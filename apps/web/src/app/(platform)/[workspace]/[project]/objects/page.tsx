@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import {
@@ -15,6 +16,7 @@ import type {
   Dataset,
   LinkCardinality,
   LinkType,
+  ObjectTypeSource,
   ObjectTypeSummary,
   ObjectTypeSuggestion,
   PropertyDataType,
@@ -513,6 +515,84 @@ function SourceDialog({
   );
 }
 
+const SYNC_STATUS_CLASS: Record<string, string> = {
+  ok: "status-ok",
+  error: "status-error",
+  syncing: "status-testing",
+  never_synced: "status-unconfigured",
+};
+
+function SourceRow({
+  workspaceId,
+  projectId,
+  source,
+  canEdit,
+  onRemove,
+}: {
+  workspaceId: string;
+  projectId: string;
+  source: ObjectTypeSource;
+  canEdit: boolean;
+  onRemove: (id: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const sync = useMutation({
+    mutationFn: () => objApi.syncSource(workspaceId, projectId, source.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["object-sources", projectId] });
+    },
+  });
+  const result = sync.data;
+
+  return (
+    <tr>
+      <td>
+        <strong>{source.object_type_name}</strong>
+      </td>
+      <td>{source.dataset_name}</td>
+      <td className="slug">{source.primary_key_column}</td>
+      <td>
+        <span className={SYNC_STATUS_CLASS[source.sync_status] ?? "status-unconfigured"}>
+          <span className="status-dot" />
+          <span className="status-label">{source.sync_status.replace("_", " ")}</span>
+        </span>
+        {source.last_synced_at && (
+          <div className="slug">{new Date(source.last_synced_at).toLocaleString()}</div>
+        )}
+        {source.last_error && (
+          <div className="form-error" style={{ marginTop: 4 }}>{source.last_error}</div>
+        )}
+        {result && result.ok && (
+          <p className="login-note" style={{ margin: "4px 0 0" }}>
+            {result.upserted} synced{result.removed > 0 ? `, ${result.removed} removed` : ""}
+          </p>
+        )}
+      </td>
+      <td>
+        {canEdit && (
+          <div className="row-actions">
+            <button
+              className="btn"
+              style={{ padding: "3px 11px", fontSize: 12 }}
+              disabled={sync.isPending}
+              onClick={() => sync.mutate()}
+            >
+              {sync.isPending ? "Syncing…" : "Sync now"}
+            </button>
+            <button
+              className="btn danger"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => onRemove(source.id)}
+            >
+              Remove
+            </button>
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
 export default function ObjectsPage() {
   const params = useParams<{ workspace: string; project: string }>();
   const { workspace } = useWorkspaceBySlug(params.workspace);
@@ -609,20 +689,29 @@ export default function ObjectsPage() {
                   </td>
                   <td className="count">{t.source_count}</td>
                   <td>
-                    {canEditOntology && (
-                      <button
-                        className="btn danger"
+                    <div className="row-actions">
+                      <Link
+                        href={`/${params.workspace}/${params.project}/objects/${t.id}`}
+                        className="btn quiet"
                         style={{ padding: "3px 9px", fontSize: 12 }}
-                        disabled={removeType.isPending}
-                        onClick={() => {
-                          if (window.confirm(`Delete ${t.display_name}? Its link types and dataset mappings go with it.`)) {
-                            removeType.mutate(t.id);
-                          }
-                        }}
                       >
-                        Delete
-                      </button>
-                    )}
+                        Browse
+                      </Link>
+                      {canEditOntology && (
+                        <button
+                          className="btn danger"
+                          style={{ padding: "3px 9px", fontSize: 12 }}
+                          disabled={removeType.isPending}
+                          onClick={() => {
+                            if (window.confirm(`Delete ${t.display_name}? Its link types and dataset mappings go with it.`)) {
+                              removeType.mutate(t.id);
+                            }
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -677,34 +766,19 @@ export default function ObjectsPage() {
           {sources.data && sources.data.length === 0 && (
             <p className="login-note">No datasets are mapped yet in this project.</p>
           )}
-          {sources.data && sources.data.length > 0 && (
+          {sources.data && sources.data.length > 0 && workspace && project && (
             <table className="table">
               <thead><tr><th>Object type</th><th>Dataset</th><th>Primary key</th><th>Status</th><th aria-label="Actions" /></tr></thead>
               <tbody>
                 {sources.data.map((s) => (
-                  <tr key={s.id}>
-                    <td><strong>{s.object_type_name}</strong></td>
-                    <td>{s.dataset_name}</td>
-                    <td className="slug">{s.primary_key_column}</td>
-                    <td>
-                      <span className={s.sync_status === "error" ? "status-error" : "status-unconfigured"}>
-                        <span className="status-dot" />
-                        <span className="status-label">{s.sync_status.replace("_", " ")}</span>
-                      </span>
-                    </td>
-                    <td>
-                      {canEditSources && (
-                        <button
-                          className="btn danger"
-                          style={{ padding: "3px 9px", fontSize: 12 }}
-                          disabled={removeSource.isPending}
-                          onClick={() => removeSource.mutate(s.id)}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                  <SourceRow
+                    key={s.id}
+                    workspaceId={workspace.id}
+                    projectId={project.id}
+                    source={s}
+                    canEdit={canEditSources}
+                    onRemove={(id) => removeSource.mutate(id)}
+                  />
                 ))}
               </tbody>
             </table>

@@ -384,6 +384,48 @@ async def create_source(
     return dict(row)
 
 
+async def get_source(
+    conn: AsyncConnection, project_id: UUID, source_id: UUID
+) -> dict[str, Any]:
+    row = await fetch_one(
+        conn,
+        """
+        SELECT s.id, s.object_type_id, ot.display_name AS object_type_name,
+               s.dataset_id, d.name AS dataset_name, d.s3_location,
+               s.primary_key_column, s.column_mappings, s.sync_status,
+               s.last_synced_at, s.last_error, s.created_at
+          FROM object_type_sources s
+          JOIN datasets d ON d.id = s.dataset_id
+          JOIN object_types ot ON ot.id = s.object_type_id
+         WHERE s.id = :sid AND d.project_id = :pid
+        """,
+        {"sid": str(source_id), "pid": str(project_id)},
+    )
+    if row is None:
+        raise NotFoundError("object type source")
+    return dict(row)
+
+
+async def mark_source_synced(
+    conn: AsyncConnection, source_id: UUID, *, ok: bool, error: str | None
+) -> dict[str, Any]:
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE object_type_sources
+           SET sync_status = CAST(:status AS object_sync_status),
+               last_synced_at = CASE WHEN :ok THEN now() ELSE last_synced_at END,
+               last_error = :error
+         WHERE id = :sid
+        RETURNING id, object_type_id, dataset_id, primary_key_column,
+                  column_mappings, sync_status, last_synced_at, last_error, created_at
+        """,
+        {"status": "ok" if ok else "error", "ok": ok, "error": error, "sid": str(source_id)},
+    )
+    assert row is not None
+    return dict(row)
+
+
 async def delete_source(conn: AsyncConnection, project_id: UUID, source_id: UUID) -> None:
     row = await fetch_one(
         conn,

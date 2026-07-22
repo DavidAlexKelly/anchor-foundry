@@ -68,7 +68,7 @@ def _reader_expr(src_path: str, extension: str) -> str:
     return template.format(path=src_path)
 
 
-def _json_safe(value: Any) -> Any:
+def json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, (dt.date, dt.datetime, dt.time)):
@@ -112,7 +112,7 @@ def preview(parquet_path: str, limit: int = PREVIEW_ROWS) -> TabularResult:
         except duckdb.Error as exc:
             raise DatasetEngineError(_clean(exc)) from exc
         columns = [ColumnSchema(name=d[0], data_type=str(d[1])) for d in cursor.description]
-        rows = [[_json_safe(v) for v in row] for row in cursor.fetchall()]
+        rows = [[json_safe(v) for v in row] for row in cursor.fetchall()]
         total = int(
             con.execute(f"SELECT count(*) FROM read_parquet('{parquet_path}')").fetchone()[0]
         )
@@ -145,7 +145,7 @@ def query(parquet_path: str, sql: str, max_rows: int = MAX_RESULT_ROWS) -> Tabul
         columns = [ColumnSchema(name=d[0], data_type=str(d[1])) for d in cursor.description]
         rows_raw = cursor.fetchmany(max_rows + 1)
         truncated = len(rows_raw) > max_rows
-        rows = [[_json_safe(v) for v in row] for row in rows_raw[:max_rows]]
+        rows = [[json_safe(v) for v in row] for row in rows_raw[:max_rows]]
         return TabularResult(columns=columns, rows=rows, total_rows=len(rows), truncated=truncated)
     finally:
         con.close()
