@@ -280,7 +280,7 @@ export interface ModelRunResult {
 export type PropertyDataType =
   | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint" | "json";
 export type LinkCardinality = "one_to_one" | "one_to_many" | "many_to_many";
-export type SourceSyncStatus = "never_synced" | "syncing" | "synced" | "error";
+export type SourceSyncStatus = "never_synced" | "syncing" | "ok" | "error";
 
 export interface ObjectTypeProperty {
   id: string;
@@ -359,4 +359,26 @@ export interface ObjectTypeSuggestion {
   suggested_primary_key: string | null;
   suggested_title_property: string | null;
   properties: SuggestedProperty[];
+}
+
+export interface SourceSyncResult {
+  ok: boolean;
+  error: string | null;
+  upserted: number;
+  removed: number;
+  source: ObjectTypeSource;
+}
+
+export interface ObjectInstance {
+  id: string;
+  primary_key: string;
+  properties: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface ObjectInstancePage {
+  items: ObjectInstance[];
+  total: number;
+  limit: number;
+  offset: number;
 }

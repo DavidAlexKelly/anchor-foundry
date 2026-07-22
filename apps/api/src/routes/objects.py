@@ -12,30 +12,44 @@ project-scoped resources.
 Role floors (conservative, flagged — the spec is silent on exact roles):
 read = viewer everywhere; object type/link type create & delete = workspace
 editor (the same floor already used for "who can create a project");
-source create/delete = project editor. Suggestion is read-only dataset
-inspection, so it sits at viewer like dataset preview/query.
+source create/delete/sync = project editor. Suggestion is read-only dataset
+inspection, so it sits at viewer like dataset preview/query. Instance
+browsing (GET .../instances) sits at workspace viewer, same as everything
+else that only reads the ontology.
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+import anyio
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import datasets as dataset_service
+from ..services import instances as instances_service
 from ..services import ontology as ontology_service
+from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["objects"])
 project_router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/object-type-sources",
     tags=["objects"],
 )
+
+
+def _dataset_storage():
+    # The datasets router owns the storage gateway; instance sync reads the
+    # same Parquet files uploads/models/sync write, so it must use the same
+    # gateway instance (mirrors connections.py / models.py).
+    from . import datasets as dataset_routes
+
+    return dataset_routes._storage
 
 
 # ---- schemas ----------------------------------------------------------------
@@ -157,6 +171,28 @@ class SuggestResponse(BaseModel):
     properties: list[SuggestedProperty]
 
 
+class SyncResult(BaseModel):
+    ok: bool
+    error: str | None
+    upserted: int
+    removed: int
+    source: SourceOut
+
+
+class InstanceOut(BaseModel):
+    id: UUID
+    primary_key: str
+    properties: dict[str, Any]
+    updated_at: datetime
+
+
+class InstancePage(BaseModel):
+    items: list[InstanceOut]
+    total: int
+    limit: int
+    offset: int
+
+
 def _jsonb(value: Any) -> dict[str, Any]:
     return json.loads(value) if isinstance(value, str) else value
 
@@ -248,6 +284,39 @@ async def delete_object_type(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+
+
+# ---- object instances (workspace-scoped browsing) ---------------------------
+@router.get("/object-types/{type_id}/instances", response_model=InstancePage)
+async def list_instances(
+    type_id: UUID,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> InstancePage:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)  # 404 if invisible
+        rows, total = await instances_service.list_for_type(
+            conn, type_id, limit=limit, offset=offset
+        )
+    return InstancePage(
+        items=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/object-types/{type_id}/instances/{instance_id}", response_model=InstanceOut)
+async def get_instance(
+    type_id: UUID,
+    instance_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> InstanceOut:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        row = await instances_service.get(conn, type_id, instance_id)
+    return InstanceOut(**{**row, "properties": _jsonb(row["properties"])})
 
 
 # ---- link types (workspace-scoped) ------------------------------------------
@@ -402,3 +471,65 @@ async def suggest_from_dataset(
             conn, access.project_id, body.dataset_id
         )
     return SuggestResponse(**suggestion)
+
+
+@project_router.post("/{source_id}/sync", response_model=SyncResult)
+async def sync_source(
+    source_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> SyncResult:
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        source = await ontology_service.get_source(conn, access.project_id, source_id)
+
+    synced_at = datetime.now(timezone.utc)
+    ok, error = True, None
+    upserted = removed = 0
+    rows: list[tuple[str, dict[str, Any]]] = []
+    try:
+        local_path = await anyio.to_thread.run_sync(
+            storage.local_path, str(source["s3_location"])
+        )
+        rows = await anyio.to_thread.run_sync(
+            instances_service.extract_rows,
+            local_path,
+            str(source["primary_key_column"]),
+            _jsonb(source["column_mappings"]),
+        )
+    except DatasetEngineError as exc:
+        ok, error = False, str(exc)
+
+    if ok:
+        async with user_connection(access.auth.user_id) as conn:
+            upserted = await instances_service.upsert_instances(
+                conn,
+                object_type_id=UUID(str(source["object_type_id"])),
+                source_id=source_id,
+                rows=rows,
+                synced_at=synced_at,
+            )
+            removed = await instances_service.delete_stale_instances(
+                conn, source_id=source_id, synced_before=synced_at
+            )
+
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.mark_source_synced(conn, source_id, ok=ok, error=error)
+        updated_source = await ontology_service.get_source(conn, access.project_id, source_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_source.sync",
+            resource_type="object_type_source",
+            resource_id=source_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"ok": ok, "upserted": upserted, "removed": removed},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SyncResult(
+        ok=ok, error=error, upserted=upserted, removed=removed,
+        source=_source_out(updated_source),
+    )

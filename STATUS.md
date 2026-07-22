@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app — synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0011) + migration runner
+│   ├── db/              SQL migrations (0001–0012) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0011)
+### 1. Database schema (migrations 0001–0012)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) — a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) — 8/8 tests
@@ -39,41 +39,46 @@ VPC, RDS (encrypted, deletion-protected), ElastiCache, OpenSearch, S3, Cognito (
 ### 4. Auth (Cognito JWT middleware, built into the API)
 Full JWT validation pipeline (JWKS caching → exp/aud/iss → sub → DB lookup → context), 401 on any invalid/expired/tampered/wrong-audience token, disabled users locked out immediately (identity cache invalidation).
 
-### 5. Hierarchy API — 25/25 tests (part of the 76 below)
+### 5. Hierarchy API — 25/25 tests (part of the total below)
 Orgs, workspaces (with isolation anchors: S3 prefix / pg schema / search prefix, provisioned atomically), projects, members, groups, custom permission overrides (including `'none'` as an active revocation), 404-not-403 semantics throughout, full audit trail.
 
 **Key bug fixed:** `INSERT ... RETURNING` under RLS fails when the SELECT policy's helper re-queries the table mid-transaction (rows from the current command aren't visible yet). Fixed by splitting creates into INSERT-then-SELECT rather than weakening any policy.
 
-### 6. Connections (Layer 1) — tests included in the 76
+### 6. Connections (Layer 1) — tests included in the total below
 CRUD, credential handling (AWS Secrets Manager only — passwords never touch a response, log, or the `config` jsonb column), connector registry (PostgreSQL fully implemented: test, schema discovery), workspace vs. project scope.
 
-### 7. Datasets — tests included in the 76
+### 7. Datasets — tests included in the total below
 Upload (CSV/TSV/Parquet/JSON/JSONL → canonical Parquet via DuckDB), preview, **sandboxed SQL query** (a user can run arbitrary SQL against their dataset with zero filesystem/network access — verified by trying to read `/etc/passwd` and having it fail), export (CSV/Parquet), versioning.
 
-### 8. Connection sync — tests included in the 76
+### 8. Connection sync — tests included in the total below
 Full-snapshot sync of a source table into the datasets layer, creating or versioning a dataset each run, with a `sync_runs` history table. Wrong passwords, missing tables, and injection-shaped identifiers all fail cleanly rather than 500ing or leaking anything.
 
-### 9. Models — tests included in the 95
+### 9. Models — tests included in the total below
 SQL transforms over one or more datasets, executed through the same DuckDB sandbox, writing a versioned output dataset. Run history is honest (failed runs show the real DB error; successful runs point at the exact dataset version they produced). **Lineage**: walks the dataset↔model graph in both directions and renders it as Mermaid, per spec.
 
-### 10. Objects / ontology — 19/19 tests (part of the 95 below)
+### 10. Objects / ontology — 19/19 tests (part of the 102 below)
 `ontology.py`'s service layer wired into routes (`routes/objects.py`): object types + typed properties and link types (workspace-scoped — the ontology is shared across every project in a workspace), object type sources (project-scoped dataset→type mapping, column-level validation against both the dataset's schema and the type's properties), and the auto-suggestion endpoint (infers a type name, properties, primary key, and title property from a dataset's schema). Delete cascades (type → its link types and sources) rely on the schema's `ON DELETE CASCADE`, matching how the rest of the hierarchy behaves. Role floors are conservative and flagged in the routes module docstring: workspace viewer reads everything; workspace editor+ creates/deletes types and link types (same floor already used for "who can create a project"); project editor+ creates/deletes dataset mappings; suggestion is viewer-level like dataset preview/query since it's read-only.
 
-**Current API regression total: 95/95 passing** (hierarchy 25 + connections 14 + datasets 17 + sync 9 + models 11 + objects 19). Plus control-plane 8/8 and worker 4/4.
+### 11. Object instance materialisation — 7/7 tests (part of the 102 below)
+Migration 0012 adds `object_instances` — a Postgres-backed instance store (`services/instances.py`) behind the same shape the production OpenSearch store will have. **Flagged as architecturally significant**: this is not a drop-in gateway swap like storage (S3/local disk) or secrets (Secrets Manager/in-memory) — Postgres RLS gives free per-row workspace isolation that a search index doesn't, so a real OpenSearch-backed store needs its own access-control design; that swap is out of scope here and called out in both the migration and the service module's docstrings.
 
-### 11. Frontend (`apps/web`)
-Next.js 14 App Router, full route tree per the spec's §18 (login via Cognito PKCE + a local dev-token path, workspace grid, project grid, project sidebar with live resource counts), and working UI for every layer above: create workspace/project, invite/manage org members, connections (wizard: pick type → configure → test → save, plus sync), datasets (upload, explore/query dialog, export), models (editor with input-aliasing, run, results), and now **objects** (the project's Objects page: define an object type with a property-row builder, define link types once two types exist, map a project dataset onto a type with a per-column property mapping table, and the flagship "suggest from dataset" flow — pick a dataset, get a suggested type/properties/primary key back, toggle which properties to keep, and create the type + mapping in one action). A from-scratch design system (harbor-ink/paper/teal palette, Archivo/Public Sans/Plex Mono, a "chain line" motif in the sidebar reflecting the org→workspace→project hierarchy) rather than a generic template. Verified live in a browser (Playwright against the real dev API + dev Postgres): type/link/source CRUD, the suggestion flow end-to-end, sidebar badge counts updating on mutation, and viewer role gating (no write controls rendered for a viewer token).
+Sync (`POST .../object-type-sources/{id}/sync`, project editor+) reads the mapped dataset's current Parquet file through the same DuckDB path datasets/models already use, extracts the primary key + mapped columns, and upserts one instance per source row keyed on `(source_id, primary_key)`. A resync also removes any instance whose primary key no longer appears in the current data (mark-and-sweep on a per-sync timestamp), so the store never lags behind upstream deletes — verified by a same-data resync test (idempotent, zero removed) and cascade-on-delete-source test (deleting the mapping empties its instances). Browsing is workspace-scoped and paginated: `GET .../object-types/{id}/instances` (list) and `.../instances/{id}` (detail), both viewer-level like the rest of the read surface.
+
+**Current API regression total: 102/102 passing** (hierarchy 25 + connections 14 + datasets 17 + sync 9 + models 11 + objects 19 + instances 7). Plus control-plane 8/8 and worker 4/4.
+
+### 12. Frontend (`apps/web`)
+Next.js 14 App Router, full route tree per the spec's §18 (login via Cognito PKCE + a local dev-token path, workspace grid, project grid, project sidebar with live resource counts), and working UI for every layer above: create workspace/project, invite/manage org members, connections (wizard: pick type → configure → test → save, plus sync), datasets (upload, explore/query dialog, export), models (editor with input-aliasing, run, results), and **objects** (the project's Objects page: define an object type with a property-row builder, define link types once two types exist, map a project dataset onto a type with a per-column property mapping table, and the flagship "suggest from dataset" flow — pick a dataset, get a suggested type/properties/primary key back, toggle which properties to keep, and create the type + mapping in one action; each mapping row now has a "Sync now" button showing live status/last-synced-at/error and a "Browse" link per object type opening a paginated instance table with dynamic property columns). A from-scratch design system (harbor-ink/paper/teal palette, Archivo/Public Sans/Plex Mono, a "chain line" motif in the sidebar reflecting the org→workspace→project hierarchy) rather than a generic template. Verified live in a browser (Playwright against the real dev API + dev Postgres): type/link/source CRUD, the suggestion flow end-to-end, sync → instance browsing end-to-end (with real synced rows), sidebar badge counts updating on mutation, and viewer role gating (no write/sync controls rendered for a viewer token, read views unaffected).
 
 ---
 
 ## What's not started
 
-- **Object instance materialisation** — syncing mapped datasets into a searchable instance store (OpenSearch in prod); currently `sync_status` on sources honestly reports `never_synced`
 - **Actions (write-back)** — Canvas buttons/forms writing back to object instances → source datasets
 - **Canvas** (app/BI builder) and **Code** (repo browser) — not started
 - **Python model transforms** — explicitly deferred; needs an isolated worker runtime (SQL transforms are fully sandboxed today via DuckDB)
-- **Scheduled/large syncs, incremental sync mode** — day-one sync is full-snapshot and inline; cron/upstream triggers and a real cursor-based incremental mode belong to the worker
-- **Dockerfiles are written but not build-tested** against the final ontology/objects code
+- **Scheduled/large syncs, incremental sync mode** — day-one sync (both connection sync and object instance sync) is full-snapshot and inline; cron/upstream triggers and a real cursor-based incremental mode belong to the worker
+- **Production OpenSearch instance store** — today's `object_instances` Postgres table is a complete, tested local/dev stand-in (see §11); swapping in OpenSearch for production needs its own access-control design since there's no RLS at that layer
+- **Dockerfiles are written but not build-tested** against the final ontology/objects/instances code
 
 ---
 

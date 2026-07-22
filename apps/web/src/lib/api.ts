@@ -326,4 +326,17 @@ export const objects = {
       `/workspaces/${wid}/projects/${pid}/object-type-sources/suggest`,
       { method: "POST", body: JSON.stringify({ dataset_id: datasetId }) },
     ),
+  syncSource: (wid: string, pid: string, sourceId: string) =>
+    request<import("./types").SourceSyncResult>(
+      `/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}/sync`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  listInstances: (wid: string, typeId: string, limit = 50, offset = 0) =>
+    request<import("./types").ObjectInstancePage>(
+      `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}&offset=${offset}`,
+    ),
+  getInstance: (wid: string, typeId: string, instanceId: string) =>
+    request<import("./types").ObjectInstance>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}`,
+    ),
 };

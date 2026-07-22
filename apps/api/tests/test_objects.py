@@ -403,3 +403,118 @@ def test_delete_type_cascades_and_is_audited(client: TestClient, fx: Fixture) ->
         "object_type.create", "object_type.delete", "link_type.create",
         "link_type.delete", "object_type_source.create", "object_type_source.delete",
     } <= actions
+
+
+# ---- instance materialisation + sync -----------------------------------------
+def ibase(fx: Fixture, type_id: str) -> str:
+    return f"{wbase(fx)}/object-types/{type_id}/instances"
+
+
+@pytest.fixture(scope="module")
+def sync_type_id(client: TestClient, fx: Fixture) -> str:
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"SyncTarget{fx.tag}",
+            "display_name": f"SyncTarget {fx.tag}",
+            "properties": [
+                {"api_name": "name", "data_type": "string"},
+                {"api_name": "email", "data_type": "string"},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+@pytest.fixture(scope="module")
+def sync_source_id(
+    client: TestClient, fx: Fixture, sync_type_id: str, customers_dataset: str
+) -> str:
+    r = client.post(
+        sbase(fx),
+        headers=hdr(fx.editor_sub),
+        json={
+            "object_type_id": sync_type_id,
+            "dataset_id": customers_dataset,
+            "primary_key_column": "customer_id",
+            "column_mappings": {"name": "name", "email": "email"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_viewer_cannot_sync(client: TestClient, fx: Fixture, sync_source_id: str) -> None:
+    r = client.post(f"{sbase(fx)}/{sync_source_id}/sync", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 403
+
+
+def test_sync_upserts_instances(
+    client: TestClient, fx: Fixture, sync_source_id: str, sync_type_id: str
+) -> None:
+    r = client.post(f"{sbase(fx)}/{sync_source_id}/sync", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["upserted"] == 2  # two rows in CUSTOMERS
+    assert body["removed"] == 0
+    assert body["source"]["sync_status"] == "ok"
+    assert body["source"]["last_synced_at"] is not None
+
+    r = client.get(ibase(fx, sync_type_id), headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    page = r.json()
+    assert page["total"] == 2
+    by_name = {item["properties"]["name"]: item for item in page["items"]}
+    assert set(by_name) == {"Ada Lovelace", "Grace Hopper"}
+    assert by_name["Ada Lovelace"]["properties"]["email"] == "ada@example.com"
+    assert by_name["Ada Lovelace"]["primary_key"] == "1"
+
+
+def test_instance_detail_matches_list(
+    client: TestClient, fx: Fixture, sync_type_id: str
+) -> None:
+    r = client.get(ibase(fx, sync_type_id), headers=hdr(fx.viewer_sub))
+    instance_id = r.json()["items"][0]["id"]
+    r = client.get(f"{ibase(fx, sync_type_id)}/{instance_id}", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == instance_id
+
+
+def test_resync_is_idempotent(
+    client: TestClient, fx: Fixture, sync_source_id: str, sync_type_id: str
+) -> None:
+    r = client.post(f"{sbase(fx)}/{sync_source_id}/sync", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["upserted"] == 2 and body["removed"] == 0
+
+    r = client.get(ibase(fx, sync_type_id), headers=hdr(fx.viewer_sub))
+    assert r.json()["total"] == 2  # no duplicates from the re-sync
+
+
+def test_unknown_instance_is_404(client: TestClient, fx: Fixture, sync_type_id: str) -> None:
+    import uuid
+
+    r = client.get(
+        f"{ibase(fx, sync_type_id)}/{uuid.uuid4()}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 404
+
+
+def test_delete_source_cascades_instances(
+    client: TestClient, fx: Fixture, sync_source_id: str, sync_type_id: str
+) -> None:
+    assert client.delete(
+        f"{sbase(fx)}/{sync_source_id}", headers=hdr(fx.editor_sub)
+    ).status_code == 204
+    r = client.get(ibase(fx, sync_type_id), headers=hdr(fx.viewer_sub))
+    assert r.json()["total"] == 0
+
+
+def test_sync_audited(client: TestClient, fx: Fixture) -> None:
+    r = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
+    actions = {e["action"] for e in r.json()}
+    assert "object_type_source.sync" in actions

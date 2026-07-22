@@ -66,7 +66,7 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
             <Link
               key={s.path}
               href={`${base}/${s.path}`}
-              aria-current={pathname === `${base}/${s.path}`}
+              aria-current={pathname === `${base}/${s.path}` || pathname.startsWith(`${base}/${s.path}/`)}
             >
               <span>{s.label}</span>
               <span className="count">{counts ? counts[s.countKey] : "–"}</span>
