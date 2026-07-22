@@ -1,0 +1,94 @@
+# ============================================================================
+# Customer bootstrap template (spec §6 "The Bootstrap IAM Role").
+#
+# The ONE piece of setup the customer performs manually: a tiny template that
+# creates an IAM role in their account trusting our control plane role, with
+# an external ID (unique per customer, secret) to prevent confused-deputy
+# attacks. Used only for: initial provisioning, version updates, and stack
+# destroy. Day-to-day platform operation uses the minimal-privilege roles the
+# CDK stack itself provisions.
+# ============================================================================
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Platform bootstrap role. Grants the platform control plane permission to
+  provision and update the platform stack in this account. Delete this stack
+  to revoke all control plane access.
+
+Parameters:
+  ControlPlaneRoleArn:
+    Type: String
+    Description: ARN of the platform control plane role (provided during onboarding).
+    AllowedPattern: "^arn:aws:iam::[0-9]{12}:role/.+$"
+  ExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Unique secret external ID from your onboarding page. Prevents confused-deputy attacks.
+
+Resources:
+  PlatformBootstrapRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: platform-bootstrap
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref ControlPlaneRoleArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        - PolicyName: platform-provisioning
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudFormation/CDK deploy of the platform stack only.
+              - Sid: CloudFormation
+                Effect: Allow
+                Action:
+                  - cloudformation:*
+                Resource:
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/PlatformStack*/*"
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/CDKToolkit/*"
+              # CDK asset staging bucket + ECR.
+              - Sid: CdkAssets
+                Effect: Allow
+                Action:
+                  - s3:*
+                Resource:
+                  - "arn:aws:s3:::cdk-*"
+                  - "arn:aws:s3:::cdk-*/*"
+              - Sid: CdkBootstrapRoles
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:PassRole
+                  - sts:AssumeRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/cdk-*"
+              - Sid: CdkBootstrapSsm
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:PutParameter
+                Resource:
+                  - !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/cdk-bootstrap/*"
+              # Cost transparency (spec §12): read-only billing access so the
+              # platform can show the customer their own infrastructure costs.
+              - Sid: CostExplorerReadOnly
+                Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - ce:GetCostForecast
+                  - ce:GetTags
+                Resource: "*"
+
+Outputs:
+  BootstrapRoleArn:
+    Description: Paste this ARN back into the onboarding page.
+    Value: !GetAtt PlatformBootstrapRole.Arn

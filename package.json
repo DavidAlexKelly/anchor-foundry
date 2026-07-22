@@ -1,0 +1,10 @@
+{
+  "name": "platform",
+  "private": true,
+  "workspaces": ["apps/web", "packages/types"],
+  "scripts": {
+    "web:dev": "npm run dev -w @platform/web",
+    "web:build": "npm run build -w @platform/web",
+    "web:typecheck": "npm run typecheck -w @platform/web"
+  }
+}

@@ -1,0 +1,12 @@
+[project]
+name = "anchor-worker"
+version = "0.1.0"
+description = "Anchor background worker: Dagster jobs for cleanup, sync, and pipelines."
+requires-python = ">=3.12"
+dependencies = [
+    "dagster==1.7.12",
+    "psycopg[binary]==3.2.1",
+]
+
+[tool.dagster]
+module_name = "anchor_worker.definitions"
