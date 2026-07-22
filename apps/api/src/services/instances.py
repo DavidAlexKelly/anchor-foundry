@@ -153,7 +153,7 @@ async def get(conn: AsyncConnection, object_type_id: UUID, instance_id: UUID) ->
     row = await fetch_one(
         conn,
         """
-        SELECT id, primary_key, properties, updated_at
+        SELECT id, source_id, primary_key, properties, updated_at
           FROM object_instances
          WHERE id = :iid AND object_type_id = :tid
         """,
@@ -162,3 +162,17 @@ async def get(conn: AsyncConnection, object_type_id: UUID, instance_id: UUID) ->
     if row is None:
         raise NotFoundError("object instance")
     return dict(row)
+
+
+async def update_properties(
+    conn: AsyncConnection, instance_id: UUID, properties: dict[str, Any]
+) -> None:
+    """Merge new property values into an instance after a successful
+    write-back (services/actions.py)."""
+    await conn.execute(
+        text(
+            "UPDATE object_instances SET properties = properties || CAST(:props AS jsonb), "
+            "updated_at = now() WHERE id = :iid"
+        ),
+        {"props": json.dumps(properties), "iid": str(instance_id)},
+    )

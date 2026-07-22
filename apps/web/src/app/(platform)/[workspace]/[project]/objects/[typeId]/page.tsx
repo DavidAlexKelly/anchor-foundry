@@ -1,18 +1,106 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { objects as objApi } from "@/lib/api";
-import { useWorkspaceBySlug } from "@/components/use-workspace";
+import { actions as actionApi, ApiError, objects as objApi } from "@/lib/api";
+import { Dialog, Field } from "@/components/dialog";
+import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
+import type { ActionType, ObjectInstance } from "@/lib/types";
 
 const PAGE_SIZE = 50;
+
+function EditInstanceDialog({
+  workspaceId,
+  projectId,
+  instance,
+  actionTypes,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  instance: ObjectInstance;
+  actionTypes: ActionType[];
+  onClose: () => void;
+}) {
+  const [actionTypeId, setActionTypeId] = useState(actionTypes[0]?.id ?? "");
+  const activeAction = actionTypes.find((a) => a.id === actionTypeId) ?? actionTypes[0];
+  const [values, setValues] = useState<Record<string, string>>(
+    Object.fromEntries(
+      (activeAction?.editable_properties ?? []).map((p) => [
+        p, instance.properties[p] == null ? "" : String(instance.properties[p]),
+      ]),
+    ),
+  );
+  const queryClient = useQueryClient();
+
+  const execute = useMutation({
+    mutationFn: () => actionApi.execute(workspaceId, projectId, activeAction!.id, instance.id, values),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["object-instances"] });
+      onClose();
+    },
+  });
+
+  function selectAction(id: string) {
+    setActionTypeId(id);
+    const next = actionTypes.find((a) => a.id === id);
+    setValues(
+      Object.fromEntries(
+        (next?.editable_properties ?? []).map((p) => [
+          p, instance.properties[p] == null ? "" : String(instance.properties[p]),
+        ]),
+      ),
+    );
+  }
+
+  return (
+    <Dialog open title={`Edit ${instance.primary_key}`} onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); execute.mutate(); }}>
+        {actionTypes.length > 1 && (
+          <Field label="Action">
+            <select value={actionTypeId} onChange={(e) => selectAction(e.target.value)}>
+              {actionTypes.map((a) => (
+                <option key={a.id} value={a.id}>{a.display_name}</option>
+              ))}
+            </select>
+          </Field>
+        )}
+        {(activeAction?.editable_properties ?? []).map((p) => (
+          <Field key={p} label={p}>
+            <input
+              type="text"
+              value={values[p] ?? ""}
+              onChange={(e) => setValues({ ...values, [p]: e.target.value })}
+            />
+          </Field>
+        ))}
+        {execute.isError && (
+          <div className="form-error">
+            {execute.error instanceof ApiError ? execute.error.message : "Couldn't save this change."}
+          </div>
+        )}
+        {execute.data && !execute.data.ok && (
+          <div className="form-error">{execute.data.error}</div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn" disabled={execute.isPending || !activeAction}>
+            {execute.isPending ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
 
 export default function ObjectInstancesPage() {
   const params = useParams<{ workspace: string; project: string; typeId: string }>();
   const { workspace } = useWorkspaceBySlug(params.workspace);
+  const { project } = useProjectBySlug(workspace?.id, params.project);
   const [page, setPage] = useState(0);
+  const [editing, setEditing] = useState<ObjectInstance | null>(null);
 
   const type = useQuery({
     queryKey: ["object-type", params.typeId],
@@ -24,11 +112,17 @@ export default function ObjectInstancesPage() {
     queryFn: () => objApi.listInstances(workspace!.id, params.typeId, PAGE_SIZE, page * PAGE_SIZE),
     enabled: !!workspace,
   });
+  const actionTypes = useQuery({
+    queryKey: ["action-types", workspace?.id, params.typeId],
+    queryFn: () => actionApi.listTypes(workspace!.id, params.typeId),
+    enabled: !!workspace,
+  });
 
   const properties = type.data?.properties ?? [];
   const rows = instances.data?.items ?? [];
   const total = instances.data?.total ?? 0;
   const hasNext = (page + 1) * PAGE_SIZE < total;
+  const canEdit = (project ? project.effective_role !== "viewer" : false) && (actionTypes.data?.length ?? 0) > 0;
 
   return (
     <main>
@@ -71,6 +165,7 @@ export default function ObjectInstancesPage() {
                     <th key={p.api_name}>{p.display_name || p.api_name}</th>
                   ))}
                   <th>Updated</th>
+                  {canEdit && <th aria-label="Actions" />}
                 </tr>
               </thead>
               <tbody>
@@ -86,6 +181,17 @@ export default function ObjectInstancesPage() {
                       </td>
                     ))}
                     <td className="count">{new Date(instance.updated_at).toLocaleString()}</td>
+                    {canEdit && (
+                      <td>
+                        <button
+                          className="btn quiet"
+                          style={{ padding: "3px 9px", fontSize: 12 }}
+                          onClick={() => setEditing(instance)}
+                        >
+                          Edit
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -113,6 +219,16 @@ export default function ObjectInstancesPage() {
             </button>
           </div>
         </>
+      )}
+
+      {editing && workspace && project && actionTypes.data && (
+        <EditInstanceDialog
+          workspaceId={workspace.id}
+          projectId={project.id}
+          instance={editing}
+          actionTypes={actionTypes.data}
+          onClose={() => setEditing(null)}
+        />
       )}
     </main>
   );

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import {
+  actions as actionApi,
   ApiError,
   datasets as dsApi,
   objects as objApi,
@@ -13,6 +14,7 @@ import {
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type {
+  ActionType,
   Dataset,
   LinkCardinality,
   LinkType,
@@ -400,6 +402,97 @@ function LinkTypeDialog({
   );
 }
 
+// ---- action types (write-back) ---------------------------------------------
+function ActionTypeDialog({
+  workspaceId,
+  types,
+  onClose,
+}: {
+  workspaceId: string;
+  types: ObjectTypeSummary[];
+  onClose: () => void;
+}) {
+  const [objectTypeId, setObjectTypeId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [description, setDescription] = useState("");
+  const [editable, setEditable] = useState<Record<string, boolean>>({});
+  const queryClient = useQueryClient();
+
+  const typeDetail = useQuery({
+    queryKey: ["object-type", objectTypeId],
+    queryFn: () => objApi.getType(workspaceId, objectTypeId),
+    enabled: !!objectTypeId,
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      actionApi.createType(workspaceId, {
+        object_type_id: objectTypeId,
+        api_name: toApiName(displayName, false),
+        display_name: displayName,
+        description,
+        editable_properties: Object.entries(editable).filter(([, v]) => v).map(([k]) => k),
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["action-types", workspaceId] });
+      onClose();
+    },
+  });
+
+  const editableCount = Object.values(editable).filter(Boolean).length;
+
+  return (
+    <Dialog open title="New action" onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
+        <Field label="Object type">
+          <select
+            value={objectTypeId}
+            onChange={(e) => { setObjectTypeId(e.target.value); setEditable({}); }}
+            required
+          >
+            <option value="">Choose a type…</option>
+            {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
+          </select>
+        </Field>
+        <Field label="Name" hint="e.g. Update contact, Approve, Close case">
+          <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={200} autoFocus />
+        </Field>
+        <Field label="Description" hint="Optional">
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} />
+        </Field>
+        {typeDetail.data && (
+          <Field label="Editable properties" hint="What this action is allowed to write back">
+            <div>
+              {typeDetail.data.properties.map((p) => (
+                <label key={p.api_name} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, padding: "3px 0" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!editable[p.api_name]}
+                    onChange={(e) => setEditable({ ...editable, [p.api_name]: e.target.checked })}
+                  />
+                  <strong>{p.api_name}</strong>
+                  <span className="chip">{p.data_type}</span>
+                </label>
+              ))}
+            </div>
+          </Field>
+        )}
+        {create.isError && (
+          <div className="form-error">
+            {create.error instanceof ApiError ? create.error.message : "Couldn't create the action."}
+          </div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn" disabled={create.isPending || !displayName.trim() || !objectTypeId || editableCount === 0}>
+            {create.isPending ? "Creating…" : "Create action"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 // ---- map a dataset onto an existing object type ----------------------------
 function SourceDialog({
   workspaceId,
@@ -601,6 +694,7 @@ export default function ObjectsPage() {
   const [suggesting, setSuggesting] = useState(false);
   const [creatingLink, setCreatingLink] = useState(false);
   const [creatingSource, setCreatingSource] = useState(false);
+  const [creatingAction, setCreatingAction] = useState(false);
   const queryClient = useQueryClient();
 
   const types = useQuery({
@@ -618,6 +712,11 @@ export default function ObjectsPage() {
     queryFn: () => objApi.listSources(workspace!.id, project!.id),
     enabled: !!workspace && !!project,
   });
+  const actionTypes = useQuery({
+    queryKey: ["action-types", workspace?.id],
+    queryFn: () => actionApi.listTypes(workspace!.id),
+    enabled: !!workspace,
+  });
 
   const removeType = useMutation({
     mutationFn: (typeId: string) => objApi.removeType(workspace!.id, typeId),
@@ -625,6 +724,7 @@ export default function ObjectsPage() {
       queryClient.invalidateQueries({ queryKey: ["object-types", workspace?.id] });
       queryClient.invalidateQueries({ queryKey: ["link-types", workspace?.id] });
       queryClient.invalidateQueries({ queryKey: ["object-sources", project?.id] });
+      queryClient.invalidateQueries({ queryKey: ["action-types", workspace?.id] });
       queryClient.invalidateQueries({ queryKey: ["project", workspace?.id] });
     },
   });
@@ -638,6 +738,10 @@ export default function ObjectsPage() {
       queryClient.invalidateQueries({ queryKey: ["object-sources", project?.id] });
       queryClient.invalidateQueries({ queryKey: ["object-types", workspace?.id] });
     },
+  });
+  const removeAction = useMutation({
+    mutationFn: (actionTypeId: string) => actionApi.removeType(workspace!.id, actionTypeId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["action-types", workspace?.id] }),
   });
 
   const canEditOntology = workspace ? workspace.effective_role !== "viewer" : false;
@@ -756,6 +860,45 @@ export default function ObjectsPage() {
 
           <div className="page-head" style={{ marginTop: 32 }}>
             <div>
+              <h2 style={{ fontSize: 15, margin: 0 }}>Actions</h2>
+              <p className="sub">Write-back operations available on an object type&apos;s instances</p>
+            </div>
+            {canEditOntology && (
+              <button className="btn quiet" onClick={() => setCreatingAction(true)}>New action</button>
+            )}
+          </div>
+          {actionTypes.data && actionTypes.data.length === 0 && (
+            <p className="login-note">No actions yet — define one to let instances write values back to their mapped datasets.</p>
+          )}
+          {actionTypes.data && actionTypes.data.length > 0 && (
+            <table className="table" style={{ marginBottom: 28 }}>
+              <thead><tr><th>Action</th><th>Object type</th><th>Editable properties</th><th aria-label="Actions" /></tr></thead>
+              <tbody>
+                {actionTypes.data.map((a: ActionType) => (
+                  <tr key={a.id}>
+                    <td><strong>{a.display_name}</strong><div className="slug">{a.api_name}</div></td>
+                    <td>{a.object_type_name}</td>
+                    <td>{a.editable_properties.map((p) => <span key={p} className="chip" style={{ marginRight: 4 }}>{p}</span>)}</td>
+                    <td>
+                      {canEditOntology && (
+                        <button
+                          className="btn danger"
+                          style={{ padding: "3px 9px", fontSize: 12 }}
+                          disabled={removeAction.isPending}
+                          onClick={() => removeAction.mutate(a.id)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="page-head" style={{ marginTop: 32 }}>
+            <div>
               <h2 style={{ fontSize: 15, margin: 0 }}>Dataset mappings</h2>
               <p className="sub">Datasets in this project mapped onto the workspace ontology</p>
             </div>
@@ -801,6 +944,13 @@ export default function ObjectsPage() {
           projectId={project.id}
           types={types.data}
           onClose={() => setCreatingSource(false)}
+        />
+      )}
+      {creatingAction && workspace && types.data && (
+        <ActionTypeDialog
+          workspaceId={workspace.id}
+          types={types.data}
+          onClose={() => setCreatingAction(false)}
         />
       )}
     </main>
