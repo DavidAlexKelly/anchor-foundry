@@ -382,3 +382,35 @@ export interface ObjectInstancePage {
   limit: number;
   offset: number;
 }
+
+// ---- actions (write-back) ----------------------------------------------------
+export interface ActionType {
+  id: string;
+  object_type_id: string;
+  object_type_name: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  editable_properties: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActionRun {
+  id: string;
+  instance_id: string | null;
+  dataset_id: string | null;
+  dataset_version: number | null;
+  submitted_values: Record<string, unknown>;
+  status: "running" | "succeeded" | "failed";
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface ActionExecuteResult {
+  ok: boolean;
+  error: string | null;
+  dataset_version: number | null;
+  instance: ObjectInstance;
+}

@@ -340,3 +340,36 @@ export const objects = {
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}`,
     ),
 };
+
+export interface ActionTypeCreateInput {
+  object_type_id: string;
+  api_name: string;
+  display_name: string;
+  description?: string;
+  editable_properties: string[];
+}
+
+export const actions = {
+  listTypes: (wid: string, objectTypeId?: string) =>
+    request<import("./types").ActionType[]>(
+      `/workspaces/${wid}/action-types${objectTypeId ? `?object_type_id=${objectTypeId}` : ""}`,
+    ),
+  createType: (wid: string, input: ActionTypeCreateInput) =>
+    request<import("./types").ActionType>(`/workspaces/${wid}/action-types`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  removeType: (wid: string, actionTypeId: string) =>
+    request<void>(`/workspaces/${wid}/action-types/${actionTypeId}`, { method: "DELETE" }),
+  execute: (
+    wid: string,
+    pid: string,
+    actionTypeId: string,
+    instanceId: string,
+    values: Record<string, unknown>,
+  ) =>
+    request<import("./types").ActionExecuteResult>(
+      `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/execute`,
+      { method: "POST", body: JSON.stringify({ instance_id: instanceId, values }) },
+    ),
+};

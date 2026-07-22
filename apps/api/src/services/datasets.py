@@ -211,3 +211,66 @@ async def list_versions(
         """,
         {"did": str(dataset_id)},
     )
+
+
+async def add_version(
+    conn: AsyncConnection,
+    storage: StorageGateway,
+    *,
+    dataset_id: UUID,
+    workspace_id: UUID,
+    parquet_bytes: bytes,
+    schema: list[ColumnSchema],
+    row_count: int,
+    produced_by_kind: str,
+    produced_by_id: UUID | None,
+    created_by: UUID,
+) -> dict[str, Any]:
+    """Append a new version to an already-known dataset in place — the
+    simpler single-purpose case where uploads/model-outputs/syncs' own
+    create-or-version-by-slug logic doesn't apply because the dataset id is
+    already known (used by action write-back)."""
+    import json
+
+    ws_prefix = await workspace_s3_prefix(conn, workspace_id)
+    current = await fetch_one(
+        conn, "SELECT current_version FROM datasets WHERE id = :id", {"id": str(dataset_id)}
+    )
+    if current is None:
+        raise NotFoundError("dataset")
+    version = int(current["current_version"]) + 1
+    parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
+    storage.put(parquet_key, parquet_bytes)
+    schema_json = json.dumps([c.as_dict() for c in schema])
+
+    updated = await fetch_one(
+        conn,
+        """
+        UPDATE datasets
+           SET s3_location = :loc, table_schema = CAST(:schema AS jsonb),
+               row_count = :rows, current_version = :version
+         WHERE id = :id
+        RETURNING id, project_id, name, slug, row_count, current_version
+        """,
+        {
+            "loc": parquet_key, "schema": schema_json, "rows": row_count,
+            "version": version, "id": str(dataset_id),
+        },
+    )
+    assert updated is not None
+    await fetch_one(
+        conn,
+        """
+        INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
+                                      table_schema, row_count, produced_by_kind,
+                                      produced_by_id, created_by)
+        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, :kind, :pbid, :by)
+        RETURNING id
+        """,
+        {
+            "did": str(dataset_id), "version": version, "key": parquet_key,
+            "schema": schema_json, "rows": row_count, "kind": produced_by_kind,
+            "pbid": str(produced_by_id) if produced_by_id else None, "by": str(created_by),
+        },
+    )
+    return dict(updated)

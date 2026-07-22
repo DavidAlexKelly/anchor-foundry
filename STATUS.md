@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app — synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0012) + migration runner
+│   ├── db/              SQL migrations (0001–0013) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0012)
+### 1. Database schema (migrations 0001–0013)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) — a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) — 8/8 tests
@@ -64,21 +64,26 @@ Migration 0012 adds `object_instances` — a Postgres-backed instance store (`se
 
 Sync (`POST .../object-type-sources/{id}/sync`, project editor+) reads the mapped dataset's current Parquet file through the same DuckDB path datasets/models already use, extracts the primary key + mapped columns, and upserts one instance per source row keyed on `(source_id, primary_key)`. A resync also removes any instance whose primary key no longer appears in the current data (mark-and-sweep on a per-sync timestamp), so the store never lags behind upstream deletes — verified by a same-data resync test (idempotent, zero removed) and cascade-on-delete-source test (deleting the mapping empties its instances). Browsing is workspace-scoped and paginated: `GET .../object-types/{id}/instances` (list) and `.../instances/{id}` (detail), both viewer-level like the rest of the read surface.
 
-**Current API regression total: 102/102 passing** (hierarchy 25 + connections 14 + datasets 17 + sync 9 + models 11 + objects 19 + instances 7). Plus control-plane 8/8 and worker 4/4.
+### 12. Actions (write-back) — 11/11 tests (part of the 113 below)
+Migration 0013 adds `action_types` (workspace-scoped, same shape/isolation pattern as `link_types`: a named action on an object type naming a subset of its properties as writable, validated against the type's real properties at create time) and `action_runs` (history, same pattern as `sync_runs`/`model_runs`). Execution (`POST .../projects/{id}/actions/{action_type_id}/execute`, project editor+ — write-back always targets one instance, whose data lives in exactly one project) validates the submitted values three ways: on the action's editable list, type-consistent with the property's declared type, and actually mapped to a dataset column on *this instance's specific source* (an object type is workspace-shared, but which of its properties have a real write-back target depends on the project-specific source doing the mapping — checked at execute time, not at action-definition time, since that's the only point both facts are known together).
 
-### 12. Frontend (`apps/web`)
-Next.js 14 App Router, full route tree per the spec's §18 (login via Cognito PKCE + a local dev-token path, workspace grid, project grid, project sidebar with live resource counts), and working UI for every layer above: create workspace/project, invite/manage org members, connections (wizard: pick type → configure → test → save, plus sync), datasets (upload, explore/query dialog, export), models (editor with input-aliasing, run, results), and **objects** (the project's Objects page: define an object type with a property-row builder, define link types once two types exist, map a project dataset onto a type with a per-column property mapping table, and the flagship "suggest from dataset" flow — pick a dataset, get a suggested type/properties/primary key back, toggle which properties to keep, and create the type + mapping in one action; each mapping row now has a "Sync now" button showing live status/last-synced-at/error and a "Browse" link per object type opening a paginated instance table with dynamic property columns). A from-scratch design system (harbor-ink/paper/teal palette, Archivo/Public Sans/Plex Mono, a "chain line" motif in the sidebar reflecting the org→workspace→project hierarchy) rather than a generic template. Verified live in a browser (Playwright against the real dev API + dev Postgres): type/link/source CRUD, the suggestion flow end-to-end, sync → instance browsing end-to-end (with real synced rows), sidebar badge counts updating on mutation, and viewer role gating (no write/sync controls rendered for a viewer token, read views unaffected).
+A successful execute does two things, both versioned rather than silently overwritten: updates the instance's `object_instances.properties`, and writes the corresponding row in the mapped dataset's Parquet file, producing a new `dataset_versions` row (`produced_by_kind='action'`) via a new `datasets.add_version()` helper — the simpler in-place case alongside the existing create-or-version-by-slug logic uploads/sync/models each already have. **Flagged as architecturally significant, scope**: write-back targets this platform's own dataset copy, not the customer's original external system — connectors in this build only support test/discover, not write, so true write-through to a live external table is out of scope and called out in both the migration and `services/actions.py`'s docstring.
+
+**Current API regression total: 113/113 passing** (hierarchy 25 + connections 14 + datasets 17 + sync 9 + models 11 + objects 19 + instances 7 + actions 11). Plus control-plane 8/8 and worker 4/4.
+
+### 13. Frontend (`apps/web`)
+Next.js 14 App Router, full route tree per the spec's §18 (login via Cognito PKCE + a local dev-token path, workspace grid, project grid, project sidebar with live resource counts), and working UI for every layer above: create workspace/project, invite/manage org members, connections (wizard: pick type → configure → test → save, plus sync), datasets (upload, explore/query dialog, export), models (editor with input-aliasing, run, results), and **objects** (the project's Objects page: define an object type with a property-row builder, define link types once two types exist, map a project dataset onto a type with a per-column property mapping table, and the flagship "suggest from dataset" flow — pick a dataset, get a suggested type/properties/primary key back, toggle which properties to keep, and create the type + mapping in one action; each mapping row has a "Sync now" button showing live status/last-synced-at/error and a "Browse" link per object type opening a paginated instance table with dynamic property columns). An **Actions** section on the Objects page defines write-back actions (pick an object type, name it, check which properties it can write), and the instance browser gained an "Edit" button per row (only rendered when at least one action exists for that type) opening a small form pre-filled with current values — submitting calls the action, and both the instance row and the underlying dataset version bump in place. A from-scratch design system (harbor-ink/paper/teal palette, Archivo/Public Sans/Plex Mono, a "chain line" motif in the sidebar reflecting the org→workspace→project hierarchy) rather than a generic template. Verified live in a browser (Playwright against the real dev API + dev Postgres): type/link/source CRUD, the suggestion flow end-to-end, sync → instance browsing end-to-end (with real synced rows), define-action → edit-instance → dataset-version-bump end-to-end, sidebar badge counts updating on mutation, and viewer role gating (no write/sync/edit controls rendered for a viewer token, read views unaffected).
 
 ---
 
 ## What's not started
 
-- **Actions (write-back)** — Canvas buttons/forms writing back to object instances → source datasets
-- **Canvas** (app/BI builder) and **Code** (repo browser) — not started
+- **Canvas** (app/BI builder) and **Code** (repo browser) — not started; Actions execute today via a plain edit form on the instance browser rather than Canvas buttons/forms, since Canvas itself doesn't exist yet (see §12)
 - **Python model transforms** — explicitly deferred; needs an isolated worker runtime (SQL transforms are fully sandboxed today via DuckDB)
-- **Scheduled/large syncs, incremental sync mode** — day-one sync (both connection sync and object instance sync) is full-snapshot and inline; cron/upstream triggers and a real cursor-based incremental mode belong to the worker
+- **Scheduled/large syncs, incremental sync mode** — day-one sync (connection sync and object instance sync alike) is full-snapshot and inline; cron/upstream triggers and a real cursor-based incremental mode belong to the worker
 - **Production OpenSearch instance store** — today's `object_instances` Postgres table is a complete, tested local/dev stand-in (see §11); swapping in OpenSearch for production needs its own access-control design since there's no RLS at that layer
-- **Dockerfiles are written but not build-tested** against the final ontology/objects/instances code
+- **Write-through to external connection sources** — Actions write back to this platform's own dataset copy only (see §12); connectors don't support write operations yet
+- **Dockerfiles are written but not build-tested** against the final ontology/objects/instances/actions code
 
 ---
 
@@ -87,7 +92,7 @@ Next.js 14 App Router, full route tree per the spec's §18 (login via Cognito PK
 - The local dev Postgres instance (this sandbox only) needs manual restarting periodically — not a real issue, just a sandbox quirk, documented in the restart command used throughout this session.
 - `apps/api/requirements.txt` was missing `duckdb`, `pytz` (DuckDB's own timestamp dependency), and `python-multipart` (needed by FastAPI for file-upload endpoints) — all three are genuine runtime dependencies of code that already existed, not new to this session's work, and the gap would have surfaced as a broken Docker image. Fixed in this session; a `requirements-dev.txt` was added alongside it for the test-only extras (`pytest`, `httpx`).
 - Upload/sync/model size caps (50 MB / 200 MB / 5M rows) are conservative day-one limits, each flagged in code comments as the point where the Athena/worker path takes over.
-- A handful of spec-silent decisions were made conservatively and flagged in-code with `# Flagged for review` — e.g. who can create a workspace (org admin), who can create a project (workspace editor+), object counts being workspace- vs. project-scoped for `object_types`, and the objects role floors described above.
+- A handful of spec-silent decisions were made conservatively and flagged in-code with `# Flagged for review` — e.g. who can create a workspace (org admin), who can create a project (workspace editor+), object counts being workspace- vs. project-scoped for `object_types`, the objects/instances/actions role floors described above, and the Actions write-back scope decision (this platform's own dataset copy, not the external source).
 
 ---
 

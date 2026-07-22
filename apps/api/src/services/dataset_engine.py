@@ -173,6 +173,52 @@ def _clean(exc: duckdb.Error) -> str:
     return first[:500]
 
 
+def _quote_column(name: str) -> str:
+    """Dataset column names come from uploaded file headers, not a fixed
+    identifier grammar — quote-and-escape rather than assume unquoted-safe."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def write_back_row(
+    parquet_path: str,
+    primary_key_column: str,
+    primary_key_value: str,
+    column_updates: dict[str, Any],
+    dest_path: str,
+) -> tuple[list[ColumnSchema], int]:
+    """Update one row (matched by primary key) in a dataset's Parquet file
+    and write the result to dest_path as a new version. Used by Actions
+    write-back — every mutation still produces a new dataset_versions row
+    rather than silently overwriting data, matching the rest of the
+    platform's dataset model."""
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet({parquet_path!r})")
+            pk_col = _quote_column(primary_key_column)
+            (matched,) = con.execute(
+                f"SELECT count(*) FROM t WHERE CAST({pk_col} AS VARCHAR) = ?",
+                [primary_key_value],
+            ).fetchone()
+            if not matched:
+                raise DatasetEngineError(
+                    f"no row with {primary_key_column} = {primary_key_value!r} in this dataset"
+                )
+            set_clause = ", ".join(f"{_quote_column(c)} = ?" for c in column_updates)
+            params = list(column_updates.values()) + [primary_key_value]
+            con.execute(f"UPDATE t SET {set_clause} WHERE CAST({pk_col} AS VARCHAR) = ?", params)
+            described = con.execute("DESCRIBE t").fetchall()
+            schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
+            row_count = int(con.execute("SELECT count(*) FROM t").fetchone()[0])
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            con.execute(f"COPY t TO '{dest_path}' (FORMAT parquet)")
+            return schema, row_count
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+
+
 # ---- model transforms --------------------------------------------------------
 TRANSFORM_BATCH_ROWS = 50_000
 MAX_TRANSFORM_OUTPUT_ROWS = 5_000_000  # flag: worker/Athena path beyond this
