@@ -253,3 +253,77 @@ export const models = {
   remove: (wid: string, pid: string, mid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, { method: "DELETE" }),
 };
+
+export interface PropertyInput {
+  api_name: string;
+  display_name?: string;
+  data_type: import("./types").PropertyDataType;
+  required?: boolean;
+  description?: string;
+}
+
+export interface ObjectTypeCreateInput {
+  api_name: string;
+  display_name: string;
+  description?: string;
+  icon?: string;
+  colour?: string;
+  properties?: PropertyInput[];
+  title_property?: string | null;
+}
+
+export interface LinkTypeCreateInput {
+  api_name: string;
+  display_name: string;
+  from_type_id: string;
+  to_type_id: string;
+  cardinality: import("./types").LinkCardinality;
+}
+
+export interface SourceCreateInput {
+  object_type_id: string;
+  dataset_id: string;
+  primary_key_column: string;
+  column_mappings: Record<string, string>;
+}
+
+export const objects = {
+  listTypes: (wid: string) =>
+    request<import("./types").ObjectTypeSummary[]>(`/workspaces/${wid}/object-types`),
+  getType: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeDetail>(`/workspaces/${wid}/object-types/${typeId}`),
+  createType: (wid: string, input: ObjectTypeCreateInput) =>
+    request<import("./types").ObjectTypeDetail>(`/workspaces/${wid}/object-types`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  removeType: (wid: string, typeId: string) =>
+    request<void>(`/workspaces/${wid}/object-types/${typeId}`, { method: "DELETE" }),
+  listLinkTypes: (wid: string) =>
+    request<import("./types").LinkType[]>(`/workspaces/${wid}/link-types`),
+  createLinkType: (wid: string, input: LinkTypeCreateInput) =>
+    request<import("./types").LinkType>(`/workspaces/${wid}/link-types`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  removeLinkType: (wid: string, linkId: string) =>
+    request<void>(`/workspaces/${wid}/link-types/${linkId}`, { method: "DELETE" }),
+  listSources: (wid: string, pid: string) =>
+    request<import("./types").ObjectTypeSource[]>(
+      `/workspaces/${wid}/projects/${pid}/object-type-sources`,
+    ),
+  createSource: (wid: string, pid: string, input: SourceCreateInput) =>
+    request<import("./types").ObjectTypeSource>(
+      `/workspaces/${wid}/projects/${pid}/object-type-sources`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  removeSource: (wid: string, pid: string, sourceId: string) =>
+    request<void>(`/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}`, {
+      method: "DELETE",
+    }),
+  suggest: (wid: string, pid: string, datasetId: string) =>
+    request<import("./types").ObjectTypeSuggestion>(
+      `/workspaces/${wid}/projects/${pid}/object-type-sources/suggest`,
+      { method: "POST", body: JSON.stringify({ dataset_id: datasetId }) },
+    ),
+};

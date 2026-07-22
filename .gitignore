@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.next/
+apps/web/.next/
+apps/web/tsconfig.tsbuildinfo
+dist/
+build/
+*.egg-info/
+.pytest_cache/

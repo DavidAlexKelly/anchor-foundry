@@ -22,6 +22,7 @@ from .routes import auth as auth_routes
 from .routes import connections as connection_routes
 from .routes import datasets as dataset_routes
 from .routes import models as model_routes
+from .routes import objects as object_routes
 from .routes import org as org_routes
 from .routes import projects as project_routes
 from .routes import workspaces as workspace_routes
@@ -88,6 +89,8 @@ def create_app() -> FastAPI:
     app.include_router(connection_routes.router, prefix=prefix)
     app.include_router(dataset_routes.router, prefix=prefix)
     app.include_router(model_routes.router, prefix=prefix)
+    app.include_router(object_routes.router, prefix=prefix)
+    app.include_router(object_routes.project_router, prefix=prefix)
     return app
 
 
