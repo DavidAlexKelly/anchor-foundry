@@ -275,3 +275,88 @@ export interface ModelRunResult {
   rows_produced: number;
   output_dataset: { id: string; name: string; slug: string; current_version: number } | null;
 }
+
+// ---- objects (ontology) -----------------------------------------------------
+export type PropertyDataType =
+  | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint" | "json";
+export type LinkCardinality = "one_to_one" | "one_to_many" | "many_to_many";
+export type SourceSyncStatus = "never_synced" | "syncing" | "synced" | "error";
+
+export interface ObjectTypeProperty {
+  id: string;
+  api_name: string;
+  display_name: string;
+  data_type: PropertyDataType;
+  required: boolean;
+  description: string;
+  sort_order: number;
+}
+
+export interface ObjectTypeSummary {
+  id: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  icon: string;
+  colour: string;
+  title_property_id: string | null;
+  source_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ObjectTypeDetail {
+  id: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  icon: string;
+  colour: string;
+  title_property_id: string | null;
+  properties: ObjectTypeProperty[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LinkType {
+  id: string;
+  api_name: string;
+  display_name: string;
+  cardinality: LinkCardinality;
+  from_object_type_id: string;
+  from_display_name: string;
+  to_object_type_id: string;
+  to_display_name: string;
+  created_at: string;
+}
+
+export interface ObjectTypeSource {
+  id: string;
+  object_type_id: string;
+  object_type_name: string;
+  dataset_id: string;
+  dataset_name: string;
+  primary_key_column: string;
+  column_mappings: Record<string, string>;
+  sync_status: SourceSyncStatus;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface SuggestedProperty {
+  api_name: string;
+  display_name: string;
+  data_type: PropertyDataType;
+  required: boolean;
+  source_column: string;
+}
+
+export interface ObjectTypeSuggestion {
+  dataset_name: string;
+  suggested_api_name: string;
+  suggested_display_name: string;
+  suggested_primary_key: string | null;
+  suggested_title_property: string | null;
+  properties: SuggestedProperty[];
+}
