@@ -504,6 +504,61 @@ def test_unknown_instance_is_404(client: TestClient, fx: Fixture, sync_type_id: 
     assert r.status_code == 404
 
 
+# ---- scheduled sync ----------------------------------------------------------
+def test_default_schedule_is_unset(client: TestClient, fx: Fixture, sync_source_id: str) -> None:
+    r = client.get(f"{sbase(fx)}/{sync_source_id}/schedule", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["sync_schedule"] is None
+    assert r.json()["sync_next_run_at"] is None
+
+
+def test_viewer_cannot_set_schedule(client: TestClient, fx: Fixture, sync_source_id: str) -> None:
+    r = client.put(
+        f"{sbase(fx)}/{sync_source_id}/schedule",
+        headers=hdr(fx.viewer_sub), json={"cron_schedule": "*/15 * * * *"},
+    )
+    assert r.status_code == 403
+
+
+def test_set_schedule_computes_next_run_at(
+    client: TestClient, fx: Fixture, sync_source_id: str
+) -> None:
+    r = client.put(
+        f"{sbase(fx)}/{sync_source_id}/schedule",
+        headers=hdr(fx.editor_sub), json={"cron_schedule": "*/15 * * * *"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sync_schedule"] == "*/15 * * * *"
+    assert body["sync_next_run_at"] is not None
+
+    r = client.get(f"{sbase(fx)}/{sync_source_id}/schedule", headers=hdr(fx.viewer_sub))
+    assert r.json()["sync_schedule"] == "*/15 * * * *"
+
+
+def test_invalid_cron_expression_is_422(
+    client: TestClient, fx: Fixture, sync_source_id: str
+) -> None:
+    r = client.put(
+        f"{sbase(fx)}/{sync_source_id}/schedule",
+        headers=hdr(fx.editor_sub), json={"cron_schedule": "not a cron expression"},
+    )
+    assert r.status_code == 422
+
+
+def test_clear_schedule(client: TestClient, fx: Fixture, sync_source_id: str) -> None:
+    r = client.delete(f"{sbase(fx)}/{sync_source_id}/schedule", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["sync_schedule"] is None
+    assert r.json()["sync_next_run_at"] is None
+
+
+def test_schedule_actions_audited(client: TestClient, fx: Fixture) -> None:
+    r = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
+    actions = {e["action"] for e in r.json()}
+    assert {"object_type_source.schedule_set", "object_type_source.schedule_clear"} <= actions
+
+
 def test_delete_source_cascades_instances(
     client: TestClient, fx: Fixture, sync_source_id: str, sync_type_id: str
 ) -> None:

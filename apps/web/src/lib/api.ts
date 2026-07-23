@@ -370,6 +370,20 @@ export const objects = {
       `/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}/sync`,
       { method: "POST", body: JSON.stringify({}) },
     ),
+  getSourceSchedule: (wid: string, pid: string, sourceId: string) =>
+    request<import("./types").ObjectSourceSchedule>(
+      `/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}/schedule`,
+    ),
+  setSourceSchedule: (wid: string, pid: string, sourceId: string, cronSchedule: string) =>
+    request<import("./types").ObjectSourceSchedule>(
+      `/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}/schedule`,
+      { method: "PUT", body: JSON.stringify({ cron_schedule: cronSchedule }) },
+    ),
+  clearSourceSchedule: (wid: string, pid: string, sourceId: string) =>
+    request<import("./types").ObjectSourceSchedule>(
+      `/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}/schedule`,
+      { method: "DELETE" },
+    ),
   listInstances: (wid: string, typeId: string, limit = 50, offset = 0) =>
     request<import("./types").ObjectInstancePage>(
       `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}&offset=${offset}`,
