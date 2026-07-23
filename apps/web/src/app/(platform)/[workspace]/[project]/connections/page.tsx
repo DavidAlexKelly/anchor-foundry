@@ -2,8 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-import { useState } from "react";
-import { ApiError, connections as connApi, sync as syncApi } from "@/lib/api";
+import { useEffect, useState } from "react";
+import {
+  ApiError,
+  connections as connApi,
+  scheduledSync as scheduledSyncApi,
+  sync as syncApi,
+} from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { Connection, DiscoveredTable, SourceTypeInfo } from "@/lib/types";
@@ -431,6 +436,232 @@ function SyncDialog({
   );
 }
 
+/** A connection carries at most one managed scheduled/incremental sync
+ * target (migration 0014) — this dialog is both the "set it up" form and
+ * the status view, since there's only ever one to show. */
+function ScheduledSyncDialog({
+  workspaceId,
+  projectId,
+  connection,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  connection: Connection;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+
+  const schedule = useQuery({
+    queryKey: ["scheduled-sync", connection.id],
+    queryFn: () => scheduledSyncApi.get(workspaceId, projectId, connection.id),
+  });
+  const discover = useQuery({
+    queryKey: ["discover", connection.id],
+    queryFn: () => connApi.discover(workspaceId, projectId, connection.id),
+    retry: false,
+  });
+
+  const [mode, setMode] = useState<"full" | "incremental">("full");
+  const [table, setTable] = useState<string | null>(null);
+  const [datasetName, setDatasetName] = useState("");
+  const [pkColumn, setPkColumn] = useState("");
+  const [cursorColumn, setCursorColumn] = useState("");
+  const [cronSchedule, setCronSchedule] = useState("*/15 * * * *");
+
+  useEffect(() => {
+    if (!schedule.data) return;
+    setMode(schedule.data.sync_mode === "incremental" ? "incremental" : "full");
+    if (schedule.data.sync_source_schema && schedule.data.sync_source_table) {
+      setTable(`${schedule.data.sync_source_schema}.${schedule.data.sync_source_table}`);
+    }
+    setDatasetName(schedule.data.sync_dataset_name ?? "");
+    setPkColumn(schedule.data.sync_primary_key_column ?? "");
+    setCursorColumn(schedule.data.sync_cursor_column ?? "");
+    if (schedule.data.sync_schedule) setCronSchedule(schedule.data.sync_schedule);
+  }, [schedule.data]);
+
+  const columns = discover.data?.find((t) => `${t.schema_name}.${t.name}` === table)?.columns ?? [];
+
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["scheduled-sync", connection.id] });
+    await queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
+  };
+
+  const save = useMutation({
+    mutationFn: () => {
+      if (!table) throw new Error("pick a table");
+      const dot = table.indexOf(".");
+      const schemaName = dot === -1 ? "public" : table.slice(0, dot);
+      const tableName = dot === -1 ? table : table.slice(dot + 1);
+      return scheduledSyncApi.set(workspaceId, projectId, connection.id, {
+        mode,
+        source_schema: schemaName,
+        source_table: tableName,
+        dataset_name: datasetName || undefined,
+        primary_key_column: mode === "incremental" ? pkColumn : undefined,
+        cursor_column: mode === "incremental" ? cursorColumn : undefined,
+        cron_schedule: cronSchedule || undefined,
+      });
+    },
+    onSuccess: invalidate,
+  });
+  const clear = useMutation({
+    mutationFn: () => scheduledSyncApi.clear(workspaceId, projectId, connection.id),
+    onSuccess: invalidate,
+  });
+  const runNow = useMutation({
+    mutationFn: () => scheduledSyncApi.run(workspaceId, projectId, connection.id),
+    onSuccess: async () => {
+      await invalidate();
+      await queryClient.invalidateQueries({ queryKey: ["datasets", projectId] });
+    },
+  });
+
+  const configured = !!schedule.data?.sync_source_table;
+  const result = runNow.data;
+
+  return (
+    <Dialog open wide title={`Scheduled sync — ${connection.name}`} onClose={onClose}>
+      {schedule.isPending && <div className="state">Loading schedule…</div>}
+      {schedule.data && (
+        <>
+          {configured && (
+            <div className="card" style={{ marginBottom: 14 }}>
+              <p className="login-note" style={{ marginTop: 0 }}>
+                {schedule.data.sync_mode} sync of {schedule.data.sync_source_schema}.
+                {schedule.data.sync_source_table}
+                {schedule.data.sync_schedule
+                  ? ` on ${schedule.data.sync_schedule}`
+                  : " — no cron, run manually with the button below"}
+              </p>
+              {schedule.data.sync_next_run_at && (
+                <p className="slug">
+                  next run: {new Date(schedule.data.sync_next_run_at).toLocaleString()}
+                </p>
+              )}
+              {schedule.data.sync_last_cursor_value && (
+                <p className="slug">last cursor: {schedule.data.sync_last_cursor_value}</p>
+              )}
+              {result && (
+                <div style={{ marginTop: 8 }}>
+                  {result.ok ? (
+                    <p className="login-note" style={{ margin: 0 }}>
+                      Synced {result.rows_synced.toLocaleString()} rows
+                      {result.dataset ? ` → ${result.dataset.name} v${result.dataset.current_version}` : ""}.
+                    </p>
+                  ) : (
+                    <div className="form-error">{result.error}</div>
+                  )}
+                </div>
+              )}
+              <div className="form-actions" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  disabled={runNow.isPending}
+                  onClick={() => runNow.mutate()}
+                >
+                  {runNow.isPending ? "Running…" : "Run now"}
+                </button>
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={clear.isPending}
+                  onClick={() => clear.mutate()}
+                >
+                  Stop scheduling
+                </button>
+              </div>
+            </div>
+          )}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              save.mutate();
+            }}
+          >
+            <Field label="Mode">
+              <select value={mode} onChange={(e) => setMode(e.target.value as "full" | "incremental")}>
+                <option value="full">Full — replace the dataset each run</option>
+                <option value="incremental">Incremental — merge only new/changed rows</option>
+              </select>
+            </Field>
+            {discover.isPending && <div className="state">Reading the source schema…</div>}
+            {discover.data && (
+              <Field label="Table">
+                <select value={table ?? ""} onChange={(e) => setTable(e.target.value || null)} required>
+                  <option value="">Choose a table…</option>
+                  {discover.data
+                    .filter((t) => t.kind === "table")
+                    .map((t) => (
+                      <option key={`${t.schema_name}.${t.name}`} value={`${t.schema_name}.${t.name}`}>
+                        {t.schema_name}.{t.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            )}
+            <Field label="Dataset name" hint="Defaults to the table name">
+              <input
+                type="text"
+                value={datasetName}
+                onChange={(e) => setDatasetName(e.target.value)}
+                maxLength={200}
+              />
+            </Field>
+            {mode === "incremental" && (
+              <>
+                <Field label="Primary key column">
+                  <select value={pkColumn} onChange={(e) => setPkColumn(e.target.value)} required>
+                    <option value="">Choose a column…</option>
+                    {columns.map((c) => (
+                      <option key={c.name} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field
+                  label="Cursor column"
+                  hint="A column that only increases over time (id, updated_at, ...)"
+                >
+                  <select value={cursorColumn} onChange={(e) => setCursorColumn(e.target.value)} required>
+                    <option value="">Choose a column…</option>
+                    {columns.map((c) => (
+                      <option key={c.name} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              </>
+            )}
+            <Field label="Cron schedule" hint="Leave a schedule to run automatically; clear it to sync manually only">
+              <input
+                type="text"
+                style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, width: 160 }}
+                value={cronSchedule}
+                onChange={(e) => setCronSchedule(e.target.value)}
+                placeholder="*/15 * * * *"
+              />
+            </Field>
+            {save.isError && (
+              <div className="form-error">
+                {save.error instanceof ApiError ? save.error.message : "Couldn't save the schedule."}
+              </div>
+            )}
+            <div className="form-actions">
+              <button type="button" className="btn quiet" onClick={onClose}>
+                Close
+              </button>
+              <button type="submit" className="btn" disabled={save.isPending || !table}>
+                {save.isPending ? "Saving…" : "Save schedule"}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 function ConnectionRow({
   workspaceId,
   projectId,
@@ -445,6 +676,7 @@ function ConnectionRow({
   const queryClient = useQueryClient();
   const [showSchema, setShowSchema] = useState(false);
   const [showSync, setShowSync] = useState(false);
+  const [showScheduledSync, setShowScheduledSync] = useState(false);
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
 
@@ -502,6 +734,13 @@ function ConnectionRow({
               Sync
             </button>
             <button
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setShowScheduledSync(true)}
+            >
+              Scheduled sync
+            </button>
+            <button
               className="btn danger"
               style={{ padding: "3px 9px", fontSize: 12 }}
               disabled={remove.isPending}
@@ -529,6 +768,14 @@ function ConnectionRow({
             projectId={projectId}
             connection={connection}
             onClose={() => setShowSchema(false)}
+          />
+        )}
+        {showScheduledSync && (
+          <ScheduledSyncDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            connection={connection}
+            onClose={() => setShowScheduledSync(false)}
           />
         )}
       </td>

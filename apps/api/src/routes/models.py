@@ -1,9 +1,13 @@
 """Model routes (spec §17: /workspaces/{id}/projects/{id}/models).
 
 Role floors (conservative, flagged): read = viewer; create/update/delete/run
-= editor. Runs execute inline via the sandboxed DuckDB engine; python
-transforms and cancel are worker-milestone features and rejected/absent with
-clear messaging (see services/models.py docstring).
+= editor. SQL runs execute inline via the sandboxed DuckDB engine and the
+route returns the finished result; Python runs (and any cron-fired run,
+whatever the language) are left 'queued' for the worker's
+scheduled_model_runs job to pick up — see services/models.py's docstring for
+the full reasoning. The cancel endpoint remains out of scope: a synchronous
+SQL run has no meaningful cancel, and a real cancel for queued/running
+worker jobs isn't built here.
 """
 from __future__ import annotations
 
@@ -57,6 +61,8 @@ class ModelOut(BaseModel):
     code: str
     output_dataset_id: UUID | None
     trigger_mode: str
+    cron_schedule: str | None = None
+    next_run_at: datetime | None = None
     last_run_status: str | None = None
     last_run_at: datetime | None = None
     inputs: list[ModelInputOut] = []
@@ -77,6 +83,8 @@ class ModelUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     code: str | None = Field(default=None, max_length=100_000)
     inputs: list[ModelInputIn] | None = Field(default=None, max_length=20)
+    trigger_mode: str | None = Field(default=None, pattern="^(manual|cron|upstream)$")
+    cron_schedule: str | None = Field(default=None, max_length=100)
 
 
 class RunOut(BaseModel):
@@ -93,6 +101,7 @@ class RunOut(BaseModel):
 
 class RunResult(BaseModel):
     run_id: UUID
+    status: str  # 'queued' | 'succeeded' | 'failed'
     ok: bool
     error: str | None
     rows_produced: int
@@ -119,17 +128,13 @@ async def create_model(
     request: Request,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> ModelOut:
-    if body.language == "python":
-        raise DatasetEngineError(
-            "python transforms need the isolated worker runtime — SQL models are "
-            "available now"
-        )
     async with user_connection(access.auth.user_id) as conn:
         row = await model_service.create(
             conn,
             project_id=access.project_id,
             name=body.name,
             description=body.description,
+            language=body.language,
             code=body.code,
             inputs=[i.model_dump() for i in body.inputs],
             created_by=access.auth.user_id,
@@ -176,6 +181,8 @@ async def update_model(
             description=body.description,
             code=body.code,
             inputs=[i.model_dump() for i in body.inputs] if body.inputs is not None else None,
+            trigger_mode=body.trigger_mode,
+            cron_schedule=body.cron_schedule,
         )
         await audit.record(
             conn,
@@ -187,7 +194,8 @@ async def update_model(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"code_changed": body.code is not None,
-                      "inputs_changed": body.inputs is not None},
+                      "inputs_changed": body.inputs is not None,
+                      "trigger_mode": body.trigger_mode},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -227,9 +235,33 @@ async def run_model(
         model = dict(await model_service.get(conn, access.project_id, model_id))
         inputs = await model_service.list_inputs(conn, model_id)
         if not str(model["code"]).strip():
-            raise DatasetEngineError("the model has no SQL yet")
+            raise DatasetEngineError("the model has no code yet")
         if not inputs:
             raise DatasetEngineError("add at least one input dataset before running")
+
+        if model["language"] == "python":
+            # Needs a real process boundary DuckDB can't give it — leave the
+            # run queued for the worker's scheduled_model_runs job and return
+            # immediately rather than blocking on its poll cycle.
+            run_id = await model_service.open_queued_run(conn, model_id, access.auth.user_id)
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="model.run",
+                resource_type="model",
+                resource_id=model_id,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                metadata={"status": "queued", "language": "python"},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            return RunResult(
+                run_id=run_id, status="queued", ok=True, error=None,
+                rows_produced=0, output_dataset=None,
+            )
+
         input_paths: dict[str, str] = {}
         for item in inputs:
             ds_row = await ds_service.get(
@@ -291,6 +323,7 @@ async def run_model(
         )
     return RunResult(
         run_id=run_id,
+        status="succeeded" if ok else "failed",
         ok=ok,
         error=error,
         rows_produced=rows_produced if ok else 0,

@@ -210,6 +210,41 @@ export const sync = {
     ),
 };
 
+export const scheduledSync = {
+  get: (wid: string, pid: string, cid: string) =>
+    request<import("./types").ScheduledSync>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/scheduled-sync`,
+    ),
+  set: (
+    wid: string,
+    pid: string,
+    cid: string,
+    input: {
+      mode: "full" | "incremental";
+      source_schema?: string;
+      source_table: string;
+      dataset_name?: string;
+      primary_key_column?: string;
+      cursor_column?: string;
+      cron_schedule?: string;
+    },
+  ) =>
+    request<import("./types").ScheduledSync>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/scheduled-sync`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  clear: (wid: string, pid: string, cid: string) =>
+    request<import("./types").ScheduledSync>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/scheduled-sync`,
+      { method: "DELETE" },
+    ),
+  run: (wid: string, pid: string, cid: string) =>
+    request<import("./types").SyncResult>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/scheduled-sync/run`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+};
+
 export const models = {
   list: (wid: string, pid: string) =>
     request<import("./types").Model[]>(`/workspaces/${wid}/projects/${pid}/models`),
@@ -219,6 +254,7 @@ export const models = {
     input: {
       name: string;
       description?: string;
+      language?: "sql" | "python";
       code: string;
       inputs: { dataset_id: string; input_alias: string }[];
     },
@@ -235,6 +271,8 @@ export const models = {
       name?: string;
       code?: string;
       inputs?: { dataset_id: string; input_alias: string }[];
+      trigger_mode?: "manual" | "cron" | "upstream";
+      cron_schedule?: string | null;
     },
   ) =>
     request<import("./types").Model>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, {

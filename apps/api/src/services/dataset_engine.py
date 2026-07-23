@@ -165,6 +165,51 @@ def export_csv(parquet_path: str, dest_path: str) -> None:
         con.close()
 
 
+def merge_incremental(
+    existing_parquet: str | None,
+    new_rows_parquet: str,
+    primary_key_column: str,
+    dest_parquet: str,
+) -> tuple[list[ColumnSchema], int]:
+    """Upsert an incremental sync's new/changed rows into the existing
+    dataset by primary key, writing the merged result as a new version. No
+    existing_parquet means this is the connection's first incremental run —
+    the new rows are the whole dataset."""
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(
+                f"CREATE TABLE new_rows AS SELECT * FROM read_parquet({new_rows_parquet!r})"
+            )
+            if existing_parquet is None:
+                con.execute("CREATE TABLE merged AS SELECT * FROM new_rows")
+            else:
+                con.execute(
+                    f"CREATE TABLE existing AS SELECT * FROM read_parquet({existing_parquet!r})"
+                )
+                pk = f'"{primary_key_column}"'
+                con.execute(
+                    f"""
+                    CREATE TABLE merged AS
+                    SELECT * FROM existing WHERE {pk} NOT IN (SELECT {pk} FROM new_rows)
+                    UNION ALL
+                    SELECT * FROM new_rows
+                    """
+                )
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        schema = [
+            ColumnSchema(name=row[0], data_type=row[1])
+            for row in con.execute("DESCRIBE merged").fetchall()
+        ]
+        row_count = int(con.execute("SELECT count(*) FROM merged").fetchone()[0])
+        os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
+        con.execute(f"COPY merged TO {dest_parquet!r} (FORMAT parquet)")
+        return schema, row_count
+    finally:
+        con.close()
+
+
 def _clean(exc: duckdb.Error) -> str:
     """First line of DuckDB's message: precise about the SQL/file problem,
     never contains paths beyond the one we passed in."""

@@ -233,6 +233,22 @@ export interface SyncRun {
   dataset_name: string | null;
 }
 
+// A connection carries at most one managed scheduled/incremental sync
+// target (migration 0014) — not several independently scheduled tables.
+export interface ScheduledSync {
+  id: string;
+  sync_mode: SyncMode;
+  sync_schedule: string | null;
+  sync_source_schema: string | null;
+  sync_source_table: string | null;
+  sync_dataset_name: string | null;
+  sync_dataset_id: string | null;
+  sync_primary_key_column: string | null;
+  sync_cursor_column: string | null;
+  sync_last_cursor_value: string | null;
+  sync_next_run_at: string | null;
+}
+
 // ---- models -----------------------------------------------------------------
 export interface ModelInput {
   dataset_id: string;
@@ -249,6 +265,8 @@ export interface Model {
   code: string;
   output_dataset_id: string | null;
   trigger_mode: "manual" | "cron" | "upstream";
+  cron_schedule: string | null;
+  next_run_at: string | null;
   last_run_status: string | null;
   last_run_at: string | null;
   inputs: ModelInput[];
@@ -270,6 +288,7 @@ export interface ModelRun {
 
 export interface ModelRunResult {
   run_id: string;
+  status: "queued" | "succeeded" | "failed";
   ok: boolean;
   error: string | null;
   rows_produced: number;
