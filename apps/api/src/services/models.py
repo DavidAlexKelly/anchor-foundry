@@ -2,16 +2,23 @@
 model_inputs / model_runs, §17 "Models: CRUD, code editor, trigger run, run
 history, cancel").
 
-Scope in this slice, each deviation flagged:
-  * language='sql' only. Python transforms need an isolated worker runtime
-    (process/container sandbox) — DuckDB SQL is already sandboxed by the
-    engine; the API rejects python with a clear message.
-  * Runs execute inline in the request (the same DuckDB path as queries).
-    trigger_mode 'cron'/'upstream' and the cancel endpoint belong to the
-    worker milestone — a synchronous run has no meaningful cancel, so the
-    endpoint is deliberately absent rather than decorative.
+Scope, each deviation flagged:
+  * language='sql' runs execute inline in the request (the same sandboxed
+    DuckDB path as queries) — an interactive result the caller waits for.
+    language='python' needs a real process boundary DuckDB can't give it
+    (see apps/worker's python_sandbox.py), so a python run is left
+    'queued' by open_run() and the worker's scheduled_model_runs job picks
+    it up; the route returns immediately rather than blocking on the
+    worker's poll cycle.
+  * trigger_mode='cron': the API only computes an initial next_run_at guess
+    (lib/cron.py) when the schedule is set or changed; the worker
+    recomputes it after every firing, since it's the process that actually
+    observes "this just fired." trigger_mode='upstream' and the cancel
+    endpoint remain out of scope — a synchronous SQL run has no meaningful
+    cancel, and 'upstream' triggers belong with a real dependency graph,
+    neither built here.
   * Run logs live in error_message/rows_produced; log_s3_key is written by
-    the worker runtime when it takes over long runs.
+    the worker runtime for long runs.
 
 Output semantics mirror connection sync: first successful run creates the
 output dataset (origin='model_output', slug from the model name) and links
@@ -30,6 +37,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from ..lib.cron import next_run_after
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
 from . import dataset_engine as engine
@@ -38,7 +46,7 @@ from .storage import StorageGateway
 
 _COLUMNS = """
     id, project_id, name, description, language, code, output_dataset_id,
-    trigger_mode, cron_schedule, created_by, created_at, updated_at
+    trigger_mode, cron_schedule, next_run_at, created_by, created_at, updated_at
 """
 
 
@@ -129,6 +137,7 @@ async def create(
     project_id: UUID,
     name: str,
     description: str,
+    language: str,
     code: str,
     inputs: list[dict[str, Any]],
     created_by: UUID,
@@ -144,13 +153,14 @@ async def create(
         conn,
         f"""
         INSERT INTO models (project_id, name, description, language, code, created_by)
-        VALUES (:pid, :name, :descr, 'sql', :code, :by)
+        VALUES (:pid, :name, :descr, CAST(:lang AS model_language), :code, :by)
         RETURNING {_COLUMNS}
         """,
         {
             "pid": str(project_id),
             "name": name,
             "descr": description,
+            "lang": language,
             "code": code,
             "by": str(created_by),
         },
@@ -169,19 +179,39 @@ async def update(
     description: str | None,
     code: str | None,
     inputs: list[dict[str, Any]] | None,
+    trigger_mode: str | None = None,
+    cron_schedule: str | None = None,
 ) -> dict[str, Any]:
     await get(conn, project_id, model_id)
+    if trigger_mode == "cron":
+        if not cron_schedule:
+            raise ValueError("cron_schedule is required when trigger_mode is 'cron'")
+        next_run_at = next_run_after(cron_schedule)
+    elif trigger_mode is not None:
+        next_run_at = None  # switching away from cron clears any pending schedule
+    else:
+        next_run_at = None
     row = await fetch_one(
         conn,
         f"""
         UPDATE models
            SET name = COALESCE(:name, name),
                description = COALESCE(:descr, description),
-               code = COALESCE(:code, code)
+               code = COALESCE(:code, code),
+               trigger_mode = COALESCE(CAST(:trigger AS model_trigger), trigger_mode),
+               cron_schedule = CASE WHEN :trigger = 'cron' THEN :cron
+                                    WHEN :trigger IS NOT NULL THEN NULL
+                                    ELSE cron_schedule END,
+               next_run_at = CASE WHEN :trigger IS NOT NULL THEN :next_run_at
+                                  ELSE next_run_at END
          WHERE id = :mid
         RETURNING {_COLUMNS}
         """,
-        {"name": name, "descr": description, "code": code, "mid": str(model_id)},
+        {
+            "name": name, "descr": description, "code": code,
+            "trigger": trigger_mode, "cron": cron_schedule, "next_run_at": next_run_at,
+            "mid": str(model_id),
+        },
     )
     assert row is not None
     if inputs is not None:
@@ -202,11 +232,33 @@ async def delete(conn: AsyncConnection, project_id: UUID, model_id: UUID) -> Non
 async def open_run(
     conn: AsyncConnection, model_id: UUID, triggered_by: UUID
 ) -> UUID:
+    """SQL runs only — the route executes the transform immediately after
+    this call, so 'running'/started_at=now() is accurate the instant it's
+    written. Python runs use open_queued_run instead: nothing executes them
+    until the worker's poll picks the row up."""
     row = await fetch_one(
         conn,
         """
         INSERT INTO model_runs (model_id, status, triggered_by, trigger_kind, started_at)
         VALUES (:mid, 'running', :by, 'manual', now())
+        RETURNING id
+        """,
+        {"mid": str(model_id), "by": str(triggered_by)},
+    )
+    assert row is not None
+    return UUID(str(row["id"]))
+
+
+async def open_queued_run(
+    conn: AsyncConnection, model_id: UUID, triggered_by: UUID
+) -> UUID:
+    """Python runs: left at the table's default status='queued' with no
+    started_at — that only gets set when the worker actually starts it."""
+    row = await fetch_one(
+        conn,
+        """
+        INSERT INTO model_runs (model_id, triggered_by, trigger_kind)
+        VALUES (:mid, :by, 'manual')
         RETURNING id
         """,
         {"mid": str(model_id), "by": str(triggered_by)},

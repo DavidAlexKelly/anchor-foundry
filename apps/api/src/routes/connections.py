@@ -401,8 +401,9 @@ async def trigger_sync(
 ) -> SyncResult:
     if body.mode == "incremental":
         raise ConnectorConfigError(
-            "incremental sync needs a cursor column and arrives with scheduled "
-            "worker syncs — use mode 'full' for now"
+            "incremental sync needs stored cursor progress — set up a scheduled "
+            "sync (POST .../scheduled-sync) and use its 'run now' endpoint instead "
+            "of an ad hoc trigger"
         )
     async with user_connection(access.auth.user_id) as conn:
         row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
@@ -497,4 +498,224 @@ async def sync_runs(
     return [SyncRunOut(**r) for r in rows]
 
 
+# ---- scheduled/incremental sync (spec: cron-triggered, cursor-based sync) ---
+# A connection carries at most one managed sync target — migration 0014
+# completes the sync_mode/sync_schedule columns that existed since 0003 with
+# the fields a schedulable/incremental sync needs to be self-contained.
+# Firing on schedule is the worker's job (scheduled_connection_syncs);
+# "run now" here executes the identical steps inline, same relationship as
+# models' manual run vs. its own scheduled_model_runs job.
+class ScheduledSyncSet(BaseModel):
+    mode: str = Field(pattern="^(full|incremental)$")
+    source_schema: str = Field(default="public", min_length=1, max_length=63)
+    source_table: str = Field(min_length=1, max_length=63)
+    dataset_name: str | None = Field(default=None, min_length=1, max_length=200)
+    primary_key_column: str | None = Field(default=None, min_length=1, max_length=200)
+    cursor_column: str | None = Field(default=None, min_length=1, max_length=200)
+    cron_schedule: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class ScheduledSyncOut(BaseModel):
+    id: UUID
+    sync_mode: str
+    sync_schedule: str | None
+    sync_source_schema: str | None
+    sync_source_table: str | None
+    sync_dataset_name: str | None
+    sync_dataset_id: UUID | None
+    sync_primary_key_column: str | None
+    sync_cursor_column: str | None
+    sync_last_cursor_value: str | None
+    sync_next_run_at: datetime | None
+
+
+@router.get("/{connection_id}/scheduled-sync", response_model=ScheduledSyncOut)
+async def get_scheduled_sync(
+    connection_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ScheduledSyncOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.get_schedule(
+            conn, access.workspace_id, access.project_id, connection_id
+        )
+    return ScheduledSyncOut(**row)
+
+
+@router.put("/{connection_id}/scheduled-sync", response_model=ScheduledSyncOut)
+async def set_scheduled_sync(
+    connection_id: UUID,
+    body: ScheduledSyncSet,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ScheduledSyncOut:
+    if body.mode == "incremental" and (not body.primary_key_column or not body.cursor_column):
+        raise ConnectorConfigError(
+            "incremental sync needs both a primary key column and a cursor column"
+        )
+    next_run_at = next_run_after(body.cron_schedule) if body.cron_schedule else None
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.set_schedule(
+            conn, access.workspace_id, access.project_id, connection_id,
+            mode=body.mode, source_schema=body.source_schema, source_table=body.source_table,
+            dataset_name=body.dataset_name, primary_key_column=body.primary_key_column,
+            cursor_column=body.cursor_column, cron_schedule=body.cron_schedule,
+            next_run_at=next_run_at,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.scheduled_sync.set",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={
+                "mode": body.mode, "table": f"{body.source_schema}.{body.source_table}",
+                "cron_schedule": body.cron_schedule,
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ScheduledSyncOut(**row)
+
+
+@router.delete("/{connection_id}/scheduled-sync", response_model=ScheduledSyncOut)
+async def clear_scheduled_sync(
+    connection_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ScheduledSyncOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.clear_schedule(
+            conn, access.workspace_id, access.project_id, connection_id
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.scheduled_sync.clear",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ScheduledSyncOut(**row)
+
+
+@router.post("/{connection_id}/scheduled-sync/run", response_model=SyncResult)
+async def run_scheduled_sync(
+    connection_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> SyncResult:
+    async with user_connection(access.auth.user_id) as conn:
+        schedule = await conn_service.get_schedule(
+            conn, access.workspace_id, access.project_id, connection_id
+        )
+        if not schedule["sync_source_table"]:
+            raise ConnectorConfigError(
+                "no scheduled sync target is configured — set one with PUT .../scheduled-sync first"
+            )
+        row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        run_id = await sync_service.open_run(
+            conn,
+            connection_id=connection_id,
+            source_table=f"{schedule['sync_source_schema']}.{schedule['sync_source_table']}",
+            requested_by=access.auth.user_id,
+        )
+
+    config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
+    mode = schedule["sync_mode"]
+    ok, error, rows_synced, created = True, None, 0, False
+    dataset: dict[str, Any] | None = None
+    new_cursor_value = schedule["sync_last_cursor_value"]
+    tmp_dir = _tempfile.mkdtemp()
+    csv_path = _os.path.join(tmp_dir, "snapshot.csv")
+    try:
+        secret = conn_service.secret_values_for(_secrets, row)
+        cursor_col = schedule["sync_cursor_column"] if mode == "incremental" else None
+        await anyio.to_thread.run_sync(
+            sync_service.snapshot_source_table,
+            config, secret, schedule["sync_source_schema"], schedule["sync_source_table"],
+            csv_path, cursor_col, schedule["sync_last_cursor_value"],
+        )
+        if mode == "incremental" and cursor_col:
+            new_cursor_value = await anyio.to_thread.run_sync(
+                sync_service.max_cursor_value,
+                config, secret, schedule["sync_source_schema"], schedule["sync_source_table"], cursor_col,
+            ) or schedule["sync_last_cursor_value"]
+
+        async with user_connection(access.auth.user_id) as conn:
+            if mode == "incremental":
+                dataset, rows_synced, created = await sync_service.run_incremental_sync(
+                    conn, _dataset_storage(),
+                    connection_row=schedule,
+                    workspace_id=access.workspace_id, project_id=access.project_id,
+                    source_schema=schedule["sync_source_schema"],
+                    source_table=schedule["sync_source_table"],
+                    dataset_name=schedule["sync_dataset_name"],
+                    primary_key_column=schedule["sync_primary_key_column"],
+                    new_cursor_value=new_cursor_value,
+                    requested_by=access.auth.user_id,
+                    snapshot_csv_path=csv_path,
+                )
+            else:
+                dataset, rows_synced, created = await sync_service.run_full_sync(
+                    conn, _dataset_storage(),
+                    connection_row=row,
+                    workspace_id=access.workspace_id, project_id=access.project_id,
+                    source_schema=schedule["sync_source_schema"],
+                    source_table=schedule["sync_source_table"],
+                    dataset_name=schedule["sync_dataset_name"],
+                    requested_by=access.auth.user_id,
+                    snapshot_csv_path=csv_path,
+                )
+                if dataset:
+                    await conn.execute(
+                        _sql_text("UPDATE connections SET sync_dataset_id = :did WHERE id = :cid"),
+                        {"did": str(dataset["id"]), "cid": str(connection_id)},
+                    )
+    except (SyncError, ConnectorOperationError) as exc:
+        ok, error = False, str(exc)
+    except KeyError:
+        ok, error = False, "stored credentials are missing — update the connection"
+    finally:
+        import shutil as _shutil
+
+        _shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    async with user_connection(access.auth.user_id) as conn:
+        await sync_service.close_run(
+            conn, run_id, ok=ok, rows_synced=rows_synced,
+            dataset_id=UUID(str(dataset["id"])) if dataset else None, error=error,
+        )
+        await conn_service.record_test_result(conn, connection_id, ok=ok, error=error)
+        if ok:
+            await conn.execute(
+                _sql_text("UPDATE connections SET last_synced_at = now() WHERE id = :cid"),
+                {"cid": str(connection_id)},
+            )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.scheduled_sync.run",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"mode": mode, "ok": ok, "rows": rows_synced},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SyncResult(
+        run_id=run_id, ok=ok, error=error, rows_synced=rows_synced,
+        created_dataset=created, dataset=SyncDatasetOut(**dataset) if dataset else None,
+    )
+
+
+from ..lib.cron import next_run_after  # noqa: E402
 from sqlalchemy import text as _sql_text  # noqa: E402

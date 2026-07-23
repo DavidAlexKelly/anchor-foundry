@@ -181,6 +181,90 @@ async def delete(
         secrets.delete_secret(str(existing["secret_arn"]))
 
 
+_SCHEDULE_COLUMNS = """
+    sync_mode, sync_schedule, sync_source_schema, sync_source_table, sync_dataset_name,
+    sync_dataset_id, sync_primary_key_column, sync_cursor_column, sync_last_cursor_value,
+    sync_next_run_at
+"""
+
+
+async def set_schedule(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    project_id: UUID,
+    connection_id: UUID,
+    *,
+    mode: str,
+    source_schema: str,
+    source_table: str,
+    dataset_name: str | None,
+    primary_key_column: str | None,
+    cursor_column: str | None,
+    cron_schedule: str | None,
+    next_run_at,
+) -> dict[str, Any]:
+    """Define (or redefine) the one managed sync target a connection can
+    carry — spec-shaped, flagged in migration 0014: a connection supports at
+    most one scheduled/incremental sync target, not several independently
+    scheduled tables."""
+    await get(conn, workspace_id, project_id, connection_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE connections
+           SET sync_mode = CAST(:mode AS sync_mode),
+               sync_source_schema = :schema,
+               sync_source_table = :table,
+               sync_dataset_name = :dsname,
+               sync_primary_key_column = :pk,
+               sync_cursor_column = :cursor,
+               sync_schedule = :cron,
+               sync_next_run_at = :next_run
+         WHERE id = :cid
+        RETURNING id, {_SCHEDULE_COLUMNS}
+        """,
+        {
+            "mode": mode, "schema": source_schema, "table": source_table,
+            "dsname": dataset_name, "pk": primary_key_column, "cursor": cursor_column,
+            "cron": cron_schedule, "next_run": next_run_at, "cid": str(connection_id),
+        },
+    )
+    assert row is not None
+    return row
+
+
+async def clear_schedule(
+    conn: AsyncConnection, workspace_id: UUID, project_id: UUID, connection_id: UUID
+) -> dict[str, Any]:
+    """Stops the cron firing (sync_schedule/sync_next_run_at cleared) but
+    keeps the target/mode/cursor config so a manual 'run now' still works."""
+    await get(conn, workspace_id, project_id, connection_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE connections SET sync_schedule = NULL, sync_next_run_at = NULL
+         WHERE id = :cid
+        RETURNING id, {_SCHEDULE_COLUMNS}
+        """,
+        {"cid": str(connection_id)},
+    )
+    assert row is not None
+    return row
+
+
+async def get_schedule(
+    conn: AsyncConnection, workspace_id: UUID, project_id: UUID, connection_id: UUID
+) -> dict[str, Any]:
+    await get(conn, workspace_id, project_id, connection_id)
+    row = await fetch_one(
+        conn,
+        f"SELECT id, {_SCHEDULE_COLUMNS} FROM connections WHERE id = :cid",
+        {"cid": str(connection_id)},
+    )
+    assert row is not None
+    return row
+
+
 async def record_test_result(
     conn: AsyncConnection, connection_id: UUID, *, ok: bool, error: str | None
 ) -> dict[str, Any]:

@@ -97,13 +97,59 @@ def model_id(client: TestClient, fx: Fixture, input_datasets: dict[str, str]) ->
     return body["id"]
 
 
-def test_python_language_clearly_deferred(client: TestClient, fx: Fixture) -> None:
+def test_python_model_run_is_queued_for_the_worker(
+    client: TestClient, fx: Fixture, input_datasets: dict[str, str]
+) -> None:
+    ids = list(input_datasets.values())
     r = client.post(
         mbase(fx), headers=hdr(fx.editor_sub),
-        json={"name": "Py", "language": "python", "code": "print(1)"},
+        json={
+            "name": f"Py {fx.tag}", "language": "python", "code": "output = orders",
+            "inputs": [{"dataset_id": ids[0], "input_alias": "orders"}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    py_model_id = r.json()["id"]
+
+    # Running it doesn't execute inline — a real process boundary is needed
+    # (services/models.py's docstring) — it's left queued for the worker.
+    r = client.post(f"{mbase(fx)}/{py_model_id}/run", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "queued"
+    assert body["output_dataset"] is None
+
+    r = client.get(f"{mbase(fx)}/{py_model_id}/runs", headers=hdr(fx.viewer_sub))
+    assert r.json()[0]["status"] == "queued"
+
+
+def test_cron_schedule_sets_next_run_at(client: TestClient, fx: Fixture, model_id: str) -> None:
+    r = client.patch(
+        f"{mbase(fx)}/{model_id}", headers=hdr(fx.editor_sub),
+        json={"trigger_mode": "cron", "cron_schedule": "*/15 * * * *"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["trigger_mode"] == "cron"
+    assert body["cron_schedule"] == "*/15 * * * *"
+    assert body["next_run_at"] is not None
+
+    r = client.patch(
+        f"{mbase(fx)}/{model_id}", headers=hdr(fx.editor_sub),
+        json={"trigger_mode": "cron", "cron_schedule": "not a cron expression"},
     )
     assert r.status_code == 422
-    assert "worker" in r.json()["detail"]
+
+    # switching back to manual clears the schedule
+    r = client.patch(
+        f"{mbase(fx)}/{model_id}", headers=hdr(fx.editor_sub),
+        json={"trigger_mode": "manual"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["trigger_mode"] == "manual"
+    assert body["cron_schedule"] is None
+    assert body["next_run_at"] is None
 
 
 def test_viewer_cannot_create_or_run(client: TestClient, fx: Fixture, model_id: str) -> None:

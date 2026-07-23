@@ -5,11 +5,15 @@ Architecturally significant, flagged for review: this slice stores instances
 in Postgres (object_instances, migration 0012) rather than OpenSearch. That
 is not a drop-in gateway swap like storage (S3 vs local disk) or secrets
 (Secrets Manager vs in-memory) — Postgres RLS gives free, per-row workspace
-isolation that a search index does not enforce on its own. A production
-OpenSearch-backed store needs its own access-control design (workspace/type
-filters baked into every query, since there is no RLS at that layer); this
-module is written so that swap is a service-layer change, not a route-layer
-one, but the swap itself is out of scope here.
+isolation that a search index does not enforce on its own. The production
+OpenSearch-backed store now exists (services/instance_store.py:
+OpenSearchInstanceStore, index-per-workspace via the same search_prefix
+isolation anchor S3/pg_schema already use, object_type_id filtered within
+it) but is not wired in here yet — the cutover replaces the Postgres-
+connection-shaped functions below with calls through that gateway, which is
+deliberately left as its own follow-up so it can be reviewed independently;
+see that module's docstring for the full design and why it isn't a one-line
+swap.
 
 Sync (project-scoped, triggered per object_type_source): reads the mapped
 dataset's current Parquet file through the same DuckDB path datasets/models

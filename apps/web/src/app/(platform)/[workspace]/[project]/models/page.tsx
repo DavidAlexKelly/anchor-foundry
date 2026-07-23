@@ -9,6 +9,7 @@ import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace
 import type { Model } from "@/lib/types";
 
 const DEFAULT_SQL = "SELECT *\n  FROM orders\n LIMIT 100";
+const DEFAULT_PYTHON = "output = orders.copy()\n";
 
 function RunBadge({ model }: { model: Model }) {
   if (!model.last_run_status) {
@@ -20,6 +21,17 @@ function RunBadge({ model }: { model: Model }) {
     <span className={cls}>
       <span className="status-dot" />
       <span className="status-label">{model.last_run_status}</span>
+    </span>
+  );
+}
+
+function ScheduleSummary({ model }: { model: Model }) {
+  if (model.trigger_mode !== "cron") return <span className="count">manual</span>;
+  const next = model.next_run_at ? new Date(model.next_run_at).toLocaleString() : "due now";
+  return (
+    <span title={model.cron_schedule ?? undefined}>
+      <span className="chip">{model.cron_schedule}</span>
+      <div className="slug">next: {next}</div>
     </span>
   );
 }
@@ -36,10 +48,15 @@ function ModelDialog({
   onClose: () => void;
 }) {
   const [name, setName] = useState(existing?.name ?? "");
+  const [language, setLanguage] = useState<"sql" | "python">(existing?.language ?? "sql");
   const [code, setCode] = useState(existing?.code ?? DEFAULT_SQL);
   const [inputs, setInputs] = useState<{ dataset_id: string; input_alias: string }[]>(
     existing?.inputs.map((i) => ({ dataset_id: i.dataset_id, input_alias: i.input_alias })) ?? [],
   );
+  const [triggerMode, setTriggerMode] = useState<"manual" | "cron">(
+    existing?.trigger_mode === "cron" ? "cron" : "manual",
+  );
+  const [cronSchedule, setCronSchedule] = useState(existing?.cron_schedule ?? "0 * * * *");
   const queryClient = useQueryClient();
 
   const availableDatasets = useQuery({
@@ -50,8 +67,14 @@ function ModelDialog({
   const save = useMutation({
     mutationFn: () =>
       existing
-        ? modelApi.update(workspaceId, projectId, existing.id, { name, code, inputs })
-        : modelApi.create(workspaceId, projectId, { name, code, inputs }),
+        ? modelApi.update(workspaceId, projectId, existing.id, {
+            name,
+            code,
+            inputs,
+            trigger_mode: triggerMode,
+            cron_schedule: triggerMode === "cron" ? cronSchedule : null,
+          })
+        : modelApi.create(workspaceId, projectId, { name, language, code, inputs }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
       await queryClient.invalidateQueries({ queryKey: ["project", workspaceId] });
@@ -82,9 +105,30 @@ function ModelDialog({
             maxLength={200}
           />
         </Field>
+        {existing ? (
+          <Field label="Language">
+            <span className="chip">{existing.language === "python" ? "Python" : "SQL"}</span>
+          </Field>
+        ) : (
+          <Field label="Language" hint="Can't be changed once the model is created">
+            <select
+              value={language}
+              onChange={(e) => {
+                const next = e.target.value as "sql" | "python";
+                setLanguage(next);
+                if (code === DEFAULT_SQL || code === DEFAULT_PYTHON) {
+                  setCode(next === "python" ? DEFAULT_PYTHON : DEFAULT_SQL);
+                }
+              }}
+            >
+              <option value="sql">SQL</option>
+              <option value="python">Python</option>
+            </select>
+          </Field>
+        )}
         <Field
           label="Input datasets"
-          hint="Each input is a table in your SQL, named by its alias"
+          hint="Each input is a table (SQL) or a pandas DataFrame (Python), named by its alias"
         >
           <div>
             {inputs.map((input, index) => (
@@ -147,7 +191,14 @@ function ModelDialog({
             </button>
           </div>
         </Field>
-        <Field label="SQL" hint="Query the inputs by their aliases; the result becomes the output dataset">
+        <Field
+          label={(existing?.language ?? language) === "python" ? "Python" : "SQL"}
+          hint={
+            (existing?.language ?? language) === "python"
+              ? "Each input alias is a pandas DataFrame; set an `output` DataFrame with the result"
+              : "Query the inputs by their aliases; the result becomes the output dataset"
+          }
+        >
           <textarea
             className="sql-box"
             style={{ minHeight: 140 }}
@@ -156,6 +207,29 @@ function ModelDialog({
             spellCheck={false}
           />
         </Field>
+        {existing && (
+          <Field label="Schedule" hint="Cron runs are queued for the background worker, same as Python">
+            <div className="row-actions">
+              <select
+                value={triggerMode}
+                onChange={(e) => setTriggerMode(e.target.value as "manual" | "cron")}
+              >
+                <option value="manual">Manual only</option>
+                <option value="cron">On a schedule</option>
+              </select>
+              {triggerMode === "cron" && (
+                <input
+                  type="text"
+                  style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, width: 140 }}
+                  value={cronSchedule}
+                  onChange={(e) => setCronSchedule(e.target.value)}
+                  placeholder="0 * * * *"
+                  required
+                />
+              )}
+            </div>
+          </Field>
+        )}
         {save.isError && (
           <div className="form-error">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the model."}
@@ -216,10 +290,15 @@ function ModelRow({
           {model.inputs.map((i) => i.input_alias).join(", ") || "no inputs"} →{" "}
           {model.output_dataset_id ? "output dataset" : "not yet run"}
         </div>
-        {result && !result.ok && (
+        {result && result.status === "queued" && (
+          <p className="login-note" style={{ margin: "6px 0 0" }}>
+            Queued — Python models run on the background worker. Check back for the result.
+          </p>
+        )}
+        {result && result.status !== "queued" && !result.ok && (
           <div className="form-error" style={{ marginTop: 6 }}>{result.error}</div>
         )}
-        {result && result.ok && result.output_dataset && (
+        {result && result.status !== "queued" && result.ok && result.output_dataset && (
           <p className="login-note" style={{ margin: "6px 0 0" }}>
             Produced {result.rows_produced.toLocaleString()} rows → {result.output_dataset.name}{" "}
             v{result.output_dataset.current_version} (see Datasets)
@@ -228,6 +307,9 @@ function ModelRow({
       </td>
       <td>
         <RunBadge model={model} />
+      </td>
+      <td>
+        <ScheduleSummary model={model} />
       </td>
       <td>
         {canEdit && (
@@ -326,6 +408,7 @@ export default function ModelsPage() {
             <tr>
               <th>Model</th>
               <th>Last run</th>
+              <th>Schedule</th>
               <th aria-label="Actions" />
             </tr>
           </thead>
