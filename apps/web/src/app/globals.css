@@ -524,3 +524,42 @@ button { font: inherit; cursor: pointer; }
   resize: vertical;
 }
 .dialog.wide { width: 720px; }
+
+/* ---- canvas app builder ---------------------------------------------------- */
+.canvas-shell { display: grid; grid-template-columns: 200px 1fr 260px; gap: 16px; align-items: start; }
+.canvas-shell--full { grid-template-columns: 1fr; }
+.canvas-toolbox, .canvas-settings {
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 14px;
+  position: sticky;
+  top: 16px;
+}
+.canvas-palette-item {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin-top: 8px;
+  cursor: grab;
+  background: var(--paper);
+}
+.canvas-palette-item:hover { border-color: var(--accent); background: var(--accent-wash); }
+.canvas-palette-item strong { display: block; font-size: 13px; }
+.canvas-palette-item span { display: block; font-size: 11.5px; color: var(--ink-soft); margin-top: 2px; }
+.canvas-frame-area {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-height: 480px;
+}
+.canvas-block {
+  border: 1px dashed transparent;
+  border-radius: var(--radius);
+  min-height: 32px;
+  margin-bottom: 10px;
+}
+.canvas-frame-area .canvas-block:hover { border-color: var(--line-strong); }
+.canvas-widget-empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; margin: 0; }
+.canvas-settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }

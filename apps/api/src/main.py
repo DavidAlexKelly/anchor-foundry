@@ -20,6 +20,7 @@ from .services.dataset_engine import DatasetEngineError
 from .services.storage import StorageKeyError
 from .routes import actions as action_routes
 from .routes import auth as auth_routes
+from .routes import canvas as canvas_routes
 from .routes import connections as connection_routes
 from .routes import datasets as dataset_routes
 from .routes import models as model_routes
@@ -94,6 +95,8 @@ def create_app() -> FastAPI:
     app.include_router(object_routes.project_router, prefix=prefix)
     app.include_router(action_routes.router, prefix=prefix)
     app.include_router(action_routes.project_router, prefix=prefix)
+    app.include_router(canvas_routes.router, prefix=prefix)
+    app.include_router(canvas_routes.published_router, prefix=prefix)
     return app
 
 
