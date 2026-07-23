@@ -19,6 +19,14 @@ export interface Me {
   org_role: OrgRole;
 }
 
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+  member_count: number | null;
+  created_at: string;
+}
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -432,4 +440,39 @@ export interface ActionExecuteResult {
   error: string | null;
   dataset_version: number | null;
   instance: ObjectInstance;
+}
+
+// ---- canvas apps (low-code app builder) --------------------------------------
+export type CanvasPublishScope = "private" | "workspace" | "groups";
+
+export interface CanvasApp {
+  id: string;
+  project_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  current_version: number;
+  publish_scope: CanvasPublishScope;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// The definition is a Craft.js node tree — opaque to everything except the
+// canvas editor itself, so it's typed loosely here rather than modelled
+// node-by-node.
+export interface CanvasAppDetail extends CanvasApp {
+  definition: Record<string, unknown>;
+}
+
+export interface CanvasAppVersion {
+  id: string;
+  version_number: number;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface CanvasAppShare {
+  group_id: string;
+  group_name: string;
 }

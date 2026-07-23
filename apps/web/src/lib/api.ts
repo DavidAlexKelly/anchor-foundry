@@ -49,6 +49,7 @@ export const api = {
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   org: () => request<Org>("/org"),
   orgMembers: () => request<OrgUser[]>("/org/members"),
+  orgGroups: () => request<import("./types").Group[]>("/org/groups"),
   workspaces: () => request<WorkspaceSummary[]>("/workspaces"),
   workspace: (id: string) => request<WorkspaceDetail>(`/workspaces/${id}`),
   projects: (workspaceId: string) =>
@@ -410,4 +411,52 @@ export const actions = {
       `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/execute`,
       { method: "POST", body: JSON.stringify({ instance_id: instanceId, values }) },
     ),
+};
+
+export const canvas = {
+  list: (wid: string, pid: string) =>
+    request<import("./types").CanvasApp[]>(`/workspaces/${wid}/projects/${pid}/canvas-apps`),
+  create: (wid: string, pid: string, input: { name: string; description?: string }) =>
+    request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/projects/${pid}/canvas-apps`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  get: (wid: string, pid: string, appId: string) =>
+    request<import("./types").CanvasAppDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}`,
+    ),
+  update: (wid: string, pid: string, appId: string, input: { name?: string; description?: string }) =>
+    request<import("./types").CanvasAppDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+  remove: (wid: string, pid: string, appId: string) =>
+    request<void>(`/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}`, { method: "DELETE" }),
+  saveDefinition: (wid: string, pid: string, appId: string, definition: Record<string, unknown>) =>
+    request<import("./types").CanvasAppDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/definition`,
+      { method: "PUT", body: JSON.stringify({ definition }) },
+    ),
+  listVersions: (wid: string, pid: string, appId: string) =>
+    request<import("./types").CanvasAppVersion[]>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions`,
+    ),
+  publish: (
+    wid: string,
+    pid: string,
+    appId: string,
+    input: { scope: import("./types").CanvasPublishScope; group_ids?: string[] },
+  ) =>
+    request<import("./types").CanvasAppDetail>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/publish`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  listShares: (wid: string, pid: string, appId: string) =>
+    request<import("./types").CanvasAppShare[]>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/shares`,
+    ),
+  listPublished: (wid: string) =>
+    request<import("./types").CanvasApp[]>(`/workspaces/${wid}/published-canvas-apps`),
+  getPublished: (wid: string, appId: string) =>
+    request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/published-canvas-apps/${appId}`),
 };
