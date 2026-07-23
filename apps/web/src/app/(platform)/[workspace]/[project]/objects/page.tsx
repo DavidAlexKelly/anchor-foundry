@@ -615,6 +615,93 @@ const SYNC_STATUS_CLASS: Record<string, string> = {
   never_synced: "status-unconfigured",
 };
 
+function SourceScheduleDialog({
+  workspaceId,
+  projectId,
+  source,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  source: ObjectTypeSource;
+  onClose: () => void;
+}) {
+  const [cronSchedule, setCronSchedule] = useState("*/15 * * * *");
+  const queryClient = useQueryClient();
+
+  const schedule = useQuery({
+    queryKey: ["object-source-schedule", source.id],
+    queryFn: () => objApi.getSourceSchedule(workspaceId, projectId, source.id),
+  });
+
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["object-source-schedule", source.id] });
+  };
+  const save = useMutation({
+    mutationFn: () => objApi.setSourceSchedule(workspaceId, projectId, source.id, cronSchedule),
+    onSuccess: invalidate,
+  });
+  const clear = useMutation({
+    mutationFn: () => objApi.clearSourceSchedule(workspaceId, projectId, source.id),
+    onSuccess: invalidate,
+  });
+
+  return (
+    <Dialog open title={`Scheduled sync — ${source.object_type_name}`} onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        Reprocesses the current dataset on a schedule instead of only when you click
+        &quot;Sync now&quot; — the same worker-run path large datasets need (the interactive sync
+        is capped at 20,000 rows).
+      </p>
+      {schedule.data?.sync_schedule && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <p className="login-note" style={{ marginTop: 0 }}>
+            Running on <span className="chip">{schedule.data.sync_schedule}</span>
+          </p>
+          {schedule.data.sync_next_run_at && (
+            <p className="slug">next run: {new Date(schedule.data.sync_next_run_at).toLocaleString()}</p>
+          )}
+          <div className="form-actions" style={{ marginTop: 10 }}>
+            <button type="button" className="btn danger" disabled={clear.isPending} onClick={() => clear.mutate()}>
+              {clear.isPending ? "Stopping…" : "Stop scheduling"}
+            </button>
+          </div>
+        </div>
+      )}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <Field label="Cron schedule">
+          <input
+            type="text"
+            style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, width: 160 }}
+            value={cronSchedule}
+            onChange={(e) => setCronSchedule(e.target.value)}
+            placeholder="*/15 * * * *"
+            required
+          />
+        </Field>
+        {save.isError && (
+          <div className="form-error">
+            {save.error instanceof ApiError ? save.error.message : "Couldn't save the schedule."}
+          </div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>
+            Close
+          </button>
+          <button type="submit" className="btn" disabled={save.isPending}>
+            {save.isPending ? "Saving…" : "Save schedule"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 function SourceRow({
   workspaceId,
   projectId,
@@ -629,6 +716,7 @@ function SourceRow({
   onRemove: (id: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const [showSchedule, setShowSchedule] = useState(false);
   const sync = useMutation({
     mutationFn: () => objApi.syncSource(workspaceId, projectId, source.id),
     onSuccess: () => {
@@ -673,6 +761,13 @@ function SourceRow({
               {sync.isPending ? "Syncing…" : "Sync now"}
             </button>
             <button
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setShowSchedule(true)}
+            >
+              Schedule
+            </button>
+            <button
               className="btn danger"
               style={{ padding: "3px 9px", fontSize: 12 }}
               onClick={() => onRemove(source.id)}
@@ -680,6 +775,14 @@ function SourceRow({
               Remove
             </button>
           </div>
+        )}
+        {showSchedule && (
+          <SourceScheduleDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            source={source}
+            onClose={() => setShowSchedule(false)}
+          />
         )}
       </td>
     </tr>
