@@ -80,20 +80,23 @@ export class CustomerStack extends Stack {
     Tags.of(services.workerService).add("platform:component", "pipeline-runs");
 
     // Network paths: only the services may reach the stores.
-    data.database.connections.allowFrom(services.apiService, ec2.Port.tcp(5432), "api -> postgres");
-    data.database.connections.allowFrom(services.workerService, ec2.Port.tcp(5432), "worker -> postgres");
+    // Descriptions use "to" rather than "->": AWS rejects security group
+    // rule descriptions containing characters outside
+    // a-zA-Z0-9. _-:/()#,@[]+=&;{}!$* (no < or >).
+    data.database.connections.allowFrom(services.apiService, ec2.Port.tcp(5432), "api to postgres");
+    data.database.connections.allowFrom(services.workerService, ec2.Port.tcp(5432), "worker to postgres");
     data.redisSecurityGroup.addIngressRule(
       services.apiService.connections.securityGroups[0],
       ec2.Port.tcp(6379),
-      "api -> redis"
+      "api to redis"
     );
     data.redisSecurityGroup.addIngressRule(
       services.workerService.connections.securityGroups[0],
       ec2.Port.tcp(6379),
-      "worker -> redis"
+      "worker to redis"
     );
-    data.search.connections.allowFrom(services.apiService, ec2.Port.tcp(443), "api -> opensearch");
-    data.search.connections.allowFrom(services.workerService, ec2.Port.tcp(443), "worker -> opensearch");
+    data.search.connections.allowFrom(services.apiService, ec2.Port.tcp(443), "api to opensearch");
+    data.search.connections.allowFrom(services.workerService, ec2.Port.tcp(443), "worker to opensearch");
 
     // ---- WAF on the ALB with AWS managed rule sets (§10) --------------------
     const waf = new wafv2.CfnWebACL(this, "Waf", {
