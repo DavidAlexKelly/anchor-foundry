@@ -426,6 +426,62 @@ async def mark_source_synced(
     return dict(row)
 
 
+_SCHEDULE_COLUMNS = "id, sync_schedule, sync_next_run_at"
+
+
+async def get_source_schedule(
+    conn: AsyncConnection, project_id: UUID, source_id: UUID
+) -> dict[str, Any]:
+    await get_source(conn, project_id, source_id)  # 404 if invisible
+    row = await fetch_one(
+        conn,
+        f"""
+        SELECT s.{_SCHEDULE_COLUMNS} FROM object_type_sources s
+          JOIN datasets d ON d.id = s.dataset_id
+         WHERE s.id = :sid AND d.project_id = :pid
+        """,
+        {"sid": str(source_id), "pid": str(project_id)},
+    )
+    assert row is not None
+    return dict(row)
+
+
+async def set_source_schedule(
+    conn: AsyncConnection, project_id: UUID, source_id: UUID, *, cron_schedule: str, next_run_at
+) -> dict[str, Any]:
+    await get_source(conn, project_id, source_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE object_type_sources s SET sync_schedule = :cron, sync_next_run_at = :next_run
+          FROM datasets d
+         WHERE s.id = :sid AND d.id = s.dataset_id AND d.project_id = :pid
+        RETURNING s.{_SCHEDULE_COLUMNS}
+        """,
+        {"cron": cron_schedule, "next_run": next_run_at, "sid": str(source_id), "pid": str(project_id)},
+    )
+    assert row is not None
+    return dict(row)
+
+
+async def clear_source_schedule(
+    conn: AsyncConnection, project_id: UUID, source_id: UUID
+) -> dict[str, Any]:
+    await get_source(conn, project_id, source_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE object_type_sources s SET sync_schedule = NULL, sync_next_run_at = NULL
+          FROM datasets d
+         WHERE s.id = :sid AND d.id = s.dataset_id AND d.project_id = :pid
+        RETURNING s.{_SCHEDULE_COLUMNS}
+        """,
+        {"sid": str(source_id), "pid": str(project_id)},
+    )
+    assert row is not None
+    return dict(row)
+
+
 async def delete_source(conn: AsyncConnection, project_id: UUID, source_id: UUID) -> None:
     row = await fetch_one(
         conn,

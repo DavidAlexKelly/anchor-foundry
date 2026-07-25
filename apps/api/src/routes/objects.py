@@ -28,6 +28,7 @@ import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
@@ -533,3 +534,76 @@ async def sync_source(
         ok=ok, error=error, upserted=upserted, removed=removed,
         source=_source_out(updated_source),
     )
+
+
+# ---- scheduled sync (worker-driven, for datasets bigger than one request) ----
+class SourceScheduleSet(BaseModel):
+    cron_schedule: str = Field(min_length=1, max_length=100)
+
+
+class SourceScheduleOut(BaseModel):
+    id: UUID
+    sync_schedule: str | None
+    sync_next_run_at: datetime | None
+
+
+@project_router.get("/{source_id}/schedule", response_model=SourceScheduleOut)
+async def get_source_schedule(
+    source_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> SourceScheduleOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ontology_service.get_source_schedule(conn, access.project_id, source_id)
+    return SourceScheduleOut(**row)
+
+
+@project_router.put("/{source_id}/schedule", response_model=SourceScheduleOut)
+async def set_source_schedule(
+    source_id: UUID,
+    body: SourceScheduleSet,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> SourceScheduleOut:
+    next_run_at = next_run_after(body.cron_schedule)
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ontology_service.set_source_schedule(
+            conn, access.project_id, source_id,
+            cron_schedule=body.cron_schedule, next_run_at=next_run_at,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_source.schedule_set",
+            resource_type="object_type_source",
+            resource_id=source_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"cron_schedule": body.cron_schedule},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SourceScheduleOut(**row)
+
+
+@project_router.delete("/{source_id}/schedule", response_model=SourceScheduleOut)
+async def clear_source_schedule(
+    source_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> SourceScheduleOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ontology_service.clear_source_schedule(conn, access.project_id, source_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_source.schedule_clear",
+            resource_type="object_type_source",
+            resource_id=source_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SourceScheduleOut(**row)

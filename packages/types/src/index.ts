@@ -371,6 +371,12 @@ export interface ObjectTypeSource {
   created_at: string;
 }
 
+export interface ObjectSourceSchedule {
+  id: string;
+  sync_schedule: string | null;
+  sync_next_run_at: string | null;
+}
+
 export interface SuggestedProperty {
   api_name: string;
   display_name: string;

@@ -7,6 +7,8 @@ images with no shared Python package in this build.
 """
 from __future__ import annotations
 
+import datetime as dt
+import decimal
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +17,21 @@ import duckdb
 
 QUERY_MEMORY_LIMIT = "512MB"
 MAX_TRANSFORM_OUTPUT_ROWS = 5_000_000  # matches the API's day-one cap
+
+
+def json_safe(value: Any) -> Any:
+    """Matches apps/api's services/dataset_engine.py exactly — values read
+    back out of DuckDB must serialise the same way regardless of which side
+    (API interactive sync, or worker scheduled sync) ran the extraction."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (dt.date, dt.datetime, dt.time)):
+        return value.isoformat()
+    if isinstance(value, decimal.Decimal):
+        return str(value)
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+    return str(value)
 
 
 class DatasetEngineError(RuntimeError):
@@ -34,6 +51,50 @@ def _clean(exc: duckdb.Error) -> str:
     text = str(exc).strip()
     first = text.splitlines()[0] if text else "query failed"
     return first[:500]
+
+
+# Scheduled instance sync's row cap — the whole reason it runs in the worker
+# rather than the interactive request/response cycle apps/api's
+# services/instances.py's MAX_INSTANCE_SYNC_ROWS (20,000) is bounded by.
+MAX_SCHEDULED_INSTANCE_SYNC_ROWS = 2_000_000
+
+
+def extract_instance_rows(
+    parquet_path: str,
+    primary_key_column: str,
+    column_mappings: dict[str, str],
+    max_rows: int = MAX_SCHEDULED_INSTANCE_SYNC_ROWS,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Worker copy of services/instances.py's extract_rows — same primary-key
+    + mapped-column extraction, just with the worker's much larger row cap
+    instead of the API's interactive one. Rows with a null primary key are
+    skipped; they can't identify an instance."""
+    source_columns = [primary_key_column] + list(column_mappings.keys())
+    property_names = list(column_mappings.values())
+    select_list = ", ".join(_quote(c) for c in source_columns)
+
+    con = duckdb.connect()
+    try:
+        try:
+            rows = con.execute(
+                f"SELECT {select_list} FROM read_parquet({parquet_path!r}) LIMIT {max_rows + 1}"
+            ).fetchall()
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+
+    if len(rows) > max_rows:
+        raise DatasetEngineError(f"dataset exceeds the {max_rows:,} row scheduled-sync limit")
+
+    out: list[tuple[str, dict[str, Any]]] = []
+    for row in rows:
+        pk = row[0]
+        if pk is None:
+            continue
+        properties = {property_names[i]: json_safe(row[i + 1]) for i in range(len(property_names))}
+        out.append((str(pk), properties))
+    return out
 
 
 def _quote(name: str) -> str:
