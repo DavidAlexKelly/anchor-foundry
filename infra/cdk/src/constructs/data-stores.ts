@@ -131,6 +131,10 @@ export class DataStoresConstruct extends Construct {
       encryptionAtRest: { enabled: true },
       nodeToNodeEncryption: true,
       enforceHttps: true,
+      // Explicit, not left to the library default: AWS now rejects new
+      // domain creation requesting the older Policy-Min-TLS-1-0-2019-07
+      // policy outright, and older aws-cdk-lib versions still default to it.
+      tlsSecurityPolicy: opensearch.TLSSecurityPolicy.TLS_1_2,
       // §4: document-level security per workspace configured at runtime by
       // the API via fine-grained access control roles.
       fineGrainedAccessControl: { masterUserName: "platform-admin" },
