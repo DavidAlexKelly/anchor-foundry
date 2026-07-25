@@ -87,6 +87,20 @@ Resources:
                   - ce:GetCostForecast
                   - ce:GetTags
                 Resource: "*"
+              # One-time account prerequisite for the VPC-joined OpenSearch
+              # domain the platform stack provisions: AWS doesn't create
+              # this service-linked role automatically outside the console,
+              # so the control plane creates it (idempotently) before the
+              # first deploy in a fresh account.
+              - Sid: OpenSearchServiceLinkedRole
+                Effect: Allow
+                Action:
+                  - iam:CreateServiceLinkedRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/opensearchservice.amazonaws.com/AWSServiceRoleForAmazonOpenSearchService"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: opensearchservice.amazonaws.com
 
 Outputs:
   BootstrapRoleArn:
