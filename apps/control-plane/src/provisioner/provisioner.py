@@ -53,6 +53,8 @@ class AwsGateway(Protocol):
         self, role_arn: str, external_id: str, session_name: str
     ) -> TempCredentials: ...
 
+    def ensure_opensearch_service_linked_role(self, creds: TempCredentials) -> None: ...
+
     def stack_status(self, creds: TempCredentials, region: str, stack_name: str) -> str | None: ...
 
     def stack_outputs(
@@ -78,6 +80,29 @@ class Boto3Gateway:
         )
         c = resp["Credentials"]
         return TempCredentials(c["AccessKeyId"], c["SecretAccessKey"], c["SessionToken"])
+
+    def ensure_opensearch_service_linked_role(self, creds: TempCredentials) -> None:
+        """A VPC-joined OpenSearch domain can't provision its ENIs until
+        AWSServiceRoleForAmazonOpenSearchService exists in the account —
+        AWS doesn't create it automatically outside the console flow, so a
+        customer's first-ever OpenSearch domain (in this or any account)
+        fails deploy with 'you must enable a service-linked role' unless
+        something creates it first. Idempotent: swallows the "already
+        exists" error every deploy after the first hits."""
+        import boto3
+        import botocore.exceptions
+
+        iam = boto3.client(
+            "iam",
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        try:
+            iam.create_service_linked_role(AWSServiceName="opensearchservice.amazonaws.com")
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "InvalidInput":
+                raise
 
     def stack_status(self, creds: TempCredentials, region: str, stack_name: str) -> str | None:
         import boto3
@@ -188,6 +213,11 @@ class Provisioner:
             )
             # The external ID's job is done; drop the reference immediately.
             del external_id
+
+            if first_time:
+                # Account-wide prerequisite, not per-stack: only needed once
+                # per customer account, ever, not on every version update.
+                self._aws.ensure_opensearch_service_linked_role(creds)
 
             platform_url = record.platform_url or f"https://{org_slug}.platform.example.com"
             self._cdk.deploy(

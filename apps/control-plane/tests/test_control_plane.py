@@ -79,11 +79,15 @@ def test_connect_aws_validates_inputs(registry: StackRegistry) -> None:
 class FakeAws:
     def __init__(self) -> None:
         self.assume_calls: list[tuple[str, str]] = []
+        self.service_linked_role_calls = 0
         self.status_sequence = ["CREATE_IN_PROGRESS", "CREATE_COMPLETE"]
 
     def assume_bootstrap_role(self, role_arn: str, external_id: str, session_name: str) -> TempCredentials:
         self.assume_calls.append((role_arn, external_id))
         return TempCredentials("AKIA_FAKE", "secret", "token")
+
+    def ensure_opensearch_service_linked_role(self, creds: TempCredentials) -> None:
+        self.service_linked_role_calls += 1
 
     def stack_status(self, creds: TempCredentials, region: str, stack_name: str) -> str | None:
         return self.status_sequence.pop(0) if self.status_sequence else "CREATE_COMPLETE"
@@ -110,6 +114,9 @@ def test_provision_happy_path(registry: StackRegistry) -> None:
     outputs = prov.provision(s, image_tag="v1.0.0")
     # External ID was used for the assume-role call (confused deputy defence).
     assert aws.assume_calls == [("arn:aws:iam::123456789012:role/platform-bootstrap", external_id)]
+    # First-time provisioning ensures the OpenSearch service-linked role
+    # exists — a real account-level prerequisite VPC-joined domains need.
+    assert aws.service_linked_role_calls == 1
     assert cdk.deploys[0]["orgSlug"] == s and cdk.deploys[0]["imageTag"] == "v1.0.0"
     assert outputs["UserPoolId"] == "eu-west-2_abc"
     rec = registry.get(s)
@@ -135,6 +142,20 @@ def test_provision_marks_failed_on_stack_failure(registry: StackRegistry) -> Non
     with pytest.raises(RuntimeError):
         prov.provision(s, "v1")
     assert registry.get(s).stack_status is StackStatus.FAILED
+
+
+def test_update_stack_skips_service_linked_role(registry: StackRegistry) -> None:
+    s = slug()
+    registry.register_customer(s)
+    registry.connect_aws(s, "123456789012", "eu-west-2", "arn:aws:iam::123456789012:role/platform-bootstrap")
+    aws, cdk = FakeAws(), FakeCdk()
+    prov = Provisioner(registry, aws, cdk, "r", poll_interval_s=0.0)
+    prov.provision(s, "v1.0.0")
+    assert aws.service_linked_role_calls == 1
+    prov.update_stack(s, "v1.1.0")
+    # Account-wide prerequisite: only ensured on first-time provisioning,
+    # not re-checked on every version update.
+    assert aws.service_linked_role_calls == 1
 
 
 def test_updater_respects_version_pinning(registry: StackRegistry) -> None:
