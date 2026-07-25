@@ -4,7 +4,7 @@
 -- ws_* PostgreSQL schema is dropped asynchronously by the worker (see the
 -- "Flagged for review" note in apps/api/src/services/workspaces.py). DDL
 -- stays privileged: platform_app cannot DROP SCHEMA directly, so the drop is
--- wrapped in a SECURITY DEFINER function with two guards —
+-- wrapped in a SECURITY DEFINER function with two guards -
 --   1. the name must match the ws_* shape provision_workspace_schema creates;
 --   2. no live workspaces row may reference it (orphans only).
 -- ============================================================================

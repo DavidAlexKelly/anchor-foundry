@@ -47,7 +47,7 @@ export default function ProjectOverview() {
           <h2>An empty project is a starting line</h2>
           <p>
             There&apos;s no forced flow here. Connect a source, upload a file into
-            Datasets, or sketch your first object type — start wherever your work starts.
+            Datasets, or sketch your first object type - start wherever your work starts.
           </p>
         </div>
       )}

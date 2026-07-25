@@ -176,7 +176,7 @@ export default function ObjectInstancesPage() {
                       <td key={p.api_name}>
                         {instance.properties[p.api_name] === null ||
                         instance.properties[p.api_name] === undefined
-                          ? <span style={{ color: "var(--ink-soft)" }}>—</span>
+                          ? <span style={{ color: "var(--ink-soft)" }}>-</span>
                           : String(instance.properties[p.api_name])}
                       </td>
                     ))}

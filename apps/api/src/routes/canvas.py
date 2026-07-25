@@ -3,7 +3,7 @@
 Definitions and editing are project-scoped, same floor as models/datasets/
 connections: read = viewer, create/edit/save/delete = editor. Publishing to
 the whole workspace or to specific groups additionally requires the
-workspace admin role — same conservative bar routes/connections.py already
+workspace admin role - same conservative bar routes/connections.py already
 applies to workspace-scoped connections, since both expose project data
 beyond the project's own membership. A project editor can always keep an
 app private.

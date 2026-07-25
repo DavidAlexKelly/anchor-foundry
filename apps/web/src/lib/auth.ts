@@ -62,7 +62,7 @@ export async function completeLogin(code: string): Promise<void> {
   const cfg = cognitoConfig();
   if (!cfg) throw new Error("Cognito is not configured");
   const verifier = sessionStorage.getItem(KEY_VERIFIER);
-  if (!verifier) throw new Error("Missing PKCE verifier — restart sign-in");
+  if (!verifier) throw new Error("Missing PKCE verifier - restart sign-in");
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     client_id: cfg.clientId,

@@ -51,7 +51,7 @@ def wbase(fx: Fixture) -> str:
 @pytest.fixture(scope="module")
 def custom_project(fx: Fixture) -> dict[str, str]:
     """A second project, permission_mode='custom', where the workspace
-    viewer is explicitly revoked ('none') — the case the workspace-wide
+    viewer is explicitly revoked ('none') - the case the workspace-wide
     published-app read path exists for: a real workspace member who has no
     access to this project's own resources."""
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:

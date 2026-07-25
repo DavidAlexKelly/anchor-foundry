@@ -120,7 +120,7 @@ function AddConnectionWizard({
                 </p>
                 <div className="form-error">{result.error}</div>
                 <p className="login-note">
-                  Fix the details from the connection list and test again — nothing is lost.
+                  Fix the details from the connection list and test again - nothing is lost.
                 </p>
               </>
             )}
@@ -152,7 +152,7 @@ function AddConnectionWizard({
                   }}
                 >
                   <h3>{t.display_name}</h3>
-                  <p style={{ margin: 0 }}>Connect and query in place — no data copied.</p>
+                  <p style={{ margin: 0 }}>Connect and query in place - no data copied.</p>
                 </button>
               ))}
             </div>
@@ -188,7 +188,7 @@ function AddConnectionWizard({
               <Field
                 key={key}
                 label={key}
-                hint="Stored in your AWS Secrets Manager — never shown again"
+                hint="Stored in your AWS Secrets Manager - never shown again"
               >
                 <input
                   type="password"
@@ -437,7 +437,7 @@ function SyncDialog({
 }
 
 /** A connection carries at most one managed scheduled/incremental sync
- * target (migration 0014) — this dialog is both the "set it up" form and
+ * target (migration 0014) - this dialog is both the "set it up" form and
  * the status view, since there's only ever one to show. */
 function ScheduledSyncDialog({
   workspaceId,
@@ -522,7 +522,7 @@ function ScheduledSyncDialog({
   const result = runNow.data;
 
   return (
-    <Dialog open wide title={`Scheduled sync — ${connection.name}`} onClose={onClose}>
+    <Dialog open wide title={`Scheduled sync - ${connection.name}`} onClose={onClose}>
       {schedule.isPending && <div className="state">Loading schedule…</div>}
       {schedule.data && (
         <>
@@ -533,7 +533,7 @@ function ScheduledSyncDialog({
                 {schedule.data.sync_source_table}
                 {schedule.data.sync_schedule
                   ? ` on ${schedule.data.sync_schedule}`
-                  : " — no cron, run manually with the button below"}
+                  : " - no cron, run manually with the button below"}
               </p>
               {schedule.data.sync_next_run_at && (
                 <p className="slug">
@@ -583,8 +583,8 @@ function ScheduledSyncDialog({
           >
             <Field label="Mode">
               <select value={mode} onChange={(e) => setMode(e.target.value as "full" | "incremental")}>
-                <option value="full">Full — replace the dataset each run</option>
-                <option value="incremental">Incremental — merge only new/changed rows</option>
+                <option value="full">Full - replace the dataset each run</option>
+                <option value="incremental">Incremental - merge only new/changed rows</option>
               </select>
             </Field>
             {discover.isPending && <div className="state">Reading the source schema…</div>}
@@ -822,7 +822,7 @@ export default function ConnectionsPage() {
           <h2>Connect your first source</h2>
           <p>
             Point Anchor at a database and query it in place. Credentials go straight to
-            your own AWS Secrets Manager — the platform never stores them anywhere else.
+            your own AWS Secrets Manager - the platform never stores them anywhere else.
           </p>
           {canEdit && workspace && project && (
             <AddConnectionWizard

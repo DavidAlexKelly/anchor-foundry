@@ -111,8 +111,8 @@ def test_python_model_run_is_queued_for_the_worker(
     assert r.status_code == 201, r.text
     py_model_id = r.json()["id"]
 
-    # Running it doesn't execute inline — a real process boundary is needed
-    # (services/models.py's docstring) — it's left queued for the worker.
+    # Running it doesn't execute inline - a real process boundary is needed
+    # (services/models.py's docstring) - it's left queued for the worker.
     r = client.post(f"{mbase(fx)}/{py_model_id}/run", headers=hdr(fx.editor_sub))
     assert r.status_code == 200, r.text
     body = r.json()

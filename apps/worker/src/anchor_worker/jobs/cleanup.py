@@ -1,5 +1,5 @@
 """Workspace schema cleanup (spec §8 isolation; deferred DDL from workspace
-deletion — see apps/api/src/services/workspaces.py).
+deletion - see apps/api/src/services/workspaces.py).
 
 When a workspace row is deleted the API leaves the isolated ws_* schema in
 place; this job finds schemas with no owning workspaces row and drops them

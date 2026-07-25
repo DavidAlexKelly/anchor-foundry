@@ -5,7 +5,7 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- workspaces — bounded contexts within an org. Stores s3_prefix, pg_schema,
+-- workspaces - bounded contexts within an org. Stores s3_prefix, pg_schema,
 -- search_prefix for isolation enforcement (spec §16, §4 "Workspace Isolation").
 -- ----------------------------------------------------------------------------
 CREATE TABLE workspaces (
@@ -56,7 +56,7 @@ CREATE TRIGGER trg_workspaces_isolation_immutable BEFORE UPDATE ON workspaces
     FOR EACH ROW EXECUTE FUNCTION forbid_isolation_anchor_change();
 
 -- ----------------------------------------------------------------------------
--- workspace_members — user OR group membership with a role (spec §16).
+-- workspace_members - user OR group membership with a role (spec §16).
 -- Exactly one of user_id / group_id is set.
 -- ----------------------------------------------------------------------------
 CREATE TABLE workspace_members (
@@ -78,7 +78,7 @@ CREATE INDEX idx_workspace_members_user ON workspace_members (user_id) WHERE use
 CREATE INDEX idx_workspace_members_group ON workspace_members (group_id) WHERE group_id IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
--- projects — working folders inside a workspace. Toggle between inherited
+-- projects - working folders inside a workspace. Toggle between inherited
 -- and custom permissions (spec §16).
 -- ----------------------------------------------------------------------------
 CREATE TABLE projects (
@@ -102,7 +102,7 @@ CREATE TRIGGER trg_projects_updated BEFORE UPDATE ON projects
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ----------------------------------------------------------------------------
--- project_members — user OR group membership with a role, including 'none'
+-- project_members - user OR group membership with a role, including 'none'
 -- to explicitly revoke a workspace-inherited grant (spec §9, §16).
 -- Only consulted when projects.permission_mode = 'custom'.
 -- ----------------------------------------------------------------------------

@@ -1,24 +1,24 @@
-"""Canvas apps — the low-code app builder (spec §11 "Canvas": widgets bound
-to objects — tables, charts, forms with write-back; spec §5 "Publishing":
+"""Canvas apps - the low-code app builder (spec §11 "Canvas": widgets bound
+to objects - tables, charts, forms with write-back; spec §5 "Publishing":
 private / workspace / specific groups).
 
-An app's ``definition`` is an opaque JSON blob to this layer — a Craft.js
+An app's ``definition`` is an opaque JSON blob to this layer - a Craft.js
 node tree (per db 0003's comment) the frontend builder produces and
 interprets; this service only stores, versions, and gates visibility on it,
 the same "backend doesn't understand widget semantics" split routes/actions.py
 already takes with ``submitted_values``. Rendering (tables, object instances,
 write-back forms) reuses the datasets/objects/actions endpoints already
-built — no new data-access surface is needed for a widget to read or write
+built - no new data-access surface is needed for a widget to read or write
 through; Canvas only needs to remember which widgets exist and how they're
 arranged.
 
 Publishing to the workspace or to specific groups requires the workspace
 admin role (enforced at the route layer, mirroring routes/connections.py's
-workspace-scoped connections) — both expose project data beyond the
+workspace-scoped connections) - both expose project data beyond the
 project's own membership, so both get the same conservative bar. A plain
 project editor can always keep an app private and edit it freely.
 
-Schema (migration 0003, already applied — this session only starts using
+Schema (migration 0003, already applied - this session only starts using
 it): canvas_apps, canvas_app_versions (one row per save), canvas_app_shares
 (group targets when publish_scope='groups'). RLS (0006, recursion-fixed in
 0009) additionally allows a workspace member to see a published app without
@@ -50,8 +50,8 @@ _COLUMNS = """
 
 
 def slugify(name: str) -> str:
-    """canvas_apps.slug allows only [a-z0-9-] — no underscore, unlike
-    datasets' slug — so this can't reuse services/datasets.py's slugify."""
+    """canvas_apps.slug allows only [a-z0-9-] - no underscore, unlike
+    datasets' slug - so this can't reuse services/datasets.py's slugify."""
     slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
     slug = re.sub(r"-{2,}", "-", slug)[:63].strip("-")
     if not _SLUG_RE.match(slug):
@@ -261,12 +261,12 @@ async def list_shares(conn: AsyncConnection, project_id: UUID, app_id: UUID) -> 
 # ---- workspace-wide read path for published apps ------------------------------
 async def list_published(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:
     """Apps visible to any workspace member regardless of project
-    membership — the counterpart to list_for_project for a "gallery of apps
+    membership - the counterpart to list_for_project for a "gallery of apps
     shared with me" view. Scoped via rls_project_workspace_id (db 0015)
     rather than a subquery against `projects` directly: `projects` is
     itself RLS-protected, and a permission_mode='custom' project can
     legitimately hide its own row from a user this endpoint exists to
-    serve — the SECURITY DEFINER helper resolves the workspace_id without
+    serve - the SECURITY DEFINER helper resolves the workspace_id without
     depending on that visibility. RLS still independently enforces
     group-share membership for publish_scope='groups' rows."""
     rows = await fetch_all(

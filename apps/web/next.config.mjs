@@ -8,7 +8,7 @@ const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
   // Pin tracing to the monorepo root so the standalone layout is stable
-  // (apps/web/server.js) regardless of where the build runs — the web
+  // (apps/web/server.js) regardless of where the build runs - the web
   // Dockerfile's COPY paths depend on it.
   experimental: { outputFileTracingRoot: repoRoot },
   async rewrites() {

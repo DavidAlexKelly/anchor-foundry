@@ -36,7 +36,7 @@ async def me(auth: AuthContext = Depends(get_current_user)) -> Me:
 
 @router.post("/logout", status_code=204, response_model=None)
 async def logout(request: Request, auth: AuthContext = Depends(get_current_user)) -> None:
-    """Client discards tokens; server records the event (§9 audit: logins —
+    """Client discards tokens; server records the event (§9 audit: logins -
     logouts recorded symmetrically)."""
     async with user_connection(auth.user_id) as conn:
         await audit.record(

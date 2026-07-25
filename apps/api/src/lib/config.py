@@ -1,5 +1,5 @@
 """API configuration. All values come from the environment (populated in the
-deployed stack from CDK outputs and Secrets Manager — never hard-coded)."""
+deployed stack from CDK outputs and Secrets Manager - never hard-coded)."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
-    # postgresql+psycopg://platform_app:...@host/platform — the RLS-subject role.
+    # postgresql+psycopg://platform_app:...@host/platform - the RLS-subject role.
     database_url: str
     # Cognito verification inputs (spec §9 "JWT Validation").
     cognito_region: str = "eu-west-2"

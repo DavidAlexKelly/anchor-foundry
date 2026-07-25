@@ -1,4 +1,4 @@
-"""Scheduled/incremental sync configuration tests — the API half of the
+"""Scheduled/incremental sync configuration tests - the API half of the
 worker's scheduled_connection_syncs job (apps/worker/tests/test_sync_configs.py
 covers the worker's firing side). Reuses the source database + orders table
 from test_connections; "run now" here executes the identical pipeline the

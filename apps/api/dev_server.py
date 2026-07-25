@@ -2,8 +2,8 @@
 
 Runs the real app with one substitution: token verification uses a locally
 generated RS256 keypair instead of Cognito's JWKS, and mints tokens for the
-seeded users so the web app's dev sign-in box can be used. Everything else —
-RLS, permissions, audit — is the production code path.
+seeded users so the web app's dev sign-in box can be used. Everything else -
+RLS, permissions, audit - is the production code path.
 
 Flagged for review: development tooling only; never deploy. The production
 entrypoint is `uvicorn src.main:app`, which uses CognitoTokenVerifier.
@@ -68,7 +68,7 @@ class DevVerifier:
 
 def mint(sub: str, ttl_seconds: int = 8 * 3600) -> str:
     """Dev tokens last a working day; production Cognito issues 15-minute
-    tokens (§9) — the long TTL here exists purely to avoid re-pasting."""
+    tokens (§9) - the long TTL here exists purely to avoid re-pasting."""
     now = int(time.time())
     return pyjwt.encode(
         {

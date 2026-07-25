@@ -1,6 +1,6 @@
 """Connection sync tests. Reuses the source database from test_connections
 (a real second Postgres database + login role) and the local storage gateway
-from the datasets layer — the full pipeline runs for real: COPY out of the
+from the datasets layer - the full pipeline runs for real: COPY out of the
 source, DuckDB to Parquet, storage, dataset + version rows.
 """
 from __future__ import annotations

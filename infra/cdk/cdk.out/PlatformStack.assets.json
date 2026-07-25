@@ -1,0 +1,20 @@
+{
+  "version": "36.0.0",
+  "files": {
+    "0a25899f34e40be879efe26ba51893e5c134782e27780b7744f5da7c72633829": {
+      "source": {
+        "path": "PlatformStack.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "current_account-eu-north-1": {
+          "bucketName": "cdk-hnb659fds-assets-${AWS::AccountId}-eu-north-1",
+          "objectKey": "0a25899f34e40be879efe26ba51893e5c134782e27780b7744f5da7c72633829.json",
+          "region": "eu-north-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-file-publishing-role-${AWS::AccountId}-eu-north-1"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

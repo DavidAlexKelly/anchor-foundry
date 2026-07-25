@@ -1,0 +1,4508 @@
+{
+  "version": "tree-0.1",
+  "tree": {
+    "id": "App",
+    "path": "",
+    "children": {
+      "PlatformStack": {
+        "id": "PlatformStack",
+        "path": "PlatformStack",
+        "children": {
+          "Vpc": {
+            "id": "Vpc",
+            "path": "PlatformStack/Vpc",
+            "children": {
+              "Resource": {
+                "id": "Resource",
+                "path": "PlatformStack/Vpc/Resource",
+                "attributes": {
+                  "aws:cdk:cloudformation:type": "AWS::EC2::VPC",
+                  "aws:cdk:cloudformation:props": {
+                    "cidrBlock": "10.0.0.0/16",
+                    "enableDnsHostnames": true,
+                    "enableDnsSupport": true,
+                    "instanceTenancy": "default",
+                    "tags": [
+                      {
+                        "key": "Name",
+                        "value": "PlatformStack/Vpc"
+                      },
+                      {
+                        "key": "platform:component",
+                        "value": "core"
+                      },
+                      {
+                        "key": "platform:customer",
+                        "value": "dry-run-customer"
+                      }
+                    ]
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.CfnVPC",
+                  "version": "2.150.0"
+                }
+              },
+              "publicSubnet1": {
+                "id": "publicSubnet1",
+                "path": "PlatformStack/Vpc/publicSubnet1",
+                "children": {
+                  "Subnet": {
+                    "id": "Subnet",
+                    "path": "PlatformStack/Vpc/publicSubnet1/Subnet",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Subnet",
+                      "aws:cdk:cloudformation:props": {
+                        "availabilityZone": {
+                          "Fn::Select": [
+                            0,
+                            {
+                              "Fn::GetAZs": ""
+                            }
+                          ]
+                        },
+                        "cidrBlock": "10.0.0.0/24",
+                        "mapPublicIpOnLaunch": true,
+                        "tags": [
+                          {
+                            "key": "aws-cdk:subnet-name",
+                            "value": "public"
+                          },
+                          {
+                            "key": "aws-cdk:subnet-type",
+                            "value": "Public"
+                          },
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/publicSubnet1"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnet",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Acl": {
+                    "id": "Acl",
+                    "path": "PlatformStack/Vpc/publicSubnet1/Acl",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.Resource",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTable": {
+                    "id": "RouteTable",
+                    "path": "PlatformStack/Vpc/publicSubnet1/RouteTable",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::RouteTable",
+                      "aws:cdk:cloudformation:props": {
+                        "tags": [
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/publicSubnet1"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRouteTable",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTableAssociation": {
+                    "id": "RouteTableAssociation",
+                    "path": "PlatformStack/Vpc/publicSubnet1/RouteTableAssociation",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SubnetRouteTableAssociation",
+                      "aws:cdk:cloudformation:props": {
+                        "routeTableId": {
+                          "Ref": "VpcpublicSubnet1RouteTable15C15F8E"
+                        },
+                        "subnetId": {
+                          "Ref": "VpcpublicSubnet1Subnet2BB74ED7"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnetRouteTableAssociation",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "DefaultRoute": {
+                    "id": "DefaultRoute",
+                    "path": "PlatformStack/Vpc/publicSubnet1/DefaultRoute",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Route",
+                      "aws:cdk:cloudformation:props": {
+                        "destinationCidrBlock": "0.0.0.0/0",
+                        "gatewayId": {
+                          "Ref": "VpcIGWD7BA715C"
+                        },
+                        "routeTableId": {
+                          "Ref": "VpcpublicSubnet1RouteTable15C15F8E"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRoute",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "EIP": {
+                    "id": "EIP",
+                    "path": "PlatformStack/Vpc/publicSubnet1/EIP",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::EIP",
+                      "aws:cdk:cloudformation:props": {
+                        "domain": "vpc",
+                        "tags": [
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/publicSubnet1"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnEIP",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "NATGateway": {
+                    "id": "NATGateway",
+                    "path": "PlatformStack/Vpc/publicSubnet1/NATGateway",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::NatGateway",
+                      "aws:cdk:cloudformation:props": {
+                        "allocationId": {
+                          "Fn::GetAtt": [
+                            "VpcpublicSubnet1EIP411541E6",
+                            "AllocationId"
+                          ]
+                        },
+                        "subnetId": {
+                          "Ref": "VpcpublicSubnet1Subnet2BB74ED7"
+                        },
+                        "tags": [
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/publicSubnet1"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnNatGateway",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.PublicSubnet",
+                  "version": "2.150.0"
+                }
+              },
+              "publicSubnet2": {
+                "id": "publicSubnet2",
+                "path": "PlatformStack/Vpc/publicSubnet2",
+                "children": {
+                  "Subnet": {
+                    "id": "Subnet",
+                    "path": "PlatformStack/Vpc/publicSubnet2/Subnet",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Subnet",
+                      "aws:cdk:cloudformation:props": {
+                        "availabilityZone": {
+                          "Fn::Select": [
+                            1,
+                            {
+                              "Fn::GetAZs": ""
+                            }
+                          ]
+                        },
+                        "cidrBlock": "10.0.1.0/24",
+                        "mapPublicIpOnLaunch": true,
+                        "tags": [
+                          {
+                            "key": "aws-cdk:subnet-name",
+                            "value": "public"
+                          },
+                          {
+                            "key": "aws-cdk:subnet-type",
+                            "value": "Public"
+                          },
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/publicSubnet2"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnet",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Acl": {
+                    "id": "Acl",
+                    "path": "PlatformStack/Vpc/publicSubnet2/Acl",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.Resource",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTable": {
+                    "id": "RouteTable",
+                    "path": "PlatformStack/Vpc/publicSubnet2/RouteTable",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::RouteTable",
+                      "aws:cdk:cloudformation:props": {
+                        "tags": [
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/publicSubnet2"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRouteTable",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTableAssociation": {
+                    "id": "RouteTableAssociation",
+                    "path": "PlatformStack/Vpc/publicSubnet2/RouteTableAssociation",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SubnetRouteTableAssociation",
+                      "aws:cdk:cloudformation:props": {
+                        "routeTableId": {
+                          "Ref": "VpcpublicSubnet2RouteTableC5A6DF77"
+                        },
+                        "subnetId": {
+                          "Ref": "VpcpublicSubnet2SubnetE34B022A"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnetRouteTableAssociation",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "DefaultRoute": {
+                    "id": "DefaultRoute",
+                    "path": "PlatformStack/Vpc/publicSubnet2/DefaultRoute",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Route",
+                      "aws:cdk:cloudformation:props": {
+                        "destinationCidrBlock": "0.0.0.0/0",
+                        "gatewayId": {
+                          "Ref": "VpcIGWD7BA715C"
+                        },
+                        "routeTableId": {
+                          "Ref": "VpcpublicSubnet2RouteTableC5A6DF77"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRoute",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.PublicSubnet",
+                  "version": "2.150.0"
+                }
+              },
+              "privateSubnet1": {
+                "id": "privateSubnet1",
+                "path": "PlatformStack/Vpc/privateSubnet1",
+                "children": {
+                  "Subnet": {
+                    "id": "Subnet",
+                    "path": "PlatformStack/Vpc/privateSubnet1/Subnet",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Subnet",
+                      "aws:cdk:cloudformation:props": {
+                        "availabilityZone": {
+                          "Fn::Select": [
+                            0,
+                            {
+                              "Fn::GetAZs": ""
+                            }
+                          ]
+                        },
+                        "cidrBlock": "10.0.16.0/20",
+                        "mapPublicIpOnLaunch": false,
+                        "tags": [
+                          {
+                            "key": "aws-cdk:subnet-name",
+                            "value": "private"
+                          },
+                          {
+                            "key": "aws-cdk:subnet-type",
+                            "value": "Private"
+                          },
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/privateSubnet1"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnet",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Acl": {
+                    "id": "Acl",
+                    "path": "PlatformStack/Vpc/privateSubnet1/Acl",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.Resource",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTable": {
+                    "id": "RouteTable",
+                    "path": "PlatformStack/Vpc/privateSubnet1/RouteTable",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::RouteTable",
+                      "aws:cdk:cloudformation:props": {
+                        "tags": [
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/privateSubnet1"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRouteTable",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTableAssociation": {
+                    "id": "RouteTableAssociation",
+                    "path": "PlatformStack/Vpc/privateSubnet1/RouteTableAssociation",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SubnetRouteTableAssociation",
+                      "aws:cdk:cloudformation:props": {
+                        "routeTableId": {
+                          "Ref": "VpcprivateSubnet1RouteTable1979EACB"
+                        },
+                        "subnetId": {
+                          "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnetRouteTableAssociation",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "DefaultRoute": {
+                    "id": "DefaultRoute",
+                    "path": "PlatformStack/Vpc/privateSubnet1/DefaultRoute",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Route",
+                      "aws:cdk:cloudformation:props": {
+                        "destinationCidrBlock": "0.0.0.0/0",
+                        "natGatewayId": {
+                          "Ref": "VpcpublicSubnet1NATGatewayA036E8A6"
+                        },
+                        "routeTableId": {
+                          "Ref": "VpcprivateSubnet1RouteTable1979EACB"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRoute",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.PrivateSubnet",
+                  "version": "2.150.0"
+                }
+              },
+              "privateSubnet2": {
+                "id": "privateSubnet2",
+                "path": "PlatformStack/Vpc/privateSubnet2",
+                "children": {
+                  "Subnet": {
+                    "id": "Subnet",
+                    "path": "PlatformStack/Vpc/privateSubnet2/Subnet",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Subnet",
+                      "aws:cdk:cloudformation:props": {
+                        "availabilityZone": {
+                          "Fn::Select": [
+                            1,
+                            {
+                              "Fn::GetAZs": ""
+                            }
+                          ]
+                        },
+                        "cidrBlock": "10.0.32.0/20",
+                        "mapPublicIpOnLaunch": false,
+                        "tags": [
+                          {
+                            "key": "aws-cdk:subnet-name",
+                            "value": "private"
+                          },
+                          {
+                            "key": "aws-cdk:subnet-type",
+                            "value": "Private"
+                          },
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/privateSubnet2"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnet",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Acl": {
+                    "id": "Acl",
+                    "path": "PlatformStack/Vpc/privateSubnet2/Acl",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.Resource",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTable": {
+                    "id": "RouteTable",
+                    "path": "PlatformStack/Vpc/privateSubnet2/RouteTable",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::RouteTable",
+                      "aws:cdk:cloudformation:props": {
+                        "tags": [
+                          {
+                            "key": "Name",
+                            "value": "PlatformStack/Vpc/privateSubnet2"
+                          },
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRouteTable",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "RouteTableAssociation": {
+                    "id": "RouteTableAssociation",
+                    "path": "PlatformStack/Vpc/privateSubnet2/RouteTableAssociation",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SubnetRouteTableAssociation",
+                      "aws:cdk:cloudformation:props": {
+                        "routeTableId": {
+                          "Ref": "VpcprivateSubnet2RouteTable4D0FFC8C"
+                        },
+                        "subnetId": {
+                          "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSubnetRouteTableAssociation",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "DefaultRoute": {
+                    "id": "DefaultRoute",
+                    "path": "PlatformStack/Vpc/privateSubnet2/DefaultRoute",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::Route",
+                      "aws:cdk:cloudformation:props": {
+                        "destinationCidrBlock": "0.0.0.0/0",
+                        "natGatewayId": {
+                          "Ref": "VpcpublicSubnet1NATGatewayA036E8A6"
+                        },
+                        "routeTableId": {
+                          "Ref": "VpcprivateSubnet2RouteTable4D0FFC8C"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnRoute",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.PrivateSubnet",
+                  "version": "2.150.0"
+                }
+              },
+              "IGW": {
+                "id": "IGW",
+                "path": "PlatformStack/Vpc/IGW",
+                "attributes": {
+                  "aws:cdk:cloudformation:type": "AWS::EC2::InternetGateway",
+                  "aws:cdk:cloudformation:props": {
+                    "tags": [
+                      {
+                        "key": "Name",
+                        "value": "PlatformStack/Vpc"
+                      },
+                      {
+                        "key": "platform:component",
+                        "value": "core"
+                      },
+                      {
+                        "key": "platform:customer",
+                        "value": "dry-run-customer"
+                      }
+                    ]
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.CfnInternetGateway",
+                  "version": "2.150.0"
+                }
+              },
+              "VPCGW": {
+                "id": "VPCGW",
+                "path": "PlatformStack/Vpc/VPCGW",
+                "attributes": {
+                  "aws:cdk:cloudformation:type": "AWS::EC2::VPCGatewayAttachment",
+                  "aws:cdk:cloudformation:props": {
+                    "internetGatewayId": {
+                      "Ref": "VpcIGWD7BA715C"
+                    },
+                    "vpcId": {
+                      "Ref": "Vpc8378EB38"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.CfnVPCGatewayAttachment",
+                  "version": "2.150.0"
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.aws_ec2.Vpc",
+              "version": "2.150.0"
+            }
+          },
+          "Trail": {
+            "id": "Trail",
+            "path": "PlatformStack/Trail",
+            "children": {
+              "S3": {
+                "id": "S3",
+                "path": "PlatformStack/Trail/S3",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Trail/S3/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::S3::Bucket",
+                      "aws:cdk:cloudformation:props": {
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_s3.CfnBucket",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Policy": {
+                    "id": "Policy",
+                    "path": "PlatformStack/Trail/S3/Policy",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Trail/S3/Policy/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::S3::BucketPolicy",
+                          "aws:cdk:cloudformation:props": {
+                            "bucket": {
+                              "Ref": "TrailS30071F172"
+                            },
+                            "policyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": "s3:*",
+                                  "Condition": {
+                                    "Bool": {
+                                      "aws:SecureTransport": "false"
+                                    }
+                                  },
+                                  "Effect": "Deny",
+                                  "Principal": {
+                                    "AWS": "*"
+                                  },
+                                  "Resource": [
+                                    {
+                                      "Fn::GetAtt": [
+                                        "TrailS30071F172",
+                                        "Arn"
+                                      ]
+                                    },
+                                    {
+                                      "Fn::Join": [
+                                        "",
+                                        [
+                                          {
+                                            "Fn::GetAtt": [
+                                              "TrailS30071F172",
+                                              "Arn"
+                                            ]
+                                          },
+                                          "/*"
+                                        ]
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Action": "s3:GetBucketAcl",
+                                  "Effect": "Allow",
+                                  "Principal": {
+                                    "Service": "cloudtrail.amazonaws.com"
+                                  },
+                                  "Resource": {
+                                    "Fn::GetAtt": [
+                                      "TrailS30071F172",
+                                      "Arn"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "Action": "s3:PutObject",
+                                  "Condition": {
+                                    "StringEquals": {
+                                      "s3:x-amz-acl": "bucket-owner-full-control"
+                                    }
+                                  },
+                                  "Effect": "Allow",
+                                  "Principal": {
+                                    "Service": "cloudtrail.amazonaws.com"
+                                  },
+                                  "Resource": {
+                                    "Fn::Join": [
+                                      "",
+                                      [
+                                        {
+                                          "Fn::GetAtt": [
+                                            "TrailS30071F172",
+                                            "Arn"
+                                          ]
+                                        },
+                                        "/AWSLogs/",
+                                        {
+                                          "Ref": "AWS::AccountId"
+                                        },
+                                        "/*"
+                                      ]
+                                    ]
+                                  }
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_s3.CfnBucketPolicy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_s3.BucketPolicy",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_s3.Bucket",
+                  "version": "2.150.0"
+                }
+              },
+              "Resource": {
+                "id": "Resource",
+                "path": "PlatformStack/Trail/Resource",
+                "attributes": {
+                  "aws:cdk:cloudformation:type": "AWS::CloudTrail::Trail",
+                  "aws:cdk:cloudformation:props": {
+                    "enableLogFileValidation": true,
+                    "eventSelectors": [],
+                    "includeGlobalServiceEvents": true,
+                    "isLogging": true,
+                    "isMultiRegionTrail": true,
+                    "s3BucketName": {
+                      "Ref": "TrailS30071F172"
+                    },
+                    "tags": [
+                      {
+                        "key": "platform:component",
+                        "value": "core"
+                      },
+                      {
+                        "key": "platform:customer",
+                        "value": "dry-run-customer"
+                      }
+                    ]
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_cloudtrail.CfnTrail",
+                  "version": "2.150.0"
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.aws_cloudtrail.Trail",
+              "version": "2.150.0"
+            }
+          },
+          "GuardDuty": {
+            "id": "GuardDuty",
+            "path": "PlatformStack/GuardDuty",
+            "attributes": {
+              "aws:cdk:cloudformation:type": "AWS::GuardDuty::Detector",
+              "aws:cdk:cloudformation:props": {
+                "enable": true,
+                "tags": [
+                  {
+                    "key": "platform:component",
+                    "value": "core"
+                  },
+                  {
+                    "key": "platform:customer",
+                    "value": "dry-run-customer"
+                  }
+                ]
+              }
+            },
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.aws_guardduty.CfnDetector",
+              "version": "2.150.0"
+            }
+          },
+          "Data": {
+            "id": "Data",
+            "path": "PlatformStack/Data",
+            "children": {
+              "DataKey": {
+                "id": "DataKey",
+                "path": "PlatformStack/Data/DataKey",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/DataKey/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::KMS::Key",
+                      "aws:cdk:cloudformation:props": {
+                        "description": "Platform data encryption key",
+                        "enableKeyRotation": true,
+                        "keyPolicy": {
+                          "Statement": [
+                            {
+                              "Action": "kms:*",
+                              "Effect": "Allow",
+                              "Principal": {
+                                "AWS": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "arn:",
+                                      {
+                                        "Ref": "AWS::Partition"
+                                      },
+                                      ":iam::",
+                                      {
+                                        "Ref": "AWS::AccountId"
+                                      },
+                                      ":root"
+                                    ]
+                                  ]
+                                }
+                              },
+                              "Resource": "*"
+                            }
+                          ],
+                          "Version": "2012-10-17"
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_kms.CfnKey",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_kms.Key",
+                  "version": "2.150.0"
+                }
+              },
+              "AccessLogs": {
+                "id": "AccessLogs",
+                "path": "PlatformStack/Data/AccessLogs",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/AccessLogs/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::S3::Bucket",
+                      "aws:cdk:cloudformation:props": {
+                        "bucketEncryption": {
+                          "serverSideEncryptionConfiguration": [
+                            {
+                              "serverSideEncryptionByDefault": {
+                                "sseAlgorithm": "AES256"
+                              }
+                            }
+                          ]
+                        },
+                        "lifecycleConfiguration": {
+                          "rules": [
+                            {
+                              "expirationInDays": 365,
+                              "status": "Enabled"
+                            }
+                          ]
+                        },
+                        "ownershipControls": {
+                          "rules": [
+                            {
+                              "objectOwnership": "BucketOwnerEnforced"
+                            }
+                          ]
+                        },
+                        "publicAccessBlockConfiguration": {
+                          "blockPublicAcls": true,
+                          "blockPublicPolicy": true,
+                          "ignorePublicAcls": true,
+                          "restrictPublicBuckets": true
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_s3.CfnBucket",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Policy": {
+                    "id": "Policy",
+                    "path": "PlatformStack/Data/AccessLogs/Policy",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Data/AccessLogs/Policy/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::S3::BucketPolicy",
+                          "aws:cdk:cloudformation:props": {
+                            "bucket": {
+                              "Ref": "DataAccessLogsC0C25EE4"
+                            },
+                            "policyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": "s3:*",
+                                  "Condition": {
+                                    "Bool": {
+                                      "aws:SecureTransport": "false"
+                                    }
+                                  },
+                                  "Effect": "Deny",
+                                  "Principal": {
+                                    "AWS": "*"
+                                  },
+                                  "Resource": [
+                                    {
+                                      "Fn::GetAtt": [
+                                        "DataAccessLogsC0C25EE4",
+                                        "Arn"
+                                      ]
+                                    },
+                                    {
+                                      "Fn::Join": [
+                                        "",
+                                        [
+                                          {
+                                            "Fn::GetAtt": [
+                                              "DataAccessLogsC0C25EE4",
+                                              "Arn"
+                                            ]
+                                          },
+                                          "/*"
+                                        ]
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Action": "s3:PutObject",
+                                  "Condition": {
+                                    "ArnLike": {
+                                      "aws:SourceArn": {
+                                        "Fn::GetAtt": [
+                                          "DataDataBucketA7E8509A",
+                                          "Arn"
+                                        ]
+                                      }
+                                    },
+                                    "StringEquals": {
+                                      "aws:SourceAccount": {
+                                        "Ref": "AWS::AccountId"
+                                      }
+                                    }
+                                  },
+                                  "Effect": "Allow",
+                                  "Principal": {
+                                    "Service": "logging.s3.amazonaws.com"
+                                  },
+                                  "Resource": {
+                                    "Fn::Join": [
+                                      "",
+                                      [
+                                        {
+                                          "Fn::GetAtt": [
+                                            "DataAccessLogsC0C25EE4",
+                                            "Arn"
+                                          ]
+                                        },
+                                        "/s3-data/*"
+                                      ]
+                                    ]
+                                  }
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_s3.CfnBucketPolicy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_s3.BucketPolicy",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_s3.Bucket",
+                  "version": "2.150.0"
+                }
+              },
+              "DataBucket": {
+                "id": "DataBucket",
+                "path": "PlatformStack/Data/DataBucket",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/DataBucket/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::S3::Bucket",
+                      "aws:cdk:cloudformation:props": {
+                        "bucketEncryption": {
+                          "serverSideEncryptionConfiguration": [
+                            {
+                              "serverSideEncryptionByDefault": {
+                                "sseAlgorithm": "aws:kms",
+                                "kmsMasterKeyId": {
+                                  "Fn::GetAtt": [
+                                    "DataDataKeyCDD1A924",
+                                    "Arn"
+                                  ]
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "loggingConfiguration": {
+                          "destinationBucketName": {
+                            "Ref": "DataAccessLogsC0C25EE4"
+                          },
+                          "logFilePrefix": "s3-data/"
+                        },
+                        "publicAccessBlockConfiguration": {
+                          "blockPublicAcls": true,
+                          "blockPublicPolicy": true,
+                          "ignorePublicAcls": true,
+                          "restrictPublicBuckets": true
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "storage"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "versioningConfiguration": {
+                          "status": "Enabled"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_s3.CfnBucket",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Policy": {
+                    "id": "Policy",
+                    "path": "PlatformStack/Data/DataBucket/Policy",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Data/DataBucket/Policy/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::S3::BucketPolicy",
+                          "aws:cdk:cloudformation:props": {
+                            "bucket": {
+                              "Ref": "DataDataBucketA7E8509A"
+                            },
+                            "policyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": "s3:*",
+                                  "Condition": {
+                                    "Bool": {
+                                      "aws:SecureTransport": "false"
+                                    }
+                                  },
+                                  "Effect": "Deny",
+                                  "Principal": {
+                                    "AWS": "*"
+                                  },
+                                  "Resource": [
+                                    {
+                                      "Fn::GetAtt": [
+                                        "DataDataBucketA7E8509A",
+                                        "Arn"
+                                      ]
+                                    },
+                                    {
+                                      "Fn::Join": [
+                                        "",
+                                        [
+                                          {
+                                            "Fn::GetAtt": [
+                                              "DataDataBucketA7E8509A",
+                                              "Arn"
+                                            ]
+                                          },
+                                          "/*"
+                                        ]
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_s3.CfnBucketPolicy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_s3.BucketPolicy",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_s3.Bucket",
+                  "version": "2.150.0"
+                }
+              },
+              "DbSg": {
+                "id": "DbSg",
+                "path": "PlatformStack/Data/DbSg",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/DbSg/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroup",
+                      "aws:cdk:cloudformation:props": {
+                        "groupDescription": "PlatformStack/Data/DbSg",
+                        "securityGroupEgress": [
+                          {
+                            "cidrIp": "255.255.255.255/32",
+                            "description": "Disallow all traffic",
+                            "ipProtocol": "icmp",
+                            "fromPort": 252,
+                            "toPort": 86
+                          }
+                        ],
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroup",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "from PlatformStackServicesapiServiceSecurityGroup4ADC4467:5432": {
+                    "id": "from PlatformStackServicesapiServiceSecurityGroup4ADC4467:5432",
+                    "path": "PlatformStack/Data/DbSg/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:5432",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                      "aws:cdk:cloudformation:props": {
+                        "description": "api -> postgres",
+                        "fromPort": 5432,
+                        "groupId": {
+                          "Fn::GetAtt": [
+                            "DataDbSg816B4B26",
+                            "GroupId"
+                          ]
+                        },
+                        "ipProtocol": "tcp",
+                        "sourceSecurityGroupId": {
+                          "Fn::GetAtt": [
+                            "ServicesapiServiceSecurityGroup67559850",
+                            "GroupId"
+                          ]
+                        },
+                        "toPort": 5432
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:5432": {
+                    "id": "from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:5432",
+                    "path": "PlatformStack/Data/DbSg/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:5432",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                      "aws:cdk:cloudformation:props": {
+                        "description": "worker -> postgres",
+                        "fromPort": 5432,
+                        "groupId": {
+                          "Fn::GetAtt": [
+                            "DataDbSg816B4B26",
+                            "GroupId"
+                          ]
+                        },
+                        "ipProtocol": "tcp",
+                        "sourceSecurityGroupId": {
+                          "Fn::GetAtt": [
+                            "ServicesworkerServiceSecurityGroup254C3E45",
+                            "GroupId"
+                          ]
+                        },
+                        "toPort": 5432
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.SecurityGroup",
+                  "version": "2.150.0"
+                }
+              },
+              "Postgres": {
+                "id": "Postgres",
+                "path": "PlatformStack/Data/Postgres",
+                "children": {
+                  "SubnetGroup": {
+                    "id": "SubnetGroup",
+                    "path": "PlatformStack/Data/Postgres/SubnetGroup",
+                    "children": {
+                      "Default": {
+                        "id": "Default",
+                        "path": "PlatformStack/Data/Postgres/SubnetGroup/Default",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::RDS::DBSubnetGroup",
+                          "aws:cdk:cloudformation:props": {
+                            "dbSubnetGroupDescription": "Subnet group for Postgres database",
+                            "subnetIds": [
+                              {
+                                "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+                              },
+                              {
+                                "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+                              }
+                            ],
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "database"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_rds.CfnDBSubnetGroup",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_rds.SubnetGroup",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Secret": {
+                    "id": "Secret",
+                    "path": "PlatformStack/Data/Postgres/Secret",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Data/Postgres/Secret/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::SecretsManager::Secret",
+                          "aws:cdk:cloudformation:props": {
+                            "description": {
+                              "Fn::Join": [
+                                "",
+                                [
+                                  "Generated by the CDK for stack: ",
+                                  {
+                                    "Ref": "AWS::StackName"
+                                  }
+                                ]
+                              ]
+                            },
+                            "generateSecretString": {
+                              "passwordLength": 30,
+                              "secretStringTemplate": "{\"username\":\"platform\"}",
+                              "generateStringKey": "password",
+                              "excludeCharacters": " %+~`#$&*()|[]{}:;<>?!'/@\"\\"
+                            },
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "database"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_secretsmanager.CfnSecret",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "Attachment": {
+                        "id": "Attachment",
+                        "path": "PlatformStack/Data/Postgres/Secret/Attachment",
+                        "children": {
+                          "Resource": {
+                            "id": "Resource",
+                            "path": "PlatformStack/Data/Postgres/Secret/Attachment/Resource",
+                            "attributes": {
+                              "aws:cdk:cloudformation:type": "AWS::SecretsManager::SecretTargetAttachment",
+                              "aws:cdk:cloudformation:props": {
+                                "secretId": {
+                                  "Ref": "PlatformStackDataPostgresSecretA61251E63fdaad7efa858a3daf9490cf0a702aeb"
+                                },
+                                "targetId": {
+                                  "Ref": "DataPostgresA4594A5A"
+                                },
+                                "targetType": "AWS::RDS::DBInstance"
+                              }
+                            },
+                            "constructInfo": {
+                              "fqn": "aws-cdk-lib.aws_secretsmanager.CfnSecretTargetAttachment",
+                              "version": "2.150.0"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_secretsmanager.SecretTargetAttachment",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_rds.DatabaseSecret",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/Postgres/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::RDS::DBInstance",
+                      "aws:cdk:cloudformation:props": {
+                        "allocatedStorage": "50",
+                        "backupRetentionPeriod": 14,
+                        "copyTagsToSnapshot": true,
+                        "dbInstanceClass": "db.t4g.medium",
+                        "dbName": "platform",
+                        "dbSubnetGroupName": {
+                          "Ref": "DataPostgresSubnetGroupD8DCC9AD"
+                        },
+                        "deletionProtection": true,
+                        "engine": "postgres",
+                        "engineVersion": "16",
+                        "kmsKeyId": {
+                          "Fn::GetAtt": [
+                            "DataDataKeyCDD1A924",
+                            "Arn"
+                          ]
+                        },
+                        "masterUsername": "platform",
+                        "masterUserPassword": {
+                          "Fn::Join": [
+                            "",
+                            [
+                              "{{resolve:secretsmanager:",
+                              {
+                                "Ref": "PlatformStackDataPostgresSecretA61251E63fdaad7efa858a3daf9490cf0a702aeb"
+                              },
+                              ":SecretString:password::}}"
+                            ]
+                          ]
+                        },
+                        "maxAllocatedStorage": 500,
+                        "multiAz": false,
+                        "publiclyAccessible": false,
+                        "storageEncrypted": true,
+                        "storageType": "gp2",
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "database"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcSecurityGroups": [
+                          {
+                            "Fn::GetAtt": [
+                              "DataDbSg816B4B26",
+                              "GroupId"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_rds.CfnDBInstance",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_rds.DatabaseInstance",
+                  "version": "2.150.0"
+                }
+              },
+              "AppDbSecret": {
+                "id": "AppDbSecret",
+                "path": "PlatformStack/Data/AppDbSecret",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/AppDbSecret/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::SecretsManager::Secret",
+                      "aws:cdk:cloudformation:props": {
+                        "description": "platform_app role credentials (RLS-subject application role)",
+                        "generateSecretString": {
+                          "secretStringTemplate": "{\"username\":\"platform_app\"}",
+                          "generateStringKey": "password",
+                          "excludeCharacters": "\"'\\/@",
+                          "passwordLength": 40
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_secretsmanager.CfnSecret",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_secretsmanager.Secret",
+                  "version": "2.150.0"
+                }
+              },
+              "RedisSg": {
+                "id": "RedisSg",
+                "path": "PlatformStack/Data/RedisSg",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/RedisSg/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroup",
+                      "aws:cdk:cloudformation:props": {
+                        "groupDescription": "PlatformStack/Data/RedisSg",
+                        "securityGroupEgress": [
+                          {
+                            "cidrIp": "255.255.255.255/32",
+                            "description": "Disallow all traffic",
+                            "ipProtocol": "icmp",
+                            "fromPort": 252,
+                            "toPort": 86
+                          }
+                        ],
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcId": {
+                          "Ref": "Vpc8378EB38"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroup",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "from PlatformStackServicesapiServiceSecurityGroup4ADC4467:6379": {
+                    "id": "from PlatformStackServicesapiServiceSecurityGroup4ADC4467:6379",
+                    "path": "PlatformStack/Data/RedisSg/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:6379",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                      "aws:cdk:cloudformation:props": {
+                        "description": "api -> redis",
+                        "fromPort": 6379,
+                        "groupId": {
+                          "Fn::GetAtt": [
+                            "DataRedisSgADF85847",
+                            "GroupId"
+                          ]
+                        },
+                        "ipProtocol": "tcp",
+                        "sourceSecurityGroupId": {
+                          "Fn::GetAtt": [
+                            "ServicesapiServiceSecurityGroup67559850",
+                            "GroupId"
+                          ]
+                        },
+                        "toPort": 6379
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:6379": {
+                    "id": "from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:6379",
+                    "path": "PlatformStack/Data/RedisSg/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:6379",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                      "aws:cdk:cloudformation:props": {
+                        "description": "worker -> redis",
+                        "fromPort": 6379,
+                        "groupId": {
+                          "Fn::GetAtt": [
+                            "DataRedisSgADF85847",
+                            "GroupId"
+                          ]
+                        },
+                        "ipProtocol": "tcp",
+                        "sourceSecurityGroupId": {
+                          "Fn::GetAtt": [
+                            "ServicesworkerServiceSecurityGroup254C3E45",
+                            "GroupId"
+                          ]
+                        },
+                        "toPort": 6379
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ec2.SecurityGroup",
+                  "version": "2.150.0"
+                }
+              },
+              "RedisSubnets": {
+                "id": "RedisSubnets",
+                "path": "PlatformStack/Data/RedisSubnets",
+                "attributes": {
+                  "aws:cdk:cloudformation:type": "AWS::ElastiCache::SubnetGroup",
+                  "aws:cdk:cloudformation:props": {
+                    "description": "Platform redis subnets",
+                    "subnetIds": [
+                      {
+                        "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+                      },
+                      {
+                        "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+                      }
+                    ],
+                    "tags": [
+                      {
+                        "key": "platform:component",
+                        "value": "core"
+                      },
+                      {
+                        "key": "platform:customer",
+                        "value": "dry-run-customer"
+                      }
+                    ]
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_elasticache.CfnSubnetGroup",
+                  "version": "2.150.0"
+                }
+              },
+              "Redis": {
+                "id": "Redis",
+                "path": "PlatformStack/Data/Redis",
+                "attributes": {
+                  "aws:cdk:cloudformation:type": "AWS::ElastiCache::ReplicationGroup",
+                  "aws:cdk:cloudformation:props": {
+                    "atRestEncryptionEnabled": true,
+                    "automaticFailoverEnabled": false,
+                    "cacheNodeType": "cache.t4g.small",
+                    "cacheSubnetGroupName": {
+                      "Ref": "DataRedisSubnets0D63ED40"
+                    },
+                    "engine": "redis",
+                    "numCacheClusters": 1,
+                    "replicationGroupDescription": "Platform cache and job queue",
+                    "securityGroupIds": [
+                      {
+                        "Fn::GetAtt": [
+                          "DataRedisSgADF85847",
+                          "GroupId"
+                        ]
+                      }
+                    ],
+                    "tags": [
+                      {
+                        "key": "platform:component",
+                        "value": "core"
+                      },
+                      {
+                        "key": "platform:customer",
+                        "value": "dry-run-customer"
+                      }
+                    ],
+                    "transitEncryptionEnabled": true
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_elasticache.CfnReplicationGroup",
+                  "version": "2.150.0"
+                }
+              },
+              "Search": {
+                "id": "Search",
+                "path": "PlatformStack/Data/Search",
+                "children": {
+                  "SecurityGroup": {
+                    "id": "SecurityGroup",
+                    "path": "PlatformStack/Data/Search/SecurityGroup",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Data/Search/SecurityGroup/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroup",
+                          "aws:cdk:cloudformation:props": {
+                            "groupDescription": "Security group for domain Search",
+                            "securityGroupEgress": [
+                              {
+                                "cidrIp": "0.0.0.0/0",
+                                "description": "Allow all outbound traffic by default",
+                                "ipProtocol": "-1"
+                              }
+                            ],
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "object-search"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ],
+                            "vpcId": {
+                              "Ref": "Vpc8378EB38"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroup",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "from PlatformStackServicesapiServiceSecurityGroup4ADC4467:443": {
+                        "id": "from PlatformStackServicesapiServiceSecurityGroup4ADC4467:443",
+                        "path": "PlatformStack/Data/Search/SecurityGroup/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:443",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                          "aws:cdk:cloudformation:props": {
+                            "description": "api -> opensearch",
+                            "fromPort": 443,
+                            "groupId": {
+                              "Fn::GetAtt": [
+                                "DataSearchSecurityGroupEFFA2DB4",
+                                "GroupId"
+                              ]
+                            },
+                            "ipProtocol": "tcp",
+                            "sourceSecurityGroupId": {
+                              "Fn::GetAtt": [
+                                "ServicesapiServiceSecurityGroup67559850",
+                                "GroupId"
+                              ]
+                            },
+                            "toPort": 443
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:443": {
+                        "id": "from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:443",
+                        "path": "PlatformStack/Data/Search/SecurityGroup/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:443",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                          "aws:cdk:cloudformation:props": {
+                            "description": "worker -> opensearch",
+                            "fromPort": 443,
+                            "groupId": {
+                              "Fn::GetAtt": [
+                                "DataSearchSecurityGroupEFFA2DB4",
+                                "GroupId"
+                              ]
+                            },
+                            "ipProtocol": "tcp",
+                            "sourceSecurityGroupId": {
+                              "Fn::GetAtt": [
+                                "ServicesworkerServiceSecurityGroup254C3E45",
+                                "GroupId"
+                              ]
+                            },
+                            "toPort": 443
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.SecurityGroup",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "MasterUser": {
+                    "id": "MasterUser",
+                    "path": "PlatformStack/Data/Search/MasterUser",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Data/Search/MasterUser/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::SecretsManager::Secret",
+                          "aws:cdk:cloudformation:props": {
+                            "generateSecretString": {
+                              "secretStringTemplate": "{\"username\":\"platform-admin\"}",
+                              "generateStringKey": "password",
+                              "excludeCharacters": "{}'\\*[]()`"
+                            },
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "object-search"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_secretsmanager.CfnSecret",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_secretsmanager.Secret",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Data/Search/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::OpenSearchService::Domain",
+                      "aws:cdk:cloudformation:props": {
+                        "advancedSecurityOptions": {
+                          "enabled": true,
+                          "internalUserDatabaseEnabled": true,
+                          "masterUserOptions": {
+                            "masterUserName": "platform-admin",
+                            "masterUserPassword": {
+                              "Fn::Join": [
+                                "",
+                                [
+                                  "{{resolve:secretsmanager:",
+                                  {
+                                    "Ref": "DataSearchMasterUserB2E3D50A"
+                                  },
+                                  ":SecretString:password::}}"
+                                ]
+                              ]
+                            }
+                          }
+                        },
+                        "clusterConfig": {
+                          "dedicatedMasterEnabled": false,
+                          "instanceCount": 1,
+                          "instanceType": "t3.small.search",
+                          "multiAzWithStandbyEnabled": false,
+                          "zoneAwarenessEnabled": false
+                        },
+                        "domainEndpointOptions": {
+                          "enforceHttps": true,
+                          "tlsSecurityPolicy": "Policy-Min-TLS-1-0-2019-07"
+                        },
+                        "ebsOptions": {
+                          "ebsEnabled": true,
+                          "volumeSize": 30,
+                          "volumeType": "gp2"
+                        },
+                        "encryptionAtRestOptions": {
+                          "enabled": true
+                        },
+                        "engineVersion": "OpenSearch_2.11",
+                        "logPublishingOptions": {},
+                        "nodeToNodeEncryptionOptions": {
+                          "enabled": true
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "object-search"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "vpcOptions": {
+                          "securityGroupIds": [
+                            {
+                              "Fn::GetAtt": [
+                                "DataSearchSecurityGroupEFFA2DB4",
+                                "GroupId"
+                              ]
+                            }
+                          ],
+                          "subnetIds": [
+                            {
+                              "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_opensearchservice.CfnDomain",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_opensearchservice.Domain",
+                  "version": "2.150.0"
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "constructs.Construct",
+              "version": "10.3.0"
+            }
+          },
+          "Auth": {
+            "id": "Auth",
+            "path": "PlatformStack/Auth",
+            "children": {
+              "UserPool": {
+                "id": "UserPool",
+                "path": "PlatformStack/Auth/UserPool",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Auth/UserPool/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::Cognito::UserPool",
+                      "aws:cdk:cloudformation:props": {
+                        "accountRecoverySetting": {
+                          "recoveryMechanisms": [
+                            {
+                              "name": "verified_email",
+                              "priority": 1
+                            }
+                          ]
+                        },
+                        "adminCreateUserConfig": {
+                          "allowAdminCreateUserOnly": true
+                        },
+                        "autoVerifiedAttributes": [
+                          "email"
+                        ],
+                        "emailVerificationMessage": "The verification code to your new account is {####}",
+                        "emailVerificationSubject": "Verify your new account",
+                        "enabledMfas": [
+                          "SOFTWARE_TOKEN_MFA"
+                        ],
+                        "mfaConfiguration": "OPTIONAL",
+                        "policies": {
+                          "passwordPolicy": {
+                            "temporaryPasswordValidityDays": 7,
+                            "minimumLength": 12,
+                            "requireLowercase": true,
+                            "requireUppercase": true,
+                            "requireNumbers": true,
+                            "requireSymbols": true
+                          }
+                        },
+                        "smsVerificationMessage": "The verification code to your new account is {####}",
+                        "userPoolTags": {
+                          "platform:component": "core",
+                          "platform:customer": "dry-run-customer"
+                        },
+                        "usernameAttributes": [
+                          "email"
+                        ],
+                        "usernameConfiguration": {
+                          "caseSensitive": false
+                        },
+                        "verificationMessageTemplate": {
+                          "defaultEmailOption": "CONFIRM_WITH_CODE",
+                          "emailMessage": "The verification code to your new account is {####}",
+                          "emailSubject": "Verify your new account",
+                          "smsMessage": "The verification code to your new account is {####}"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_cognito.CfnUserPool",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "WebClient": {
+                    "id": "WebClient",
+                    "path": "PlatformStack/Auth/UserPool/WebClient",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Auth/UserPool/WebClient/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::Cognito::UserPoolClient",
+                          "aws:cdk:cloudformation:props": {
+                            "accessTokenValidity": 15,
+                            "allowedOAuthFlows": [
+                              "code"
+                            ],
+                            "allowedOAuthFlowsUserPoolClient": true,
+                            "allowedOAuthScopes": [
+                              "openid",
+                              "email",
+                              "profile"
+                            ],
+                            "callbackUrLs": [
+                              "https://dry-run.local/callback"
+                            ],
+                            "explicitAuthFlows": [
+                              "ALLOW_USER_SRP_AUTH",
+                              "ALLOW_REFRESH_TOKEN_AUTH"
+                            ],
+                            "generateSecret": false,
+                            "idTokenValidity": 15,
+                            "logoutUrLs": [
+                              "https://dry-run.local/login"
+                            ],
+                            "preventUserExistenceErrors": "ENABLED",
+                            "refreshTokenValidity": 43200,
+                            "supportedIdentityProviders": [
+                              "COGNITO"
+                            ],
+                            "tokenValidityUnits": {
+                              "idToken": "minutes",
+                              "accessToken": "minutes",
+                              "refreshToken": "minutes"
+                            },
+                            "userPoolId": {
+                              "Ref": "AuthUserPool8115E87F"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_cognito.CfnUserPoolClient",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_cognito.UserPoolClient",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "HostedUi": {
+                    "id": "HostedUi",
+                    "path": "PlatformStack/Auth/UserPool/HostedUi",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Auth/UserPool/HostedUi/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::Cognito::UserPoolDomain",
+                          "aws:cdk:cloudformation:props": {
+                            "domain": "platform-dry-run-customer",
+                            "userPoolId": {
+                              "Ref": "AuthUserPool8115E87F"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_cognito.CfnUserPoolDomain",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_cognito.UserPoolDomain",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_cognito.UserPool",
+                  "version": "2.150.0"
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "constructs.Construct",
+              "version": "10.3.0"
+            }
+          },
+          "Services": {
+            "id": "Services",
+            "path": "PlatformStack/Services",
+            "children": {
+              "Cluster": {
+                "id": "Cluster",
+                "path": "PlatformStack/Services/Cluster",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/Cluster/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ECS::Cluster",
+                      "aws:cdk:cloudformation:props": {
+                        "clusterSettings": [
+                          {
+                            "name": "containerInsights",
+                            "value": "enabled"
+                          }
+                        ],
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.CfnCluster",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ecs.Cluster",
+                  "version": "2.150.0"
+                }
+              },
+              "Logs": {
+                "id": "Logs",
+                "path": "PlatformStack/Services/Logs",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/Logs/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::Logs::LogGroup",
+                      "aws:cdk:cloudformation:props": {
+                        "retentionInDays": 30,
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_logs.CfnLogGroup",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_logs.LogGroup",
+                  "version": "2.150.0"
+                }
+              },
+              "ApiTaskRole": {
+                "id": "ApiTaskRole",
+                "path": "PlatformStack/Services/ApiTaskRole",
+                "children": {
+                  "ImportApiTaskRole": {
+                    "id": "ImportApiTaskRole",
+                    "path": "PlatformStack/Services/ApiTaskRole/ImportApiTaskRole",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.Resource",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/ApiTaskRole/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::IAM::Role",
+                      "aws:cdk:cloudformation:props": {
+                        "assumeRolePolicyDocument": {
+                          "Statement": [
+                            {
+                              "Action": "sts:AssumeRole",
+                              "Effect": "Allow",
+                              "Principal": {
+                                "Service": "ecs-tasks.amazonaws.com"
+                              }
+                            }
+                          ],
+                          "Version": "2012-10-17"
+                        },
+                        "description": "Platform API task role",
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.CfnRole",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "DefaultPolicy": {
+                    "id": "DefaultPolicy",
+                    "path": "PlatformStack/Services/ApiTaskRole/DefaultPolicy",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/ApiTaskRole/DefaultPolicy/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::IAM::Policy",
+                          "aws:cdk:cloudformation:props": {
+                            "policyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": [
+                                    "s3:Abort*",
+                                    "s3:DeleteObject*",
+                                    "s3:GetBucket*",
+                                    "s3:GetObject*",
+                                    "s3:List*",
+                                    "s3:PutObject",
+                                    "s3:PutObjectLegalHold",
+                                    "s3:PutObjectRetention",
+                                    "s3:PutObjectTagging",
+                                    "s3:PutObjectVersionTagging"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": [
+                                    {
+                                      "Fn::GetAtt": [
+                                        "DataDataBucketA7E8509A",
+                                        "Arn"
+                                      ]
+                                    },
+                                    {
+                                      "Fn::Join": [
+                                        "",
+                                        [
+                                          {
+                                            "Fn::GetAtt": [
+                                              "DataDataBucketA7E8509A",
+                                              "Arn"
+                                            ]
+                                          },
+                                          "/*"
+                                        ]
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Action": [
+                                    "kms:Decrypt",
+                                    "kms:DescribeKey",
+                                    "kms:Encrypt",
+                                    "kms:GenerateDataKey*",
+                                    "kms:ReEncrypt*"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": {
+                                    "Fn::GetAtt": [
+                                      "DataDataKeyCDD1A924",
+                                      "Arn"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "Action": [
+                                    "secretsmanager:DescribeSecret",
+                                    "secretsmanager:GetSecretValue"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": {
+                                    "Ref": "DataAppDbSecretA34DDACB"
+                                  }
+                                },
+                                {
+                                  "Action": [
+                                    "secretsmanager:CreateSecret",
+                                    "secretsmanager:DeleteSecret",
+                                    "secretsmanager:GetSecretValue",
+                                    "secretsmanager:PutSecretValue",
+                                    "secretsmanager:TagResource"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": "arn:aws:secretsmanager:*:*:secret:platform/connections/*"
+                                },
+                                {
+                                  "Action": [
+                                    "cognito-idp:AdminCreateUser",
+                                    "cognito-idp:AdminDisableUser",
+                                    "cognito-idp:AdminEnableUser",
+                                    "cognito-idp:AdminGetUser",
+                                    "cognito-idp:AdminResetUserPassword"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": {
+                                    "Fn::GetAtt": [
+                                      "AuthUserPool8115E87F",
+                                      "Arn"
+                                    ]
+                                  }
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            },
+                            "policyName": "ServicesApiTaskRoleDefaultPolicyC87C16ED",
+                            "roles": [
+                              {
+                                "Ref": "ServicesApiTaskRoleF7B4AF36"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.CfnPolicy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.Policy",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_iam.Role",
+                  "version": "2.150.0"
+                }
+              },
+              "WorkerTaskRole": {
+                "id": "WorkerTaskRole",
+                "path": "PlatformStack/Services/WorkerTaskRole",
+                "children": {
+                  "ImportWorkerTaskRole": {
+                    "id": "ImportWorkerTaskRole",
+                    "path": "PlatformStack/Services/WorkerTaskRole/ImportWorkerTaskRole",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.Resource",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/WorkerTaskRole/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::IAM::Role",
+                      "aws:cdk:cloudformation:props": {
+                        "assumeRolePolicyDocument": {
+                          "Statement": [
+                            {
+                              "Action": "sts:AssumeRole",
+                              "Effect": "Allow",
+                              "Principal": {
+                                "Service": "ecs-tasks.amazonaws.com"
+                              }
+                            }
+                          ],
+                          "Version": "2012-10-17"
+                        },
+                        "description": "Platform worker task role - deliberately narrower than API (no Cognito)",
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.CfnRole",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "DefaultPolicy": {
+                    "id": "DefaultPolicy",
+                    "path": "PlatformStack/Services/WorkerTaskRole/DefaultPolicy",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/WorkerTaskRole/DefaultPolicy/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::IAM::Policy",
+                          "aws:cdk:cloudformation:props": {
+                            "policyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": [
+                                    "s3:Abort*",
+                                    "s3:DeleteObject*",
+                                    "s3:GetBucket*",
+                                    "s3:GetObject*",
+                                    "s3:List*",
+                                    "s3:PutObject",
+                                    "s3:PutObjectLegalHold",
+                                    "s3:PutObjectRetention",
+                                    "s3:PutObjectTagging",
+                                    "s3:PutObjectVersionTagging"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": [
+                                    {
+                                      "Fn::GetAtt": [
+                                        "DataDataBucketA7E8509A",
+                                        "Arn"
+                                      ]
+                                    },
+                                    {
+                                      "Fn::Join": [
+                                        "",
+                                        [
+                                          {
+                                            "Fn::GetAtt": [
+                                              "DataDataBucketA7E8509A",
+                                              "Arn"
+                                            ]
+                                          },
+                                          "/*"
+                                        ]
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "Action": [
+                                    "kms:Decrypt",
+                                    "kms:DescribeKey",
+                                    "kms:Encrypt",
+                                    "kms:GenerateDataKey*",
+                                    "kms:ReEncrypt*"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": {
+                                    "Fn::GetAtt": [
+                                      "DataDataKeyCDD1A924",
+                                      "Arn"
+                                    ]
+                                  }
+                                },
+                                {
+                                  "Action": [
+                                    "secretsmanager:DescribeSecret",
+                                    "secretsmanager:GetSecretValue"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": {
+                                    "Ref": "DataAppDbSecretA34DDACB"
+                                  }
+                                },
+                                {
+                                  "Action": "secretsmanager:GetSecretValue",
+                                  "Effect": "Allow",
+                                  "Resource": "arn:aws:secretsmanager:*:*:secret:platform/connections/*"
+                                },
+                                {
+                                  "Action": [
+                                    "athena:GetQueryExecution",
+                                    "athena:GetQueryResults",
+                                    "athena:StartQueryExecution",
+                                    "athena:StopQueryExecution"
+                                  ],
+                                  "Effect": "Allow",
+                                  "Resource": "arn:aws:athena:*:*:workgroup/platform"
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            },
+                            "policyName": "ServicesWorkerTaskRoleDefaultPolicy0983F570",
+                            "roles": [
+                              {
+                                "Ref": "ServicesWorkerTaskRole15DE1B06"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.CfnPolicy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.Policy",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_iam.Role",
+                  "version": "2.150.0"
+                }
+              },
+              "WebTaskRole": {
+                "id": "WebTaskRole",
+                "path": "PlatformStack/Services/WebTaskRole",
+                "children": {
+                  "ImportWebTaskRole": {
+                    "id": "ImportWebTaskRole",
+                    "path": "PlatformStack/Services/WebTaskRole/ImportWebTaskRole",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.Resource",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/WebTaskRole/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::IAM::Role",
+                      "aws:cdk:cloudformation:props": {
+                        "assumeRolePolicyDocument": {
+                          "Statement": [
+                            {
+                              "Action": "sts:AssumeRole",
+                              "Effect": "Allow",
+                              "Principal": {
+                                "Service": "ecs-tasks.amazonaws.com"
+                              }
+                            }
+                          ],
+                          "Version": "2012-10-17"
+                        },
+                        "description": "Platform web task role - no data permissions",
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ]
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.CfnRole",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_iam.Role",
+                  "version": "2.150.0"
+                }
+              },
+              "apiTaskDef": {
+                "id": "apiTaskDef",
+                "path": "PlatformStack/Services/apiTaskDef",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/apiTaskDef/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ECS::TaskDefinition",
+                      "aws:cdk:cloudformation:props": {
+                        "containerDefinitions": [
+                          {
+                            "essential": true,
+                            "image": "295435085030.dkr.ecr.eu-north-1.amazonaws.com/platform-api:v1",
+                            "name": "api",
+                            "portMappings": [
+                              {
+                                "containerPort": 8000,
+                                "protocol": "tcp"
+                              }
+                            ],
+                            "logConfiguration": {
+                              "logDriver": "awslogs",
+                              "options": {
+                                "awslogs-group": {
+                                  "Ref": "ServicesLogs43B4E769"
+                                },
+                                "awslogs-stream-prefix": "api",
+                                "awslogs-region": "eu-north-1"
+                              }
+                            },
+                            "environment": [
+                              {
+                                "name": "REDIS_URL",
+                                "value": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "rediss://",
+                                      {
+                                        "Fn::GetAtt": [
+                                          "DataRedisAA90275E",
+                                          "PrimaryEndPoint.Address"
+                                        ]
+                                      },
+                                      ":6379/0"
+                                    ]
+                                  ]
+                                }
+                              },
+                              {
+                                "name": "OPENSEARCH_ENDPOINT",
+                                "value": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "https://",
+                                      {
+                                        "Fn::GetAtt": [
+                                          "DataSearchC7D96612",
+                                          "DomainEndpoint"
+                                        ]
+                                      }
+                                    ]
+                                  ]
+                                }
+                              },
+                              {
+                                "name": "S3_DATA_BUCKET",
+                                "value": {
+                                  "Ref": "DataDataBucketA7E8509A"
+                                }
+                              },
+                              {
+                                "name": "COGNITO_USER_POOL_ID",
+                                "value": {
+                                  "Ref": "AuthUserPool8115E87F"
+                                }
+                              },
+                              {
+                                "name": "COGNITO_CLIENT_ID",
+                                "value": {
+                                  "Ref": "AuthUserPoolWebClient147E4E38"
+                                }
+                              },
+                              {
+                                "name": "PLATFORM_VERSION",
+                                "value": "v1"
+                              }
+                            ],
+                            "secrets": [
+                              {
+                                "name": "DATABASE_CREDENTIALS",
+                                "valueFrom": {
+                                  "Ref": "DataAppDbSecretA34DDACB"
+                                }
+                              }
+                            ]
+                          }
+                        ],
+                        "cpu": "512",
+                        "executionRoleArn": {
+                          "Fn::GetAtt": [
+                            "ServicesapiTaskDefExecutionRole2ED35D1D",
+                            "Arn"
+                          ]
+                        },
+                        "family": "PlatformStackServicesapiTaskDef7ACFE143",
+                        "memory": "1024",
+                        "networkMode": "awsvpc",
+                        "requiresCompatibilities": [
+                          "FARGATE"
+                        ],
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "taskRoleArn": {
+                          "Fn::GetAtt": [
+                            "ServicesApiTaskRoleF7B4AF36",
+                            "Arn"
+                          ]
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.CfnTaskDefinition",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "api": {
+                    "id": "api",
+                    "path": "PlatformStack/Services/apiTaskDef/api",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.ContainerDefinition",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "ExecutionRole": {
+                    "id": "ExecutionRole",
+                    "path": "PlatformStack/Services/apiTaskDef/ExecutionRole",
+                    "children": {
+                      "ImportExecutionRole": {
+                        "id": "ImportExecutionRole",
+                        "path": "PlatformStack/Services/apiTaskDef/ExecutionRole/ImportExecutionRole",
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.Resource",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/apiTaskDef/ExecutionRole/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::IAM::Role",
+                          "aws:cdk:cloudformation:props": {
+                            "assumeRolePolicyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": "sts:AssumeRole",
+                                  "Effect": "Allow",
+                                  "Principal": {
+                                    "Service": "ecs-tasks.amazonaws.com"
+                                  }
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            },
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "core"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.CfnRole",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "DefaultPolicy": {
+                        "id": "DefaultPolicy",
+                        "path": "PlatformStack/Services/apiTaskDef/ExecutionRole/DefaultPolicy",
+                        "children": {
+                          "Resource": {
+                            "id": "Resource",
+                            "path": "PlatformStack/Services/apiTaskDef/ExecutionRole/DefaultPolicy/Resource",
+                            "attributes": {
+                              "aws:cdk:cloudformation:type": "AWS::IAM::Policy",
+                              "aws:cdk:cloudformation:props": {
+                                "policyDocument": {
+                                  "Statement": [
+                                    {
+                                      "Action": [
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                      ],
+                                      "Effect": "Allow",
+                                      "Resource": {
+                                        "Fn::GetAtt": [
+                                          "ServicesLogs43B4E769",
+                                          "Arn"
+                                        ]
+                                      }
+                                    },
+                                    {
+                                      "Action": [
+                                        "secretsmanager:DescribeSecret",
+                                        "secretsmanager:GetSecretValue"
+                                      ],
+                                      "Effect": "Allow",
+                                      "Resource": {
+                                        "Ref": "DataAppDbSecretA34DDACB"
+                                      }
+                                    }
+                                  ],
+                                  "Version": "2012-10-17"
+                                },
+                                "policyName": "ServicesapiTaskDefExecutionRoleDefaultPolicy305D370B",
+                                "roles": [
+                                  {
+                                    "Ref": "ServicesapiTaskDefExecutionRole2ED35D1D"
+                                  }
+                                ]
+                              }
+                            },
+                            "constructInfo": {
+                              "fqn": "aws-cdk-lib.aws_iam.CfnPolicy",
+                              "version": "2.150.0"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.Policy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.Role",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ecs.FargateTaskDefinition",
+                  "version": "2.150.0"
+                }
+              },
+              "apiService": {
+                "id": "apiService",
+                "path": "PlatformStack/Services/apiService",
+                "children": {
+                  "Service": {
+                    "id": "Service",
+                    "path": "PlatformStack/Services/apiService/Service",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ECS::Service",
+                      "aws:cdk:cloudformation:props": {
+                        "cluster": {
+                          "Ref": "ServicesClusterFAAA2B60"
+                        },
+                        "deploymentConfiguration": {
+                          "maximumPercent": 200,
+                          "minimumHealthyPercent": 100,
+                          "deploymentCircuitBreaker": {
+                            "enable": true,
+                            "rollback": true
+                          }
+                        },
+                        "deploymentController": {
+                          "type": "ECS"
+                        },
+                        "desiredCount": 1,
+                        "enableEcsManagedTags": false,
+                        "healthCheckGracePeriodSeconds": 60,
+                        "launchType": "FARGATE",
+                        "loadBalancers": [
+                          {
+                            "targetGroupArn": {
+                              "Ref": "ServicesAlbHttpApiGroupEBAE83DE"
+                            },
+                            "containerName": "api",
+                            "containerPort": 8000
+                          }
+                        ],
+                        "networkConfiguration": {
+                          "awsvpcConfiguration": {
+                            "assignPublicIp": "DISABLED",
+                            "subnets": [
+                              {
+                                "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+                              },
+                              {
+                                "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+                              }
+                            ],
+                            "securityGroups": [
+                              {
+                                "Fn::GetAtt": [
+                                  "ServicesapiServiceSecurityGroup67559850",
+                                  "GroupId"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "app-server"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "taskDefinition": {
+                          "Ref": "ServicesapiTaskDefD92A9D11"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.CfnService",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "SecurityGroup": {
+                    "id": "SecurityGroup",
+                    "path": "PlatformStack/Services/apiService/SecurityGroup",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/apiService/SecurityGroup/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroup",
+                          "aws:cdk:cloudformation:props": {
+                            "groupDescription": "PlatformStack/Services/apiService/SecurityGroup",
+                            "securityGroupEgress": [
+                              {
+                                "cidrIp": "0.0.0.0/0",
+                                "description": "Allow all outbound traffic by default",
+                                "ipProtocol": "-1"
+                              }
+                            ],
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "app-server"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ],
+                            "vpcId": {
+                              "Ref": "Vpc8378EB38"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroup",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "from PlatformStackServicesAlbSecurityGroupF38E3EAC:8000": {
+                        "id": "from PlatformStackServicesAlbSecurityGroupF38E3EAC:8000",
+                        "path": "PlatformStack/Services/apiService/SecurityGroup/from PlatformStackServicesAlbSecurityGroupF38E3EAC:8000",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                          "aws:cdk:cloudformation:props": {
+                            "description": "Load balancer to target",
+                            "fromPort": 8000,
+                            "groupId": {
+                              "Fn::GetAtt": [
+                                "ServicesapiServiceSecurityGroup67559850",
+                                "GroupId"
+                              ]
+                            },
+                            "ipProtocol": "tcp",
+                            "sourceSecurityGroupId": {
+                              "Fn::GetAtt": [
+                                "ServicesAlbSecurityGroup90C3F600",
+                                "GroupId"
+                              ]
+                            },
+                            "toPort": 8000
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.SecurityGroup",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ecs.FargateService",
+                  "version": "2.150.0"
+                }
+              },
+              "workerTaskDef": {
+                "id": "workerTaskDef",
+                "path": "PlatformStack/Services/workerTaskDef",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/workerTaskDef/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ECS::TaskDefinition",
+                      "aws:cdk:cloudformation:props": {
+                        "containerDefinitions": [
+                          {
+                            "essential": true,
+                            "image": "295435085030.dkr.ecr.eu-north-1.amazonaws.com/platform-worker:v1",
+                            "name": "worker",
+                            "logConfiguration": {
+                              "logDriver": "awslogs",
+                              "options": {
+                                "awslogs-group": {
+                                  "Ref": "ServicesLogs43B4E769"
+                                },
+                                "awslogs-stream-prefix": "worker",
+                                "awslogs-region": "eu-north-1"
+                              }
+                            },
+                            "environment": [
+                              {
+                                "name": "REDIS_URL",
+                                "value": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "rediss://",
+                                      {
+                                        "Fn::GetAtt": [
+                                          "DataRedisAA90275E",
+                                          "PrimaryEndPoint.Address"
+                                        ]
+                                      },
+                                      ":6379/0"
+                                    ]
+                                  ]
+                                }
+                              },
+                              {
+                                "name": "OPENSEARCH_ENDPOINT",
+                                "value": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "https://",
+                                      {
+                                        "Fn::GetAtt": [
+                                          "DataSearchC7D96612",
+                                          "DomainEndpoint"
+                                        ]
+                                      }
+                                    ]
+                                  ]
+                                }
+                              },
+                              {
+                                "name": "S3_DATA_BUCKET",
+                                "value": {
+                                  "Ref": "DataDataBucketA7E8509A"
+                                }
+                              },
+                              {
+                                "name": "COGNITO_USER_POOL_ID",
+                                "value": {
+                                  "Ref": "AuthUserPool8115E87F"
+                                }
+                              },
+                              {
+                                "name": "COGNITO_CLIENT_ID",
+                                "value": {
+                                  "Ref": "AuthUserPoolWebClient147E4E38"
+                                }
+                              },
+                              {
+                                "name": "PLATFORM_VERSION",
+                                "value": "v1"
+                              }
+                            ],
+                            "secrets": [
+                              {
+                                "name": "DATABASE_CREDENTIALS",
+                                "valueFrom": {
+                                  "Ref": "DataAppDbSecretA34DDACB"
+                                }
+                              }
+                            ]
+                          }
+                        ],
+                        "cpu": "1024",
+                        "executionRoleArn": {
+                          "Fn::GetAtt": [
+                            "ServicesworkerTaskDefExecutionRoleC5D764EB",
+                            "Arn"
+                          ]
+                        },
+                        "family": "PlatformStackServicesworkerTaskDef5C40DB4C",
+                        "memory": "2048",
+                        "networkMode": "awsvpc",
+                        "requiresCompatibilities": [
+                          "FARGATE"
+                        ],
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "taskRoleArn": {
+                          "Fn::GetAtt": [
+                            "ServicesWorkerTaskRole15DE1B06",
+                            "Arn"
+                          ]
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.CfnTaskDefinition",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "worker": {
+                    "id": "worker",
+                    "path": "PlatformStack/Services/workerTaskDef/worker",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.ContainerDefinition",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "ExecutionRole": {
+                    "id": "ExecutionRole",
+                    "path": "PlatformStack/Services/workerTaskDef/ExecutionRole",
+                    "children": {
+                      "ImportExecutionRole": {
+                        "id": "ImportExecutionRole",
+                        "path": "PlatformStack/Services/workerTaskDef/ExecutionRole/ImportExecutionRole",
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.Resource",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/workerTaskDef/ExecutionRole/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::IAM::Role",
+                          "aws:cdk:cloudformation:props": {
+                            "assumeRolePolicyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": "sts:AssumeRole",
+                                  "Effect": "Allow",
+                                  "Principal": {
+                                    "Service": "ecs-tasks.amazonaws.com"
+                                  }
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            },
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "core"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.CfnRole",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "DefaultPolicy": {
+                        "id": "DefaultPolicy",
+                        "path": "PlatformStack/Services/workerTaskDef/ExecutionRole/DefaultPolicy",
+                        "children": {
+                          "Resource": {
+                            "id": "Resource",
+                            "path": "PlatformStack/Services/workerTaskDef/ExecutionRole/DefaultPolicy/Resource",
+                            "attributes": {
+                              "aws:cdk:cloudformation:type": "AWS::IAM::Policy",
+                              "aws:cdk:cloudformation:props": {
+                                "policyDocument": {
+                                  "Statement": [
+                                    {
+                                      "Action": [
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                      ],
+                                      "Effect": "Allow",
+                                      "Resource": {
+                                        "Fn::GetAtt": [
+                                          "ServicesLogs43B4E769",
+                                          "Arn"
+                                        ]
+                                      }
+                                    },
+                                    {
+                                      "Action": [
+                                        "secretsmanager:DescribeSecret",
+                                        "secretsmanager:GetSecretValue"
+                                      ],
+                                      "Effect": "Allow",
+                                      "Resource": {
+                                        "Ref": "DataAppDbSecretA34DDACB"
+                                      }
+                                    }
+                                  ],
+                                  "Version": "2012-10-17"
+                                },
+                                "policyName": "ServicesworkerTaskDefExecutionRoleDefaultPolicyAC95A40D",
+                                "roles": [
+                                  {
+                                    "Ref": "ServicesworkerTaskDefExecutionRoleC5D764EB"
+                                  }
+                                ]
+                              }
+                            },
+                            "constructInfo": {
+                              "fqn": "aws-cdk-lib.aws_iam.CfnPolicy",
+                              "version": "2.150.0"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.Policy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.Role",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ecs.FargateTaskDefinition",
+                  "version": "2.150.0"
+                }
+              },
+              "workerService": {
+                "id": "workerService",
+                "path": "PlatformStack/Services/workerService",
+                "children": {
+                  "Service": {
+                    "id": "Service",
+                    "path": "PlatformStack/Services/workerService/Service",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ECS::Service",
+                      "aws:cdk:cloudformation:props": {
+                        "cluster": {
+                          "Ref": "ServicesClusterFAAA2B60"
+                        },
+                        "deploymentConfiguration": {
+                          "maximumPercent": 200,
+                          "minimumHealthyPercent": 100,
+                          "deploymentCircuitBreaker": {
+                            "enable": true,
+                            "rollback": true
+                          }
+                        },
+                        "deploymentController": {
+                          "type": "ECS"
+                        },
+                        "desiredCount": 1,
+                        "enableEcsManagedTags": false,
+                        "launchType": "FARGATE",
+                        "networkConfiguration": {
+                          "awsvpcConfiguration": {
+                            "assignPublicIp": "DISABLED",
+                            "subnets": [
+                              {
+                                "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+                              },
+                              {
+                                "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+                              }
+                            ],
+                            "securityGroups": [
+                              {
+                                "Fn::GetAtt": [
+                                  "ServicesworkerServiceSecurityGroup254C3E45",
+                                  "GroupId"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "pipeline-runs"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "taskDefinition": {
+                          "Ref": "ServicesworkerTaskDef771E1D48"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.CfnService",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "SecurityGroup": {
+                    "id": "SecurityGroup",
+                    "path": "PlatformStack/Services/workerService/SecurityGroup",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/workerService/SecurityGroup/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroup",
+                          "aws:cdk:cloudformation:props": {
+                            "groupDescription": "PlatformStack/Services/workerService/SecurityGroup",
+                            "securityGroupEgress": [
+                              {
+                                "cidrIp": "0.0.0.0/0",
+                                "description": "Allow all outbound traffic by default",
+                                "ipProtocol": "-1"
+                              }
+                            ],
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "pipeline-runs"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ],
+                            "vpcId": {
+                              "Ref": "Vpc8378EB38"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroup",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.SecurityGroup",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ecs.FargateService",
+                  "version": "2.150.0"
+                }
+              },
+              "webTaskDef": {
+                "id": "webTaskDef",
+                "path": "PlatformStack/Services/webTaskDef",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/webTaskDef/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ECS::TaskDefinition",
+                      "aws:cdk:cloudformation:props": {
+                        "containerDefinitions": [
+                          {
+                            "essential": true,
+                            "image": "295435085030.dkr.ecr.eu-north-1.amazonaws.com/platform-web:v1",
+                            "name": "web",
+                            "portMappings": [
+                              {
+                                "containerPort": 3000,
+                                "protocol": "tcp"
+                              }
+                            ],
+                            "logConfiguration": {
+                              "logDriver": "awslogs",
+                              "options": {
+                                "awslogs-group": {
+                                  "Ref": "ServicesLogs43B4E769"
+                                },
+                                "awslogs-stream-prefix": "web",
+                                "awslogs-region": "eu-north-1"
+                              }
+                            },
+                            "environment": [
+                              {
+                                "name": "REDIS_URL",
+                                "value": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "rediss://",
+                                      {
+                                        "Fn::GetAtt": [
+                                          "DataRedisAA90275E",
+                                          "PrimaryEndPoint.Address"
+                                        ]
+                                      },
+                                      ":6379/0"
+                                    ]
+                                  ]
+                                }
+                              },
+                              {
+                                "name": "OPENSEARCH_ENDPOINT",
+                                "value": {
+                                  "Fn::Join": [
+                                    "",
+                                    [
+                                      "https://",
+                                      {
+                                        "Fn::GetAtt": [
+                                          "DataSearchC7D96612",
+                                          "DomainEndpoint"
+                                        ]
+                                      }
+                                    ]
+                                  ]
+                                }
+                              },
+                              {
+                                "name": "S3_DATA_BUCKET",
+                                "value": {
+                                  "Ref": "DataDataBucketA7E8509A"
+                                }
+                              },
+                              {
+                                "name": "COGNITO_USER_POOL_ID",
+                                "value": {
+                                  "Ref": "AuthUserPool8115E87F"
+                                }
+                              },
+                              {
+                                "name": "COGNITO_CLIENT_ID",
+                                "value": {
+                                  "Ref": "AuthUserPoolWebClient147E4E38"
+                                }
+                              },
+                              {
+                                "name": "PLATFORM_VERSION",
+                                "value": "v1"
+                              }
+                            ]
+                          }
+                        ],
+                        "cpu": "256",
+                        "executionRoleArn": {
+                          "Fn::GetAtt": [
+                            "ServiceswebTaskDefExecutionRole14D1F9F3",
+                            "Arn"
+                          ]
+                        },
+                        "family": "PlatformStackServiceswebTaskDefCD023732",
+                        "memory": "512",
+                        "networkMode": "awsvpc",
+                        "requiresCompatibilities": [
+                          "FARGATE"
+                        ],
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "taskRoleArn": {
+                          "Fn::GetAtt": [
+                            "ServicesWebTaskRole8E6B2CE3",
+                            "Arn"
+                          ]
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.CfnTaskDefinition",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "web": {
+                    "id": "web",
+                    "path": "PlatformStack/Services/webTaskDef/web",
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.ContainerDefinition",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "ExecutionRole": {
+                    "id": "ExecutionRole",
+                    "path": "PlatformStack/Services/webTaskDef/ExecutionRole",
+                    "children": {
+                      "ImportExecutionRole": {
+                        "id": "ImportExecutionRole",
+                        "path": "PlatformStack/Services/webTaskDef/ExecutionRole/ImportExecutionRole",
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.Resource",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/webTaskDef/ExecutionRole/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::IAM::Role",
+                          "aws:cdk:cloudformation:props": {
+                            "assumeRolePolicyDocument": {
+                              "Statement": [
+                                {
+                                  "Action": "sts:AssumeRole",
+                                  "Effect": "Allow",
+                                  "Principal": {
+                                    "Service": "ecs-tasks.amazonaws.com"
+                                  }
+                                }
+                              ],
+                              "Version": "2012-10-17"
+                            },
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "core"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ]
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.CfnRole",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "DefaultPolicy": {
+                        "id": "DefaultPolicy",
+                        "path": "PlatformStack/Services/webTaskDef/ExecutionRole/DefaultPolicy",
+                        "children": {
+                          "Resource": {
+                            "id": "Resource",
+                            "path": "PlatformStack/Services/webTaskDef/ExecutionRole/DefaultPolicy/Resource",
+                            "attributes": {
+                              "aws:cdk:cloudformation:type": "AWS::IAM::Policy",
+                              "aws:cdk:cloudformation:props": {
+                                "policyDocument": {
+                                  "Statement": [
+                                    {
+                                      "Action": [
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                      ],
+                                      "Effect": "Allow",
+                                      "Resource": {
+                                        "Fn::GetAtt": [
+                                          "ServicesLogs43B4E769",
+                                          "Arn"
+                                        ]
+                                      }
+                                    }
+                                  ],
+                                  "Version": "2012-10-17"
+                                },
+                                "policyName": "ServiceswebTaskDefExecutionRoleDefaultPolicy94599A2E",
+                                "roles": [
+                                  {
+                                    "Ref": "ServiceswebTaskDefExecutionRole14D1F9F3"
+                                  }
+                                ]
+                              }
+                            },
+                            "constructInfo": {
+                              "fqn": "aws-cdk-lib.aws_iam.CfnPolicy",
+                              "version": "2.150.0"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_iam.Policy",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_iam.Role",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ecs.FargateTaskDefinition",
+                  "version": "2.150.0"
+                }
+              },
+              "webService": {
+                "id": "webService",
+                "path": "PlatformStack/Services/webService",
+                "children": {
+                  "Service": {
+                    "id": "Service",
+                    "path": "PlatformStack/Services/webService/Service",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ECS::Service",
+                      "aws:cdk:cloudformation:props": {
+                        "cluster": {
+                          "Ref": "ServicesClusterFAAA2B60"
+                        },
+                        "deploymentConfiguration": {
+                          "maximumPercent": 200,
+                          "minimumHealthyPercent": 100,
+                          "deploymentCircuitBreaker": {
+                            "enable": true,
+                            "rollback": true
+                          }
+                        },
+                        "deploymentController": {
+                          "type": "ECS"
+                        },
+                        "desiredCount": 1,
+                        "enableEcsManagedTags": false,
+                        "healthCheckGracePeriodSeconds": 60,
+                        "launchType": "FARGATE",
+                        "loadBalancers": [
+                          {
+                            "targetGroupArn": {
+                              "Ref": "ServicesAlbHttpWebGroupF8408A6D"
+                            },
+                            "containerName": "web",
+                            "containerPort": 3000
+                          }
+                        ],
+                        "networkConfiguration": {
+                          "awsvpcConfiguration": {
+                            "assignPublicIp": "DISABLED",
+                            "subnets": [
+                              {
+                                "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+                              },
+                              {
+                                "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+                              }
+                            ],
+                            "securityGroups": [
+                              {
+                                "Fn::GetAtt": [
+                                  "ServiceswebServiceSecurityGroupA5389644",
+                                  "GroupId"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "taskDefinition": {
+                          "Ref": "ServiceswebTaskDef2BEAA581"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ecs.CfnService",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "SecurityGroup": {
+                    "id": "SecurityGroup",
+                    "path": "PlatformStack/Services/webService/SecurityGroup",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/webService/SecurityGroup/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroup",
+                          "aws:cdk:cloudformation:props": {
+                            "groupDescription": "PlatformStack/Services/webService/SecurityGroup",
+                            "securityGroupEgress": [
+                              {
+                                "cidrIp": "0.0.0.0/0",
+                                "description": "Allow all outbound traffic by default",
+                                "ipProtocol": "-1"
+                              }
+                            ],
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "core"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ],
+                            "vpcId": {
+                              "Ref": "Vpc8378EB38"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroup",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "from PlatformStackServicesAlbSecurityGroupF38E3EAC:3000": {
+                        "id": "from PlatformStackServicesAlbSecurityGroupF38E3EAC:3000",
+                        "path": "PlatformStack/Services/webService/SecurityGroup/from PlatformStackServicesAlbSecurityGroupF38E3EAC:3000",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
+                          "aws:cdk:cloudformation:props": {
+                            "description": "Load balancer to target",
+                            "fromPort": 3000,
+                            "groupId": {
+                              "Fn::GetAtt": [
+                                "ServiceswebServiceSecurityGroupA5389644",
+                                "GroupId"
+                              ]
+                            },
+                            "ipProtocol": "tcp",
+                            "sourceSecurityGroupId": {
+                              "Fn::GetAtt": [
+                                "ServicesAlbSecurityGroup90C3F600",
+                                "GroupId"
+                              ]
+                            },
+                            "toPort": 3000
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupIngress",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.SecurityGroup",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_ecs.FargateService",
+                  "version": "2.150.0"
+                }
+              },
+              "Alb": {
+                "id": "Alb",
+                "path": "PlatformStack/Services/Alb",
+                "children": {
+                  "Resource": {
+                    "id": "Resource",
+                    "path": "PlatformStack/Services/Alb/Resource",
+                    "attributes": {
+                      "aws:cdk:cloudformation:type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+                      "aws:cdk:cloudformation:props": {
+                        "loadBalancerAttributes": [
+                          {
+                            "key": "deletion_protection.enabled",
+                            "value": "false"
+                          }
+                        ],
+                        "scheme": "internet-facing",
+                        "securityGroups": [
+                          {
+                            "Fn::GetAtt": [
+                              "ServicesAlbSecurityGroup90C3F600",
+                              "GroupId"
+                            ]
+                          }
+                        ],
+                        "subnets": [
+                          {
+                            "Ref": "VpcpublicSubnet1Subnet2BB74ED7"
+                          },
+                          {
+                            "Ref": "VpcpublicSubnet2SubnetE34B022A"
+                          }
+                        ],
+                        "tags": [
+                          {
+                            "key": "platform:component",
+                            "value": "core"
+                          },
+                          {
+                            "key": "platform:customer",
+                            "value": "dry-run-customer"
+                          }
+                        ],
+                        "type": "application"
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.CfnLoadBalancer",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "SecurityGroup": {
+                    "id": "SecurityGroup",
+                    "path": "PlatformStack/Services/Alb/SecurityGroup",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/Alb/SecurityGroup/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroup",
+                          "aws:cdk:cloudformation:props": {
+                            "groupDescription": "Automatically created Security Group for ELB PlatformStackServicesAlbCD7AF525",
+                            "securityGroupIngress": [
+                              {
+                                "cidrIp": "0.0.0.0/0",
+                                "ipProtocol": "tcp",
+                                "fromPort": 80,
+                                "toPort": 80,
+                                "description": "Allow from anyone on port 80"
+                              }
+                            ],
+                            "tags": [
+                              {
+                                "key": "platform:component",
+                                "value": "core"
+                              },
+                              {
+                                "key": "platform:customer",
+                                "value": "dry-run-customer"
+                              }
+                            ],
+                            "vpcId": {
+                              "Ref": "Vpc8378EB38"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroup",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "to PlatformStackServiceswebServiceSecurityGroupA8948657:3000": {
+                        "id": "to PlatformStackServiceswebServiceSecurityGroupA8948657:3000",
+                        "path": "PlatformStack/Services/Alb/SecurityGroup/to PlatformStackServiceswebServiceSecurityGroupA8948657:3000",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupEgress",
+                          "aws:cdk:cloudformation:props": {
+                            "description": "Load balancer to target",
+                            "destinationSecurityGroupId": {
+                              "Fn::GetAtt": [
+                                "ServiceswebServiceSecurityGroupA5389644",
+                                "GroupId"
+                              ]
+                            },
+                            "fromPort": 3000,
+                            "groupId": {
+                              "Fn::GetAtt": [
+                                "ServicesAlbSecurityGroup90C3F600",
+                                "GroupId"
+                              ]
+                            },
+                            "ipProtocol": "tcp",
+                            "toPort": 3000
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupEgress",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "to PlatformStackServicesapiServiceSecurityGroup4ADC4467:8000": {
+                        "id": "to PlatformStackServicesapiServiceSecurityGroup4ADC4467:8000",
+                        "path": "PlatformStack/Services/Alb/SecurityGroup/to PlatformStackServicesapiServiceSecurityGroup4ADC4467:8000",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupEgress",
+                          "aws:cdk:cloudformation:props": {
+                            "description": "Load balancer to target",
+                            "destinationSecurityGroupId": {
+                              "Fn::GetAtt": [
+                                "ServicesapiServiceSecurityGroup67559850",
+                                "GroupId"
+                              ]
+                            },
+                            "fromPort": 8000,
+                            "groupId": {
+                              "Fn::GetAtt": [
+                                "ServicesAlbSecurityGroup90C3F600",
+                                "GroupId"
+                              ]
+                            },
+                            "ipProtocol": "tcp",
+                            "toPort": 8000
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_ec2.CfnSecurityGroupEgress",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_ec2.SecurityGroup",
+                      "version": "2.150.0"
+                    }
+                  },
+                  "Http": {
+                    "id": "Http",
+                    "path": "PlatformStack/Services/Alb/Http",
+                    "children": {
+                      "Resource": {
+                        "id": "Resource",
+                        "path": "PlatformStack/Services/Alb/Http/Resource",
+                        "attributes": {
+                          "aws:cdk:cloudformation:type": "AWS::ElasticLoadBalancingV2::Listener",
+                          "aws:cdk:cloudformation:props": {
+                            "defaultActions": [
+                              {
+                                "type": "forward",
+                                "targetGroupArn": {
+                                  "Ref": "ServicesAlbHttpWebGroupF8408A6D"
+                                }
+                              }
+                            ],
+                            "loadBalancerArn": {
+                              "Ref": "ServicesAlbEE1BF5FE"
+                            },
+                            "port": 80,
+                            "protocol": "HTTP"
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.CfnListener",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "WebGroup": {
+                        "id": "WebGroup",
+                        "path": "PlatformStack/Services/Alb/Http/WebGroup",
+                        "children": {
+                          "Resource": {
+                            "id": "Resource",
+                            "path": "PlatformStack/Services/Alb/Http/WebGroup/Resource",
+                            "attributes": {
+                              "aws:cdk:cloudformation:type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+                              "aws:cdk:cloudformation:props": {
+                                "healthCheckPath": "/",
+                                "matcher": {
+                                  "httpCode": "200-399"
+                                },
+                                "port": 3000,
+                                "protocol": "HTTP",
+                                "tags": [
+                                  {
+                                    "key": "platform:component",
+                                    "value": "core"
+                                  },
+                                  {
+                                    "key": "platform:customer",
+                                    "value": "dry-run-customer"
+                                  }
+                                ],
+                                "targetGroupAttributes": [
+                                  {
+                                    "key": "stickiness.enabled",
+                                    "value": "false"
+                                  }
+                                ],
+                                "targetType": "ip",
+                                "vpcId": {
+                                  "Ref": "Vpc8378EB38"
+                                }
+                              }
+                            },
+                            "constructInfo": {
+                              "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.CfnTargetGroup",
+                              "version": "2.150.0"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.ApplicationTargetGroup",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "ApiGroup": {
+                        "id": "ApiGroup",
+                        "path": "PlatformStack/Services/Alb/Http/ApiGroup",
+                        "children": {
+                          "Resource": {
+                            "id": "Resource",
+                            "path": "PlatformStack/Services/Alb/Http/ApiGroup/Resource",
+                            "attributes": {
+                              "aws:cdk:cloudformation:type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+                              "aws:cdk:cloudformation:props": {
+                                "healthCheckPath": "/api/health",
+                                "matcher": {
+                                  "httpCode": "200"
+                                },
+                                "port": 8000,
+                                "protocol": "HTTP",
+                                "tags": [
+                                  {
+                                    "key": "platform:component",
+                                    "value": "core"
+                                  },
+                                  {
+                                    "key": "platform:customer",
+                                    "value": "dry-run-customer"
+                                  }
+                                ],
+                                "targetGroupAttributes": [
+                                  {
+                                    "key": "deregistration_delay.timeout_seconds",
+                                    "value": "15"
+                                  },
+                                  {
+                                    "key": "stickiness.enabled",
+                                    "value": "false"
+                                  }
+                                ],
+                                "targetType": "ip",
+                                "vpcId": {
+                                  "Ref": "Vpc8378EB38"
+                                }
+                              }
+                            },
+                            "constructInfo": {
+                              "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.CfnTargetGroup",
+                              "version": "2.150.0"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.ApplicationTargetGroup",
+                          "version": "2.150.0"
+                        }
+                      },
+                      "ApiRule": {
+                        "id": "ApiRule",
+                        "path": "PlatformStack/Services/Alb/Http/ApiRule",
+                        "children": {
+                          "Resource": {
+                            "id": "Resource",
+                            "path": "PlatformStack/Services/Alb/Http/ApiRule/Resource",
+                            "attributes": {
+                              "aws:cdk:cloudformation:type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+                              "aws:cdk:cloudformation:props": {
+                                "actions": [
+                                  {
+                                    "type": "forward",
+                                    "targetGroupArn": {
+                                      "Ref": "ServicesAlbHttpApiGroupEBAE83DE"
+                                    }
+                                  }
+                                ],
+                                "conditions": [
+                                  {
+                                    "field": "path-pattern",
+                                    "pathPatternConfig": {
+                                      "values": [
+                                        "/api/*",
+                                        "/graphql"
+                                      ]
+                                    }
+                                  }
+                                ],
+                                "listenerArn": {
+                                  "Ref": "ServicesAlbHttp0B51B3FC"
+                                },
+                                "priority": 10
+                              }
+                            },
+                            "constructInfo": {
+                              "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.CfnListenerRule",
+                              "version": "2.150.0"
+                            }
+                          }
+                        },
+                        "constructInfo": {
+                          "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.ApplicationListenerRule",
+                          "version": "2.150.0"
+                        }
+                      }
+                    },
+                    "constructInfo": {
+                      "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.ApplicationListener",
+                      "version": "2.150.0"
+                    }
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_elasticloadbalancingv2.ApplicationLoadBalancer",
+                  "version": "2.150.0"
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "constructs.Construct",
+              "version": "10.3.0"
+            }
+          },
+          "Waf": {
+            "id": "Waf",
+            "path": "PlatformStack/Waf",
+            "attributes": {
+              "aws:cdk:cloudformation:type": "AWS::WAFv2::WebACL",
+              "aws:cdk:cloudformation:props": {
+                "defaultAction": {
+                  "allow": {}
+                },
+                "rules": [
+                  {
+                    "name": "AWSManagedCommonRules",
+                    "priority": 0,
+                    "overrideAction": {
+                      "none": {}
+                    },
+                    "statement": {
+                      "managedRuleGroupStatement": {
+                        "vendorName": "AWS",
+                        "name": "AWSManagedRulesCommonRuleSet"
+                      }
+                    },
+                    "visibilityConfig": {
+                      "cloudWatchMetricsEnabled": true,
+                      "metricName": "common-rules",
+                      "sampledRequestsEnabled": true
+                    }
+                  },
+                  {
+                    "name": "AWSManagedKnownBadInputs",
+                    "priority": 1,
+                    "overrideAction": {
+                      "none": {}
+                    },
+                    "statement": {
+                      "managedRuleGroupStatement": {
+                        "vendorName": "AWS",
+                        "name": "AWSManagedRulesKnownBadInputsRuleSet"
+                      }
+                    },
+                    "visibilityConfig": {
+                      "cloudWatchMetricsEnabled": true,
+                      "metricName": "bad-inputs",
+                      "sampledRequestsEnabled": true
+                    }
+                  }
+                ],
+                "scope": "REGIONAL",
+                "tags": [
+                  {
+                    "key": "platform:component",
+                    "value": "core"
+                  },
+                  {
+                    "key": "platform:customer",
+                    "value": "dry-run-customer"
+                  }
+                ],
+                "visibilityConfig": {
+                  "cloudWatchMetricsEnabled": true,
+                  "metricName": "platform-waf",
+                  "sampledRequestsEnabled": true
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.aws_wafv2.CfnWebACL",
+              "version": "2.150.0"
+            }
+          },
+          "WafAssoc": {
+            "id": "WafAssoc",
+            "path": "PlatformStack/WafAssoc",
+            "attributes": {
+              "aws:cdk:cloudformation:type": "AWS::WAFv2::WebACLAssociation",
+              "aws:cdk:cloudformation:props": {
+                "resourceArn": {
+                  "Ref": "ServicesAlbEE1BF5FE"
+                },
+                "webAclArn": {
+                  "Fn::GetAtt": [
+                    "Waf",
+                    "Arn"
+                  ]
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.aws_wafv2.CfnWebACLAssociation",
+              "version": "2.150.0"
+            }
+          },
+          "Cdn": {
+            "id": "Cdn",
+            "path": "PlatformStack/Cdn",
+            "children": {
+              "Origin1": {
+                "id": "Origin1",
+                "path": "PlatformStack/Cdn/Origin1",
+                "constructInfo": {
+                  "fqn": "constructs.Construct",
+                  "version": "10.3.0"
+                }
+              },
+              "Resource": {
+                "id": "Resource",
+                "path": "PlatformStack/Cdn/Resource",
+                "attributes": {
+                  "aws:cdk:cloudformation:type": "AWS::CloudFront::Distribution",
+                  "aws:cdk:cloudformation:props": {
+                    "distributionConfig": {
+                      "enabled": true,
+                      "origins": [
+                        {
+                          "domainName": {
+                            "Fn::GetAtt": [
+                              "ServicesAlbEE1BF5FE",
+                              "DNSName"
+                            ]
+                          },
+                          "id": "PlatformStackCdnOrigin14938D8CB",
+                          "customOriginConfig": {
+                            "originSslProtocols": [
+                              "TLSv1.2"
+                            ],
+                            "originProtocolPolicy": "http-only"
+                          }
+                        }
+                      ],
+                      "defaultCacheBehavior": {
+                        "pathPattern": "*",
+                        "targetOriginId": "PlatformStackCdnOrigin14938D8CB",
+                        "allowedMethods": [
+                          "GET",
+                          "HEAD",
+                          "OPTIONS",
+                          "PUT",
+                          "PATCH",
+                          "POST",
+                          "DELETE"
+                        ],
+                        "cachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+                        "compress": true,
+                        "originRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+                        "viewerProtocolPolicy": "redirect-to-https"
+                      },
+                      "httpVersion": "http2",
+                      "ipv6Enabled": true
+                    },
+                    "tags": [
+                      {
+                        "key": "platform:component",
+                        "value": "core"
+                      },
+                      {
+                        "key": "platform:customer",
+                        "value": "dry-run-customer"
+                      }
+                    ]
+                  }
+                },
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.aws_cloudfront.CfnDistribution",
+                  "version": "2.150.0"
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.aws_cloudfront.Distribution",
+              "version": "2.150.0"
+            }
+          },
+          "PlatformDomain": {
+            "id": "PlatformDomain",
+            "path": "PlatformStack/PlatformDomain",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "UserPoolId": {
+            "id": "UserPoolId",
+            "path": "PlatformStack/UserPoolId",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "UserPoolClientId": {
+            "id": "UserPoolClientId",
+            "path": "PlatformStack/UserPoolClientId",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "DataBucketName": {
+            "id": "DataBucketName",
+            "path": "PlatformStack/DataBucketName",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "DbSecretArn": {
+            "id": "DbSecretArn",
+            "path": "PlatformStack/DbSecretArn",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "AppDbSecretArn": {
+            "id": "AppDbSecretArn",
+            "path": "PlatformStack/AppDbSecretArn",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "ClusterName": {
+            "id": "ClusterName",
+            "path": "PlatformStack/ClusterName",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "ApiServiceName": {
+            "id": "ApiServiceName",
+            "path": "PlatformStack/ApiServiceName",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "WorkerServiceName": {
+            "id": "WorkerServiceName",
+            "path": "PlatformStack/WorkerServiceName",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "WebServiceName": {
+            "id": "WebServiceName",
+            "path": "PlatformStack/WebServiceName",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnOutput",
+              "version": "2.150.0"
+            }
+          },
+          "CDKMetadata": {
+            "id": "CDKMetadata",
+            "path": "PlatformStack/CDKMetadata",
+            "children": {
+              "Default": {
+                "id": "Default",
+                "path": "PlatformStack/CDKMetadata/Default",
+                "constructInfo": {
+                  "fqn": "aws-cdk-lib.CfnResource",
+                  "version": "2.150.0"
+                }
+              }
+            },
+            "constructInfo": {
+              "fqn": "constructs.Construct",
+              "version": "10.3.0"
+            }
+          },
+          "BootstrapVersion": {
+            "id": "BootstrapVersion",
+            "path": "PlatformStack/BootstrapVersion",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnParameter",
+              "version": "2.150.0"
+            }
+          },
+          "CheckBootstrapVersion": {
+            "id": "CheckBootstrapVersion",
+            "path": "PlatformStack/CheckBootstrapVersion",
+            "constructInfo": {
+              "fqn": "aws-cdk-lib.CfnRule",
+              "version": "2.150.0"
+            }
+          }
+        },
+        "constructInfo": {
+          "fqn": "aws-cdk-lib.Stack",
+          "version": "2.150.0"
+        }
+      },
+      "Tree": {
+        "id": "Tree",
+        "path": "Tree",
+        "constructInfo": {
+          "fqn": "constructs.Construct",
+          "version": "10.3.0"
+        }
+      }
+    },
+    "constructInfo": {
+      "fqn": "aws-cdk-lib.App",
+      "version": "2.150.0"
+    }
+  }
+}

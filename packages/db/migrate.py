@@ -4,7 +4,7 @@
 Applies numbered ``migrations/NNNN_name.sql`` files in order, each inside its
 own transaction, recording applied files (with a SHA-256 checksum) in
 ``schema_migrations``. Re-running is a no-op for already-applied files; a
-checksum mismatch on an applied file aborts hard — applied migrations are
+checksum mismatch on an applied file aborts hard - applied migrations are
 immutable, write a new one instead.
 
 Usage:
@@ -13,7 +13,7 @@ Usage:
 Used in three places, identically:
   * local development
   * CI (schema tests run against a scratch database)
-  * the deployed stack — the control plane runs this container command as
+  * the deployed stack - the control plane runs this container command as
     part of every version update (spec §6 "Runs any database migrations
     automatically").
 """

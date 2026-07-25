@@ -1,15 +1,15 @@
-"""Ontology routes (spec §16: Objects — the semantic layer).
+"""Ontology routes (spec §16: Objects - the semantic layer).
 
 Object types and link types are workspace-level (the ontology is shared
 across every project in a workspace) and live under
 ``/workspaces/{workspace_id}/object-types`` and ``.../link-types``. Object
-type sources — the per-project mapping of a dataset onto a workspace type —
+type sources - the per-project mapping of a dataset onto a workspace type -
 are project-level and live under
 ``/workspaces/{workspace_id}/projects/{project_id}/object-type-sources``,
 mirroring the connections/models split between workspace- and
 project-scoped resources.
 
-Role floors (conservative, flagged — the spec is silent on exact roles):
+Role floors (conservative, flagged - the spec is silent on exact roles):
 read = viewer everywhere; object type/link type create & delete = workspace
 editor (the same floor already used for "who can create a project");
 source create/delete/sync = project editor. Suggestion is read-only dataset

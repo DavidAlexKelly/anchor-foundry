@@ -1,6 +1,6 @@
 """API integration tests. Runs the real FastAPI app against the real local
 Postgres (as the RLS-subject role) with genuine RS256 JWTs validated against
-a locally generated JWKS — the production verification code path, different
+a locally generated JWKS - the production verification code path, different
 only in where the public key comes from.
 
 Covers the contract from the build brief and spec §9:
@@ -27,8 +27,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-ADMIN_DSN = os.environ["TEST_ADMIN_DSN"]      # role: platform (owner) — fixtures only
-APP_DSN = os.environ["DATABASE_URL"]          # role: platform_app — what the API uses
+ADMIN_DSN = os.environ["TEST_ADMIN_DSN"]      # role: platform (owner) - fixtures only
+APP_DSN = os.environ["DATABASE_URL"]          # role: platform_app - what the API uses
 
 os.environ.setdefault("COGNITO_CLIENT_ID", "test-client")
 os.environ.setdefault("COGNITO_ISSUER", "https://test-issuer.local")

@@ -1,15 +1,15 @@
-"""Ontology service (spec §"Objects — The Semantic Layer", §16 object_types /
+"""Ontology service (spec §"Objects - The Semantic Layer", §16 object_types /
 object_type_properties / link_types / object_type_sources).
 
 Object types and link types live at the workspace level; object type sources
 live at the project level and map a project dataset's columns onto the
-workspace type's properties. This slice is the definition layer — build the
+workspace type's properties. This slice is the definition layer - build the
 ontology, map data to it, and get auto-suggestions from dataset schemas.
 
 Instance materialisation ("object instances are stored and indexed in
 OpenSearch") is the next slice: it needs the instance-store gateway
 (OpenSearch in production, Postgres locally) and the sync pipeline. Sources
-created here carry sync_status='never_synced' until that ships — the status
+created here carry sync_status='never_synced' until that ships - the status
 column is telling the truth, not faking progress. Actions (write-back) follow
 with Canvas.
 """
@@ -326,7 +326,7 @@ async def create_source(
     created_by: UUID,
 ) -> dict[str, Any]:
     """Map dataset columns → object properties. Every referenced column must
-    exist in the dataset's schema and every property on the type — a mapping
+    exist in the dataset's schema and every property on the type - a mapping
     that silently drops columns would corrupt instances at sync time."""
     await get_type(conn, workspace_id, object_type_id)
     ds = await fetch_one(

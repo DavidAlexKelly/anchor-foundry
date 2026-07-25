@@ -46,7 +46,7 @@ function NewAppDialog({
         <Field label="Name">
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required maxLength={200} autoFocus />
         </Field>
-        <Field label="Description" hint="Optional — shown on the app card">
+        <Field label="Description" hint="Optional - shown on the app card">
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} />
         </Field>
         {create.isError && (
@@ -155,7 +155,7 @@ export default function CanvasListPage() {
         <div className="empty">
           <h2>No apps yet</h2>
           <p>
-            Canvas apps are built from widgets bound to your objects — tables, charts, forms with
+            Canvas apps are built from widgets bound to your objects - tables, charts, forms with
             write-back. No code needed; drop into code when you want it.
           </p>
           {canEdit && (

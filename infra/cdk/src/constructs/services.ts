@@ -27,7 +27,7 @@ export interface ServicesProps {
 
 /**
  * ECS Fargate services (spec §6): api, worker, web. Spec §10: "Least-privilege
- * IAM roles per ECS service — the API task role cannot do what the worker
+ * IAM roles per ECS service - the API task role cannot do what the worker
  * task role can do." Concretely:
  *   - api:    read/write S3 data, read app-db secret, manage data-source
  *             secrets under platform/connections/*, Cognito admin on the
@@ -88,7 +88,7 @@ export class ServicesConstruct extends Construct {
 
     const workerTaskRole = new iam.Role(this, "WorkerTaskRole", {
       assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-      description: "Platform worker task role — deliberately narrower than API (no Cognito)",
+      description: "Platform worker task role - deliberately narrower than API (no Cognito)",
     });
     props.dataBucket.grantReadWrite(workerTaskRole);
     props.appDbSecret.grantRead(workerTaskRole);
@@ -113,7 +113,7 @@ export class ServicesConstruct extends Construct {
 
     const webTaskRole = new iam.Role(this, "WebTaskRole", {
       assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-      description: "Platform web task role — no data permissions",
+      description: "Platform web task role - no data permissions",
     });
 
     // ---- Shared env ---------------------------------------------------------

@@ -5,14 +5,14 @@ import { Construct } from "constructs";
 export interface AuthConstructProps {
   /** Customer org slug, used for the hosted UI domain prefix. */
   readonly orgSlug: string;
-  /** Platform URL, e.g. https://acme.platform.example — OAuth callback target. */
+  /** Platform URL, e.g. https://acme.platform.example - OAuth callback target. */
   readonly platformUrl: string;
 }
 
 /**
  * One Cognito User Pool per customer organisation (spec §9), provisioned
  * automatically during deployment. Every setting below is a verbatim
- * security default from spec §9 "Cognito Setup in CDK" — do not relax any
+ * security default from spec §9 "Cognito Setup in CDK" - do not relax any
  * of them without a documented review.
  */
 export class AuthConstruct extends Construct {
@@ -30,7 +30,7 @@ export class AuthConstruct extends Construct {
       signInAliases: { email: true },
       signInCaseSensitive: false,
       autoVerify: { email: true },
-      // §9: MFA optional (admins encouraged to require), TOTP only — no SMS.
+      // §9: MFA optional (admins encouraged to require), TOTP only - no SMS.
       mfa: cognito.Mfa.OPTIONAL,
       mfaSecondFactor: { otp: true, sms: false },
       passwordPolicy: {
@@ -48,7 +48,7 @@ export class AuthConstruct extends Construct {
     });
 
     this.userPoolClient = this.userPool.addClient("WebClient", {
-      // §9: SRP only — the password is never transmitted in plain text.
+      // §9: SRP only - the password is never transmitted in plain text.
       authFlows: { userSrp: true, userPassword: false, adminUserPassword: false, custom: false },
       // §9: don't reveal whether an email is registered.
       preventUserExistenceErrors: true,

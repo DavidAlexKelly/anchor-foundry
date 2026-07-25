@@ -9,7 +9,7 @@ transaction:
 
 so PostgreSQL row-level security enforces workspace/project isolation as a
 second layer independent of the application permission checks (spec §10).
-Permission *logic* is never duplicated here — the API calls the same
+Permission *logic* is never duplicated here - the API calls the same
 ``effective_workspace_role`` / ``effective_project_role`` functions the RLS
 policies use (db migration 0005), keeping one source of truth.
 """
@@ -53,7 +53,7 @@ async def auth_lookup_connection(cognito_sub: str) -> AsyncIterator[AsyncConnect
     """Connection scoped to the pre-auth user lookup (db 0007 keyhole policy).
 
     Only the single user row matching the validated token's sub (and its
-    organisation) is visible in this context. Parameterised set_config — the
+    organisation) is visible in this context. Parameterised set_config - the
     sub comes from a cryptographically validated token but is still treated
     as untrusted input.
     """

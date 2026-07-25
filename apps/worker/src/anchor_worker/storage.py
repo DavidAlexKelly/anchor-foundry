@@ -1,4 +1,4 @@
-"""Dataset file storage — worker's copy of apps/api's services/storage.py.
+"""Dataset file storage - worker's copy of apps/api's services/storage.py.
 Duplicated rather than shared: api and worker are independently deployable
 images (separate Dockerfiles, separate dependency sets) with no shared
 Python package between them in this build, the same reason control-plane
@@ -120,7 +120,7 @@ _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$")
 
 
 def slugify(name: str) -> str:
-    """Matches apps/api's services/datasets.py slugify exactly — dataset
+    """Matches apps/api's services/datasets.py slugify exactly - dataset
     slugs must agree regardless of which side (API upload/sync, or worker
     model/sync run) creates the row."""
     slug = re.sub(r"[^a-z0-9_-]+", "-", name.lower()).strip("-_")

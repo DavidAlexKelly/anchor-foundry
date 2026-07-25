@@ -27,7 +27,7 @@ CREATE TYPE stack_status AS ENUM (
 );
 
 -- ----------------------------------------------------------------------------
--- organisations — one per customer. Maps to one AWS account. (spec §4, §16)
+-- organisations - one per customer. Maps to one AWS account. (spec §4, §16)
 -- In a deployed customer stack this table contains exactly one row; the
 -- schema still models it as a table so control-plane tooling and tests can
 -- share the same migrations.
@@ -58,7 +58,7 @@ CREATE TABLE organisations (
 );
 
 -- ----------------------------------------------------------------------------
--- users — mirrors the Cognito user pool, linked by cognito_sub (spec §16).
+-- users - mirrors the Cognito user pool, linked by cognito_sub (spec §16).
 -- Cognito owns authentication; this table owns platform identity + org role.
 -- ----------------------------------------------------------------------------
 CREATE TABLE users (
@@ -81,7 +81,7 @@ CREATE INDEX idx_users_org ON users (organisation_id);
 CREATE INDEX idx_users_cognito_sub ON users (cognito_sub) WHERE cognito_sub IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
--- groups — named user collections for permission management (spec §9, §16).
+-- groups - named user collections for permission management (spec §9, §16).
 -- ----------------------------------------------------------------------------
 CREATE TABLE groups (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
