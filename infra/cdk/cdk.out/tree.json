@@ -1961,7 +1961,7 @@
                         },
                         "domainEndpointOptions": {
                           "enforceHttps": true,
-                          "tlsSecurityPolicy": "Policy-Min-TLS-1-0-2019-07"
+                          "tlsSecurityPolicy": "Policy-Min-TLS-1-2-2019-07"
                         },
                         "ebsOptions": {
                           "ebsEnabled": true,
