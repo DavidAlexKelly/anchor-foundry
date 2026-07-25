@@ -142,6 +142,16 @@ export class ServicesConstruct extends Construct {
         memoryLimitMiB: opts.memory,
         taskRole: role,
       });
+      // ContainerImage.fromRegistry (below) takes a plain URL string, not an
+      // IRepository, so CDK has nothing to grant ECR pull permissions from —
+      // it only auto-grants when built via fromEcrRepository(). Without this,
+      // the execution role has zero ECR permissions and every task fails to
+      // even pull its image (confirmed: empty CloudWatch log streams, since
+      // the container never starts). The synth-time ecrImageRequiresPolicy
+      // warning is the correct signal for exactly this gap.
+      taskDef.obtainExecutionRole().addManagedPolicy(
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AmazonECSTaskExecutionRolePolicy")
+      );
       const container = taskDef.addContainer(name, {
         image: ecs.ContainerImage.fromRegistry(image),
         logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: name }),
