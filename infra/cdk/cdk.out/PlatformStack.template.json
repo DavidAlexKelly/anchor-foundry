@@ -996,7 +996,7 @@
   "DataDbSgfromPlatformStackServicesapiServiceSecurityGroup4ADC44675432556CD087": {
    "Type": "AWS::EC2::SecurityGroupIngress",
    "Properties": {
-    "Description": "api -> postgres",
+    "Description": "api to postgres",
     "FromPort": 5432,
     "GroupId": {
      "Fn::GetAtt": [
@@ -1020,7 +1020,7 @@
   "DataDbSgfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A5432A6CB79A4": {
    "Type": "AWS::EC2::SecurityGroupIngress",
    "Properties": {
-    "Description": "worker -> postgres",
+    "Description": "worker to postgres",
     "FromPort": 5432,
     "GroupId": {
      "Fn::GetAtt": [
@@ -1246,7 +1246,7 @@
   "DataRedisSgfromPlatformStackServicesapiServiceSecurityGroup4ADC4467637973A0AC18": {
    "Type": "AWS::EC2::SecurityGroupIngress",
    "Properties": {
-    "Description": "api -> redis",
+    "Description": "api to redis",
     "FromPort": 6379,
     "GroupId": {
      "Fn::GetAtt": [
@@ -1270,7 +1270,7 @@
   "DataRedisSgfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A637916B2BDC2": {
    "Type": "AWS::EC2::SecurityGroupIngress",
    "Properties": {
-    "Description": "worker -> redis",
+    "Description": "worker to redis",
     "FromPort": 6379,
     "GroupId": {
      "Fn::GetAtt": [
@@ -1389,7 +1389,7 @@
   "DataSearchSecurityGroupfromPlatformStackServicesapiServiceSecurityGroup4ADC4467443A9594816": {
    "Type": "AWS::EC2::SecurityGroupIngress",
    "Properties": {
-    "Description": "api -> opensearch",
+    "Description": "api to opensearch",
     "FromPort": 443,
     "GroupId": {
      "Fn::GetAtt": [
@@ -1413,7 +1413,7 @@
   "DataSearchSecurityGroupfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A443498E3CDB": {
    "Type": "AWS::EC2::SecurityGroupIngress",
    "Properties": {
-    "Description": "worker -> opensearch",
+    "Description": "worker to opensearch",
     "FromPort": 443,
     "GroupId": {
      "Fn::GetAtt": [

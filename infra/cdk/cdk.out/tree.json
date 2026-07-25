@@ -1310,7 +1310,7 @@
                     "attributes": {
                       "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
                       "aws:cdk:cloudformation:props": {
-                        "description": "api -> postgres",
+                        "description": "api to postgres",
                         "fromPort": 5432,
                         "groupId": {
                           "Fn::GetAtt": [
@@ -1339,7 +1339,7 @@
                     "attributes": {
                       "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
                       "aws:cdk:cloudformation:props": {
-                        "description": "worker -> postgres",
+                        "description": "worker to postgres",
                         "fromPort": 5432,
                         "groupId": {
                           "Fn::GetAtt": [
@@ -1652,7 +1652,7 @@
                     "attributes": {
                       "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
                       "aws:cdk:cloudformation:props": {
-                        "description": "api -> redis",
+                        "description": "api to redis",
                         "fromPort": 6379,
                         "groupId": {
                           "Fn::GetAtt": [
@@ -1681,7 +1681,7 @@
                     "attributes": {
                       "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
                       "aws:cdk:cloudformation:props": {
-                        "description": "worker -> redis",
+                        "description": "worker to redis",
                         "fromPort": 6379,
                         "groupId": {
                           "Fn::GetAtt": [
@@ -1831,7 +1831,7 @@
                         "attributes": {
                           "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
                           "aws:cdk:cloudformation:props": {
-                            "description": "api -> opensearch",
+                            "description": "api to opensearch",
                             "fromPort": 443,
                             "groupId": {
                               "Fn::GetAtt": [
@@ -1860,7 +1860,7 @@
                         "attributes": {
                           "aws:cdk:cloudformation:type": "AWS::EC2::SecurityGroupIngress",
                           "aws:cdk:cloudformation:props": {
-                            "description": "worker -> opensearch",
+                            "description": "worker to opensearch",
                             "fromPort": 443,
                             "groupId": {
                               "Fn::GetAtt": [
