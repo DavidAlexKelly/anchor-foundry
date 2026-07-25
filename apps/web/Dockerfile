@@ -10,8 +10,12 @@ RUN npm ci --no-audit --no-fund
 
 FROM node:20-slim AS build
 WORKDIR /repo
-COPY --from=deps /repo/node_modules ./node_modules
-COPY package.json package-lock.json ./
+# Copy the whole deps-stage tree, not just /repo/node_modules: npm workspaces
+# can nest a package's deps under its own workspace directory (e.g. this
+# lockfile places `next` at apps/web/node_modules, not the root) rather than
+# hoisting everything to the root node_modules, and .dockerignore excludes
+# node_modules from the real build context so it can't be recovered below.
+COPY --from=deps /repo ./
 COPY apps/web apps/web
 COPY packages/types packages/types
 ARG NEXT_PUBLIC_COGNITO_DOMAIN
