@@ -85,7 +85,7 @@ function ObjectTypeDialog({
       >
         <Field
           label="Display name"
-          hint={displayName ? `API name: ${toApiName(displayName, true) || "—"}` : "e.g. Customer"}
+          hint={displayName ? `API name: ${toApiName(displayName, true) || "-"}` : "e.g. Customer"}
         >
           <input
             type="text"
@@ -168,7 +168,7 @@ function ObjectTypeDialog({
             </button>
           </div>
         </Field>
-        <Field label="Title property" hint="Shown as the object's name — optional">
+        <Field label="Title property" hint="Shown as the object's name - optional">
           <select value={titleProperty} onChange={(e) => setTitleProperty(e.target.value)}>
             <option value="">None</option>
             {properties.filter((p) => p.api_name).map((p) => (
@@ -576,7 +576,7 @@ function SourceDialog({
                       value={mappings[c.name] ?? ""}
                       onChange={(e) => setMappings({ ...mappings, [c.name]: e.target.value })}
                     >
-                      <option value="">— skip —</option>
+                      <option value="">- skip -</option>
                       {typeDetail.data.properties.map((p) => (
                         <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
                       ))}
@@ -647,10 +647,10 @@ function SourceScheduleDialog({
   });
 
   return (
-    <Dialog open title={`Scheduled sync — ${source.object_type_name}`} onClose={onClose}>
+    <Dialog open title={`Scheduled sync - ${source.object_type_name}`} onClose={onClose}>
       <p className="login-note" style={{ marginTop: 0 }}>
         Reprocesses the current dataset on a schedule instead of only when you click
-        &quot;Sync now&quot; — the same worker-run path large datasets need (the interactive sync
+        &quot;Sync now&quot; - the same worker-run path large datasets need (the interactive sync
         is capped at 20,000 rows).
       </p>
       {schedule.data?.sync_schedule && (
@@ -871,7 +871,7 @@ export default function ObjectsPage() {
       {types.data && types.data.length === 0 && (
         <div className="empty">
           <h2>The ontology starts here</h2>
-          <p>Object types give your data business meaning: a Customer, an Order, a Shipment — typed properties, typed relationships, shared across the workspace.</p>
+          <p>Object types give your data business meaning: a Customer, an Order, a Shipment - typed properties, typed relationships, shared across the workspace.</p>
           {canEditOntology && (
             <div className="row-actions" style={{ justifyContent: "center" }}>
               <button className="btn quiet" onClick={() => setSuggesting(true)}>Suggest from dataset</button>
@@ -932,7 +932,7 @@ export default function ObjectsPage() {
             )}
           </div>
           {linkTypes.data && linkTypes.data.length === 0 && (
-            <p className="login-note">No link types yet — define relationships between object types once you have at least two.</p>
+            <p className="login-note">No link types yet - define relationships between object types once you have at least two.</p>
           )}
           {linkTypes.data && linkTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>
@@ -971,7 +971,7 @@ export default function ObjectsPage() {
             )}
           </div>
           {actionTypes.data && actionTypes.data.length === 0 && (
-            <p className="login-note">No actions yet — define one to let instances write values back to their mapped datasets.</p>
+            <p className="login-note">No actions yet - define one to let instances write values back to their mapped datasets.</p>
           )}
           {actionTypes.data && actionTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>

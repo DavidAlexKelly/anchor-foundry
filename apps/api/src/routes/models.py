@@ -4,7 +4,7 @@ Role floors (conservative, flagged): read = viewer; create/update/delete/run
 = editor. SQL runs execute inline via the sandboxed DuckDB engine and the
 route returns the finished result; Python runs (and any cron-fired run,
 whatever the language) are left 'queued' for the worker's
-scheduled_model_runs job to pick up — see services/models.py's docstring for
+scheduled_model_runs job to pick up - see services/models.py's docstring for
 the full reasoning. The cancel endpoint remains out of scope: a synchronous
 SQL run has no meaningful cancel, and a real cancel for queued/running
 worker jobs isn't built here.
@@ -240,7 +240,7 @@ async def run_model(
             raise DatasetEngineError("add at least one input dataset before running")
 
         if model["language"] == "python":
-            # Needs a real process boundary DuckDB can't give it — leave the
+            # Needs a real process boundary DuckDB can't give it - leave the
             # run queued for the worker's scheduled_model_runs job and return
             # immediately rather than blocking on its poll cycle.
             run_id = await model_service.open_queued_run(conn, model_id, access.auth.user_id)

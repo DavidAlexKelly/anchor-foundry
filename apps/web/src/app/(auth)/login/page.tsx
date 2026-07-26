@@ -92,7 +92,7 @@ export default function LoginPage() {
           )}
           {error && <p className="login-note" style={{ color: "var(--danger)" }}>{error}</p>}
           <p className="login-note">
-            No self-service sign-up — accounts are created by your organisation&apos;s
+            No self-service sign-up - accounts are created by your organisation&apos;s
             administrators.
           </p>
         </div>

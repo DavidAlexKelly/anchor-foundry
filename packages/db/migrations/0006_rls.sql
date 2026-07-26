@@ -85,7 +85,7 @@ $$;
 -- Policies. RLS here is a *visibility* backstop: it guarantees no query run
 -- on behalf of a user can touch rows in workspaces/projects the user cannot
 -- access, even if an API permission check is missing or buggy. Write-level
--- role checks (viewer vs editor vs admin) remain the API's responsibility —
+-- role checks (viewer vs editor vs admin) remain the API's responsibility -
 -- encoding them here too would duplicate the role matrix in a second place
 -- and RLS's job per the spec is isolation, not fine-grained authorisation.
 -- ----------------------------------------------------------------------------

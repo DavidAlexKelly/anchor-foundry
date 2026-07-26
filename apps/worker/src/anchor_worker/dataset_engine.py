@@ -1,8 +1,8 @@
-"""Dataset compute — worker's copy of the DuckDB primitives apps/api's
+"""Dataset compute - worker's copy of the DuckDB primitives apps/api's
 dataset_engine.py already has, trimmed to what scheduled jobs need: running
 a SQL transform (cron-triggered models the API isn't the one to execute)
 and merging incremental sync rows into an existing dataset. Duplicated for
-the same reason as storage.py — api and worker are independently deployable
+the same reason as storage.py - api and worker are independently deployable
 images with no shared Python package in this build.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ MAX_TRANSFORM_OUTPUT_ROWS = 5_000_000  # matches the API's day-one cap
 
 
 def json_safe(value: Any) -> Any:
-    """Matches apps/api's services/dataset_engine.py exactly — values read
+    """Matches apps/api's services/dataset_engine.py exactly - values read
     back out of DuckDB must serialise the same way regardless of which side
     (API interactive sync, or worker scheduled sync) ran the extraction."""
     if value is None or isinstance(value, (bool, int, float, str)):
@@ -53,7 +53,7 @@ def _clean(exc: duckdb.Error) -> str:
     return first[:500]
 
 
-# Scheduled instance sync's row cap — the whole reason it runs in the worker
+# Scheduled instance sync's row cap - the whole reason it runs in the worker
 # rather than the interactive request/response cycle apps/api's
 # services/instances.py's MAX_INSTANCE_SYNC_ROWS (20,000) is bounded by.
 MAX_SCHEDULED_INSTANCE_SYNC_ROWS = 2_000_000
@@ -65,7 +65,7 @@ def extract_instance_rows(
     column_mappings: dict[str, str],
     max_rows: int = MAX_SCHEDULED_INSTANCE_SYNC_ROWS,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Worker copy of services/instances.py's extract_rows — same primary-key
+    """Worker copy of services/instances.py's extract_rows - same primary-key
     + mapped-column extraction, just with the worker's much larger row cap
     instead of the API's interactive one. Rows with a null primary key are
     skipped; they can't identify an instance."""
@@ -110,7 +110,7 @@ def run_sql_transform(
     """Same sandboxed-input / trusted-output-writer split as the API's
     run_transform: user SQL only ever executes in the sandbox connection
     (inputs pre-materialised, external access switched off before it runs);
-    the trusted writer connection never executes user SQL at all — it only
+    the trusted writer connection never executes user SQL at all - it only
     receives already-computed rows via parameterised INSERT and writes them
     out, so a malicious transform can't reach the filesystem or network
     through the write path either."""
@@ -133,7 +133,7 @@ def run_sql_transform(
         row_count = int(sandbox.execute("SELECT count(*) FROM __output").fetchone()[0])
         if row_count > MAX_TRANSFORM_OUTPUT_ROWS:
             raise DatasetEngineError(
-                f"the transform produced {row_count:,} rows — above this build's "
+                f"the transform produced {row_count:,} rows - above this build's "
                 f"{MAX_TRANSFORM_OUTPUT_ROWS:,} row limit"
             )
 
@@ -162,7 +162,7 @@ def merge_incremental(
 ) -> tuple[list[ColumnSchema], int]:
     """Upsert new_rows into existing (by primary key) and write the merged
     result as a new version. No existing_parquet means this is the first
-    sync — the new rows are the whole dataset."""
+    sync - the new rows are the whole dataset."""
     con = duckdb.connect()
     try:
         try:

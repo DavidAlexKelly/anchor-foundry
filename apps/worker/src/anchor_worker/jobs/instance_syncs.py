@@ -1,7 +1,7 @@
 """Scheduled object-type-source sync (spec: object instances materialised
 from a mapped dataset). Day-one sync (apps/api's routes/objects.py
 `POST .../{source_id}/sync`) is interactive and capped at
-MAX_INSTANCE_SYNC_ROWS (20,000) — this is the worker half: a cron-scheduled
+MAX_INSTANCE_SYNC_ROWS (20,000) - this is the worker half: a cron-scheduled
 version of the identical mark-and-sweep upsert, with a far larger row cap
 since it isn't bounded by one HTTP request/response.
 
@@ -9,7 +9,7 @@ Not incremental, deliberately: the mapped dataset's Parquet file is replaced
 wholesale on every upload/sync/model run (a snapshot, not an append log), so
 there is no "rows changed since a cursor" to filter the way connection sync
 (jobs/sync_configs.py) can. Reprocessing the full current snapshot and
-upserting by primary key is already the correct approach for this domain —
+upserting by primary key is already the correct approach for this domain -
 see migration 0016's docstring.
 
 Same discover-then-verify pattern as the other scheduled jobs: the
@@ -18,7 +18,7 @@ candidates across every workspace; the actual read/write happens through a
 workspace-scoped connection that re-checks the source is still due and
 still configured before touching anything.
 
-Note: deliberately no `from __future__ import annotations` here — see
+Note: deliberately no `from __future__ import annotations` here - see
 jobs/model_runs.py's docstring for why (breaks Dagster's `@op` context
 validation under PEP 563).
 """
@@ -59,7 +59,7 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
                 )
                 row = cur.fetchone()
                 if row is None or row[4] is None:
-                    continue  # deleted or unscheduled since discovery — re-verified
+                    continue  # deleted or unscheduled since discovery - re-verified
                 object_type_id, dataset_id, primary_key_column, column_mappings, _schedule, s3_location = row
                 if isinstance(column_mappings, str):
                     column_mappings = json.loads(column_mappings)

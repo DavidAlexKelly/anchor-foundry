@@ -4,7 +4,7 @@ settings", §16 organisations / users / groups / group_members / audit_log).
 User provisioning note (§9 "No self-registration"): creating a platform user
 here also creates the Cognito identity via AdminCreateUser in production
 (CognitoAdminGateway). The DB row is authoritative; cognito_sub is linked on
-first login when the middleware sees a matching email claim — Flagged for
+first login when the middleware sees a matching email claim - Flagged for
 review: spec doesn't define the linking moment; conservative choice is to
 store the sub returned by AdminCreateUser immediately, which is what the
 production gateway does. The gateway is injected so the service is testable
@@ -78,7 +78,7 @@ async def invite_user(
     org_role: str,
 ) -> dict[str, Any]:
     if org_role not in ("admin", "member"):
-        # 'owner' is never grantable through invite — ownership transfer is a
+        # 'owner' is never grantable through invite - ownership transfer is a
         # separate, deliberate operation. Flagged for review (spec silent).
         raise ValueError("invited users may be 'admin' or 'member'")
     existing = await fetch_one(

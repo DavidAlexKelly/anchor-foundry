@@ -53,7 +53,7 @@ function PublishDialog({
       </p>
       <Field label="Visibility">
         <select value={scope} onChange={(e) => setScope(e.target.value as CanvasPublishScope)}>
-          <option value="private">Private — this project only</option>
+          <option value="private">Private - this project only</option>
           <option value="workspace">Whole workspace</option>
           <option value="groups">Specific groups</option>
         </select>
@@ -75,7 +75,7 @@ function PublishDialog({
               </label>
             ))}
             {groups.data && groups.data.length === 0 && (
-              <p className="canvas-widget-empty">No groups yet — create one under Organisation settings.</p>
+              <p className="canvas-widget-empty">No groups yet - create one under Organisation settings.</p>
             )}
           </div>
         </Field>

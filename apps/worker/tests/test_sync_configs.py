@@ -1,4 +1,4 @@
-"""Scheduled/incremental connection sync job tests — a real Postgres source
+"""Scheduled/incremental connection sync job tests - a real Postgres source
 database (a separate database + login role, standing in for a customer's
 system, same pattern as apps/api/tests/test_connections.py) plus real
 Parquet files on disk. secretsmanager is monkeypatched out: the worker only
@@ -62,7 +62,7 @@ def source_database():
 @pytest.fixture(autouse=True)
 def _seed_items(source_database: dict) -> None:
     """Reset the shared source table to its known two rows before every
-    test — tests share source_database (module-scoped, expensive to set
+    test - tests share source_database (module-scoped, expensive to set
     up) but must not see each other's row mutations."""
     src_dsn = ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
     with psycopg.connect(src_dsn, autocommit=True) as conn:

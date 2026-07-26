@@ -1,21 +1,21 @@
-"""Actions — write-back (spec: "Canvas buttons/forms writing back to object
+"""Actions - write-back (spec: "Canvas buttons/forms writing back to object
 instances → source datasets").
 
 Scope, flagged for review: write-back targets this platform's own Parquet
 copy of the mapped dataset (the same dataset the object type source points
 at), not the customer's original external system reached through a
 connection. Connectors in this build only support test/discover, not
-write — true write-through to a live external table needs its own connector
+write - true write-through to a live external table needs its own connector
 capability and is out of scope here. Every write-back still creates a new
 dataset_versions row (produced_by_kind='action'), exactly like
-uploads/syncs/model runs — nothing is silently overwritten.
+uploads/syncs/model runs - nothing is silently overwritten.
 
 An action_type names a subset of an object type's properties as writable
 ("editable_properties"), validated against that type's real properties the
 same way object_type_sources.column_mappings is validated against a
 dataset's schema. Executing one (routes/actions.py orchestrates; this
 module holds the DB-only primitives) requires the instance's mapped
-property to also appear in its source's column_mappings — only properties
+property to also appear in its source's column_mappings - only properties
 with a known dataset column can be written back.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ def validate_submitted_values(
 ) -> None:
     """A submitted value is only writable if it's (a) on the action type's
     editable list, (b) type-consistent with the property's declared type,
-    and (c) actually mapped to a dataset column on this instance's source —
+    and (c) actually mapped to a dataset column on this instance's source -
     properties the source never populated have no write-back target."""
     if not values:
         raise ValueError("submit at least one value to write")

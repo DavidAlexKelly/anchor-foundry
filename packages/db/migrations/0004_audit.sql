@@ -1,6 +1,6 @@
 -- ============================================================================
 -- 0004_audit.sql
--- audit_log — append-only log of every action. Protected by SQL rules that
+-- audit_log - append-only log of every action. Protected by SQL rules that
 -- prevent update or delete (spec §16, verbatim requirement).
 -- ============================================================================
 
@@ -31,7 +31,7 @@ CREATE INDEX idx_audit_workspace ON audit_log (workspace_id) WHERE workspace_id 
 
 -- Spec §16: "Protected by SQL rules that prevent update or delete."
 -- Rules rewrite the statement to a no-op at the parser level, so even the
--- table owner cannot UPDATE or DELETE without first dropping the rule —
+-- table owner cannot UPDATE or DELETE without first dropping the rule -
 -- which is itself visible in DDL audit (CloudTrail / pgaudit).
 CREATE RULE audit_log_no_update AS ON UPDATE TO audit_log DO INSTEAD NOTHING;
 CREATE RULE audit_log_no_delete AS ON DELETE TO audit_log DO INSTEAD NOTHING;

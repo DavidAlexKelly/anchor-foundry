@@ -122,7 +122,7 @@ async def get_workspace(
 ) -> WorkspaceDetail:
     async with user_connection(access.auth.user_id) as conn:
         row = await ws_service.get(conn, access.workspace_id)
-    # Isolation anchors (s3_prefix etc.) are internal plumbing — not exposed.
+    # Isolation anchors (s3_prefix etc.) are internal plumbing - not exposed.
     return WorkspaceDetail(
         id=row["id"],
         name=row["name"],

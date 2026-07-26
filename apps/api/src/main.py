@@ -1,5 +1,5 @@
 """API entrypoint (spec §7 apps/api). ALB health checks hit /api/health
-(unauthenticated — it reveals nothing but liveness); every other route
+(unauthenticated - it reveals nothing but liveness); every other route
 requires a validated Cognito JWT via the auth middleware dependencies.
 """
 from __future__ import annotations

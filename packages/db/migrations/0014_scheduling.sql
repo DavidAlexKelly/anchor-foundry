@@ -16,14 +16,14 @@
 -- which schema.table, the dataset it feeds, and (incremental only) the
 -- primary key + cursor columns and progress. Flagged for review: syncing
 -- several tables from one connection on independent schedules needs a
--- separate per-target config table — a natural extension, not built here,
+-- separate per-target config table - a natural extension, not built here,
 -- since the existing schema already committed to one schedule per
 -- connection.
 --
 -- Worker discovery (mirrors 0010's list_orphaned_workspace_schemas: a
--- SECURITY DEFINER function enumerates candidates across every workspace —
+-- SECURITY DEFINER function enumerates candidates across every workspace -
 -- something no ordinary RLS-scoped query can do without already knowing
--- which workspace to look in — and the worker re-verifies/acts on each one
+-- which workspace to look in - and the worker re-verifies/acts on each one
 -- through the normal RLS-scoped path, never trusting the bypass for the
 -- actual mutation).
 -- ============================================================================
@@ -57,13 +57,13 @@ AS $$
      ORDER BY mr.queued_at
 $$;
 
--- A NULL next_run_at means "schedule set, never fired yet" — treated as due
+-- A NULL next_run_at means "schedule set, never fired yet" - treated as due
 -- immediately so a freshly-scheduled model/sync doesn't sit idle until the
 -- worker (the only place that parses cron expressions, via croniter) has
 -- had a chance to compute its first real occurrence. Flagged for review:
 -- this means a newly-scheduled job fires once right away and follows the
 -- schedule thereafter, rather than waiting for the first natural occurrence
--- — a conservative, simple, honestly-documented day-one choice.
+-- - a conservative, simple, honestly-documented day-one choice.
 CREATE FUNCTION list_due_cron_models() RETURNS TABLE(model_id uuid, workspace_id uuid)
 LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public

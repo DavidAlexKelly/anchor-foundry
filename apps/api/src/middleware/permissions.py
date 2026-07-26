@@ -1,7 +1,7 @@
 """Permission enforcement (spec §9, §10 "Broken access control").
 
 Every resource route composes one of these dependencies AFTER authentication
-and BEFORE any business logic — the ordering the user-facing contract in the
+and BEFORE any business logic - the ordering the user-facing contract in the
 build brief demands: validate JWT → resolve user → check effective role →
 only then execute.
 
@@ -103,7 +103,7 @@ def require_workspace_role(minimum: str):
 
 def require_project_role(minimum: str):
     """Dependency factory for project-scoped routes. Additionally verifies the
-    project actually belongs to the workspace in the path — resource IDs from
+    project actually belongs to the workspace in the path - resource IDs from
     URLs are never trusted without confirming the hierarchy (§10)."""
     if minimum not in _PROJ_RANK:
         raise ValueError(f"unknown project role {minimum!r}")

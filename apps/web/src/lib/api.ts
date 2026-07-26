@@ -1,6 +1,6 @@
 /** Typed API client. Single origin (Next rewrites /api to the FastAPI
  * process in dev; CloudFront routes it in production). 401 anywhere sends
- * the user back to sign-in — the token is either absent or expired. */
+ * the user back to sign-in - the token is either absent or expired. */
 
 import { clearToken, getToken } from "./auth";
 import type {
@@ -36,7 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body: { detail?: string } = await res.json();
       if (typeof body.detail === "string") detail = body.detail;
     } catch {
-      /* non-JSON error body — keep statusText */
+      /* non-JSON error body - keep statusText */
     }
     throw new ApiError(res.status, detail);
   }

@@ -30,5 +30,5 @@ new CustomerStack(app, "PlatformStack", {
   vendorEcrRegistry,
   imageTag,
   env: region ? { region } : undefined,
-  description: `Platform stack for ${orgSlug} — provisioned by the platform control plane`,
+  description: `Platform stack for ${orgSlug} - provisioned by the platform control plane`,
 });

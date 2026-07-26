@@ -99,7 +99,7 @@ export class DataStoresConstruct extends Construct {
       },
     });
 
-    // ElastiCache Redis — Celery queues + API caching (spec §7).
+    // ElastiCache Redis - Celery queues + API caching (spec §7).
     this.redisSecurityGroup = new ec2.SecurityGroup(this, "RedisSg", {
       vpc,
       allowAllOutbound: false,
@@ -121,7 +121,7 @@ export class DataStoresConstruct extends Construct {
     });
     this.redis.addDependency(redisSubnets);
 
-    // OpenSearch — object instance search and aggregation (spec §7, §8).
+    // OpenSearch - object instance search and aggregation (spec §7, §8).
     this.search = new opensearch.Domain(this, "Search", {
       version: opensearch.EngineVersion.OPENSEARCH_2_11,
       vpc,

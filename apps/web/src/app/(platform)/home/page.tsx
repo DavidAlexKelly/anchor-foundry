@@ -8,7 +8,7 @@ import { CreateWorkspaceButton } from "@/components/create-workspace";
 export default function HomePage() {
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
-  // Mirror of the API's floor (org admin) — the server is authoritative.
+  // Mirror of the API's floor (org admin) - the server is authoritative.
   const canCreate = me.data?.org_role === "owner" || me.data?.org_role === "admin";
 
   return (
@@ -17,7 +17,7 @@ export default function HomePage() {
         <div>
           <p className="eyebrow">workspaces</p>
           <h1>Choose a workspace</h1>
-          <p className="sub">Each workspace keeps its own data, storage, and search — fully isolated.</p>
+          <p className="sub">Each workspace keeps its own data, storage, and search - fully isolated.</p>
         </div>
         {canCreate && <CreateWorkspaceButton />}
       </div>

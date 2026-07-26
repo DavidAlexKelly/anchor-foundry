@@ -1,7 +1,7 @@
 """Dataset file storage (spec §8 "S3 as the foundation").
 
-All dataset bytes live under the owning workspace's s3_prefix — the same
-isolation anchor IAM policies are scoped to — so storage isolation holds by
+All dataset bytes live under the owning workspace's s3_prefix - the same
+isolation anchor IAM policies are scoped to - so storage isolation holds by
 construction. The gateway hides where that prefix physically lives: the
 customer's S3 bucket in production, a directory in local development.
 

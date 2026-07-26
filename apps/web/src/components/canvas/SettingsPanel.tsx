@@ -3,7 +3,7 @@
 import { useEditor } from "@craftjs/core";
 
 /** Renders the selected node's own `related.settings` component (registered
- * per-widget via `.craft.related.settings` in widgets.tsx) — the standard
+ * per-widget via `.craft.related.settings` in widgets.tsx) - the standard
  * Craft.js pattern for a props-editing sidebar that doesn't need to know
  * about every widget type itself. */
 export function SettingsPanel() {

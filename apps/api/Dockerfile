@@ -1,6 +1,6 @@
 # Anchor API. Runs behind the ALB (CDK services construct); health check
 # GET /api/health. Container runs as a non-root user; the image carries no
-# secrets — DATABASE_URL and COGNITO_* arrive from ECS task definition
+# secrets - DATABASE_URL and COGNITO_* arrive from ECS task definition
 # secrets (Secrets Manager) at runtime.
 FROM python:3.12-slim AS base
 
