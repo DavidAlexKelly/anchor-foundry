@@ -1,5 +1,5 @@
 """API error types. One deliberate convention from spec §9: a resource the
-user cannot access "does not exist for this user (404, not 403)" — access
+user cannot access "does not exist for this user (404, not 403)" - access
 denial is expressed as NotFound to avoid leaking resource existence."""
 from __future__ import annotations
 

@@ -1,12 +1,12 @@
-"""Python model transform execution — the worker slice the spec's "isolated
+"""Python model transform execution - the worker slice the spec's "isolated
 worker runtime" note anticipated (SQL transforms run inline in the API,
 sandboxed via DuckDB's `enable_external_access` switch; Python needs a real
 process boundary DuckDB can't give it, which is why the API rejects
 language='python' at run time and leaves the run 'queued' for this module).
 
 Honesty about what this actually is, flagged clearly: this is process-level
-isolation — a fresh OS process, capped CPU/memory, a wall-clock timeout, and
-a stripped environment — not a hard multi-tenant security boundary. It does
+isolation - a fresh OS process, capped CPU/memory, a wall-clock timeout, and
+a stripped environment - not a hard multi-tenant security boundary. It does
 not stop the transform from opening a network socket or reading files
 outside its working directory; that needs a real sandbox (gVisor, a
 Firecracker microVM, a network-denied container) applied at the worker's
@@ -133,7 +133,7 @@ def run_python_transform(
     row_count = int(payload["row_count"])
     if row_count > MAX_OUTPUT_ROWS:
         raise DatasetEngineError(
-            f"the transform produced {row_count:,} rows — above this build's "
+            f"the transform produced {row_count:,} rows - above this build's "
             f"{MAX_OUTPUT_ROWS:,} row limit"
         )
     schema = [ColumnSchema(name=c["name"], data_type=c["data_type"]) for c in payload["schema"]]

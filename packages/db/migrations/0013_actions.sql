@@ -1,11 +1,11 @@
 -- ============================================================================
 -- 0013_actions.sql
--- Actions — write-back (spec: "Canvas buttons/forms writing back to object
+-- Actions - write-back (spec: "Canvas buttons/forms writing back to object
 -- instances → source datasets"). An action_type names a set of an object
 -- type's properties as writable; executing one (services/actions.py) updates
 -- a specific object instance and versions the mapped dataset it came from.
 --
--- Flagged for review — scope: write-back targets this platform's own
+-- Flagged for review - scope: write-back targets this platform's own
 -- Parquet-backed copy of the mapped dataset, not the customer's original
 -- external system. Connectors in this build only support test/discover, not
 -- write, so true write-through to a live external source is out of scope;
@@ -54,7 +54,7 @@ ALTER TABLE action_types ENABLE ROW LEVEL SECURITY;
 CREATE POLICY action_types_isolation ON action_types
     USING (rls_can_access_workspace(workspace_id));
 
--- action_runs — history, one row per execution (spec §17 pattern already
+-- action_runs - history, one row per execution (spec §17 pattern already
 -- used by sync_runs/model_runs: every mutating operation is auditable).
 CREATE TABLE action_runs (
     id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),

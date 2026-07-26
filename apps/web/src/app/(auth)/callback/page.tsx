@@ -26,7 +26,7 @@ function CallbackInner() {
   if (error) {
     return (
       <div className="state error">
-        {error} — <a href="/login" style={{ textDecoration: "underline" }}>back to sign in</a>
+        {error} - <a href="/login" style={{ textDecoration: "underline" }}>back to sign in</a>
       </div>
     );
   }

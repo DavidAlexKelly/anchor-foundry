@@ -91,7 +91,7 @@ _verifier: TokenVerifier | None = None
 # Tiny in-process cache of sub -> (expiry, AuthContext) to avoid a DB round
 # trip on every request within a short window. Access tokens live 15 minutes
 # (§9); caching identity for 30s is a safe, bounded optimisation. Role and
-# permission checks are NOT cached — they run against the DB on every request.
+# permission checks are NOT cached - they run against the DB on every request.
 _identity_cache: dict[str, tuple[float, AuthContext]] = {}
 _IDENTITY_CACHE_TTL_S = 30.0
 
@@ -131,7 +131,7 @@ async def get_current_user(request: Request) -> AuthContext:
         ctx = cached[1]
     else:
         # Step 5: DB lookup by cognito_sub, under the narrow auth-lookup RLS
-        # context (db 0007) — only this user's row is visible.
+        # context (db 0007) - only this user's row is visible.
         async with auth_lookup_connection(sub) as conn:
             row = await fetch_one(
                 conn,

@@ -1,9 +1,9 @@
 """Scheduled/incremental connection syncs (spec: day-one connection sync is
-full-snapshot and inline via the API; this is the worker half — scheduled
+full-snapshot and inline via the API; this is the worker half - scheduled
 firing on a cron, and a true cursor-based incremental mode).
 
 One op, on its own schedule: for every connection with a due sync_schedule
-(db list_due_scheduled_syncs), runs a full or incremental sync — full
+(db list_due_scheduled_syncs), runs a full or incremental sync - full
 replaces the dataset's current version wholesale (same as the API's inline
 "trigger sync"); incremental pulls only rows where the cursor column
 exceeds the last seen value and upserts them into the existing dataset by
@@ -15,7 +15,7 @@ function enumerates candidates across every workspace; the actual read/
 write happens through a workspace-scoped connection that re-checks the
 connection is still due before touching anything.
 
-Note: deliberately no `from __future__ import annotations` here — see
+Note: deliberately no `from __future__ import annotations` here - see
 jobs/model_runs.py's docstring for why (breaks Dagster's `@op` context
 validation under PEP 563).
 """
@@ -135,7 +135,7 @@ def _record_synced_dataset(
         )
         if cur.fetchone() is not None:
             raise engine.DatasetEngineError(
-                f"a dataset named '{slug}' already exists — rename the scheduled sync or that dataset"
+                f"a dataset named '{slug}' already exists - rename the scheduled sync or that dataset"
             )
         version = 1
         parquet_key = f"{storage_prefix(ws_prefix, new_id)}v1/data.parquet"
@@ -207,7 +207,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                 )
                 row = cur.fetchone()
                 if row is None or row[4] is None:
-                    continue  # unscheduled since discovery — re-verified
+                    continue  # unscheduled since discovery - re-verified
                 (project_id, config, secret_arn, mode, _schedule, source_schema, source_table,
                  dataset_name, dataset_id, primary_key_column, cursor_column, last_cursor) = row
                 if not source_schema or not source_table:
@@ -238,7 +238,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                 if nothing_new:
                     # Steady state for a cron-scheduled sync between source
                     # writes. An empty CSV (header only) gives DuckDB nothing
-                    # to infer column types from — it falls back to VARCHAR
+                    # to infer column types from - it falls back to VARCHAR
                     # for every column, which then fails to compare against
                     # the existing (correctly-typed) dataset in the primary
                     # key anti-join. Skip the merge/write entirely instead.
@@ -309,7 +309,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                 )
             conn.commit()
 
-        # Advance the schedule regardless of outcome — a failing source
+        # Advance the schedule regardless of outcome - a failing source
         # shouldn't be retried every poll cycle faster than its own cadence.
         with platform_db.connect_scoped_to(workspace_id) as conn:
             with conn.cursor() as cur:

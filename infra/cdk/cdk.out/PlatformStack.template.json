@@ -1,0 +1,3432 @@
+{
+ "Description": "Platform stack for dry-run-customer - provisioned by the platform control plane",
+ "Resources": {
+  "Vpc8378EB38": {
+   "Type": "AWS::EC2::VPC",
+   "Properties": {
+    "CidrBlock": "10.0.0.0/16",
+    "EnableDnsHostnames": true,
+    "EnableDnsSupport": true,
+    "InstanceTenancy": "default",
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/Resource"
+   }
+  },
+  "VpcpublicSubnet1Subnet2BB74ED7": {
+   "Type": "AWS::EC2::Subnet",
+   "Properties": {
+    "AvailabilityZone": {
+     "Fn::Select": [
+      0,
+      {
+       "Fn::GetAZs": ""
+      }
+     ]
+    },
+    "CidrBlock": "10.0.0.0/24",
+    "MapPublicIpOnLaunch": true,
+    "Tags": [
+     {
+      "Key": "aws-cdk:subnet-name",
+      "Value": "public"
+     },
+     {
+      "Key": "aws-cdk:subnet-type",
+      "Value": "Public"
+     },
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/publicSubnet1"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet1/Subnet"
+   }
+  },
+  "VpcpublicSubnet1RouteTable15C15F8E": {
+   "Type": "AWS::EC2::RouteTable",
+   "Properties": {
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/publicSubnet1"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet1/RouteTable"
+   }
+  },
+  "VpcpublicSubnet1RouteTableAssociation4E83B6E4": {
+   "Type": "AWS::EC2::SubnetRouteTableAssociation",
+   "Properties": {
+    "RouteTableId": {
+     "Ref": "VpcpublicSubnet1RouteTable15C15F8E"
+    },
+    "SubnetId": {
+     "Ref": "VpcpublicSubnet1Subnet2BB74ED7"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet1/RouteTableAssociation"
+   }
+  },
+  "VpcpublicSubnet1DefaultRouteB88F9E93": {
+   "Type": "AWS::EC2::Route",
+   "Properties": {
+    "DestinationCidrBlock": "0.0.0.0/0",
+    "GatewayId": {
+     "Ref": "VpcIGWD7BA715C"
+    },
+    "RouteTableId": {
+     "Ref": "VpcpublicSubnet1RouteTable15C15F8E"
+    }
+   },
+   "DependsOn": [
+    "VpcVPCGWBF912B6E"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet1/DefaultRoute"
+   }
+  },
+  "VpcpublicSubnet1EIP411541E6": {
+   "Type": "AWS::EC2::EIP",
+   "Properties": {
+    "Domain": "vpc",
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/publicSubnet1"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet1/EIP"
+   }
+  },
+  "VpcpublicSubnet1NATGatewayA036E8A6": {
+   "Type": "AWS::EC2::NatGateway",
+   "Properties": {
+    "AllocationId": {
+     "Fn::GetAtt": [
+      "VpcpublicSubnet1EIP411541E6",
+      "AllocationId"
+     ]
+    },
+    "SubnetId": {
+     "Ref": "VpcpublicSubnet1Subnet2BB74ED7"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/publicSubnet1"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "DependsOn": [
+    "VpcpublicSubnet1DefaultRouteB88F9E93",
+    "VpcpublicSubnet1RouteTableAssociation4E83B6E4"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet1/NATGateway"
+   }
+  },
+  "VpcpublicSubnet2SubnetE34B022A": {
+   "Type": "AWS::EC2::Subnet",
+   "Properties": {
+    "AvailabilityZone": {
+     "Fn::Select": [
+      1,
+      {
+       "Fn::GetAZs": ""
+      }
+     ]
+    },
+    "CidrBlock": "10.0.1.0/24",
+    "MapPublicIpOnLaunch": true,
+    "Tags": [
+     {
+      "Key": "aws-cdk:subnet-name",
+      "Value": "public"
+     },
+     {
+      "Key": "aws-cdk:subnet-type",
+      "Value": "Public"
+     },
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/publicSubnet2"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet2/Subnet"
+   }
+  },
+  "VpcpublicSubnet2RouteTableC5A6DF77": {
+   "Type": "AWS::EC2::RouteTable",
+   "Properties": {
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/publicSubnet2"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet2/RouteTable"
+   }
+  },
+  "VpcpublicSubnet2RouteTableAssociationCCE257FF": {
+   "Type": "AWS::EC2::SubnetRouteTableAssociation",
+   "Properties": {
+    "RouteTableId": {
+     "Ref": "VpcpublicSubnet2RouteTableC5A6DF77"
+    },
+    "SubnetId": {
+     "Ref": "VpcpublicSubnet2SubnetE34B022A"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet2/RouteTableAssociation"
+   }
+  },
+  "VpcpublicSubnet2DefaultRoute732F0BEB": {
+   "Type": "AWS::EC2::Route",
+   "Properties": {
+    "DestinationCidrBlock": "0.0.0.0/0",
+    "GatewayId": {
+     "Ref": "VpcIGWD7BA715C"
+    },
+    "RouteTableId": {
+     "Ref": "VpcpublicSubnet2RouteTableC5A6DF77"
+    }
+   },
+   "DependsOn": [
+    "VpcVPCGWBF912B6E"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/publicSubnet2/DefaultRoute"
+   }
+  },
+  "VpcprivateSubnet1SubnetCEAD3716": {
+   "Type": "AWS::EC2::Subnet",
+   "Properties": {
+    "AvailabilityZone": {
+     "Fn::Select": [
+      0,
+      {
+       "Fn::GetAZs": ""
+      }
+     ]
+    },
+    "CidrBlock": "10.0.16.0/20",
+    "MapPublicIpOnLaunch": false,
+    "Tags": [
+     {
+      "Key": "aws-cdk:subnet-name",
+      "Value": "private"
+     },
+     {
+      "Key": "aws-cdk:subnet-type",
+      "Value": "Private"
+     },
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/privateSubnet1"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet1/Subnet"
+   }
+  },
+  "VpcprivateSubnet1RouteTable1979EACB": {
+   "Type": "AWS::EC2::RouteTable",
+   "Properties": {
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/privateSubnet1"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet1/RouteTable"
+   }
+  },
+  "VpcprivateSubnet1RouteTableAssociationEEBD93CE": {
+   "Type": "AWS::EC2::SubnetRouteTableAssociation",
+   "Properties": {
+    "RouteTableId": {
+     "Ref": "VpcprivateSubnet1RouteTable1979EACB"
+    },
+    "SubnetId": {
+     "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet1/RouteTableAssociation"
+   }
+  },
+  "VpcprivateSubnet1DefaultRouteB506891A": {
+   "Type": "AWS::EC2::Route",
+   "Properties": {
+    "DestinationCidrBlock": "0.0.0.0/0",
+    "NatGatewayId": {
+     "Ref": "VpcpublicSubnet1NATGatewayA036E8A6"
+    },
+    "RouteTableId": {
+     "Ref": "VpcprivateSubnet1RouteTable1979EACB"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet1/DefaultRoute"
+   }
+  },
+  "VpcprivateSubnet2Subnet2DE7549C": {
+   "Type": "AWS::EC2::Subnet",
+   "Properties": {
+    "AvailabilityZone": {
+     "Fn::Select": [
+      1,
+      {
+       "Fn::GetAZs": ""
+      }
+     ]
+    },
+    "CidrBlock": "10.0.32.0/20",
+    "MapPublicIpOnLaunch": false,
+    "Tags": [
+     {
+      "Key": "aws-cdk:subnet-name",
+      "Value": "private"
+     },
+     {
+      "Key": "aws-cdk:subnet-type",
+      "Value": "Private"
+     },
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/privateSubnet2"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet2/Subnet"
+   }
+  },
+  "VpcprivateSubnet2RouteTable4D0FFC8C": {
+   "Type": "AWS::EC2::RouteTable",
+   "Properties": {
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc/privateSubnet2"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet2/RouteTable"
+   }
+  },
+  "VpcprivateSubnet2RouteTableAssociationB691E645": {
+   "Type": "AWS::EC2::SubnetRouteTableAssociation",
+   "Properties": {
+    "RouteTableId": {
+     "Ref": "VpcprivateSubnet2RouteTable4D0FFC8C"
+    },
+    "SubnetId": {
+     "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet2/RouteTableAssociation"
+   }
+  },
+  "VpcprivateSubnet2DefaultRouteBAC3C1C3": {
+   "Type": "AWS::EC2::Route",
+   "Properties": {
+    "DestinationCidrBlock": "0.0.0.0/0",
+    "NatGatewayId": {
+     "Ref": "VpcpublicSubnet1NATGatewayA036E8A6"
+    },
+    "RouteTableId": {
+     "Ref": "VpcprivateSubnet2RouteTable4D0FFC8C"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/privateSubnet2/DefaultRoute"
+   }
+  },
+  "VpcIGWD7BA715C": {
+   "Type": "AWS::EC2::InternetGateway",
+   "Properties": {
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "PlatformStack/Vpc"
+     },
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/IGW"
+   }
+  },
+  "VpcVPCGWBF912B6E": {
+   "Type": "AWS::EC2::VPCGatewayAttachment",
+   "Properties": {
+    "InternetGatewayId": {
+     "Ref": "VpcIGWD7BA715C"
+    },
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Vpc/VPCGW"
+   }
+  },
+  "TrailS30071F172": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Trail/S3/Resource"
+   }
+  },
+  "TrailS3PolicyE42170FE": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "TrailS30071F172"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "TrailS30071F172",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "TrailS30071F172",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "s3:GetBucketAcl",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "cloudtrail.amazonaws.com"
+       },
+       "Resource": {
+        "Fn::GetAtt": [
+         "TrailS30071F172",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": "s3:PutObject",
+       "Condition": {
+        "StringEquals": {
+         "s3:x-amz-acl": "bucket-owner-full-control"
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "cloudtrail.amazonaws.com"
+       },
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "TrailS30071F172",
+            "Arn"
+           ]
+          },
+          "/AWSLogs/",
+          {
+           "Ref": "AWS::AccountId"
+          },
+          "/*"
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Trail/S3/Policy/Resource"
+   }
+  },
+  "Trail022F0CF2": {
+   "Type": "AWS::CloudTrail::Trail",
+   "Properties": {
+    "EnableLogFileValidation": true,
+    "EventSelectors": [],
+    "IncludeGlobalServiceEvents": true,
+    "IsLogging": true,
+    "IsMultiRegionTrail": true,
+    "S3BucketName": {
+     "Ref": "TrailS30071F172"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "DependsOn": [
+    "TrailS3PolicyE42170FE"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Trail/Resource"
+   }
+  },
+  "GuardDuty": {
+   "Type": "AWS::GuardDuty::Detector",
+   "Properties": {
+    "Enable": true,
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/GuardDuty"
+   }
+  },
+  "DataDataKeyCDD1A924": {
+   "Type": "AWS::KMS::Key",
+   "Properties": {
+    "Description": "Platform data encryption key",
+    "EnableKeyRotation": true,
+    "KeyPolicy": {
+     "Statement": [
+      {
+       "Action": "kms:*",
+       "Effect": "Allow",
+       "Principal": {
+        "AWS": {
+         "Fn::Join": [
+          "",
+          [
+           "arn:",
+           {
+            "Ref": "AWS::Partition"
+           },
+           ":iam::",
+           {
+            "Ref": "AWS::AccountId"
+           },
+           ":root"
+          ]
+         ]
+        }
+       },
+       "Resource": "*"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/DataKey/Resource"
+   }
+  },
+  "DataAccessLogsC0C25EE4": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    },
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "ExpirationInDays": 365,
+       "Status": "Enabled"
+      }
+     ]
+    },
+    "OwnershipControls": {
+     "Rules": [
+      {
+       "ObjectOwnership": "BucketOwnerEnforced"
+      }
+     ]
+    },
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/AccessLogs/Resource"
+   }
+  },
+  "DataAccessLogsPolicy459727B3": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "DataAccessLogsC0C25EE4"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "DataAccessLogsC0C25EE4",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "DataAccessLogsC0C25EE4",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "s3:PutObject",
+       "Condition": {
+        "ArnLike": {
+         "aws:SourceArn": {
+          "Fn::GetAtt": [
+           "DataDataBucketA7E8509A",
+           "Arn"
+          ]
+         }
+        },
+        "StringEquals": {
+         "aws:SourceAccount": {
+          "Ref": "AWS::AccountId"
+         }
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "logging.s3.amazonaws.com"
+       },
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "DataAccessLogsC0C25EE4",
+            "Arn"
+           ]
+          },
+          "/s3-data/*"
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/AccessLogs/Policy/Resource"
+   }
+  },
+  "DataDataBucketA7E8509A": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "KMSMasterKeyID": {
+         "Fn::GetAtt": [
+          "DataDataKeyCDD1A924",
+          "Arn"
+         ]
+        },
+        "SSEAlgorithm": "aws:kms"
+       }
+      }
+     ]
+    },
+    "LoggingConfiguration": {
+     "DestinationBucketName": {
+      "Ref": "DataAccessLogsC0C25EE4"
+     },
+     "LogFilePrefix": "s3-data/"
+    },
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "storage"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VersioningConfiguration": {
+     "Status": "Enabled"
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/DataBucket/Resource"
+   }
+  },
+  "DataDataBucketPolicy1EE38E1A": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "DataDataBucketA7E8509A"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "DataDataBucketA7E8509A",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "DataDataBucketA7E8509A",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/DataBucket/Policy/Resource"
+   }
+  },
+  "DataDbSg816B4B26": {
+   "Type": "AWS::EC2::SecurityGroup",
+   "Properties": {
+    "GroupDescription": "PlatformStack/Data/DbSg",
+    "SecurityGroupEgress": [
+     {
+      "CidrIp": "255.255.255.255/32",
+      "Description": "Disallow all traffic",
+      "FromPort": 252,
+      "IpProtocol": "icmp",
+      "ToPort": 86
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/DbSg/Resource"
+   }
+  },
+  "DataDbSgfromPlatformStackServicesapiServiceSecurityGroup4ADC44675432556CD087": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "api to postgres",
+    "FromPort": 5432,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "DataDbSg816B4B26",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesapiServiceSecurityGroup67559850",
+      "GroupId"
+     ]
+    },
+    "ToPort": 5432
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/DbSg/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:5432"
+   }
+  },
+  "DataDbSgfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A5432A6CB79A4": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "worker to postgres",
+    "FromPort": 5432,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "DataDbSg816B4B26",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesworkerServiceSecurityGroup254C3E45",
+      "GroupId"
+     ]
+    },
+    "ToPort": 5432
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/DbSg/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:5432"
+   }
+  },
+  "DataPostgresSubnetGroupD8DCC9AD": {
+   "Type": "AWS::RDS::DBSubnetGroup",
+   "Properties": {
+    "DBSubnetGroupDescription": "Subnet group for Postgres database",
+    "SubnetIds": [
+     {
+      "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+     },
+     {
+      "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "database"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Postgres/SubnetGroup/Default"
+   }
+  },
+  "PlatformStackDataPostgresSecretA61251E63fdaad7efa858a3daf9490cf0a702aeb": {
+   "Type": "AWS::SecretsManager::Secret",
+   "Properties": {
+    "Description": {
+     "Fn::Join": [
+      "",
+      [
+       "Generated by the CDK for stack: ",
+       {
+        "Ref": "AWS::StackName"
+       }
+      ]
+     ]
+    },
+    "GenerateSecretString": {
+     "ExcludeCharacters": " %+~`#$&*()|[]{}:;<>?!'/@\"\\",
+     "GenerateStringKey": "password",
+     "PasswordLength": 30,
+     "SecretStringTemplate": "{\"username\":\"platform\"}"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "database"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Postgres/Secret/Resource"
+   }
+  },
+  "DataPostgresSecretAttachment37869696": {
+   "Type": "AWS::SecretsManager::SecretTargetAttachment",
+   "Properties": {
+    "SecretId": {
+     "Ref": "PlatformStackDataPostgresSecretA61251E63fdaad7efa858a3daf9490cf0a702aeb"
+    },
+    "TargetId": {
+     "Ref": "DataPostgresA4594A5A"
+    },
+    "TargetType": "AWS::RDS::DBInstance"
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Postgres/Secret/Attachment/Resource"
+   }
+  },
+  "DataPostgresA4594A5A": {
+   "Type": "AWS::RDS::DBInstance",
+   "Properties": {
+    "AllocatedStorage": "50",
+    "BackupRetentionPeriod": 14,
+    "CopyTagsToSnapshot": true,
+    "DBInstanceClass": "db.t4g.medium",
+    "DBName": "platform",
+    "DBSubnetGroupName": {
+     "Ref": "DataPostgresSubnetGroupD8DCC9AD"
+    },
+    "DeletionProtection": true,
+    "Engine": "postgres",
+    "EngineVersion": "16",
+    "KmsKeyId": {
+     "Fn::GetAtt": [
+      "DataDataKeyCDD1A924",
+      "Arn"
+     ]
+    },
+    "MasterUserPassword": {
+     "Fn::Join": [
+      "",
+      [
+       "{{resolve:secretsmanager:",
+       {
+        "Ref": "PlatformStackDataPostgresSecretA61251E63fdaad7efa858a3daf9490cf0a702aeb"
+       },
+       ":SecretString:password::}}"
+      ]
+     ]
+    },
+    "MasterUsername": "platform",
+    "MaxAllocatedStorage": 500,
+    "MultiAZ": false,
+    "PubliclyAccessible": false,
+    "StorageEncrypted": true,
+    "StorageType": "gp2",
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "database"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VPCSecurityGroups": [
+     {
+      "Fn::GetAtt": [
+       "DataDbSg816B4B26",
+       "GroupId"
+      ]
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Postgres/Resource"
+   }
+  },
+  "DataAppDbSecretA34DDACB": {
+   "Type": "AWS::SecretsManager::Secret",
+   "Properties": {
+    "Description": "platform_app role credentials (RLS-subject application role)",
+    "GenerateSecretString": {
+     "ExcludeCharacters": "\"'\\/@",
+     "GenerateStringKey": "password",
+     "PasswordLength": 40,
+     "SecretStringTemplate": "{\"username\":\"platform_app\"}"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/AppDbSecret/Resource"
+   }
+  },
+  "DataRedisSgADF85847": {
+   "Type": "AWS::EC2::SecurityGroup",
+   "Properties": {
+    "GroupDescription": "PlatformStack/Data/RedisSg",
+    "SecurityGroupEgress": [
+     {
+      "CidrIp": "255.255.255.255/32",
+      "Description": "Disallow all traffic",
+      "FromPort": 252,
+      "IpProtocol": "icmp",
+      "ToPort": 86
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/RedisSg/Resource"
+   }
+  },
+  "DataRedisSgfromPlatformStackServicesapiServiceSecurityGroup4ADC4467637973A0AC18": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "api to redis",
+    "FromPort": 6379,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "DataRedisSgADF85847",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesapiServiceSecurityGroup67559850",
+      "GroupId"
+     ]
+    },
+    "ToPort": 6379
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/RedisSg/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:6379"
+   }
+  },
+  "DataRedisSgfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A637916B2BDC2": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "worker to redis",
+    "FromPort": 6379,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "DataRedisSgADF85847",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesworkerServiceSecurityGroup254C3E45",
+      "GroupId"
+     ]
+    },
+    "ToPort": 6379
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/RedisSg/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:6379"
+   }
+  },
+  "DataRedisSubnets0D63ED40": {
+   "Type": "AWS::ElastiCache::SubnetGroup",
+   "Properties": {
+    "Description": "Platform redis subnets",
+    "SubnetIds": [
+     {
+      "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+     },
+     {
+      "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/RedisSubnets"
+   }
+  },
+  "DataRedisAA90275E": {
+   "Type": "AWS::ElastiCache::ReplicationGroup",
+   "Properties": {
+    "AtRestEncryptionEnabled": true,
+    "AutomaticFailoverEnabled": false,
+    "CacheNodeType": "cache.t4g.small",
+    "CacheSubnetGroupName": {
+     "Ref": "DataRedisSubnets0D63ED40"
+    },
+    "Engine": "redis",
+    "NumCacheClusters": 1,
+    "ReplicationGroupDescription": "Platform cache and job queue",
+    "SecurityGroupIds": [
+     {
+      "Fn::GetAtt": [
+       "DataRedisSgADF85847",
+       "GroupId"
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TransitEncryptionEnabled": true
+   },
+   "DependsOn": [
+    "DataRedisSubnets0D63ED40"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Redis"
+   }
+  },
+  "DataSearchSecurityGroupEFFA2DB4": {
+   "Type": "AWS::EC2::SecurityGroup",
+   "Properties": {
+    "GroupDescription": "Security group for domain Search",
+    "SecurityGroupEgress": [
+     {
+      "CidrIp": "0.0.0.0/0",
+      "Description": "Allow all outbound traffic by default",
+      "IpProtocol": "-1"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "object-search"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Search/SecurityGroup/Resource"
+   }
+  },
+  "DataSearchSecurityGroupfromPlatformStackServicesapiServiceSecurityGroup4ADC4467443A9594816": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "api to opensearch",
+    "FromPort": 443,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "DataSearchSecurityGroupEFFA2DB4",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesapiServiceSecurityGroup67559850",
+      "GroupId"
+     ]
+    },
+    "ToPort": 443
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Search/SecurityGroup/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:443"
+   }
+  },
+  "DataSearchSecurityGroupfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A443498E3CDB": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "worker to opensearch",
+    "FromPort": 443,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "DataSearchSecurityGroupEFFA2DB4",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesworkerServiceSecurityGroup254C3E45",
+      "GroupId"
+     ]
+    },
+    "ToPort": 443
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Search/SecurityGroup/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:443"
+   }
+  },
+  "DataSearchMasterUserB2E3D50A": {
+   "Type": "AWS::SecretsManager::Secret",
+   "Properties": {
+    "GenerateSecretString": {
+     "ExcludeCharacters": "{}'\\*[]()`",
+     "GenerateStringKey": "password",
+     "SecretStringTemplate": "{\"username\":\"platform-admin\"}"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "object-search"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Search/MasterUser/Resource"
+   }
+  },
+  "DataSearchC7D96612": {
+   "Type": "AWS::OpenSearchService::Domain",
+   "Properties": {
+    "AdvancedSecurityOptions": {
+     "Enabled": true,
+     "InternalUserDatabaseEnabled": true,
+     "MasterUserOptions": {
+      "MasterUserName": "platform-admin",
+      "MasterUserPassword": {
+       "Fn::Join": [
+        "",
+        [
+         "{{resolve:secretsmanager:",
+         {
+          "Ref": "DataSearchMasterUserB2E3D50A"
+         },
+         ":SecretString:password::}}"
+        ]
+       ]
+      }
+     }
+    },
+    "ClusterConfig": {
+     "DedicatedMasterEnabled": false,
+     "InstanceCount": 1,
+     "InstanceType": "t3.small.search",
+     "MultiAZWithStandbyEnabled": false,
+     "ZoneAwarenessEnabled": false
+    },
+    "DomainEndpointOptions": {
+     "EnforceHTTPS": true,
+     "TLSSecurityPolicy": "Policy-Min-TLS-1-2-2019-07"
+    },
+    "EBSOptions": {
+     "EBSEnabled": true,
+     "VolumeSize": 30,
+     "VolumeType": "gp2"
+    },
+    "EncryptionAtRestOptions": {
+     "Enabled": true
+    },
+    "EngineVersion": "OpenSearch_2.11",
+    "LogPublishingOptions": {},
+    "NodeToNodeEncryptionOptions": {
+     "Enabled": true
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "object-search"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VPCOptions": {
+     "SecurityGroupIds": [
+      {
+       "Fn::GetAtt": [
+        "DataSearchSecurityGroupEFFA2DB4",
+        "GroupId"
+       ]
+      }
+     ],
+     "SubnetIds": [
+      {
+       "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+      }
+     ]
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Data/Search/Resource"
+   }
+  },
+  "AuthUserPool8115E87F": {
+   "Type": "AWS::Cognito::UserPool",
+   "Properties": {
+    "AccountRecoverySetting": {
+     "RecoveryMechanisms": [
+      {
+       "Name": "verified_email",
+       "Priority": 1
+      }
+     ]
+    },
+    "AdminCreateUserConfig": {
+     "AllowAdminCreateUserOnly": true
+    },
+    "AutoVerifiedAttributes": [
+     "email"
+    ],
+    "EmailVerificationMessage": "The verification code to your new account is {####}",
+    "EmailVerificationSubject": "Verify your new account",
+    "EnabledMfas": [
+     "SOFTWARE_TOKEN_MFA"
+    ],
+    "MfaConfiguration": "OPTIONAL",
+    "Policies": {
+     "PasswordPolicy": {
+      "MinimumLength": 12,
+      "RequireLowercase": true,
+      "RequireNumbers": true,
+      "RequireSymbols": true,
+      "RequireUppercase": true,
+      "TemporaryPasswordValidityDays": 7
+     }
+    },
+    "SmsVerificationMessage": "The verification code to your new account is {####}",
+    "UserPoolTags": {
+     "platform:component": "core",
+     "platform:customer": "dry-run-customer"
+    },
+    "UsernameAttributes": [
+     "email"
+    ],
+    "UsernameConfiguration": {
+     "CaseSensitive": false
+    },
+    "VerificationMessageTemplate": {
+     "DefaultEmailOption": "CONFIRM_WITH_CODE",
+     "EmailMessage": "The verification code to your new account is {####}",
+     "EmailSubject": "Verify your new account",
+     "SmsMessage": "The verification code to your new account is {####}"
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Auth/UserPool/Resource"
+   }
+  },
+  "AuthUserPoolWebClient147E4E38": {
+   "Type": "AWS::Cognito::UserPoolClient",
+   "Properties": {
+    "AccessTokenValidity": 15,
+    "AllowedOAuthFlows": [
+     "code"
+    ],
+    "AllowedOAuthFlowsUserPoolClient": true,
+    "AllowedOAuthScopes": [
+     "openid",
+     "email",
+     "profile"
+    ],
+    "CallbackURLs": [
+     "https://dry-run.local/callback"
+    ],
+    "ExplicitAuthFlows": [
+     "ALLOW_USER_SRP_AUTH",
+     "ALLOW_REFRESH_TOKEN_AUTH"
+    ],
+    "GenerateSecret": false,
+    "IdTokenValidity": 15,
+    "LogoutURLs": [
+     "https://dry-run.local/login"
+    ],
+    "PreventUserExistenceErrors": "ENABLED",
+    "RefreshTokenValidity": 43200,
+    "SupportedIdentityProviders": [
+     "COGNITO"
+    ],
+    "TokenValidityUnits": {
+     "AccessToken": "minutes",
+     "IdToken": "minutes",
+     "RefreshToken": "minutes"
+    },
+    "UserPoolId": {
+     "Ref": "AuthUserPool8115E87F"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Auth/UserPool/WebClient/Resource"
+   }
+  },
+  "AuthUserPoolHostedUiAF35A5C3": {
+   "Type": "AWS::Cognito::UserPoolDomain",
+   "Properties": {
+    "Domain": "platform-dry-run-customer",
+    "UserPoolId": {
+     "Ref": "AuthUserPool8115E87F"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Auth/UserPool/HostedUi/Resource"
+   }
+  },
+  "ServicesClusterFAAA2B60": {
+   "Type": "AWS::ECS::Cluster",
+   "Properties": {
+    "ClusterSettings": [
+     {
+      "Name": "containerInsights",
+      "Value": "enabled"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Cluster/Resource"
+   }
+  },
+  "ServicesLogs43B4E769": {
+   "Type": "AWS::Logs::LogGroup",
+   "Properties": {
+    "RetentionInDays": 30,
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Logs/Resource"
+   }
+  },
+  "ServicesApiTaskRoleF7B4AF36": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "Platform API task role",
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/ApiTaskRole/Resource"
+   }
+  },
+  "ServicesApiTaskRoleDefaultPolicyC87C16ED": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:Abort*",
+        "s3:DeleteObject*",
+        "s3:GetBucket*",
+        "s3:GetObject*",
+        "s3:List*",
+        "s3:PutObject",
+        "s3:PutObjectLegalHold",
+        "s3:PutObjectRetention",
+        "s3:PutObjectTagging",
+        "s3:PutObjectVersionTagging"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "DataDataBucketA7E8509A",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "DataDataBucketA7E8509A",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "DataDataKeyCDD1A924",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Ref": "DataAppDbSecretA34DDACB"
+       }
+      },
+      {
+       "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:TagResource"
+       ],
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:*:*:secret:platform/connections/*"
+      },
+      {
+       "Action": [
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminResetUserPassword"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "AuthUserPool8115E87F",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ServicesApiTaskRoleDefaultPolicyC87C16ED",
+    "Roles": [
+     {
+      "Ref": "ServicesApiTaskRoleF7B4AF36"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/ApiTaskRole/DefaultPolicy/Resource"
+   }
+  },
+  "ServicesWorkerTaskRole15DE1B06": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "Platform worker task role - deliberately narrower than API (no Cognito)",
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/WorkerTaskRole/Resource"
+   }
+  },
+  "ServicesWorkerTaskRoleDefaultPolicy0983F570": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:Abort*",
+        "s3:DeleteObject*",
+        "s3:GetBucket*",
+        "s3:GetObject*",
+        "s3:List*",
+        "s3:PutObject",
+        "s3:PutObjectLegalHold",
+        "s3:PutObjectRetention",
+        "s3:PutObjectTagging",
+        "s3:PutObjectVersionTagging"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "DataDataBucketA7E8509A",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "DataDataBucketA7E8509A",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey*",
+        "kms:ReEncrypt*"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "DataDataKeyCDD1A924",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Ref": "DataAppDbSecretA34DDACB"
+       }
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:*:*:secret:platform/connections/*"
+      },
+      {
+       "Action": [
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults",
+        "athena:StartQueryExecution",
+        "athena:StopQueryExecution"
+       ],
+       "Effect": "Allow",
+       "Resource": "arn:aws:athena:*:*:workgroup/platform"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ServicesWorkerTaskRoleDefaultPolicy0983F570",
+    "Roles": [
+     {
+      "Ref": "ServicesWorkerTaskRole15DE1B06"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/WorkerTaskRole/DefaultPolicy/Resource"
+   }
+  },
+  "ServicesWebTaskRole8E6B2CE3": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "Platform web task role - no data permissions",
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/WebTaskRole/Resource"
+   }
+  },
+  "ServicesapiTaskDefD92A9D11": {
+   "Type": "AWS::ECS::TaskDefinition",
+   "Properties": {
+    "ContainerDefinitions": [
+     {
+      "Environment": [
+       {
+        "Name": "REDIS_URL",
+        "Value": {
+         "Fn::Join": [
+          "",
+          [
+           "rediss://",
+           {
+            "Fn::GetAtt": [
+             "DataRedisAA90275E",
+             "PrimaryEndPoint.Address"
+            ]
+           },
+           ":6379/0"
+          ]
+         ]
+        }
+       },
+       {
+        "Name": "OPENSEARCH_ENDPOINT",
+        "Value": {
+         "Fn::Join": [
+          "",
+          [
+           "https://",
+           {
+            "Fn::GetAtt": [
+             "DataSearchC7D96612",
+             "DomainEndpoint"
+            ]
+           }
+          ]
+         ]
+        }
+       },
+       {
+        "Name": "S3_DATA_BUCKET",
+        "Value": {
+         "Ref": "DataDataBucketA7E8509A"
+        }
+       },
+       {
+        "Name": "COGNITO_USER_POOL_ID",
+        "Value": {
+         "Ref": "AuthUserPool8115E87F"
+        }
+       },
+       {
+        "Name": "COGNITO_CLIENT_ID",
+        "Value": {
+         "Ref": "AuthUserPoolWebClient147E4E38"
+        }
+       },
+       {
+        "Name": "PLATFORM_VERSION",
+        "Value": "v1"
+       }
+      ],
+      "Essential": true,
+      "Image": "295435085030.dkr.ecr.eu-north-1.amazonaws.com/platform-api:v1",
+      "LogConfiguration": {
+       "LogDriver": "awslogs",
+       "Options": {
+        "awslogs-group": {
+         "Ref": "ServicesLogs43B4E769"
+        },
+        "awslogs-stream-prefix": "api",
+        "awslogs-region": "eu-north-1"
+       }
+      },
+      "Name": "api",
+      "PortMappings": [
+       {
+        "ContainerPort": 8000,
+        "Protocol": "tcp"
+       }
+      ],
+      "Secrets": [
+       {
+        "Name": "DATABASE_CREDENTIALS",
+        "ValueFrom": {
+         "Ref": "DataAppDbSecretA34DDACB"
+        }
+       }
+      ]
+     }
+    ],
+    "Cpu": "512",
+    "ExecutionRoleArn": {
+     "Fn::GetAtt": [
+      "ServicesapiTaskDefExecutionRole2ED35D1D",
+      "Arn"
+     ]
+    },
+    "Family": "PlatformStackServicesapiTaskDef7ACFE143",
+    "Memory": "1024",
+    "NetworkMode": "awsvpc",
+    "RequiresCompatibilities": [
+     "FARGATE"
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TaskRoleArn": {
+     "Fn::GetAtt": [
+      "ServicesApiTaskRoleF7B4AF36",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/apiTaskDef/Resource"
+   }
+  },
+  "ServicesapiTaskDefExecutionRole2ED35D1D": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/apiTaskDef/ExecutionRole/Resource"
+   }
+  },
+  "ServicesapiTaskDefExecutionRoleDefaultPolicy305D370B": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "ServicesLogs43B4E769",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Ref": "DataAppDbSecretA34DDACB"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ServicesapiTaskDefExecutionRoleDefaultPolicy305D370B",
+    "Roles": [
+     {
+      "Ref": "ServicesapiTaskDefExecutionRole2ED35D1D"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/apiTaskDef/ExecutionRole/DefaultPolicy/Resource"
+   }
+  },
+  "ServicesapiService4BF0B34F": {
+   "Type": "AWS::ECS::Service",
+   "Properties": {
+    "Cluster": {
+     "Ref": "ServicesClusterFAAA2B60"
+    },
+    "DeploymentConfiguration": {
+     "DeploymentCircuitBreaker": {
+      "Enable": true,
+      "Rollback": true
+     },
+     "MaximumPercent": 200,
+     "MinimumHealthyPercent": 100
+    },
+    "DeploymentController": {
+     "Type": "ECS"
+    },
+    "DesiredCount": 1,
+    "EnableECSManagedTags": false,
+    "HealthCheckGracePeriodSeconds": 60,
+    "LaunchType": "FARGATE",
+    "LoadBalancers": [
+     {
+      "ContainerName": "api",
+      "ContainerPort": 8000,
+      "TargetGroupArn": {
+       "Ref": "ServicesAlbHttpApiGroupEBAE83DE"
+      }
+     }
+    ],
+    "NetworkConfiguration": {
+     "AwsvpcConfiguration": {
+      "AssignPublicIp": "DISABLED",
+      "SecurityGroups": [
+       {
+        "Fn::GetAtt": [
+         "ServicesapiServiceSecurityGroup67559850",
+         "GroupId"
+        ]
+       }
+      ],
+      "Subnets": [
+       {
+        "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+       },
+       {
+        "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+       }
+      ]
+     }
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "app-server"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TaskDefinition": {
+     "Ref": "ServicesapiTaskDefD92A9D11"
+    }
+   },
+   "DependsOn": [
+    "ServicesAlbHttpApiRule4AAABB4A",
+    "ServicesApiTaskRoleDefaultPolicyC87C16ED",
+    "ServicesApiTaskRoleF7B4AF36"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/apiService/Service"
+   }
+  },
+  "ServicesapiServiceSecurityGroup67559850": {
+   "Type": "AWS::EC2::SecurityGroup",
+   "Properties": {
+    "GroupDescription": "PlatformStack/Services/apiService/SecurityGroup",
+    "SecurityGroupEgress": [
+     {
+      "CidrIp": "0.0.0.0/0",
+      "Description": "Allow all outbound traffic by default",
+      "IpProtocol": "-1"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "app-server"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "DependsOn": [
+    "ServicesApiTaskRoleDefaultPolicyC87C16ED",
+    "ServicesApiTaskRoleF7B4AF36"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/apiService/SecurityGroup/Resource"
+   }
+  },
+  "ServicesapiServiceSecurityGroupfromPlatformStackServicesAlbSecurityGroupF38E3EAC80009C5F0574": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "Load balancer to target",
+    "FromPort": 8000,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "ServicesapiServiceSecurityGroup67559850",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesAlbSecurityGroup90C3F600",
+      "GroupId"
+     ]
+    },
+    "ToPort": 8000
+   },
+   "DependsOn": [
+    "ServicesApiTaskRoleDefaultPolicyC87C16ED",
+    "ServicesApiTaskRoleF7B4AF36"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/apiService/SecurityGroup/from PlatformStackServicesAlbSecurityGroupF38E3EAC:8000"
+   }
+  },
+  "ServicesworkerTaskDef771E1D48": {
+   "Type": "AWS::ECS::TaskDefinition",
+   "Properties": {
+    "ContainerDefinitions": [
+     {
+      "Environment": [
+       {
+        "Name": "REDIS_URL",
+        "Value": {
+         "Fn::Join": [
+          "",
+          [
+           "rediss://",
+           {
+            "Fn::GetAtt": [
+             "DataRedisAA90275E",
+             "PrimaryEndPoint.Address"
+            ]
+           },
+           ":6379/0"
+          ]
+         ]
+        }
+       },
+       {
+        "Name": "OPENSEARCH_ENDPOINT",
+        "Value": {
+         "Fn::Join": [
+          "",
+          [
+           "https://",
+           {
+            "Fn::GetAtt": [
+             "DataSearchC7D96612",
+             "DomainEndpoint"
+            ]
+           }
+          ]
+         ]
+        }
+       },
+       {
+        "Name": "S3_DATA_BUCKET",
+        "Value": {
+         "Ref": "DataDataBucketA7E8509A"
+        }
+       },
+       {
+        "Name": "COGNITO_USER_POOL_ID",
+        "Value": {
+         "Ref": "AuthUserPool8115E87F"
+        }
+       },
+       {
+        "Name": "COGNITO_CLIENT_ID",
+        "Value": {
+         "Ref": "AuthUserPoolWebClient147E4E38"
+        }
+       },
+       {
+        "Name": "PLATFORM_VERSION",
+        "Value": "v1"
+       }
+      ],
+      "Essential": true,
+      "Image": "295435085030.dkr.ecr.eu-north-1.amazonaws.com/platform-worker:v1",
+      "LogConfiguration": {
+       "LogDriver": "awslogs",
+       "Options": {
+        "awslogs-group": {
+         "Ref": "ServicesLogs43B4E769"
+        },
+        "awslogs-stream-prefix": "worker",
+        "awslogs-region": "eu-north-1"
+       }
+      },
+      "Name": "worker",
+      "Secrets": [
+       {
+        "Name": "DATABASE_CREDENTIALS",
+        "ValueFrom": {
+         "Ref": "DataAppDbSecretA34DDACB"
+        }
+       }
+      ]
+     }
+    ],
+    "Cpu": "1024",
+    "ExecutionRoleArn": {
+     "Fn::GetAtt": [
+      "ServicesworkerTaskDefExecutionRoleC5D764EB",
+      "Arn"
+     ]
+    },
+    "Family": "PlatformStackServicesworkerTaskDef5C40DB4C",
+    "Memory": "2048",
+    "NetworkMode": "awsvpc",
+    "RequiresCompatibilities": [
+     "FARGATE"
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TaskRoleArn": {
+     "Fn::GetAtt": [
+      "ServicesWorkerTaskRole15DE1B06",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/workerTaskDef/Resource"
+   }
+  },
+  "ServicesworkerTaskDefExecutionRoleC5D764EB": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/workerTaskDef/ExecutionRole/Resource"
+   }
+  },
+  "ServicesworkerTaskDefExecutionRoleDefaultPolicyAC95A40D": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "ServicesLogs43B4E769",
+         "Arn"
+        ]
+       }
+      },
+      {
+       "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Ref": "DataAppDbSecretA34DDACB"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ServicesworkerTaskDefExecutionRoleDefaultPolicyAC95A40D",
+    "Roles": [
+     {
+      "Ref": "ServicesworkerTaskDefExecutionRoleC5D764EB"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/workerTaskDef/ExecutionRole/DefaultPolicy/Resource"
+   }
+  },
+  "ServicesworkerServiceD29EA6D0": {
+   "Type": "AWS::ECS::Service",
+   "Properties": {
+    "Cluster": {
+     "Ref": "ServicesClusterFAAA2B60"
+    },
+    "DeploymentConfiguration": {
+     "DeploymentCircuitBreaker": {
+      "Enable": true,
+      "Rollback": true
+     },
+     "MaximumPercent": 200,
+     "MinimumHealthyPercent": 100
+    },
+    "DeploymentController": {
+     "Type": "ECS"
+    },
+    "DesiredCount": 1,
+    "EnableECSManagedTags": false,
+    "LaunchType": "FARGATE",
+    "NetworkConfiguration": {
+     "AwsvpcConfiguration": {
+      "AssignPublicIp": "DISABLED",
+      "SecurityGroups": [
+       {
+        "Fn::GetAtt": [
+         "ServicesworkerServiceSecurityGroup254C3E45",
+         "GroupId"
+        ]
+       }
+      ],
+      "Subnets": [
+       {
+        "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+       },
+       {
+        "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+       }
+      ]
+     }
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "pipeline-runs"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TaskDefinition": {
+     "Ref": "ServicesworkerTaskDef771E1D48"
+    }
+   },
+   "DependsOn": [
+    "ServicesWorkerTaskRoleDefaultPolicy0983F570",
+    "ServicesWorkerTaskRole15DE1B06"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/workerService/Service"
+   }
+  },
+  "ServicesworkerServiceSecurityGroup254C3E45": {
+   "Type": "AWS::EC2::SecurityGroup",
+   "Properties": {
+    "GroupDescription": "PlatformStack/Services/workerService/SecurityGroup",
+    "SecurityGroupEgress": [
+     {
+      "CidrIp": "0.0.0.0/0",
+      "Description": "Allow all outbound traffic by default",
+      "IpProtocol": "-1"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "pipeline-runs"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "DependsOn": [
+    "ServicesWorkerTaskRoleDefaultPolicy0983F570",
+    "ServicesWorkerTaskRole15DE1B06"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/workerService/SecurityGroup/Resource"
+   }
+  },
+  "ServiceswebTaskDef2BEAA581": {
+   "Type": "AWS::ECS::TaskDefinition",
+   "Properties": {
+    "ContainerDefinitions": [
+     {
+      "Environment": [
+       {
+        "Name": "REDIS_URL",
+        "Value": {
+         "Fn::Join": [
+          "",
+          [
+           "rediss://",
+           {
+            "Fn::GetAtt": [
+             "DataRedisAA90275E",
+             "PrimaryEndPoint.Address"
+            ]
+           },
+           ":6379/0"
+          ]
+         ]
+        }
+       },
+       {
+        "Name": "OPENSEARCH_ENDPOINT",
+        "Value": {
+         "Fn::Join": [
+          "",
+          [
+           "https://",
+           {
+            "Fn::GetAtt": [
+             "DataSearchC7D96612",
+             "DomainEndpoint"
+            ]
+           }
+          ]
+         ]
+        }
+       },
+       {
+        "Name": "S3_DATA_BUCKET",
+        "Value": {
+         "Ref": "DataDataBucketA7E8509A"
+        }
+       },
+       {
+        "Name": "COGNITO_USER_POOL_ID",
+        "Value": {
+         "Ref": "AuthUserPool8115E87F"
+        }
+       },
+       {
+        "Name": "COGNITO_CLIENT_ID",
+        "Value": {
+         "Ref": "AuthUserPoolWebClient147E4E38"
+        }
+       },
+       {
+        "Name": "PLATFORM_VERSION",
+        "Value": "v1"
+       }
+      ],
+      "Essential": true,
+      "Image": "295435085030.dkr.ecr.eu-north-1.amazonaws.com/platform-web:v1",
+      "LogConfiguration": {
+       "LogDriver": "awslogs",
+       "Options": {
+        "awslogs-group": {
+         "Ref": "ServicesLogs43B4E769"
+        },
+        "awslogs-stream-prefix": "web",
+        "awslogs-region": "eu-north-1"
+       }
+      },
+      "Name": "web",
+      "PortMappings": [
+       {
+        "ContainerPort": 3000,
+        "Protocol": "tcp"
+       }
+      ]
+     }
+    ],
+    "Cpu": "256",
+    "ExecutionRoleArn": {
+     "Fn::GetAtt": [
+      "ServiceswebTaskDefExecutionRole14D1F9F3",
+      "Arn"
+     ]
+    },
+    "Family": "PlatformStackServiceswebTaskDefCD023732",
+    "Memory": "512",
+    "NetworkMode": "awsvpc",
+    "RequiresCompatibilities": [
+     "FARGATE"
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TaskRoleArn": {
+     "Fn::GetAtt": [
+      "ServicesWebTaskRole8E6B2CE3",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/webTaskDef/Resource"
+   }
+  },
+  "ServiceswebTaskDefExecutionRole14D1F9F3": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "ecs-tasks.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/webTaskDef/ExecutionRole/Resource"
+   }
+  },
+  "ServiceswebTaskDefExecutionRoleDefaultPolicy94599A2E": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "ServicesLogs43B4E769",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ServiceswebTaskDefExecutionRoleDefaultPolicy94599A2E",
+    "Roles": [
+     {
+      "Ref": "ServiceswebTaskDefExecutionRole14D1F9F3"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/webTaskDef/ExecutionRole/DefaultPolicy/Resource"
+   }
+  },
+  "ServiceswebServiceBB95EE90": {
+   "Type": "AWS::ECS::Service",
+   "Properties": {
+    "Cluster": {
+     "Ref": "ServicesClusterFAAA2B60"
+    },
+    "DeploymentConfiguration": {
+     "DeploymentCircuitBreaker": {
+      "Enable": true,
+      "Rollback": true
+     },
+     "MaximumPercent": 200,
+     "MinimumHealthyPercent": 100
+    },
+    "DeploymentController": {
+     "Type": "ECS"
+    },
+    "DesiredCount": 1,
+    "EnableECSManagedTags": false,
+    "HealthCheckGracePeriodSeconds": 60,
+    "LaunchType": "FARGATE",
+    "LoadBalancers": [
+     {
+      "ContainerName": "web",
+      "ContainerPort": 3000,
+      "TargetGroupArn": {
+       "Ref": "ServicesAlbHttpWebGroupF8408A6D"
+      }
+     }
+    ],
+    "NetworkConfiguration": {
+     "AwsvpcConfiguration": {
+      "AssignPublicIp": "DISABLED",
+      "SecurityGroups": [
+       {
+        "Fn::GetAtt": [
+         "ServiceswebServiceSecurityGroupA5389644",
+         "GroupId"
+        ]
+       }
+      ],
+      "Subnets": [
+       {
+        "Ref": "VpcprivateSubnet1SubnetCEAD3716"
+       },
+       {
+        "Ref": "VpcprivateSubnet2Subnet2DE7549C"
+       }
+      ]
+     }
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TaskDefinition": {
+     "Ref": "ServiceswebTaskDef2BEAA581"
+    }
+   },
+   "DependsOn": [
+    "ServicesAlbHttpApiGroupEBAE83DE",
+    "ServicesAlbHttpApiRule4AAABB4A",
+    "ServicesAlbHttp0B51B3FC",
+    "ServicesAlbHttpWebGroupF8408A6D",
+    "ServicesWebTaskRole8E6B2CE3"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/webService/Service"
+   }
+  },
+  "ServiceswebServiceSecurityGroupA5389644": {
+   "Type": "AWS::EC2::SecurityGroup",
+   "Properties": {
+    "GroupDescription": "PlatformStack/Services/webService/SecurityGroup",
+    "SecurityGroupEgress": [
+     {
+      "CidrIp": "0.0.0.0/0",
+      "Description": "Allow all outbound traffic by default",
+      "IpProtocol": "-1"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "DependsOn": [
+    "ServicesWebTaskRole8E6B2CE3"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/webService/SecurityGroup/Resource"
+   }
+  },
+  "ServiceswebServiceSecurityGroupfromPlatformStackServicesAlbSecurityGroupF38E3EAC30000D837630": {
+   "Type": "AWS::EC2::SecurityGroupIngress",
+   "Properties": {
+    "Description": "Load balancer to target",
+    "FromPort": 3000,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "ServiceswebServiceSecurityGroupA5389644",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "SourceSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesAlbSecurityGroup90C3F600",
+      "GroupId"
+     ]
+    },
+    "ToPort": 3000
+   },
+   "DependsOn": [
+    "ServicesWebTaskRole8E6B2CE3"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/webService/SecurityGroup/from PlatformStackServicesAlbSecurityGroupF38E3EAC:3000"
+   }
+  },
+  "ServicesAlbEE1BF5FE": {
+   "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+   "Properties": {
+    "LoadBalancerAttributes": [
+     {
+      "Key": "deletion_protection.enabled",
+      "Value": "false"
+     }
+    ],
+    "Scheme": "internet-facing",
+    "SecurityGroups": [
+     {
+      "Fn::GetAtt": [
+       "ServicesAlbSecurityGroup90C3F600",
+       "GroupId"
+      ]
+     }
+    ],
+    "Subnets": [
+     {
+      "Ref": "VpcpublicSubnet1Subnet2BB74ED7"
+     },
+     {
+      "Ref": "VpcpublicSubnet2SubnetE34B022A"
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "Type": "application"
+   },
+   "DependsOn": [
+    "VpcpublicSubnet1DefaultRouteB88F9E93",
+    "VpcpublicSubnet1RouteTableAssociation4E83B6E4",
+    "VpcpublicSubnet2DefaultRoute732F0BEB",
+    "VpcpublicSubnet2RouteTableAssociationCCE257FF"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/Resource"
+   }
+  },
+  "ServicesAlbSecurityGroup90C3F600": {
+   "Type": "AWS::EC2::SecurityGroup",
+   "Properties": {
+    "GroupDescription": "Automatically created Security Group for ELB PlatformStackServicesAlbCD7AF525",
+    "SecurityGroupIngress": [
+     {
+      "CidrIp": "0.0.0.0/0",
+      "Description": "Allow from anyone on port 80",
+      "FromPort": 80,
+      "IpProtocol": "tcp",
+      "ToPort": 80
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/SecurityGroup/Resource"
+   }
+  },
+  "ServicesAlbSecurityGrouptoPlatformStackServiceswebServiceSecurityGroupA8948657300060444816": {
+   "Type": "AWS::EC2::SecurityGroupEgress",
+   "Properties": {
+    "Description": "Load balancer to target",
+    "DestinationSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServiceswebServiceSecurityGroupA5389644",
+      "GroupId"
+     ]
+    },
+    "FromPort": 3000,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "ServicesAlbSecurityGroup90C3F600",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "ToPort": 3000
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/SecurityGroup/to PlatformStackServiceswebServiceSecurityGroupA8948657:3000"
+   }
+  },
+  "ServicesAlbSecurityGrouptoPlatformStackServicesapiServiceSecurityGroup4ADC44678000C99B9007": {
+   "Type": "AWS::EC2::SecurityGroupEgress",
+   "Properties": {
+    "Description": "Load balancer to target",
+    "DestinationSecurityGroupId": {
+     "Fn::GetAtt": [
+      "ServicesapiServiceSecurityGroup67559850",
+      "GroupId"
+     ]
+    },
+    "FromPort": 8000,
+    "GroupId": {
+     "Fn::GetAtt": [
+      "ServicesAlbSecurityGroup90C3F600",
+      "GroupId"
+     ]
+    },
+    "IpProtocol": "tcp",
+    "ToPort": 8000
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/SecurityGroup/to PlatformStackServicesapiServiceSecurityGroup4ADC4467:8000"
+   }
+  },
+  "ServicesAlbHttp0B51B3FC": {
+   "Type": "AWS::ElasticLoadBalancingV2::Listener",
+   "Properties": {
+    "DefaultActions": [
+     {
+      "TargetGroupArn": {
+       "Ref": "ServicesAlbHttpWebGroupF8408A6D"
+      },
+      "Type": "forward"
+     }
+    ],
+    "LoadBalancerArn": {
+     "Ref": "ServicesAlbEE1BF5FE"
+    },
+    "Port": 80,
+    "Protocol": "HTTP"
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/Http/Resource"
+   }
+  },
+  "ServicesAlbHttpWebGroupF8408A6D": {
+   "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+   "Properties": {
+    "HealthCheckPath": "/",
+    "Matcher": {
+     "HttpCode": "200-399"
+    },
+    "Port": 3000,
+    "Protocol": "HTTP",
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TargetGroupAttributes": [
+     {
+      "Key": "stickiness.enabled",
+      "Value": "false"
+     }
+    ],
+    "TargetType": "ip",
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/Http/WebGroup/Resource"
+   }
+  },
+  "ServicesAlbHttpApiGroupEBAE83DE": {
+   "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+   "Properties": {
+    "HealthCheckPath": "/api/health",
+    "Matcher": {
+     "HttpCode": "200"
+    },
+    "Port": 8000,
+    "Protocol": "HTTP",
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "TargetGroupAttributes": [
+     {
+      "Key": "deregistration_delay.timeout_seconds",
+      "Value": "15"
+     },
+     {
+      "Key": "stickiness.enabled",
+      "Value": "false"
+     }
+    ],
+    "TargetType": "ip",
+    "VpcId": {
+     "Ref": "Vpc8378EB38"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/Http/ApiGroup/Resource"
+   }
+  },
+  "ServicesAlbHttpApiRule4AAABB4A": {
+   "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+   "Properties": {
+    "Actions": [
+     {
+      "TargetGroupArn": {
+       "Ref": "ServicesAlbHttpApiGroupEBAE83DE"
+      },
+      "Type": "forward"
+     }
+    ],
+    "Conditions": [
+     {
+      "Field": "path-pattern",
+      "PathPatternConfig": {
+       "Values": [
+        "/api/*",
+        "/graphql"
+       ]
+      }
+     }
+    ],
+    "ListenerArn": {
+     "Ref": "ServicesAlbHttp0B51B3FC"
+    },
+    "Priority": 10
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Services/Alb/Http/ApiRule/Resource"
+   }
+  },
+  "Waf": {
+   "Type": "AWS::WAFv2::WebACL",
+   "Properties": {
+    "DefaultAction": {
+     "Allow": {}
+    },
+    "Rules": [
+     {
+      "Name": "AWSManagedCommonRules",
+      "OverrideAction": {
+       "None": {}
+      },
+      "Priority": 0,
+      "Statement": {
+       "ManagedRuleGroupStatement": {
+        "Name": "AWSManagedRulesCommonRuleSet",
+        "VendorName": "AWS"
+       }
+      },
+      "VisibilityConfig": {
+       "CloudWatchMetricsEnabled": true,
+       "MetricName": "common-rules",
+       "SampledRequestsEnabled": true
+      }
+     },
+     {
+      "Name": "AWSManagedKnownBadInputs",
+      "OverrideAction": {
+       "None": {}
+      },
+      "Priority": 1,
+      "Statement": {
+       "ManagedRuleGroupStatement": {
+        "Name": "AWSManagedRulesKnownBadInputsRuleSet",
+        "VendorName": "AWS"
+       }
+      },
+      "VisibilityConfig": {
+       "CloudWatchMetricsEnabled": true,
+       "MetricName": "bad-inputs",
+       "SampledRequestsEnabled": true
+      }
+     }
+    ],
+    "Scope": "REGIONAL",
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ],
+    "VisibilityConfig": {
+     "CloudWatchMetricsEnabled": true,
+     "MetricName": "platform-waf",
+     "SampledRequestsEnabled": true
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Waf"
+   }
+  },
+  "WafAssoc": {
+   "Type": "AWS::WAFv2::WebACLAssociation",
+   "Properties": {
+    "ResourceArn": {
+     "Ref": "ServicesAlbEE1BF5FE"
+    },
+    "WebACLArn": {
+     "Fn::GetAtt": [
+      "Waf",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/WafAssoc"
+   }
+  },
+  "Cdn9963B1AD": {
+   "Type": "AWS::CloudFront::Distribution",
+   "Properties": {
+    "DistributionConfig": {
+     "DefaultCacheBehavior": {
+      "AllowedMethods": [
+       "GET",
+       "HEAD",
+       "OPTIONS",
+       "PUT",
+       "PATCH",
+       "POST",
+       "DELETE"
+      ],
+      "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+      "Compress": true,
+      "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+      "TargetOriginId": "PlatformStackCdnOrigin14938D8CB",
+      "ViewerProtocolPolicy": "redirect-to-https"
+     },
+     "Enabled": true,
+     "HttpVersion": "http2",
+     "IPV6Enabled": true,
+     "Origins": [
+      {
+       "CustomOriginConfig": {
+        "OriginProtocolPolicy": "http-only",
+        "OriginSSLProtocols": [
+         "TLSv1.2"
+        ]
+       },
+       "DomainName": {
+        "Fn::GetAtt": [
+         "ServicesAlbEE1BF5FE",
+         "DNSName"
+        ]
+       },
+       "Id": "PlatformStackCdnOrigin14938D8CB"
+      }
+     ]
+    },
+    "Tags": [
+     {
+      "Key": "platform:component",
+      "Value": "core"
+     },
+     {
+      "Key": "platform:customer",
+      "Value": "dry-run-customer"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/Cdn/Resource"
+   }
+  },
+  "CDKMetadata": {
+   "Type": "AWS::CDK::Metadata",
+   "Properties": {
+    "Analytics": "v2:deflate64:H4sIAAAAAAAA/31Uy27bMBD8ltxpNnGR3m0rDYwarSC76bGgqLXCWCIFPmwYAv+9K1IvJ0FPOztcrWeHSy/pw+M9vb9jF7PgxWlRiZy2e8v4iSD1twW+pO1Lw8nmKF/SDUldXgm+d7kE23ETypSzcGB5BRM/cStjFBfMCiXH4g48bdMu/GT2mVm4sCtJtTgjnBpvpQWNeCiISvpsZVHraw3Skj1wp4W9PmvlmqDhv8RWlhqM+cA/BdoTXilXWM1ERdtDF7rKADwxX2m7dvwUBfYohlShP9eJjrknpWO6KJy9UjxKwAK3SpNTbWj7A0I9Bk90gUTCLMuZga00lkkOJJoxzpGs58RQjVPoKChZD1+i1MCamklWgqZtHLcrjOHAdAl2ZuNY8OEk0p5AxYwVHGmI/W7VZdDgyOGqA+eJakAaYJq/GtBnwfGzRNVMhFWICP1WpRRW0fY3FqVKBb9HPIBNJXqR75ghnRrfMiibo7Wbyhlcp+58gN9xTtatqTklcBQool/S94ySFhuBnnH9t/s4VvQuQE8qVeLv7VQ5GjNgTwSraZup+FRCnNZmWJje5UqxImcVXqaQ5Rkf46oZ7d3h2TqcxYlu8nmdwEFlXzPg2Xm86VHnPP2kS+ai7nnuyYUdO3XI/4F8tdmREc2efv+qjhqtxB3ABlrkbvB7nntPMjDK6ejqL2cbF/9metYTqQqgb+bLeflIv9GHuzcjxEI7aUUNNIvxH1xoyV/fBAAA"
+   },
+   "Metadata": {
+    "aws:cdk:path": "PlatformStack/CDKMetadata/Default"
+   }
+  }
+ },
+ "Outputs": {
+  "PlatformDomain": {
+   "Value": {
+    "Fn::GetAtt": [
+     "Cdn9963B1AD",
+     "DomainName"
+    ]
+   }
+  },
+  "UserPoolId": {
+   "Value": {
+    "Ref": "AuthUserPool8115E87F"
+   }
+  },
+  "UserPoolClientId": {
+   "Value": {
+    "Ref": "AuthUserPoolWebClient147E4E38"
+   }
+  },
+  "DataBucketName": {
+   "Value": {
+    "Ref": "DataDataBucketA7E8509A"
+   }
+  },
+  "DbSecretArn": {
+   "Value": {
+    "Ref": "DataPostgresSecretAttachment37869696"
+   }
+  },
+  "AppDbSecretArn": {
+   "Value": {
+    "Ref": "DataAppDbSecretA34DDACB"
+   }
+  },
+  "ClusterName": {
+   "Value": {
+    "Ref": "ServicesClusterFAAA2B60"
+   }
+  },
+  "ApiServiceName": {
+   "Value": {
+    "Fn::GetAtt": [
+     "ServicesapiService4BF0B34F",
+     "Name"
+    ]
+   }
+  },
+  "WorkerServiceName": {
+   "Value": {
+    "Fn::GetAtt": [
+     "ServicesworkerServiceD29EA6D0",
+     "Name"
+    ]
+   }
+  },
+  "WebServiceName": {
+   "Value": {
+    "Fn::GetAtt": [
+     "ServiceswebServiceBB95EE90",
+     "Name"
+    ]
+   }
+  }
+ },
+ "Parameters": {
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

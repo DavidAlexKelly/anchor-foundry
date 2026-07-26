@@ -7,7 +7,7 @@ Full-snapshot sync of one source table into the datasets layer:
                                     dataset row (origin='sync') + version
 
 First sync of a table creates the dataset; later syncs of the same table via
-the same connection append a version and roll current_version forward — the
+the same connection append a version and roll current_version forward - the
 dataset_versions machinery from the upload path, exercised for real.
 
 Incremental mode: pulls only rows where the connection's configured cursor
@@ -16,7 +16,7 @@ existing dataset by primary key (dataset_engine.merge_incremental) rather
 than replacing it outright. Progress (sync_last_cursor_value) and the
 schedule (sync_next_run_at) are the same columns the worker's
 scheduled_connection_syncs job advances on its own cadence (migration
-0014) — this module's run_incremental_sync is what a manual "run now"
+0014) - this module's run_incremental_sync is what a manual "run now"
 click uses; the worker runs the identical steps on a timer.
 
 Scope in this slice (each flagged where it bites):
@@ -28,7 +28,7 @@ Scope in this slice (each flagged where it bites):
     path, not a 30-minute request.
 
 Identifier safety: source schema/table names must match a strict pattern and
-are then double-quoted — user input never reaches SQL unquoted.
+are then double-quoted - user input never reaches SQL unquoted.
 """
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def snapshot_source_table(
                         if written > MAX_SYNC_BYTES:
                             cap_mb = MAX_SYNC_BYTES // (1024 * 1024)
                             raise SyncError(
-                                f"table exceeds the {cap_mb} MB interactive sync limit — "
+                                f"table exceeds the {cap_mb} MB interactive sync limit - "
                                 "scheduled worker syncs handle larger tables"
                             )
                         out.write(bytes(chunk))
@@ -133,7 +133,7 @@ def max_cursor_value(
     source_table: str,
     cursor_column: str,
 ) -> str | None:
-    """The highest cursor value currently in the source table — becomes the
+    """The highest cursor value currently in the source table - becomes the
     connection's new sync_last_cursor_value once the sync succeeds."""
     import psycopg
     from psycopg import sql
@@ -236,7 +236,7 @@ async def run_full_sync(
         version = 1
         created = True
     else:
-        # Re-sync: the slug must belong to this connection's synced dataset —
+        # Re-sync: the slug must belong to this connection's synced dataset -
         # a name collision with an upload or another connection is a conflict,
         # not an overwrite.
         if existing["origin"] != "sync" or str(existing["connection_id"]) != str(
@@ -332,7 +332,7 @@ async def run_incremental_sync(
             raise SyncError(str(exc)) from exc
 
         if new_row_count == 0 and existing_dataset_id is not None:
-            # Nothing changed since the last cursor value — the steady state
+            # Nothing changed since the last cursor value - the steady state
             # for a cron-scheduled sync between source writes. Skip the merge
             # outright: an empty CSV (header only) gives DuckDB nothing to
             # infer column types from, so it falls back to VARCHAR for every

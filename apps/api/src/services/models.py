@@ -1,10 +1,10 @@
-"""Models service (spec §"Models — Optional Transform Layer", §16 models /
+"""Models service (spec §"Models - Optional Transform Layer", §16 models /
 model_inputs / model_runs, §17 "Models: CRUD, code editor, trigger run, run
 history, cancel").
 
 Scope, each deviation flagged:
   * language='sql' runs execute inline in the request (the same sandboxed
-    DuckDB path as queries) — an interactive result the caller waits for.
+    DuckDB path as queries) - an interactive result the caller waits for.
     language='python' needs a real process boundary DuckDB can't give it
     (see apps/worker's python_sandbox.py), so a python run is left
     'queued' by open_run() and the worker's scheduled_model_runs job picks
@@ -14,7 +14,7 @@ Scope, each deviation flagged:
     (lib/cron.py) when the schedule is set or changed; the worker
     recomputes it after every firing, since it's the process that actually
     observes "this just fired." trigger_mode='upstream' and the cancel
-    endpoint remain out of scope — a synchronous SQL run has no meaningful
+    endpoint remain out of scope - a synchronous SQL run has no meaningful
     cancel, and 'upstream' triggers belong with a real dependency graph,
     neither built here.
   * Run logs live in error_message/rows_produced; log_s3_key is written by
@@ -23,7 +23,7 @@ Scope, each deviation flagged:
 Output semantics mirror connection sync: first successful run creates the
 output dataset (origin='model_output', slug from the model name) and links
 models.output_dataset_id; later runs append a dataset version and roll
-current_version — model_runs.output_version points at the exact version each
+current_version - model_runs.output_version points at the exact version each
 run produced, which is what makes run history auditable against data.
 
 Lineage (§"Models" lineage): model_inputs (dataset → model) plus
@@ -232,7 +232,7 @@ async def delete(conn: AsyncConnection, project_id: UUID, model_id: UUID) -> Non
 async def open_run(
     conn: AsyncConnection, model_id: UUID, triggered_by: UUID
 ) -> UUID:
-    """SQL runs only — the route executes the transform immediately after
+    """SQL runs only - the route executes the transform immediately after
     this call, so 'running'/started_at=now() is accurate the instant it's
     written. Python runs use open_queued_run instead: nothing executes them
     until the worker's poll picks the row up."""
@@ -253,7 +253,7 @@ async def open_queued_run(
     conn: AsyncConnection, model_id: UUID, triggered_by: UUID
 ) -> UUID:
     """Python runs: left at the table's default status='queued' with no
-    started_at — that only gets set when the worker actually starts it."""
+    started_at - that only gets set when the worker actually starts it."""
     row = await fetch_one(
         conn,
         """
@@ -340,7 +340,7 @@ async def record_output(
         )
         if clash is not None:
             raise ConflictError(
-                f"a dataset named '{slug}' already exists — rename the model or that dataset"
+                f"a dataset named '{slug}' already exists - rename the model or that dataset"
             )
         parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
         storage.put(parquet_key, parquet_bytes)

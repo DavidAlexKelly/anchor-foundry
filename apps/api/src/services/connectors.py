@@ -2,7 +2,7 @@
 
 Each connector declares its non-secret config model, its secret fields, and
 implements test/discover against the live source. The registry holds only
-connectors that genuinely work in this build — PostgreSQL today. Additional
+connectors that genuinely work in this build - PostgreSQL today. Additional
 source types from the spec's list (MySQL, Snowflake, S3, Salesforce, …) are
 additive registry entries with their own drivers; they are deliberately not
 listed until implemented, so the UI can never offer a connector that fails.

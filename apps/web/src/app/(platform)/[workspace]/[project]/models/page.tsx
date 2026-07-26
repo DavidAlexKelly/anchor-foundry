@@ -292,7 +292,7 @@ function ModelRow({
         </div>
         {result && result.status === "queued" && (
           <p className="login-note" style={{ margin: "6px 0 0" }}>
-            Queued — Python models run on the background worker. Check back for the result.
+            Queued - Python models run on the background worker. Check back for the result.
           </p>
         )}
         {result && result.status !== "queued" && !result.ok && (
@@ -392,7 +392,7 @@ export default function ModelsPage() {
         <div className="empty">
           <h2>No models yet</h2>
           <p>
-            Models transform datasets into new datasets with SQL — joins, filters,
+            Models transform datasets into new datasets with SQL - joins, filters,
             aggregations. Every run is versioned and lineage is tracked automatically.
           </p>
           {canEdit && (

@@ -1,8 +1,8 @@
 """Workspace service (spec §4 "Workspaces", §8 isolation, §16 workspaces /
 workspace_members).
 
-Isolation anchors are generated here at creation time — s3 prefix, pg schema,
-search prefix — and are immutable afterwards (db trigger 0002). The dedicated
+Isolation anchors are generated here at creation time - s3 prefix, pg schema,
+search prefix - and are immutable afterwards (db trigger 0002). The dedicated
 ``ws_*`` PostgreSQL schema is provisioned in the same transaction via
 ``provision_workspace_schema`` so a workspace can never exist half-isolated.
 """
@@ -43,7 +43,7 @@ def isolation_anchors(workspace_id: UUID, slug: str) -> tuple[str, str, str]:
 
 async def list_for_user(conn: AsyncConnection, user_id: UUID) -> list[dict[str, Any]]:
     """Home screen grid (§5): only workspaces the user can access, with their
-    effective role — straight from the v_user_workspaces view (db 0005)."""
+    effective role - straight from the v_user_workspaces view (db 0005)."""
     return await fetch_all(
         conn,
         """
@@ -98,7 +98,7 @@ async def create(
 
     # INSERT and read-back are separate commands deliberately: RETURNING would
     # require the new row to pass the SELECT policy, whose helper re-queries
-    # workspaces — and rows from the current command aren't visible to it yet
+    # workspaces - and rows from the current command aren't visible to it yet
     # (PostgreSQL command-id visibility). The follow-up SELECT runs as a later
     # command in the same transaction, where the row is visible and the policy
     # evaluates correctly.
@@ -158,7 +158,7 @@ async def update(
 
 async def delete(conn: AsyncConnection, workspace_id: UUID) -> None:
     # FK cascades remove members/projects/resources. The ws_* pg schema and
-    # S3 prefix are cleaned up by an async worker job, not inline — dropping
+    # S3 prefix are cleaned up by an async worker job, not inline - dropping
     # customer data synchronously in a request is deliberately avoided.
     # Flagged for review: spec is silent on deletion semantics; conservative
     # choice is soft-latency cleanup with the row removal as the commit point.
@@ -201,7 +201,7 @@ async def add_member(
     if role not in ("admin", "editor", "viewer"):
         raise ValueError(f"invalid workspace role {role!r}")
 
-    # The principal must belong to the same organisation — cross-org grants
+    # The principal must belong to the same organisation - cross-org grants
     # are impossible by construction (§10 tenant isolation).
     if user_id is not None:
         principal = await fetch_one(

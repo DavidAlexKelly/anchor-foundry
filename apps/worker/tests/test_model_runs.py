@@ -1,4 +1,4 @@
-"""Model run job tests — SQL and Python transforms executed via the real
+"""Model run job tests - SQL and Python transforms executed via the real
 worker path (RLS-scoped connections, real Postgres, real Parquet files),
 plus cron enqueueing. Mirrors test_cleanup.py's fixture shape."""
 from __future__ import annotations

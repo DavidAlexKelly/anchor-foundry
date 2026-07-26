@@ -97,7 +97,7 @@ async def create_from_upload(
     created_by: UUID,
 ) -> dict[str, Any]:
     """Insert the dataset row + version 1 after the bytes are already in
-    storage (see routes: storage first, row second — an orphaned file is
+    storage (see routes: storage first, row second - an orphaned file is
     recoverable garbage; a row without its file is a broken dataset)."""
     slug = slugify(name)
     existing = await fetch_one(
@@ -226,7 +226,7 @@ async def add_version(
     produced_by_id: UUID | None,
     created_by: UUID,
 ) -> dict[str, Any]:
-    """Append a new version to an already-known dataset in place — the
+    """Append a new version to an already-known dataset in place - the
     simpler single-purpose case where uploads/model-outputs/syncs' own
     create-or-version-by-slug logic doesn't apply because the dataset id is
     already known (used by action write-back)."""

@@ -1,7 +1,7 @@
 """Version update manager (spec §7: control-plane/src/updater; §6 "Updates").
 
 Customers can trigger updates from their admin panel; we trigger fleet-wide
-updates when a version ships. Enterprise customers pin versions — a pinned
+updates when a version ships. Enterprise customers pin versions - a pinned
 customer is skipped by fleet rollouts and only updates on explicit request.
 """
 from __future__ import annotations

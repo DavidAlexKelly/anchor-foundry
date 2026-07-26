@@ -1,0 +1,768 @@
+{
+  "version": "36.0.0",
+  "artifacts": {
+    "PlatformStack.assets": {
+      "type": "cdk:asset-manifest",
+      "properties": {
+        "file": "PlatformStack.assets.json",
+        "requiresBootstrapStackVersion": 6,
+        "bootstrapStackVersionSsmParameter": "/cdk-bootstrap/hnb659fds/version"
+      }
+    },
+    "PlatformStack": {
+      "type": "aws:cloudformation:stack",
+      "environment": "aws://unknown-account/eu-north-1",
+      "properties": {
+        "templateFile": "PlatformStack.template.json",
+        "terminationProtection": false,
+        "tags": {
+          "platform:component": "core",
+          "platform:customer": "dry-run-customer"
+        },
+        "validateOnSynth": false,
+        "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-deploy-role-${AWS::AccountId}-eu-north-1",
+        "cloudFormationExecutionRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-cfn-exec-role-${AWS::AccountId}-eu-north-1",
+        "stackTemplateAssetObjectUrl": "s3://cdk-hnb659fds-assets-${AWS::AccountId}-eu-north-1/cf6383036e3fb8c4a7bcfd60fb4bc5ef5efefcc9570fb5a3356d854f3586e41f.json",
+        "requiresBootstrapStackVersion": 6,
+        "bootstrapStackVersionSsmParameter": "/cdk-bootstrap/hnb659fds/version",
+        "additionalDependencies": [
+          "PlatformStack.assets"
+        ],
+        "lookupRole": {
+          "arn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-lookup-role-${AWS::AccountId}-eu-north-1",
+          "requiresBootstrapStackVersion": 8,
+          "bootstrapStackVersionSsmParameter": "/cdk-bootstrap/hnb659fds/version"
+        }
+      },
+      "dependencies": [
+        "PlatformStack.assets"
+      ],
+      "metadata": {
+        "/PlatformStack": [
+          {
+            "type": "aws:cdk:stack-tags",
+            "data": [
+              {
+                "Key": "platform:component",
+                "Value": "core"
+              },
+              {
+                "Key": "platform:customer",
+                "Value": "dry-run-customer"
+              }
+            ]
+          }
+        ],
+        "/PlatformStack/Vpc/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "Vpc8378EB38"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet1/Subnet": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet1Subnet2BB74ED7"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet1/RouteTable": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet1RouteTable15C15F8E"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet1/RouteTableAssociation": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet1RouteTableAssociation4E83B6E4"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet1/DefaultRoute": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet1DefaultRouteB88F9E93"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet1/EIP": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet1EIP411541E6"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet1/NATGateway": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet1NATGatewayA036E8A6"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet2/Subnet": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet2SubnetE34B022A"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet2/RouteTable": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet2RouteTableC5A6DF77"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet2/RouteTableAssociation": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet2RouteTableAssociationCCE257FF"
+          }
+        ],
+        "/PlatformStack/Vpc/publicSubnet2/DefaultRoute": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcpublicSubnet2DefaultRoute732F0BEB"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet1/Subnet": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet1SubnetCEAD3716"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet1/RouteTable": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet1RouteTable1979EACB"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet1/RouteTableAssociation": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet1RouteTableAssociationEEBD93CE"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet1/DefaultRoute": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet1DefaultRouteB506891A"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet2/Subnet": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet2Subnet2DE7549C"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet2/RouteTable": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet2RouteTable4D0FFC8C"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet2/RouteTableAssociation": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet2RouteTableAssociationB691E645"
+          }
+        ],
+        "/PlatformStack/Vpc/privateSubnet2/DefaultRoute": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcprivateSubnet2DefaultRouteBAC3C1C3"
+          }
+        ],
+        "/PlatformStack/Vpc/IGW": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcIGWD7BA715C"
+          }
+        ],
+        "/PlatformStack/Vpc/VPCGW": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "VpcVPCGWBF912B6E"
+          }
+        ],
+        "/PlatformStack/Trail/S3/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "TrailS30071F172"
+          }
+        ],
+        "/PlatformStack/Trail/S3/Policy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "TrailS3PolicyE42170FE"
+          }
+        ],
+        "/PlatformStack/Trail/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "Trail022F0CF2"
+          }
+        ],
+        "/PlatformStack/GuardDuty": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "GuardDuty"
+          }
+        ],
+        "/PlatformStack/Data/DataKey/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataDataKeyCDD1A924"
+          }
+        ],
+        "/PlatformStack/Data/AccessLogs/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataAccessLogsC0C25EE4"
+          }
+        ],
+        "/PlatformStack/Data/AccessLogs/Policy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataAccessLogsPolicy459727B3"
+          }
+        ],
+        "/PlatformStack/Data/DataBucket/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataDataBucketA7E8509A"
+          }
+        ],
+        "/PlatformStack/Data/DataBucket/Policy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataDataBucketPolicy1EE38E1A"
+          }
+        ],
+        "/PlatformStack/Data/DbSg/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataDbSg816B4B26"
+          }
+        ],
+        "/PlatformStack/Data/DbSg/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:5432": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataDbSgfromPlatformStackServicesapiServiceSecurityGroup4ADC44675432556CD087"
+          }
+        ],
+        "/PlatformStack/Data/DbSg/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:5432": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataDbSgfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A5432A6CB79A4"
+          }
+        ],
+        "/PlatformStack/Data/Postgres/SubnetGroup/Default": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataPostgresSubnetGroupD8DCC9AD"
+          }
+        ],
+        "/PlatformStack/Data/Postgres/Secret/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "PlatformStackDataPostgresSecretA61251E63fdaad7efa858a3daf9490cf0a702aeb"
+          }
+        ],
+        "/PlatformStack/Data/Postgres/Secret/Attachment/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataPostgresSecretAttachment37869696"
+          }
+        ],
+        "/PlatformStack/Data/Postgres/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataPostgresA4594A5A"
+          }
+        ],
+        "/PlatformStack/Data/AppDbSecret/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataAppDbSecretA34DDACB"
+          }
+        ],
+        "/PlatformStack/Data/RedisSg/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataRedisSgADF85847"
+          }
+        ],
+        "/PlatformStack/Data/RedisSg/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:6379": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataRedisSgfromPlatformStackServicesapiServiceSecurityGroup4ADC4467637973A0AC18"
+          }
+        ],
+        "/PlatformStack/Data/RedisSg/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:6379": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataRedisSgfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A637916B2BDC2"
+          }
+        ],
+        "/PlatformStack/Data/RedisSubnets": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataRedisSubnets0D63ED40"
+          }
+        ],
+        "/PlatformStack/Data/Redis": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataRedisAA90275E"
+          }
+        ],
+        "/PlatformStack/Data/Search/SecurityGroup/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataSearchSecurityGroupEFFA2DB4"
+          }
+        ],
+        "/PlatformStack/Data/Search/SecurityGroup/from PlatformStackServicesapiServiceSecurityGroup4ADC4467:443": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataSearchSecurityGroupfromPlatformStackServicesapiServiceSecurityGroup4ADC4467443A9594816"
+          }
+        ],
+        "/PlatformStack/Data/Search/SecurityGroup/from PlatformStackServicesworkerServiceSecurityGroupC4C8601A:443": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataSearchSecurityGroupfromPlatformStackServicesworkerServiceSecurityGroupC4C8601A443498E3CDB"
+          }
+        ],
+        "/PlatformStack/Data/Search/MasterUser/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataSearchMasterUserB2E3D50A"
+          }
+        ],
+        "/PlatformStack/Data/Search/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataSearchC7D96612"
+          }
+        ],
+        "/PlatformStack/Auth/UserPool/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "AuthUserPool8115E87F"
+          }
+        ],
+        "/PlatformStack/Auth/UserPool/WebClient/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "AuthUserPoolWebClient147E4E38"
+          }
+        ],
+        "/PlatformStack/Auth/UserPool/HostedUi/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "AuthUserPoolHostedUiAF35A5C3"
+          }
+        ],
+        "/PlatformStack/Services/Cluster/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesClusterFAAA2B60"
+          }
+        ],
+        "/PlatformStack/Services/Logs/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesLogs43B4E769"
+          }
+        ],
+        "/PlatformStack/Services/ApiTaskRole/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesApiTaskRoleF7B4AF36"
+          }
+        ],
+        "/PlatformStack/Services/ApiTaskRole/DefaultPolicy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesApiTaskRoleDefaultPolicyC87C16ED"
+          }
+        ],
+        "/PlatformStack/Services/WorkerTaskRole/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesWorkerTaskRole15DE1B06"
+          }
+        ],
+        "/PlatformStack/Services/WorkerTaskRole/DefaultPolicy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesWorkerTaskRoleDefaultPolicy0983F570"
+          }
+        ],
+        "/PlatformStack/Services/WebTaskRole/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesWebTaskRole8E6B2CE3"
+          }
+        ],
+        "/PlatformStack/Services/apiTaskDef/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesapiTaskDefD92A9D11"
+          }
+        ],
+        "/PlatformStack/Services/apiTaskDef/api": [
+          {
+            "type": "aws:cdk:warning",
+            "data": "Proper policies need to be attached before pulling from ECR repository, or use 'fromEcrRepository'. [ack: @aws-cdk/aws-ecs:ecrImageRequiresPolicy]",
+            "trace": [
+              "Annotations.addMessage (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/core/lib/annotations.js:1:1608)",
+              "Annotations.addWarningV2 (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/core/lib/annotations.js:1:825)",
+              "RepositoryImage.bind (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/images/repository.js:1:1306)",
+              "new ContainerDefinition (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/container-definition.js:1:3120)",
+              "FargateTaskDefinition.addContainer (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/base/task-definition.js:1:9937)",
+              "makeService (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/constructs/services.ts:145:33)",
+              "new ServicesConstruct (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/constructs/services.ts:166:23)",
+              "new CustomerStack (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/stacks/customer-stack.ts:65:22)",
+              "Object.<anonymous> (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/app.ts:27:1)",
+              "Module._compile (node:internal/modules/cjs/loader:1811:14)",
+              "Module.m._compile (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/index.ts:1618:23)",
+              "Module._extensions..js (node:internal/modules/cjs/loader:1942:10)",
+              "Object.require.extensions.<computed> [as .ts] (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/index.ts:1621:12)",
+              "Module.load (node:internal/modules/cjs/loader:1532:32)",
+              "Module._load (node:internal/modules/cjs/loader:1334:12)",
+              "wrapModuleLoad (node:internal/modules/cjs/loader:255:19)",
+              "Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)",
+              "phase4 (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:649:14)",
+              "bootstrap (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:95:10)",
+              "main (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:55:10)",
+              "Object.<anonymous> (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:800:3)",
+              "Module._compile (node:internal/modules/cjs/loader:1811:14)",
+              "Object.Module._extensions..js (node:internal/modules/cjs/loader:1942:10)",
+              "Module.load (node:internal/modules/cjs/loader:1532:32)",
+              "Module._load (node:internal/modules/cjs/loader:1334:12)",
+              "wrapModuleLoad (node:internal/modules/cjs/loader:255:19)",
+              "Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)",
+              "node:internal/main/run_main_module:33:47"
+            ]
+          }
+        ],
+        "/PlatformStack/Services/apiTaskDef/ExecutionRole/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesapiTaskDefExecutionRole2ED35D1D"
+          }
+        ],
+        "/PlatformStack/Services/apiTaskDef/ExecutionRole/DefaultPolicy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesapiTaskDefExecutionRoleDefaultPolicy305D370B"
+          }
+        ],
+        "/PlatformStack/Services/apiService/Service": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesapiService4BF0B34F"
+          }
+        ],
+        "/PlatformStack/Services/apiService/SecurityGroup/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesapiServiceSecurityGroup67559850"
+          }
+        ],
+        "/PlatformStack/Services/apiService/SecurityGroup/from PlatformStackServicesAlbSecurityGroupF38E3EAC:8000": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesapiServiceSecurityGroupfromPlatformStackServicesAlbSecurityGroupF38E3EAC80009C5F0574"
+          }
+        ],
+        "/PlatformStack/Services/workerTaskDef/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesworkerTaskDef771E1D48"
+          }
+        ],
+        "/PlatformStack/Services/workerTaskDef/worker": [
+          {
+            "type": "aws:cdk:warning",
+            "data": "Proper policies need to be attached before pulling from ECR repository, or use 'fromEcrRepository'. [ack: @aws-cdk/aws-ecs:ecrImageRequiresPolicy]",
+            "trace": [
+              "Annotations.addMessage (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/core/lib/annotations.js:1:1608)",
+              "Annotations.addWarningV2 (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/core/lib/annotations.js:1:825)",
+              "RepositoryImage.bind (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/images/repository.js:1:1306)",
+              "new ContainerDefinition (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/container-definition.js:1:3120)",
+              "FargateTaskDefinition.addContainer (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/base/task-definition.js:1:9937)",
+              "makeService (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/constructs/services.ts:145:33)",
+              "new ServicesConstruct (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/constructs/services.ts:171:26)",
+              "new CustomerStack (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/stacks/customer-stack.ts:65:22)",
+              "Object.<anonymous> (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/app.ts:27:1)",
+              "Module._compile (node:internal/modules/cjs/loader:1811:14)",
+              "Module.m._compile (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/index.ts:1618:23)",
+              "Module._extensions..js (node:internal/modules/cjs/loader:1942:10)",
+              "Object.require.extensions.<computed> [as .ts] (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/index.ts:1621:12)",
+              "Module.load (node:internal/modules/cjs/loader:1532:32)",
+              "Module._load (node:internal/modules/cjs/loader:1334:12)",
+              "wrapModuleLoad (node:internal/modules/cjs/loader:255:19)",
+              "Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)",
+              "phase4 (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:649:14)",
+              "bootstrap (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:95:10)",
+              "main (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:55:10)",
+              "Object.<anonymous> (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:800:3)",
+              "Module._compile (node:internal/modules/cjs/loader:1811:14)",
+              "Object.Module._extensions..js (node:internal/modules/cjs/loader:1942:10)",
+              "Module.load (node:internal/modules/cjs/loader:1532:32)",
+              "Module._load (node:internal/modules/cjs/loader:1334:12)",
+              "wrapModuleLoad (node:internal/modules/cjs/loader:255:19)",
+              "Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)",
+              "node:internal/main/run_main_module:33:47"
+            ]
+          }
+        ],
+        "/PlatformStack/Services/workerTaskDef/ExecutionRole/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesworkerTaskDefExecutionRoleC5D764EB"
+          }
+        ],
+        "/PlatformStack/Services/workerTaskDef/ExecutionRole/DefaultPolicy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesworkerTaskDefExecutionRoleDefaultPolicyAC95A40D"
+          }
+        ],
+        "/PlatformStack/Services/workerService/Service": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesworkerServiceD29EA6D0"
+          }
+        ],
+        "/PlatformStack/Services/workerService/SecurityGroup/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesworkerServiceSecurityGroup254C3E45"
+          }
+        ],
+        "/PlatformStack/Services/webTaskDef/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServiceswebTaskDef2BEAA581"
+          }
+        ],
+        "/PlatformStack/Services/webTaskDef/web": [
+          {
+            "type": "aws:cdk:warning",
+            "data": "Proper policies need to be attached before pulling from ECR repository, or use 'fromEcrRepository'. [ack: @aws-cdk/aws-ecs:ecrImageRequiresPolicy]",
+            "trace": [
+              "Annotations.addMessage (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/core/lib/annotations.js:1:1608)",
+              "Annotations.addWarningV2 (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/core/lib/annotations.js:1:825)",
+              "RepositoryImage.bind (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/images/repository.js:1:1306)",
+              "new ContainerDefinition (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/container-definition.js:1:3120)",
+              "FargateTaskDefinition.addContainer (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/aws-cdk-lib/aws-ecs/lib/base/task-definition.js:1:9937)",
+              "makeService (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/constructs/services.ts:145:33)",
+              "new ServicesConstruct (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/constructs/services.ts:175:23)",
+              "new CustomerStack (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/stacks/customer-stack.ts:65:22)",
+              "Object.<anonymous> (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/src/app.ts:27:1)",
+              "Module._compile (node:internal/modules/cjs/loader:1811:14)",
+              "Module.m._compile (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/index.ts:1618:23)",
+              "Module._extensions..js (node:internal/modules/cjs/loader:1942:10)",
+              "Object.require.extensions.<computed> [as .ts] (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/index.ts:1621:12)",
+              "Module.load (node:internal/modules/cjs/loader:1532:32)",
+              "Module._load (node:internal/modules/cjs/loader:1334:12)",
+              "wrapModuleLoad (node:internal/modules/cjs/loader:255:19)",
+              "Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)",
+              "phase4 (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:649:14)",
+              "bootstrap (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:95:10)",
+              "main (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:55:10)",
+              "Object.<anonymous> (/Users/davidkelly/Documents/David/Personal-Projects/Anchor/anchor-foundry/infra/cdk/node_modules/ts-node/src/bin.ts:800:3)",
+              "Module._compile (node:internal/modules/cjs/loader:1811:14)",
+              "Object.Module._extensions..js (node:internal/modules/cjs/loader:1942:10)",
+              "Module.load (node:internal/modules/cjs/loader:1532:32)",
+              "Module._load (node:internal/modules/cjs/loader:1334:12)",
+              "wrapModuleLoad (node:internal/modules/cjs/loader:255:19)",
+              "Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)",
+              "node:internal/main/run_main_module:33:47"
+            ]
+          }
+        ],
+        "/PlatformStack/Services/webTaskDef/ExecutionRole/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServiceswebTaskDefExecutionRole14D1F9F3"
+          }
+        ],
+        "/PlatformStack/Services/webTaskDef/ExecutionRole/DefaultPolicy/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServiceswebTaskDefExecutionRoleDefaultPolicy94599A2E"
+          }
+        ],
+        "/PlatformStack/Services/webService/Service": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServiceswebServiceBB95EE90"
+          }
+        ],
+        "/PlatformStack/Services/webService/SecurityGroup/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServiceswebServiceSecurityGroupA5389644"
+          }
+        ],
+        "/PlatformStack/Services/webService/SecurityGroup/from PlatformStackServicesAlbSecurityGroupF38E3EAC:3000": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServiceswebServiceSecurityGroupfromPlatformStackServicesAlbSecurityGroupF38E3EAC30000D837630"
+          }
+        ],
+        "/PlatformStack/Services/Alb/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbEE1BF5FE"
+          }
+        ],
+        "/PlatformStack/Services/Alb/SecurityGroup/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbSecurityGroup90C3F600"
+          }
+        ],
+        "/PlatformStack/Services/Alb/SecurityGroup/to PlatformStackServiceswebServiceSecurityGroupA8948657:3000": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbSecurityGrouptoPlatformStackServiceswebServiceSecurityGroupA8948657300060444816"
+          }
+        ],
+        "/PlatformStack/Services/Alb/SecurityGroup/to PlatformStackServicesapiServiceSecurityGroup4ADC4467:8000": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbSecurityGrouptoPlatformStackServicesapiServiceSecurityGroup4ADC44678000C99B9007"
+          }
+        ],
+        "/PlatformStack/Services/Alb/Http/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbHttp0B51B3FC"
+          }
+        ],
+        "/PlatformStack/Services/Alb/Http/WebGroup/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbHttpWebGroupF8408A6D"
+          }
+        ],
+        "/PlatformStack/Services/Alb/Http/ApiGroup/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbHttpApiGroupEBAE83DE"
+          }
+        ],
+        "/PlatformStack/Services/Alb/Http/ApiRule/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ServicesAlbHttpApiRule4AAABB4A"
+          }
+        ],
+        "/PlatformStack/Waf": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "Waf"
+          }
+        ],
+        "/PlatformStack/WafAssoc": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "WafAssoc"
+          }
+        ],
+        "/PlatformStack/Cdn/Resource": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "Cdn9963B1AD"
+          }
+        ],
+        "/PlatformStack/PlatformDomain": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "PlatformDomain"
+          }
+        ],
+        "/PlatformStack/UserPoolId": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "UserPoolId"
+          }
+        ],
+        "/PlatformStack/UserPoolClientId": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "UserPoolClientId"
+          }
+        ],
+        "/PlatformStack/DataBucketName": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DataBucketName"
+          }
+        ],
+        "/PlatformStack/DbSecretArn": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "DbSecretArn"
+          }
+        ],
+        "/PlatformStack/AppDbSecretArn": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "AppDbSecretArn"
+          }
+        ],
+        "/PlatformStack/ClusterName": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ClusterName"
+          }
+        ],
+        "/PlatformStack/ApiServiceName": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "ApiServiceName"
+          }
+        ],
+        "/PlatformStack/WorkerServiceName": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "WorkerServiceName"
+          }
+        ],
+        "/PlatformStack/WebServiceName": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "WebServiceName"
+          }
+        ],
+        "/PlatformStack/CDKMetadata/Default": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "CDKMetadata"
+          }
+        ],
+        "/PlatformStack/BootstrapVersion": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "BootstrapVersion"
+          }
+        ],
+        "/PlatformStack/CheckBootstrapVersion": [
+          {
+            "type": "aws:cdk:logicalId",
+            "data": "CheckBootstrapVersion"
+          }
+        ]
+      },
+      "displayName": "PlatformStack"
+    },
+    "Tree": {
+      "type": "cdk:tree",
+      "properties": {
+        "file": "tree.json"
+      }
+    }
+  }
+}
