@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { beginLogin, cognitoConfig, devAuthEnabled, setToken } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 
@@ -10,6 +10,15 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState("");
   const [busy, setBusy] = useState(false);
+  // Starts false to match the server-rendered HTML exactly (window/env vars
+  // aren't available during SSR); flips after mount once we can actually
+  // check. Computing this inline during render (typeof window !== "undefined")
+  // causes a client/server markup mismatch — React hydration errors #418/#423.
+  const [hostedUiConfigured, setHostedUiConfigured] = useState(false);
+
+  useEffect(() => {
+    setHostedUiConfigured(cognitoConfig() !== null);
+  }, []);
 
   async function onSignIn() {
     setBusy(true);
@@ -30,8 +39,6 @@ export default function LoginPage() {
     setToken(devToken.trim());
     router.replace("/home");
   }
-
-  const hostedUiConfigured = typeof window !== "undefined" && cognitoConfig() !== null;
 
   return (
     <div className="login-split">
