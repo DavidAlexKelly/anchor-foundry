@@ -61,6 +61,23 @@ class AwsGateway(Protocol):
         self, creds: TempCredentials, region: str, stack_name: str
     ) -> dict[str, str]: ...
 
+    # ---- teardown (Deprovisioner) --------------------------------------------
+    def disable_deletion_protection(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> None: ...
+
+    def deletion_protection_enabled(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> bool: ...
+
+    def delete_stack(self, creds: TempCredentials, region: str, stack_name: str) -> None: ...
+
+    def empty_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None: ...
+
+    def delete_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None: ...
+
+    def delete_search_domain(self, creds: TempCredentials, region: str, domain_name: str) -> None: ...
+
 
 class Boto3Gateway:
     """Production gateway. Import of boto3 is deferred so unit tests of the
@@ -135,6 +152,99 @@ class Boto3Gateway:
         )
         stacks = cfn.describe_stacks(StackName=stack_name)["Stacks"]
         return {o["OutputKey"]: o["OutputValue"] for o in stacks[0].get("Outputs", [])}
+
+    # ---- teardown (Deprovisioner) --------------------------------------------
+    def disable_deletion_protection(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> None:
+        import boto3
+
+        rds = boto3.client(
+            "rds",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        rds.modify_db_instance(
+            DBInstanceIdentifier=db_instance_identifier,
+            DeletionProtection=False,
+            ApplyImmediately=True,
+        )
+
+    def deletion_protection_enabled(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> bool:
+        import boto3
+
+        rds = boto3.client(
+            "rds",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        instances = rds.describe_db_instances(DBInstanceIdentifier=db_instance_identifier)
+        return bool(instances["DBInstances"][0]["DeletionProtection"])
+
+    def delete_stack(self, creds: TempCredentials, region: str, stack_name: str) -> None:
+        import boto3
+
+        cfn = boto3.client(
+            "cloudformation",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        cfn.delete_stack(StackName=stack_name)
+
+    def empty_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None:
+        """Deletes every object version and delete marker - required before
+        DeleteBucket succeeds on a versioned bucket (the data bucket has
+        versioning on; harmless no-op work on an unversioned one, since
+        list_object_versions still enumerates current versions there too)."""
+        import boto3
+
+        s3 = boto3.client(
+            "s3",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        paginator = s3.get_paginator("list_object_versions")
+        for page in paginator.paginate(Bucket=bucket_name):
+            to_delete = [
+                {"Key": v["Key"], "VersionId": v["VersionId"]}
+                for v in page.get("Versions", []) + page.get("DeleteMarkers", [])
+            ]
+            if to_delete:
+                s3.delete_objects(Bucket=bucket_name, Delete={"Objects": to_delete})
+
+    def delete_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None:
+        import boto3
+
+        s3 = boto3.client(
+            "s3",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        s3.delete_bucket(Bucket=bucket_name)
+
+    def delete_search_domain(self, creds: TempCredentials, region: str, domain_name: str) -> None:
+        import boto3
+
+        opensearch = boto3.client(
+            "opensearch",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        opensearch.delete_domain(DomainName=domain_name)
 
 
 class CdkRunner(Protocol):

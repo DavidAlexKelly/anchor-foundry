@@ -177,8 +177,16 @@ export class CustomerStack extends Stack {
     new CfnOutput(this, "UserPoolId", { value: auth.userPool.userPoolId });
     new CfnOutput(this, "UserPoolClientId", { value: auth.userPoolClient.userPoolClientId });
     new CfnOutput(this, "DataBucketName", { value: data.dataBucket.bucketName });
+    new CfnOutput(this, "AccessLogBucketName", { value: data.accessLogBucket.bucketName });
     new CfnOutput(this, "DbSecretArn", { value: data.dbSecret.secretArn });
     new CfnOutput(this, "AppDbSecretArn", { value: data.appDbSecret.secretArn });
+    // Teardown (control-plane Deprovisioner) needs the exact physical names
+    // of the RETAIN-policy/deletion-protected resources before it deletes
+    // the stack - CFN auto-generates all three, so there's nothing to look
+    // up once the stack itself is gone. Outputs only; adding these can never
+    // trigger a resource replacement.
+    new CfnOutput(this, "DatabaseInstanceIdentifier", { value: data.database.instanceIdentifier });
+    new CfnOutput(this, "SearchDomainName", { value: data.search.domainName });
     new CfnOutput(this, "ClusterName", { value: services.cluster.clusterName });
     new CfnOutput(this, "ApiServiceName", { value: services.apiService.serviceName });
     new CfnOutput(this, "WorkerServiceName", { value: services.workerService.serviceName });

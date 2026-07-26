@@ -10,6 +10,7 @@ import uuid
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.deprovisioner.deprovisioner import Deprovisioner  # noqa: E402
 from src.provisioner.provisioner import Provisioner, TempCredentials  # noqa: E402
 from src.registry.registry import StackRegistry, StackStatus, generate_external_id  # noqa: E402
 from src.updater.updater import Updater  # noqa: E402
@@ -81,6 +82,13 @@ class FakeAws:
         self.assume_calls: list[tuple[str, str]] = []
         self.service_linked_role_calls = 0
         self.status_sequence = ["CREATE_IN_PROGRESS", "CREATE_COMPLETE"]
+        self.outputs: dict[str, str] = {"PlatformDomain": "dxxx.cloudfront.net", "UserPoolId": "eu-west-2_abc"}
+        self.disable_deletion_protection_calls: list[str] = []
+        self.deletion_protection_state = False
+        self.delete_stack_calls: list[str] = []
+        self.empty_bucket_calls: list[str] = []
+        self.delete_bucket_calls: list[str] = []
+        self.delete_search_domain_calls: list[str] = []
 
     def assume_bootstrap_role(self, role_arn: str, external_id: str, session_name: str) -> TempCredentials:
         self.assume_calls.append((role_arn, external_id))
@@ -93,7 +101,26 @@ class FakeAws:
         return self.status_sequence.pop(0) if self.status_sequence else "CREATE_COMPLETE"
 
     def stack_outputs(self, creds: TempCredentials, region: str, stack_name: str) -> dict[str, str]:
-        return {"PlatformDomain": "dxxx.cloudfront.net", "UserPoolId": "eu-west-2_abc"}
+        return self.outputs
+
+    # ---- teardown -------------------------------------------------------
+    def disable_deletion_protection(self, creds: TempCredentials, region: str, db_instance_identifier: str) -> None:
+        self.disable_deletion_protection_calls.append(db_instance_identifier)
+
+    def deletion_protection_enabled(self, creds: TempCredentials, region: str, db_instance_identifier: str) -> bool:
+        return self.deletion_protection_state
+
+    def delete_stack(self, creds: TempCredentials, region: str, stack_name: str) -> None:
+        self.delete_stack_calls.append(stack_name)
+
+    def empty_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None:
+        self.empty_bucket_calls.append(bucket_name)
+
+    def delete_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None:
+        self.delete_bucket_calls.append(bucket_name)
+
+    def delete_search_domain(self, creds: TempCredentials, region: str, domain_name: str) -> None:
+        self.delete_search_domain_calls.append(domain_name)
 
 
 class FakeCdk:
@@ -156,6 +183,74 @@ def test_update_stack_skips_service_linked_role(registry: StackRegistry) -> None
     # Account-wide prerequisite: only ensured on first-time provisioning,
     # not re-checked on every version update.
     assert aws.service_linked_role_calls == 1
+
+
+def test_deprovision_happy_path(registry: StackRegistry) -> None:
+    s = slug()
+    _, external_id = registry.register_customer(s)
+    registry.connect_aws(s, "123456789012", "eu-west-2", "arn:aws:iam::123456789012:role/platform-bootstrap")
+    aws = FakeAws()
+    aws.outputs = {
+        "DatabaseInstanceIdentifier": "platformstack-data",
+        "DataBucketName": "platformstack-data-bucket",
+        "AccessLogBucketName": "platformstack-access-logs",
+        "SearchDomainName": "platformstack-search",
+    }
+    aws.status_sequence = ["DELETE_IN_PROGRESS", None]
+    deprov = Deprovisioner(registry, aws, poll_interval_s=0.0)
+    deprov.deprovision(s)
+    assert aws.assume_calls == [("arn:aws:iam::123456789012:role/platform-bootstrap", external_id)]
+    # RDS deletion protection cleared before the stack delete was requested.
+    assert aws.disable_deletion_protection_calls == ["platformstack-data"]
+    assert aws.delete_stack_calls == ["PlatformStack"]
+    # RETAIN'd resources cleaned up only after the stack itself is gone.
+    assert aws.empty_bucket_calls == ["platformstack-data-bucket", "platformstack-access-logs"]
+    assert aws.delete_bucket_calls == ["platformstack-data-bucket", "platformstack-access-logs"]
+    assert aws.delete_search_domain_calls == ["platformstack-search"]
+    assert registry.get(s).stack_status is StackStatus.DESTROYED
+
+
+def test_deprovision_without_teardown_outputs_still_deletes_stack(registry: StackRegistry) -> None:
+    """An older stack deployed before customer-stack.ts gained these
+    outputs: the core (expensive) deletion must still happen, with best-
+    effort cleanup steps skipped rather than the whole run failing."""
+    s = slug()
+    registry.register_customer(s)
+    registry.connect_aws(s, "123456789012", "eu-west-2", "arn:aws:iam::123456789012:role/platform-bootstrap")
+    aws = FakeAws()
+    aws.outputs = {"PlatformDomain": "dxxx.cloudfront.net"}
+    aws.status_sequence = [None]
+    deprov = Deprovisioner(registry, aws, poll_interval_s=0.0)
+    deprov.deprovision(s)
+    assert aws.disable_deletion_protection_calls == []
+    assert aws.delete_stack_calls == ["PlatformStack"]
+    assert aws.empty_bucket_calls == []
+    assert aws.delete_search_domain_calls == []
+    assert registry.get(s).stack_status is StackStatus.DESTROYED
+
+
+def test_deprovision_marks_failed_on_delete_failed(registry: StackRegistry) -> None:
+    s = slug()
+    registry.register_customer(s)
+    registry.connect_aws(s, "123456789012", "eu-west-2", "arn:aws:iam::123456789012:role/platform-bootstrap")
+    aws = FakeAws()
+    aws.status_sequence = ["DELETE_FAILED"]
+    deprov = Deprovisioner(registry, aws, poll_interval_s=0.0)
+    with pytest.raises(RuntimeError):
+        deprov.deprovision(s)
+    assert registry.get(s).stack_status is StackStatus.FAILED
+
+
+def test_deprovision_refuses_when_already_torn_down(registry: StackRegistry) -> None:
+    s = slug()
+    registry.register_customer(s)
+    registry.connect_aws(s, "123456789012", "eu-west-2", "arn:aws:iam::123456789012:role/platform-bootstrap")
+    aws = FakeAws()
+    aws.status_sequence = [None]
+    deprov = Deprovisioner(registry, aws, poll_interval_s=0.0)
+    deprov.deprovision(s)
+    with pytest.raises(ValueError):
+        deprov.deprovision(s)
 
 
 def test_updater_respects_version_pinning(registry: StackRegistry) -> None:
