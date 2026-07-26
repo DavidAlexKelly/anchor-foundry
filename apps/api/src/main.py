@@ -4,6 +4,7 @@ requires a validated Cognito JWT via the auth middleware dependencies.
 """
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
@@ -14,12 +15,16 @@ from sqlalchemy import text
 from fastapi.responses import JSONResponse
 from starlette.requests import Request as StarletteRequest
 
+from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
 from .services.connectors import ConnectorConfigError
 from .services.dataset_engine import DatasetEngineError
-from .services.storage import StorageKeyError
+from .services.orgs import Boto3CognitoGateway
+from .services.secrets import Boto3SecretsGateway
+from .services.storage import S3StorageGateway, StorageKeyError
 from .routes import actions as action_routes
 from .routes import auth as auth_routes
+from .routes import bootstrap as bootstrap_routes
 from .routes import canvas as canvas_routes
 from .routes import connections as connection_routes
 from .routes import datasets as dataset_routes
@@ -28,6 +33,31 @@ from .routes import objects as object_routes
 from .routes import org as org_routes
 from .routes import projects as project_routes
 from .routes import workspaces as workspace_routes
+
+
+def _wire_production_gateways() -> None:
+    """Swap in real AWS-backed gateways when running in a deployed stack.
+    S3_DATA_BUCKET is only ever set there (services.ts's commonEnv); local
+    dev and every test fixture never set it and keep the in-memory/local
+    defaults each route module already falls back to - same signal-based
+    selection as the worker's own gateway_from_env(). Found missing
+    entirely during real deploy validation (STATUS.md §17): nothing had
+    ever called these configure_* functions with a real gateway, so
+    connection credentials only ever lived in process memory and invites
+    never created real Cognito users on any deployed stack until now."""
+    bucket = os.environ.get("S3_DATA_BUCKET")
+    if not bucket:
+        return
+    region = os.environ.get("AWS_REGION", "")
+    settings = get_settings()
+    dataset_routes.configure_storage_gateway(S3StorageGateway(bucket, region))
+    connection_routes.configure_secrets_gateway(Boto3SecretsGateway(region))
+    org_routes.configure_cognito_gateway(
+        Boto3CognitoGateway(settings.cognito_user_pool_id, region)
+    )
+    bootstrap_routes.configure_cognito_gateway(
+        Boto3CognitoGateway(settings.cognito_user_pool_id, region)
+    )
 
 
 @asynccontextmanager
@@ -97,6 +127,9 @@ def create_app() -> FastAPI:
     app.include_router(action_routes.project_router, prefix=prefix)
     app.include_router(canvas_routes.router, prefix=prefix)
     app.include_router(canvas_routes.published_router, prefix=prefix)
+    app.include_router(bootstrap_routes.router, prefix=prefix)
+
+    _wire_production_gateways()
     return app
 
 

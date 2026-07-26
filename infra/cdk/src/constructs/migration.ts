@@ -1,0 +1,100 @@
+import { execSync } from "child_process";
+import * as path from "path";
+import { Duration } from "aws-cdk-lib";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as rds from "aws-cdk-lib/aws-rds";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as triggers from "aws-cdk-lib/triggers";
+import { Construct } from "constructs";
+
+export interface MigrationTriggerProps {
+  readonly vpc: ec2.IVpc;
+  readonly database: rds.IDatabaseInstance;
+  /** Master credentials (DDL owner - applies the migration files). */
+  readonly dbSecret: secretsmanager.ISecret;
+  /** platform_app credentials - only its password is read, to sync migration
+   * 0006's placeholder to the real generated value (STATUS.md §17 item 9). */
+  readonly appDbSecret: secretsmanager.ISecret;
+}
+
+const DB_PACKAGE_DIR = path.join(__dirname, "..", "..", "..", "..", "packages", "db");
+
+/**
+ * Runs packages/db's migrations against the customer's RDS instance on
+ * every deploy (spec §6 "Runs any database migrations automatically").
+ * Previously a manual step: STATUS.md §17 documents running migrate.py by
+ * hand via a CloudShell VPC session on every real deploy, because nothing
+ * in the pipeline ever did this - Provisioner._deploy's own docstring
+ * already promised it, the automation just didn't exist yet.
+ *
+ * `triggers.TriggerFunction` (not an ECS one-off task) because CDK expresses
+ * "runs once per deploy, before X and after Y" directly as executeAfter/
+ * executeBefore construct dependencies - customer-stack.ts orders this
+ * after the database and before the ECS services that need its schema.
+ */
+export class MigrationTriggerConstruct extends Construct {
+  public readonly trigger: triggers.TriggerFunction;
+
+  constructor(scope: Construct, id: string, props: MigrationTriggerProps) {
+    super(scope, id);
+    const { vpc, database, dbSecret, appDbSecret } = props;
+
+    this.trigger = new triggers.TriggerFunction(this, "Fn", {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "lambda_handler.handler",
+      timeout: Duration.minutes(5),
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      code: lambda.Code.fromAsset(DB_PACKAGE_DIR, {
+        bundling: {
+          image: lambda.Runtime.PYTHON_3_12.bundlingImage,
+          command: [
+            "bash",
+            "-c",
+            "pip install -r requirements.txt -t /asset-output && " +
+              "cp migrate.py lambda_handler.py /asset-output && " +
+              "cp -r migrations /asset-output",
+          ],
+          // Lets `cdk synth` succeed on hosts without a running Docker
+          // daemon (this repo's own dev sandbox included) by installing the
+          // same manylinux wheels pip would otherwise fetch inside the
+          // Docker bundling image above - identical resulting asset either
+          // way, so real deploys (which do have Docker) aren't affected.
+          local: {
+            tryBundle(outputDir: string): boolean {
+              try {
+                execSync(
+                  `pip install -r requirements.txt -t "${outputDir}" ` +
+                    "--platform manylinux2014_x86_64 --implementation cp " +
+                    "--python-version 3.12 --only-binary=:all:",
+                  { cwd: DB_PACKAGE_DIR, stdio: "inherit" }
+                );
+                execSync(`cp migrate.py lambda_handler.py "${outputDir}"`, {
+                  cwd: DB_PACKAGE_DIR,
+                  stdio: "inherit",
+                });
+                execSync(`cp -r migrations "${outputDir}"`, { cwd: DB_PACKAGE_DIR, stdio: "inherit" });
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          },
+        },
+      }),
+      environment: {
+        DB_SECRET_ARN: dbSecret.secretArn,
+        APP_DB_SECRET_ARN: appDbSecret.secretArn,
+        DATABASE_HOST: database.instanceEndpoint.hostname,
+        DATABASE_PORT: database.instanceEndpoint.port.toString(),
+        DATABASE_NAME: "platform",
+      },
+      executeAfter: [database],
+    });
+
+    dbSecret.grantRead(this.trigger);
+    appDbSecret.grantRead(this.trigger);
+    database.connections.allowFrom(this.trigger, ec2.Port.tcp(5432), "migration lambda to postgres");
+  }
+}

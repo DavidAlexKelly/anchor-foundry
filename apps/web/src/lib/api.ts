@@ -4,6 +4,7 @@
 
 import { clearToken, getToken } from "./auth";
 import type {
+  BootstrapFirstOwnerInput, BootstrapFirstOwnerResult, BootstrapStatus,
   Me, Org, OrgUser, ProjectDetail, ProjectSummary, WorkspaceDetail, WorkspaceSummary,
 } from "./types";
 
@@ -56,6 +57,19 @@ export const api = {
     request<ProjectSummary[]>(`/workspaces/${workspaceId}/projects`),
   project: (workspaceId: string, projectId: string) =>
     request<ProjectDetail>(`/workspaces/${workspaceId}/projects/${projectId}`),
+};
+
+// Unauthenticated on purpose (services/orgs.bootstrap_first_owner): there is
+// no user yet to hold a token when a fresh deployment needs its first
+// organisation. request() only ever *attaches* a token if one exists in
+// sessionStorage - it never requires one - so these calls work signed out.
+export const bootstrap = {
+  status: () => request<BootstrapStatus>("/bootstrap/status"),
+  firstOwner: (input: BootstrapFirstOwnerInput) =>
+    request<BootstrapFirstOwnerResult>("/bootstrap/first-owner", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 };
 
 export interface WorkspaceCreateInput {

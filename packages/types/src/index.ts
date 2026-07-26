@@ -134,6 +134,22 @@ export interface AuditEntry {
   created_at: string;
 }
 
+// ---- first-owner bootstrap (unauthenticated, one-time only) ----------------
+export interface BootstrapStatus {
+  needs_setup: boolean;
+}
+
+export interface BootstrapFirstOwnerInput {
+  organisation_name: string;
+  organisation_slug: string;
+  owner_email: string;
+  owner_display_name: string;
+}
+
+export interface BootstrapFirstOwnerResult {
+  organisation_id: string;
+}
+
 // ---- connections (Layer 1) --------------------------------------------------
 export type ConnectionScope = "project" | "workspace";
 export type ConnectionStatus = "unconfigured" | "ok" | "error" | "testing";

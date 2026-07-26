@@ -3,18 +3,17 @@ settings", §16 organisations / users / groups / group_members / audit_log).
 
 User provisioning note (§9 "No self-registration"): creating a platform user
 here also creates the Cognito identity via AdminCreateUser in production
-(CognitoAdminGateway). The DB row is authoritative; cognito_sub is linked on
-first login when the middleware sees a matching email claim - Flagged for
-review: spec doesn't define the linking moment; conservative choice is to
-store the sub returned by AdminCreateUser immediately, which is what the
-production gateway does. The gateway is injected so the service is testable
-without AWS.
+(CognitoAdminGateway) - the sub it returns is stored immediately, not linked
+later at first login (AdminCreateUser's response already carries it; there
+is no earlier point where both facts are known together). The gateway is
+injected so the service is testable without AWS.
 """
 from __future__ import annotations
 
 from typing import Any, Protocol
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
@@ -39,6 +38,86 @@ class NullCognitoGateway:
 
     def admin_disable_user(self, cognito_sub: str) -> None:
         return None
+
+
+class Boto3CognitoGateway:
+    """Production gateway. AdminCreateUser sends the invite email with a
+    Cognito-generated temporary password; the invited user sets a real one
+    via the hosted UI's forced first-login flow. The CDK auth construct
+    configures email as a sign-in alias, not the Username attribute
+    (signInAliases: { email: true }) - Cognito auto-assigns the real,
+    immutable Username as a UUID equal to the user's sub regardless of what
+    string is passed as Username= here, so `cognito_sub` doubles as the
+    identifier admin_disable_user needs."""
+
+    def __init__(self, user_pool_id: str, region: str) -> None:
+        import boto3
+
+        self._client = boto3.client("cognito-idp", region_name=region)
+        self._user_pool_id = user_pool_id
+
+    def admin_create_user(self, email: str, display_name: str) -> str:
+        resp = self._client.admin_create_user(
+            UserPoolId=self._user_pool_id,
+            Username=email,
+            UserAttributes=[
+                {"Name": "email", "Value": email},
+                {"Name": "email_verified", "Value": "true"},
+                {"Name": "name", "Value": display_name},
+            ],
+            DesiredDeliveryMediums=["EMAIL"],
+        )
+        attrs = {a["Name"]: a["Value"] for a in resp["User"]["Attributes"]}
+        return attrs["sub"]
+
+    def admin_disable_user(self, cognito_sub: str) -> None:
+        self._client.admin_disable_user(UserPoolId=self._user_pool_id, Username=cognito_sub)
+
+
+# ---- first-owner bootstrap ---------------------------------------------------
+# Found missing during real deploy validation (STATUS.md §17): self-signup is
+# disabled by spec, and invite_user below refuses to grant 'owner' - so a
+# fresh customer stack had no path at all to create its first organisation or
+# user. bootstrap_first_owner (db 0017) is a SECURITY DEFINER function rather
+# than a privileged connection at this layer: the ordinary request connection
+# has no RLS context at all pre-auth, and the one-time guard needs to be
+# atomic against concurrent callers, which only the function itself can do.
+async def platform_needs_setup(conn: AsyncConnection) -> bool:
+    row = await fetch_one(conn, "SELECT platform_has_any_organisation() AS has_org", {})
+    assert row is not None
+    return not bool(row["has_org"])
+
+
+async def bootstrap_first_owner(
+    conn: AsyncConnection,
+    cognito: CognitoAdminGateway,
+    *,
+    org_name: str,
+    org_slug: str,
+    owner_email: str,
+    owner_display_name: str,
+) -> UUID:
+    # Cognito identity created before the DB call: if the DB call then finds
+    # the platform already bootstrapped, this leaves one orphaned unused
+    # Cognito user rather than a DB row with no matching identity - the
+    # safer failure direction for something a human can clean up by hand.
+    sub = cognito.admin_create_user(owner_email, owner_display_name)
+    try:
+        row = await fetch_one(
+            conn,
+            "SELECT bootstrap_first_owner(:name, :slug, :sub, :email, :disp) AS org_id",
+            {
+                "name": org_name,
+                "slug": org_slug,
+                "sub": sub,
+                "email": owner_email,
+                "disp": owner_display_name,
+            },
+        )
+    except IntegrityError as exc:
+        raise ConflictError("this platform has already been set up") from exc
+    assert row is not None
+    return UUID(str(row["org_id"]))
 
 
 async def get_org(conn: AsyncConnection, organisation_id: UUID) -> dict[str, Any]:

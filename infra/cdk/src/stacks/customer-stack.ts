@@ -8,6 +8,7 @@ import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import { Construct } from "constructs";
 import { AuthConstruct } from "../constructs/auth";
 import { DataStoresConstruct } from "../constructs/data-stores";
+import { MigrationTriggerConstruct } from "../constructs/migration";
 import { ServicesConstruct } from "../constructs/services";
 
 export interface CustomerStackProps extends StackProps {
@@ -61,6 +62,15 @@ export class CustomerStack extends Stack {
       platformUrl: props.platformUrl,
     });
 
+    // ---- Schema migrations: run once per deploy, after the database exists
+    // and before any service that depends on its schema starts (§17) --------
+    const migration = new MigrationTriggerConstruct(this, "Migration", {
+      vpc,
+      database: data.database,
+      dbSecret: data.dbSecret,
+      appDbSecret: data.appDbSecret,
+    });
+
     // ---- Compute ------------------------------------------------------------
     const services = new ServicesConstruct(this, "Services", {
       vpc,
@@ -80,6 +90,9 @@ export class CustomerStack extends Stack {
     });
     Tags.of(services.apiService).add("platform:component", "app-server");
     Tags.of(services.workerService).add("platform:component", "pipeline-runs");
+
+    // The schema must exist before either service that reads/writes it starts.
+    migration.trigger.executeBefore(services.apiService, services.workerService);
 
     // Network paths: only the services may reach the stores.
     // Descriptions use "to" rather than "->": AWS rejects security group

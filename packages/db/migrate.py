@@ -76,16 +76,12 @@ def sync_app_password(conn: psycopg.Connection) -> None:
     conn.commit()
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="list pending migrations only")
-    args = parser.parse_args()
-
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        print("error: DATABASE_URL is not set", file=sys.stderr)
-        return 2
-
+def run(dsn: str, *, dry_run: bool = False) -> int:
+    """Applies pending migrations against dsn. Returns an exit-code-shaped
+    int (0 ok, 1 migration error, 2 setup/connection error) rather than
+    raising, so main() keeps its existing exit-code behaviour; callers that
+    want a hard failure (the CDK migration Lambda, infra/cdk's
+    MigrationTriggerConstruct) should raise on a nonzero result themselves."""
     migrations = discover_migrations()
     if not migrations:
         print("no migrations found", file=sys.stderr)
@@ -117,13 +113,13 @@ def main() -> int:
 
             if not pending:
                 print("database is up to date")
-                if not args.dry_run:
+                if not dry_run:
                     sync_app_password(conn)
                 return 0
 
             for m in pending:
-                print(f"{'would apply' if args.dry_run else 'applying'}: {m.name}")
-                if args.dry_run:
+                print(f"{'would apply' if dry_run else 'applying'}: {m.name}")
+                if dry_run:
                     continue
                 try:
                     with conn.transaction():
@@ -137,7 +133,7 @@ def main() -> int:
                     print(f"error applying {m.name}: {exc}", file=sys.stderr)
                     return 1
             conn.commit()
-            if not args.dry_run:
+            if not dry_run:
                 sync_app_password(conn)
     except psycopg.OperationalError as exc:
         print(f"error: could not connect to database: {exc}", file=sys.stderr)
@@ -145,6 +141,19 @@ def main() -> int:
 
     print(f"applied {len(pending)} migration(s)")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="list pending migrations only")
+    args = parser.parse_args()
+
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        print("error: DATABASE_URL is not set", file=sys.stderr)
+        return 2
+
+    return run(dsn, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
