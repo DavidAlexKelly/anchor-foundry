@@ -101,6 +101,46 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:AWSServiceName: opensearchservice.amazonaws.com
+              # Stack teardown (control plane Deprovisioner): CloudFormation
+              # itself is already covered by the CloudFormation statement
+              # above, but two of the stack's stateful resources are
+              # deliberately excluded from that (deletionProtection: true on
+              # RDS, removalPolicy: RETAIN on the OpenSearch domain and both
+              # S3 buckets - see infra/cdk/src/constructs/data-stores.ts) so
+              # they survive an accidental/failed stack deletion. Teardown
+              # has to reach past CloudFormation for exactly these four
+              # resources. Scoped to the "platformstack-*" name prefix
+              # CloudFormation auto-generates for every resource in this
+              # stack (same STACK_NAME="PlatformStack" the CloudFormation
+              # statement above is already scoped to) - this account only
+              # ever hosts one platform stack, so this is precise, not
+              # merely conventional.
+              - Sid: TeardownRds
+                Effect: Allow
+                Action:
+                  - rds:ModifyDBInstance
+                  - rds:DescribeDBInstances
+                Resource:
+                  - !Sub "arn:aws:rds:*:${AWS::AccountId}:db:platformstack-*"
+              - Sid: TeardownStorage
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                  - s3:GetBucketVersioning
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:DeleteBucket
+                Resource:
+                  - "arn:aws:s3:::platformstack-*"
+                  - "arn:aws:s3:::platformstack-*/*"
+              - Sid: TeardownSearch
+                Effect: Allow
+                Action:
+                  - es:DescribeDomain
+                  - es:DeleteDomain
+                Resource:
+                  - !Sub "arn:aws:es:*:${AWS::AccountId}:domain/platformstack-*"
 
 Outputs:
   BootstrapRoleArn:
