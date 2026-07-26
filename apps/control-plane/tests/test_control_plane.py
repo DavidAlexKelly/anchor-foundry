@@ -85,6 +85,8 @@ class FakeAws:
         self.outputs: dict[str, str] = {"PlatformDomain": "dxxx.cloudfront.net", "UserPoolId": "eu-west-2_abc"}
         self.disable_deletion_protection_calls: list[str] = []
         self.deletion_protection_state = False
+        self.delete_db_instance_calls: list[str] = []
+        self.db_instance_status_sequence: list[str | None] = [None]
         self.delete_stack_calls: list[str] = []
         self.empty_bucket_calls: list[str] = []
         self.delete_bucket_calls: list[str] = []
@@ -109,6 +111,16 @@ class FakeAws:
 
     def deletion_protection_enabled(self, creds: TempCredentials, region: str, db_instance_identifier: str) -> bool:
         return self.deletion_protection_state
+
+    def delete_db_instance(self, creds: TempCredentials, region: str, db_instance_identifier: str) -> None:
+        self.delete_db_instance_calls.append(db_instance_identifier)
+
+    def db_instance_status(self, creds: TempCredentials, region: str, db_instance_identifier: str) -> str | None:
+        return (
+            self.db_instance_status_sequence.pop(0)
+            if self.db_instance_status_sequence
+            else None
+        )
 
     def delete_stack(self, creds: TempCredentials, region: str, stack_name: str) -> None:
         self.delete_stack_calls.append(stack_name)
@@ -200,8 +212,11 @@ def test_deprovision_happy_path(registry: StackRegistry) -> None:
     deprov = Deprovisioner(registry, aws, poll_interval_s=0.0)
     deprov.deprovision(s)
     assert aws.assume_calls == [("arn:aws:iam::123456789012:role/platform-bootstrap", external_id)]
-    # RDS deletion protection cleared before the stack delete was requested.
+    # RDS deletion protection cleared, then the instance deleted directly -
+    # not left to delete_stack, which trusts its stale template value
+    # instead of the live one just cleared and would otherwise DELETE_SKIP it.
     assert aws.disable_deletion_protection_calls == ["platformstack-data"]
+    assert aws.delete_db_instance_calls == ["platformstack-data"]
     assert aws.delete_stack_calls == ["PlatformStack"]
     # RETAIN'd resources cleaned up only after the stack itself is gone.
     assert aws.empty_bucket_calls == ["platformstack-data-bucket", "platformstack-access-logs"]

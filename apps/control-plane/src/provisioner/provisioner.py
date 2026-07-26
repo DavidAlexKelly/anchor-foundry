@@ -70,6 +70,14 @@ class AwsGateway(Protocol):
         self, creds: TempCredentials, region: str, db_instance_identifier: str
     ) -> bool: ...
 
+    def delete_db_instance(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> None: ...
+
+    def db_instance_status(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> str | None: ...
+
     def delete_stack(self, creds: TempCredentials, region: str, stack_name: str) -> None: ...
 
     def empty_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None: ...
@@ -186,6 +194,50 @@ class Boto3Gateway:
         )
         instances = rds.describe_db_instances(DBInstanceIdentifier=db_instance_identifier)
         return bool(instances["DBInstances"][0]["DeletionProtection"])
+
+    def delete_db_instance(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> None:
+        """Deletes the RDS instance directly rather than leaving it to
+        `delete_stack`'s CloudFormation deletion: CloudFormation evaluates
+        whether to delete an RDS instance against its OWN template's last-
+        declared DeletionProtection property, not the resource's live AWS
+        state - disabling it out-of-band (disable_deletion_protection above)
+        doesn't change what the template says, so CloudFormation silently
+        DELETE_SKIPPED the instance in practice, leaving its ENI attached
+        and blocking every security group/subnet that depends on it from
+        ever deleting. Confirmed against a real stack, not theoretical."""
+        import boto3
+
+        rds = boto3.client(
+            "rds",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        rds.delete_db_instance(DBInstanceIdentifier=db_instance_identifier, SkipFinalSnapshot=True)
+
+    def db_instance_status(
+        self, creds: TempCredentials, region: str, db_instance_identifier: str
+    ) -> str | None:
+        import boto3
+        import botocore.exceptions
+
+        rds = boto3.client(
+            "rds",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        try:
+            instances = rds.describe_db_instances(DBInstanceIdentifier=db_instance_identifier)["DBInstances"]
+        except botocore.exceptions.ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "DBInstanceNotFound":
+                return None
+            raise
+        return str(instances[0]["DBInstanceStatus"]) if instances else None
 
     def delete_stack(self, creds: TempCredentials, region: str, stack_name: str) -> None:
         import boto3
