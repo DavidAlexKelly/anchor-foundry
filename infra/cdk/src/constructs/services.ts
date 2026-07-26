@@ -1,4 +1,4 @@
-import { Duration } from "aws-cdk-lib";
+import { Duration, Stack } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -125,6 +125,10 @@ export class ServicesConstruct extends Construct {
       S3_DATA_BUCKET: props.dataBucket.bucketName,
       COGNITO_USER_POOL_ID: props.userPool.userPoolId,
       COGNITO_CLIENT_ID: props.userPoolClientId,
+      // apps/api's Settings defaults this to eu-west-2 (its own local-dev
+      // default) if unset — real deployments must set it explicitly, or JWT
+      // verification builds the JWKS URL for the wrong region entirely.
+      COGNITO_REGION: Stack.of(this).region,
       PLATFORM_VERSION: props.imageTag,
       // Host/port aren't secret; the password is (below). Both apps assemble
       // their own connection string from these parts at startup rather than
