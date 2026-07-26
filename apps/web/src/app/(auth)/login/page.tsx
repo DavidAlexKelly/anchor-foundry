@@ -1,7 +1,10 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { bootstrap } from "@/lib/api";
 import { beginLogin, cognitoConfig, devAuthEnabled, setToken } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 
@@ -10,6 +13,13 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState("");
   const [busy, setBusy] = useState(false);
+  // Only ever true right after a fresh deploy, before anyone has bootstrapped
+  // an organisation - not worth showing an error state if this check fails.
+  const bootstrapStatus = useQuery({
+    queryKey: ["bootstrap-status"],
+    queryFn: bootstrap.status,
+    retry: false,
+  });
   // Starts false to match the server-rendered HTML exactly (window/env vars
   // aren't available during SSR); flips after mount once we can actually
   // check. Computing this inline during render (typeof window !== "undefined")
@@ -59,6 +69,14 @@ export default function LoginPage() {
         <div className="login-box">
           <h2>Sign in</h2>
           <p className="sub">Use the account your organisation created for you.</p>
+          {bootstrapStatus.data?.needs_setup && (
+            <p className="login-note" style={{ marginBottom: 16 }}>
+              This deployment hasn&apos;t been set up yet.{" "}
+              <Link href="/setup" style={{ textDecoration: "underline" }}>
+                Set up your organisation
+              </Link>
+            </p>
+          )}
           <button className="btn" onClick={onSignIn} disabled={busy || !hostedUiConfigured}>
             {busy ? "Redirecting…" : "Continue to sign in"}
           </button>
