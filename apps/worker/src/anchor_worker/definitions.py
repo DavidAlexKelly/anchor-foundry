@@ -29,7 +29,7 @@ def _resolve_database_url() -> str:
         return ""
     port = os.environ.get("DATABASE_PORT", "5432")
     name = os.environ.get("DATABASE_NAME", "platform")
-    return f"postgresql://{username}:{quote(password, safe='')}@{host}:{port}/{name}"
+    return f"postgresql://{username}:{quote(password, safe='')}@{host}:{port}/{name}?sslmode=require"
 
 defs = Definitions(
     jobs=[workspace_cleanup, scheduled_model_runs, scheduled_connection_syncs, scheduled_instance_syncs],
