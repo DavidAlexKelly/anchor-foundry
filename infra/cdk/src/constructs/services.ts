@@ -14,6 +14,8 @@ export interface ServicesProps {
   readonly dataBucket: s3.IBucket;
   readonly dbSecret: secretsmanager.ISecret;
   readonly appDbSecret: secretsmanager.ISecret;
+  readonly databaseHost: string;
+  readonly databasePort: string;
   readonly redisEndpoint: string;
   readonly searchEndpoint: string;
   readonly userPool: cognito.IUserPool;
@@ -124,11 +126,19 @@ export class ServicesConstruct extends Construct {
       COGNITO_USER_POOL_ID: props.userPool.userPoolId,
       COGNITO_CLIENT_ID: props.userPoolClientId,
       PLATFORM_VERSION: props.imageTag,
+      // Host/port aren't secret; the password is (below). Both apps assemble
+      // their own connection string from these parts at startup rather than
+      // receiving one ready-made — CDK can't embed a Secrets Manager value
+      // inside a single plain env var.
+      DATABASE_HOST: props.databaseHost,
+      DATABASE_PORT: props.databasePort,
+      DATABASE_NAME: "platform",
     };
     const dbSecretEnv = {
       // App connects as the RLS-subject role; the master secret is used only
       // by the migration task, never by the running services (db 0006).
-      DATABASE_CREDENTIALS: ecs.Secret.fromSecretsManager(props.appDbSecret),
+      DATABASE_USERNAME: ecs.Secret.fromSecretsManager(props.appDbSecret, "username"),
+      DATABASE_PASSWORD: ecs.Secret.fromSecretsManager(props.appDbSecret, "password"),
     };
 
     const makeService = (

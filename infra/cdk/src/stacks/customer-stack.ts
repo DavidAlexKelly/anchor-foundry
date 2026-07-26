@@ -67,6 +67,8 @@ export class CustomerStack extends Stack {
       dataBucket: data.dataBucket,
       dbSecret: data.dbSecret,
       appDbSecret: data.appDbSecret,
+      databaseHost: data.database.instanceEndpoint.hostname,
+      databasePort: data.database.instanceEndpoint.port.toString(),
       redisEndpoint: data.redis.attrPrimaryEndPointAddress,
       searchEndpoint: data.search.domainEndpoint,
       userPool: auth.userPool,
