@@ -3,14 +3,14 @@
 -- Two RLS refinements discovered while building the API layer:
 --
 -- 1. Auth-time user lookup. The JWT middleware (spec §9 step 5) must look a
---    user up by cognito_sub BEFORE app.user_id can be set — the generic
+--    user up by cognito_sub BEFORE app.user_id can be set - the generic
 --    users policy would return nothing at that point. A narrow SELECT policy
 --    keyed on app.cognito_sub (set by the middleware from the validated
 --    token) permits exactly that one row.
 --
 -- 2. INSERT paths. The FOR ALL policies' WITH CHECK expressions evaluate
 --    helper functions that query the table for the row being inserted, which
---    is not yet visible — so creation would always be denied. Explicit
+--    is not yet visible - so creation would always be denied. Explicit
 --    INSERT policies express creation rights directly:
 --      * workspaces: org owners/admins create workspaces
 --      * projects:   workspace admins/editors create projects

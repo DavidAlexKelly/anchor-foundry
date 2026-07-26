@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 0008_fix_users_policy_recursion.sql
 -- The users_same_org policy (0006) resolved the caller's organisation with a
--- subselect on users itself; evaluating the policy re-invokes the policy —
+-- subselect on users itself; evaluating the policy re-invokes the policy -
 -- PostgreSQL raises "infinite recursion detected in policy for relation
 -- users" the moment the table is read under RLS. Replace the subselect with
 -- a SECURITY DEFINER helper (executes as the table owner, bypassing RLS

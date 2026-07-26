@@ -3,7 +3,7 @@
 -- Connection sync history (spec §"Connections" sync modes, §17 trigger sync).
 -- One row per sync execution. Day one the API executes full syncs inline and
 -- records them here; this table is also the handoff point for the worker's
--- scheduled/large syncs in a later milestone — the schema is written for
+-- scheduled/large syncs in a later milestone - the schema is written for
 -- both callers.
 -- ============================================================================
 
@@ -27,7 +27,7 @@ CREATE INDEX idx_sync_runs_connection ON sync_runs (connection_id, started_at DE
 GRANT SELECT, INSERT, UPDATE ON sync_runs TO platform_app;
 
 -- Visibility follows the connection: the subselect triggers conn_isolation,
--- whose helpers are SECURITY DEFINER — one hop, no cycle back to sync_runs.
+-- whose helpers are SECURITY DEFINER - one hop, no cycle back to sync_runs.
 ALTER TABLE sync_runs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY sync_runs_isolation ON sync_runs
     USING (EXISTS (SELECT 1 FROM connections c WHERE c.id = sync_runs.connection_id));

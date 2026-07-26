@@ -1,4 +1,4 @@
-"""Python transform sandbox tests — no database needed, just the subprocess
+"""Python transform sandbox tests - no database needed, just the subprocess
 executor against real Parquet files."""
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def test_row_count_cap_is_enforced(input_parquet: str, tmp_path, monkeypatch) ->
 
 def test_sandbox_cannot_read_arbitrary_files(input_parquet: str, tmp_path) -> None:
     """Not a claim of a hard security boundary (see the module's docstring)
-    — just confirms the subprocess's cwd/HOME are the scratch dir, not the
+    - just confirms the subprocess's cwd/HOME are the scratch dir, not the
     caller's, so a script reading a relative path can't see unrelated data."""
     dest = str(tmp_path / "out.parquet")
     with pytest.raises(DatasetEngineError):

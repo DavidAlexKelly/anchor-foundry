@@ -21,7 +21,7 @@ CREATE TYPE app_publish_scope  AS ENUM ('private', 'workspace', 'groups');
 CREATE TYPE object_sync_status AS ENUM ('never_synced', 'syncing', 'ok', 'error');
 
 -- ----------------------------------------------------------------------------
--- connections — data source configurations. Either project-scoped or
+-- connections - data source configurations. Either project-scoped or
 -- workspace-shared (spec §16). Config here, credentials in Secrets Manager:
 -- we store only the secret ARN, never a secret value. (spec §5, §10)
 -- ----------------------------------------------------------------------------
@@ -58,7 +58,7 @@ CREATE TRIGGER trg_connections_updated BEFORE UPDATE ON connections
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ----------------------------------------------------------------------------
--- datasets — tables of data. S3 location, schema, row count, versioned (§16).
+-- datasets - tables of data. S3 location, schema, row count, versioned (§16).
 -- Every dataset lives in a project (spec §4: "Every resource lives at the
 -- project level"). workspace_id is denormalised for isolation enforcement and
 -- kept consistent by trigger.
@@ -112,7 +112,7 @@ CREATE TRIGGER trg_datasets_workspace BEFORE INSERT OR UPDATE ON datasets
     FOR EACH ROW EXECUTE FUNCTION enforce_dataset_workspace();
 
 -- ----------------------------------------------------------------------------
--- dataset_versions — snapshot per sync/upload; enables time travel and
+-- dataset_versions - snapshot per sync/upload; enables time travel and
 -- rollback (spec §16). Iceberg holds the data-level snapshot; this table is
 -- the platform-level index of those snapshots.
 -- ----------------------------------------------------------------------------
@@ -135,7 +135,7 @@ CREATE TABLE dataset_versions (
 CREATE INDEX idx_dataset_versions_dataset ON dataset_versions (dataset_id);
 
 -- ----------------------------------------------------------------------------
--- models — SQL or Python transforms. Links to input datasets (via
+-- models - SQL or Python transforms. Links to input datasets (via
 -- model_inputs) and one output dataset (spec §16).
 -- ----------------------------------------------------------------------------
 CREATE TABLE models (
@@ -159,7 +159,7 @@ CREATE INDEX idx_models_project ON models (project_id);
 CREATE TRIGGER trg_models_updated BEFORE UPDATE ON models
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- model_inputs — many-to-many between models and their input datasets (§16).
+-- model_inputs - many-to-many between models and their input datasets (§16).
 -- This is the lineage edge set: dataset -> model -> output dataset.
 CREATE TABLE model_inputs (
     model_id     uuid NOT NULL REFERENCES models(id) ON DELETE CASCADE,
@@ -171,7 +171,7 @@ CREATE TABLE model_inputs (
 
 CREATE INDEX idx_model_inputs_dataset ON model_inputs (dataset_id);
 
--- model_runs — execution history per model (spec §16, §5: retained 90 days;
+-- model_runs - execution history per model (spec §16, §5: retained 90 days;
 -- retention is enforced by a scheduled worker job, not the schema).
 CREATE TABLE model_runs (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -193,7 +193,7 @@ CREATE INDEX idx_model_runs_model ON model_runs (model_id, queued_at DESC);
 CREATE INDEX idx_model_runs_status ON model_runs (status) WHERE status IN ('queued', 'running');
 
 -- ----------------------------------------------------------------------------
--- object_types — defined at workspace level; the semantic entity definitions
+-- object_types - defined at workspace level; the semantic entity definitions
 -- (spec §5, §16). Available to all projects in the workspace.
 -- ----------------------------------------------------------------------------
 CREATE TABLE object_types (
@@ -219,7 +219,7 @@ CREATE INDEX idx_object_types_workspace ON object_types (workspace_id);
 CREATE TRIGGER trg_object_types_updated BEFORE UPDATE ON object_types
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- object_type_properties — typed properties on object types (spec §16).
+-- object_type_properties - typed properties on object types (spec §16).
 CREATE TABLE object_type_properties (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     object_type_id  uuid NOT NULL REFERENCES object_types(id) ON DELETE CASCADE,
@@ -239,7 +239,7 @@ ALTER TABLE object_types
     FOREIGN KEY (title_property_id) REFERENCES object_type_properties(id)
     ON DELETE SET NULL;
 
--- link_types — typed relationships between object types (spec §5, §16).
+-- link_types - typed relationships between object types (spec §5, §16).
 -- Both ends must be in the same workspace: links may not cross the hard
 -- isolation boundary. Enforced by trigger below.
 CREATE TABLE link_types (
@@ -275,7 +275,7 @@ CREATE TRIGGER trg_link_types_workspace BEFORE INSERT OR UPDATE ON link_types
     FOR EACH ROW EXECUTE FUNCTION enforce_link_type_workspace();
 
 -- ----------------------------------------------------------------------------
--- object_type_sources — maps a dataset (in a project) to a workspace object
+-- object_type_sources - maps a dataset (in a project) to a workspace object
 -- type with column mappings (spec §16). Multiple projects can contribute
 -- data to the same object type (spec §5).
 -- ----------------------------------------------------------------------------
@@ -299,7 +299,7 @@ CREATE TABLE object_type_sources (
 CREATE TRIGGER trg_object_type_sources_updated BEFORE UPDATE ON object_type_sources
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- The dataset must live in the same workspace as the object type — datasets
+-- The dataset must live in the same workspace as the object type - datasets
 -- in one workspace can never feed another workspace's ontology.
 CREATE FUNCTION enforce_object_source_workspace() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -321,7 +321,7 @@ CREATE TRIGGER trg_object_type_sources_workspace
     FOR EACH ROW EXECUTE FUNCTION enforce_object_source_workspace();
 
 -- ----------------------------------------------------------------------------
--- canvas_apps — app definitions stored as JSON, versioned (spec §16).
+-- canvas_apps - app definitions stored as JSON, versioned (spec §16).
 -- ----------------------------------------------------------------------------
 CREATE TABLE canvas_apps (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -345,7 +345,7 @@ CREATE INDEX idx_canvas_apps_project ON canvas_apps (project_id);
 CREATE TRIGGER trg_canvas_apps_updated BEFORE UPDATE ON canvas_apps
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- canvas_app_versions — snapshot per save (spec §16).
+-- canvas_app_versions - snapshot per save (spec §16).
 CREATE TABLE canvas_app_versions (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     canvas_app_id   uuid NOT NULL REFERENCES canvas_apps(id) ON DELETE CASCADE,
@@ -356,7 +356,7 @@ CREATE TABLE canvas_app_versions (
     UNIQUE (canvas_app_id, version_number)
 );
 
--- canvas_app_shares — publish target groups when publish_scope = 'groups'.
+-- canvas_app_shares - publish target groups when publish_scope = 'groups'.
 -- NOTE (flagged for review): §16 does not list this table, but §5 "Publishing"
 -- requires apps publishable "to specific groups". A join table is the most
 -- conservative way to model that; without it the requirement is unmeetable.
@@ -369,7 +369,7 @@ CREATE TABLE canvas_app_shares (
 );
 
 -- ----------------------------------------------------------------------------
--- code_repos — git-backed code repositories stored in S3 (spec §16).
+-- code_repos - git-backed code repositories stored in S3 (spec §16).
 -- ----------------------------------------------------------------------------
 CREATE TABLE code_repos (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),

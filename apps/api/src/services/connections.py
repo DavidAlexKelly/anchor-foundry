@@ -4,7 +4,7 @@ discover schema, trigger sync").
 Scope rules (§980): a connection is project-scoped by default; workspace
 scope shares it with every project in the workspace. Credentials go to the
 SecretsGateway and only their ARN is stored; the config jsonb holds
-non-secret fields exclusively — the connector's validate_config re-derives
+non-secret fields exclusively - the connector's validate_config re-derives
 the stored shape so nothing a client smuggles into config persists.
 
 Trigger-sync ships with the Datasets layer, which owns the S3/Iceberg landing
@@ -88,7 +88,7 @@ async def create(
     # Secret first: if the gateway rejects the write the row never exists.
     # An orphaned secret from a failed INSERT is recoverable (7-day window,
     # name keyed by connection id); a row without its secret is a broken
-    # connection — this ordering fails toward the harmless side.
+    # connection - this ordering fails toward the harmless side.
     secret_arn: str | None = None
     if secret_values:
         secret_arn = secrets.put_secret(str(connection_id), secret_values)
@@ -204,7 +204,7 @@ async def set_schedule(
     next_run_at,
 ) -> dict[str, Any]:
     """Define (or redefine) the one managed sync target a connection can
-    carry — spec-shaped, flagged in migration 0014: a connection supports at
+    carry - spec-shaped, flagged in migration 0014: a connection supports at
     most one scheduled/incremental sync target, not several independently
     scheduled tables."""
     await get(conn, workspace_id, project_id, connection_id)

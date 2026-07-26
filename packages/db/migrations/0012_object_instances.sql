@@ -4,7 +4,7 @@
 -- indexed in OpenSearch"). One row per source row synced from a mapped
 -- dataset into the ontology (services/instances.py).
 --
--- Flagged for review — architecturally significant: this table is a
+-- Flagged for review - architecturally significant: this table is a
 -- Postgres-backed instance store, not OpenSearch. Unlike StorageGateway
 -- (S3 vs local disk) or SecretsGateway (Secrets Manager vs in-memory), this
 -- is not a drop-in swap behind one interface: Postgres RLS gives free,
@@ -19,7 +19,7 @@ CREATE TABLE object_instances (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     object_type_id  uuid NOT NULL REFERENCES object_types(id) ON DELETE CASCADE,
     source_id       uuid NOT NULL REFERENCES object_type_sources(id) ON DELETE CASCADE,
-    -- The mapped dataset's primary key value, always stored as text — the
+    -- The mapped dataset's primary key value, always stored as text - the
     -- underlying column can be integer, uuid, etc.; instances are identified
     -- by (source_id, primary_key), never by assuming a type.
     primary_key     text NOT NULL CHECK (length(primary_key) BETWEEN 1 AND 500),

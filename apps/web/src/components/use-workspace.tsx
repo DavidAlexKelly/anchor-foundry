@@ -2,7 +2,7 @@
 
 /** Routes use human slugs (spec §18) while the API is id-addressed; resolve
  * slug → workspace via the cached workspace list. A slug that isn't in the
- * user's list is indistinguishable from a workspace they can't access —
+ * user's list is indistinguishable from a workspace they can't access -
  * which is exactly the 404-shaped answer the API would give (§9). */
 
 import { useQuery } from "@tanstack/react-query";

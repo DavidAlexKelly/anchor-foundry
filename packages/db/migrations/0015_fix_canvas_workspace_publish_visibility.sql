@@ -8,12 +8,12 @@
 --
 -- `projects` is itself RLS-protected (proj_isolation, 0006): for a
 -- permission_mode='custom' project that explicitly revokes a user
--- (project_members role='none'), that row is invisible to them entirely —
+-- (project_members role='none'), that row is invisible to them entirely -
 -- so the subselect returns zero rows and the "published to the whole
 -- workspace" escape hatch silently never fires for exactly the case it
 -- exists to serve: a workspace member with no access to the app's own
 -- project. Same shape of bug as 0008/0009 (a policy reading a table whose
--- own RLS can hide the very row the policy needs), fixed the same way — a
+-- own RLS can hide the very row the policy needs), fixed the same way - a
 -- SECURITY DEFINER helper that resolves the workspace_id without invoking
 -- `projects`' policy.
 -- ============================================================================

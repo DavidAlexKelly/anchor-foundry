@@ -50,7 +50,7 @@ export function CreateProjectButton({
         >
           <Field
             label="Name"
-            hint={name ? `slug: ${slugPreview(name) || "—"}` : "Shown across the platform"}
+            hint={name ? `slug: ${slugPreview(name) || "-"}` : "Shown across the platform"}
           >
             <input
               type="text"
@@ -61,7 +61,7 @@ export function CreateProjectButton({
               autoFocus
             />
           </Field>
-          <Field label="Description" hint="Optional — what this project is for">
+          <Field label="Description" hint="Optional - what this project is for">
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}

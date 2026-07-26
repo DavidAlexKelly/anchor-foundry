@@ -81,7 +81,7 @@ function UploadDialog({ workspaceId, projectId }: { workspaceId: string; project
             upload.mutate();
           }}
         >
-          <Field label="File" hint="CSV, TSV, Parquet, JSON, or JSONL — up to 50 MB">
+          <Field label="File" hint="CSV, TSV, Parquet, JSON, or JSONL - up to 50 MB">
             <input
               type="file"
               accept=".csv,.tsv,.parquet,.json,.jsonl"
@@ -310,7 +310,7 @@ export default function DatasetsPage() {
           <h2>No datasets yet</h2>
           <p>
             Upload a file to explore it right here, or sync one in from a connection.
-            Everything is stored in open formats in your own account — exportable at
+            Everything is stored in open formats in your own account - exportable at
             any time.
           </p>
           {canEdit && workspace && project && (

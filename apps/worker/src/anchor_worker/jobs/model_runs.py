@@ -2,12 +2,12 @@
 worker runtime" Python transforms need).
 
 Two ops, run in sequence:
-  1. enqueue_due_cron_models — for every cron model due to fire, creates a
+  1. enqueue_due_cron_models - for every cron model due to fire, creates a
      queued model_runs row and advances the model's next_run_at to the next
      occurrence (croniter; this is the only place in the platform that
-     parses cron expressions after the fact — the API only computes an
+     parses cron expressions after the fact - the API only computes an
      initial guess when a schedule is first set).
-  2. execute_queued_model_runs — for every queued run, whatever put it there
+  2. execute_queued_model_runs - for every queued run, whatever put it there
      (a cron firing above, or the API leaving a Python run 'queued' since it
      never executes those inline), runs the transform and records the
      result: SQL through the same sandboxed-DuckDB path the API uses
@@ -15,10 +15,10 @@ Two ops, run in sequence:
 
 Both discover candidates via a SECURITY DEFINER function (workspace-blind
 enumeration across every workspace) and re-verify/act on each one through a
-workspace-scoped connection — the discovery bypass is never trusted for the
+workspace-scoped connection - the discovery bypass is never trusted for the
 actual mutation, same pattern as workspace_cleanup.
 
-Note: deliberately no `from __future__ import annotations` here — Dagster's
+Note: deliberately no `from __future__ import annotations` here - Dagster's
 `@op` decorator validates the `context: OpExecutionContext` parameter by
 identity, which breaks under PEP 563 postponed evaluation (the annotation
 arrives as the string "OpExecutionContext" rather than the class). Every
@@ -78,7 +78,7 @@ def _record_output(
         )
         if cur.fetchone() is not None:
             raise engine.DatasetEngineError(
-                f"a dataset named '{slug}' already exists — rename the model or that dataset"
+                f"a dataset named '{slug}' already exists - rename the model or that dataset"
             )
         version = 1
         parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
@@ -142,7 +142,7 @@ def _enqueue_due_cron_models(context: OpExecutionContext, platform_db: PlatformD
                 )
                 row = cur.fetchone()
                 if row is None or row[0] != "cron" or not row[1]:
-                    continue  # changed since discovery — re-verified, matches cleanup's pattern
+                    continue  # changed since discovery - re-verified, matches cleanup's pattern
                 cron_schedule = row[1]
                 try:
                     next_run = croniter(cron_schedule, datetime.now(timezone.utc)).get_next(datetime)
@@ -182,7 +182,7 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                 )
                 row = cur.fetchone()
                 if row is None or row[0] != "queued":
-                    continue  # already handled or gone — re-verified
+                    continue  # already handled or gone - re-verified
                 (_, model_id, project_id, language, code, model_name, output_dataset_id) = row
                 cur.execute(
                     "UPDATE model_runs SET status = 'running', started_at = now() WHERE id = %s",
@@ -255,10 +255,10 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
 @op
 def run_model_runs(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
     """Enqueues due cron models, then executes every queued run (however it
-    got there — a cron firing above, or the API leaving a Python run
+    got there - a cron firing above, or the API leaving a Python run
     'queued' since it never executes those inline). One op, not two: the
     second step must always see the first's inserts in the same poll pass,
-    and Dagster op-to-op data passing isn't needed for that — just calling
+    and Dagster op-to-op data passing isn't needed for that - just calling
     both in sequence is simpler and equally correct."""
     _enqueue_due_cron_models(context, platform_db)
     return _execute_queued_model_runs(context, platform_db)

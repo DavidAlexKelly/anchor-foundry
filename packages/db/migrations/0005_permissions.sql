@@ -16,7 +16,7 @@
 -- Resolution order (spec §9):
 --   1. org owner/admin  → 'admin' (full access to everything in the org)
 --   2. highest of direct + group workspace memberships
---   3. NULL — for the API this means the workspace "does not exist" for
+--   3. NULL - for the API this means the workspace "does not exist" for
 --      this user (404, not 403).
 -- ----------------------------------------------------------------------------
 CREATE FUNCTION effective_workspace_role(p_user_id uuid, p_workspace_id uuid)
@@ -72,7 +72,7 @@ $$;
 -- workspace inheritance. Handles the 'none' revocation role."
 --
 -- Resolution (spec §9):
---   1. org owner/admin → 'owner' (full access; not revocable by 'none' —
+--   1. org owner/admin → 'owner' (full access; not revocable by 'none' -
 --      "full access to everything in the org" is unconditional in the spec).
 --   2. No workspace access → NULL (the project does not exist for this user).
 --   3. permission_mode = 'inherited' → map workspace role:
@@ -183,7 +183,7 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- v_user_workspaces — all workspaces a user can access with their role
+-- v_user_workspaces - all workspaces a user can access with their role
 -- (spec §16: "Used as the base for all workspace queries").
 -- ----------------------------------------------------------------------------
 CREATE VIEW v_user_workspaces AS
@@ -207,7 +207,7 @@ WHERE u.organisation_id = w.organisation_id
   AND effective_workspace_role(u.id, w.id) IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
--- v_user_projects — all projects a user can access with their role (§16).
+-- v_user_projects - all projects a user can access with their role (§16).
 -- ----------------------------------------------------------------------------
 CREATE VIEW v_user_projects AS
 SELECT

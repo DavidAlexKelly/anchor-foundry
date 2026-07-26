@@ -218,7 +218,7 @@ def test_execute_rejects_unmapped_property(
     client: TestClient, fx: Fixture, action_type_id: str, instance_id: str
 ) -> None:
     # vip_note is editable on the action but never mapped to a dataset
-    # column by the source — there's no write-back target for it.
+    # column by the source - there's no write-back target for it.
     r = client.post(
         f"{abase(fx)}/{action_type_id}/execute",
         headers=hdr(fx.editor_sub),
@@ -263,7 +263,7 @@ def test_execute_writes_back_instance_and_dataset(
     r = client.get(f"{wbase(fx)}/object-types/{customer_type_id}/instances/{instance_id}", headers=hdr(fx.viewer_sub))
     assert r.json()["properties"]["email"] == "ada.new@example.com"
 
-    # The dataset itself was versioned, and the new version has the edit —
+    # The dataset itself was versioned, and the new version has the edit -
     # while the other row is untouched.
     r = client.get(f"{dbase(fx)}/{customers_dataset}", headers=hdr(fx.viewer_sub))
     assert r.json()["current_version"] == version_before + 1

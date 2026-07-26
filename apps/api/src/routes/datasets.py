@@ -135,7 +135,7 @@ async def upload_dataset(
     extension = os.path.splitext(original_name)[1].lower()
     if extension not in engine.SUPPORTED_EXTENSIONS:
         supported = ", ".join(engine.SUPPORTED_EXTENSIONS)
-        raise _client_error(f"unsupported file type {extension or '(none)'} — supported: {supported}")
+        raise _client_error(f"unsupported file type {extension or '(none)'} - supported: {supported}")
 
     data = await file.read(ds_service.MAX_UPLOAD_BYTES + 1)
     if len(data) > ds_service.MAX_UPLOAD_BYTES:

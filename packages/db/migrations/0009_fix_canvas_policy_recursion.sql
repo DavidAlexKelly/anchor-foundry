@@ -1,7 +1,7 @@
 -- ============================================================================
 -- 0009_fix_canvas_policy_recursion.sql
 -- app_isolation (canvas_apps) subselects canvas_app_shares, whose
--- apps_isolation subselects canvas_apps — PostgreSQL raises "infinite
+-- apps_isolation subselects canvas_apps - PostgreSQL raises "infinite
 -- recursion detected in policy for relation canvas_apps" the first time
 -- either table is read under RLS. Same fix pattern as 0008: move the
 -- cross-table lookups into SECURITY DEFINER helpers (owner execution

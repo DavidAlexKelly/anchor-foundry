@@ -5,7 +5,7 @@ the API writes them at creation, reads them only to open a connection, and
 never returns them in any response. The gateway protocol keeps that boundary
 explicit and testable.
 
-Secret names follow anchor/connections/{connection_id} — one secret per
+Secret names follow anchor/connections/{connection_id} - one secret per
 connection, replaced wholesale on credential update, deleted with the
 connection.
 """
@@ -30,7 +30,7 @@ class SecretsGateway(Protocol):
 
 class Boto3SecretsGateway:
     """Production gateway. The ECS task role carries a policy scoped to the
-    anchor/connections/* name prefix (CDK services construct) — the API can
+    anchor/connections/* name prefix (CDK services construct) - the API can
     manage exactly these secrets and nothing else in the account."""
 
     def __init__(self, region: str) -> None:
@@ -62,7 +62,7 @@ class Boto3SecretsGateway:
 
 
 class InMemorySecretsGateway:
-    """Dev/test gateway. Flagged for review: development only — holds values
+    """Dev/test gateway. Flagged for review: development only - holds values
     in process memory, so credentials do not survive a restart and are never
     written to disk or the database."""
 

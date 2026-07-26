@@ -43,7 +43,7 @@ export function CreateWorkspaceButton() {
         >
           <Field
             label="Name"
-            hint={name ? `slug: ${slugPreview(name) || "—"}` : "Shown across the platform"}
+            hint={name ? `slug: ${slugPreview(name) || "-"}` : "Shown across the platform"}
           >
             <input
               type="text"
@@ -54,7 +54,7 @@ export function CreateWorkspaceButton() {
               autoFocus
             />
           </Field>
-          <Field label="Description" hint="Optional — what lives in this workspace">
+          <Field label="Description" hint="Optional - what lives in this workspace">
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}

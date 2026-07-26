@@ -2,7 +2,7 @@
 
 Flow:
   1. Assume the customer's bootstrap role via STS with their external ID
-     (confused-deputy protection — the assume call fails without it).
+     (confused-deputy protection - the assume call fails without it).
   2. Run `cdk deploy` for the customer stack with the temporary credentials.
   3. Poll CloudFormation until CREATE_COMPLETE / UPDATE_COMPLETE.
   4. Record stack outputs in the registry and mark the customer READY.
@@ -143,7 +143,7 @@ class CdkRunner(Protocol):
 
 class SubprocessCdkRunner:
     """Runs `cdk deploy` from infra/cdk with the assumed-role credentials
-    injected via environment — the control plane's own credentials are never
+    injected via environment - the control plane's own credentials are never
     exposed to the child process."""
 
     def __init__(self, cdk_dir: Path) -> None:

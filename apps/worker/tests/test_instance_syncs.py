@@ -1,4 +1,4 @@
-"""Scheduled object-type-source sync job tests — real Postgres, real Parquet
+"""Scheduled object-type-source sync job tests - real Postgres, real Parquet
 files on disk, no external source system needed (unlike sync_configs.py,
 this job reads a dataset already materialised in this platform's own
 storage). Mirrors test_model_runs.py's fixture shape."""
@@ -169,7 +169,7 @@ def test_resync_after_dataset_change_marks_and_sweeps(workspace: dict, storage_r
 
 
 def test_failing_sync_isolated_and_reschedules(workspace: dict) -> None:
-    # Well-formed key (passes storage key validation) but no file behind it —
+    # Well-formed key (passes storage key validation) but no file behind it -
     # a genuinely missing Parquet object, not a malformed key.
     missing_key = f"{workspace['ws_prefix']}datasets/{uuid.uuid4()}/v99/data.parquet"
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:

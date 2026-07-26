@@ -1,6 +1,6 @@
 /** Shared API contract types.
  *
- * These mirror the Pydantic response models in apps/api/src/routes — the API
+ * These mirror the Pydantic response models in apps/api/src/routes - the API
  * is the source of truth; when a route model changes, change this file in the
  * same commit. Field names are the wire names (snake_case) on purpose: no
  * mapping layer to drift.
@@ -242,7 +242,7 @@ export interface SyncRun {
 }
 
 // A connection carries at most one managed scheduled/incremental sync
-// target (migration 0014) — not several independently scheduled tables.
+// target (migration 0014) - not several independently scheduled tables.
 export interface ScheduledSync {
   id: string;
   sync_mode: SyncMode;
@@ -464,7 +464,7 @@ export interface CanvasApp {
   updated_at: string;
 }
 
-// The definition is a Craft.js node tree — opaque to everything except the
+// The definition is a Craft.js node tree - opaque to everything except the
 // canvas editor itself, so it's typed loosely here rather than modelled
 // node-by-node.
 export interface CanvasAppDetail extends CanvasApp {

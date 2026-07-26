@@ -1,5 +1,5 @@
 """API configuration. All values come from the environment (populated in the
-deployed stack from CDK outputs and Secrets Manager — never hard-coded)."""
+deployed stack from CDK outputs and Secrets Manager - never hard-coded)."""
 from __future__ import annotations
 
 from functools import lru_cache

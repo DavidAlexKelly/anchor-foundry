@@ -2,7 +2,7 @@
 datasets ... Athena over S3/Iceberg for large datasets").
 
 This module is the DuckDB half. Files above the interactive size cap get a
-clear message pointing at export instead of a hung request — the Athena path
+clear message pointing at export instead of a hung request - the Athena path
 arrives with the production data plane. All functions are synchronous; routes
 run them on a worker thread.
 
@@ -126,7 +126,7 @@ def query(parquet_path: str, sql: str, max_rows: int = MAX_RESULT_ROWS) -> Tabul
     size = os.path.getsize(parquet_path)
     if size > MAX_INTERACTIVE_BYTES:
         raise DatasetEngineError(
-            "this dataset is too large for interactive queries in this build — "
+            "this dataset is too large for interactive queries in this build - "
             "use export, or a model transform"
         )
     max_rows = max(1, min(max_rows, MAX_RESULT_ROWS))
@@ -173,7 +173,7 @@ def merge_incremental(
 ) -> tuple[list[ColumnSchema], int]:
     """Upsert an incremental sync's new/changed rows into the existing
     dataset by primary key, writing the merged result as a new version. No
-    existing_parquet means this is the connection's first incremental run —
+    existing_parquet means this is the connection's first incremental run -
     the new rows are the whole dataset."""
     con = duckdb.connect()
     try:
@@ -220,7 +220,7 @@ def _clean(exc: duckdb.Error) -> str:
 
 def _quote_column(name: str) -> str:
     """Dataset column names come from uploaded file headers, not a fixed
-    identifier grammar — quote-and-escape rather than assume unquoted-safe."""
+    identifier grammar - quote-and-escape rather than assume unquoted-safe."""
     return '"' + name.replace('"', '""') + '"'
 
 
@@ -233,7 +233,7 @@ def write_back_row(
 ) -> tuple[list[ColumnSchema], int]:
     """Update one row (matched by primary key) in a dataset's Parquet file
     and write the result to dest_path as a new version. Used by Actions
-    write-back — every mutation still produces a new dataset_versions row
+    write-back - every mutation still produces a new dataset_versions row
     rather than silently overwriting data, matching the rest of the
     platform's dataset model."""
     con = duckdb.connect()
@@ -297,7 +297,7 @@ def run_transform(
         total_bytes += os.path.getsize(path)
     if total_bytes > MAX_INTERACTIVE_BYTES:
         raise DatasetEngineError(
-            "combined inputs exceed the interactive transform limit in this build — "
+            "combined inputs exceed the interactive transform limit in this build - "
             "scheduled worker runs handle larger models"
         )
 
@@ -323,7 +323,7 @@ def run_transform(
         row_count = int(sandbox.execute("SELECT count(*) FROM __model_output").fetchone()[0])
         if row_count > MAX_TRANSFORM_OUTPUT_ROWS:
             raise DatasetEngineError(
-                f"the transform produced {row_count:,} rows — above this build's "
+                f"the transform produced {row_count:,} rows - above this build's "
                 f"{MAX_TRANSFORM_OUTPUT_ROWS:,} row limit"
             )
 

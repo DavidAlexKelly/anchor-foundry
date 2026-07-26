@@ -1,6 +1,6 @@
 """Connection routes (spec §17: /workspaces/{id}/projects/{id}/connections).
 
-Role floors (conservative where the spec is silent — flagged): read = project
+Role floors (conservative where the spec is silent - flagged): read = project
 viewer; create/update/delete/test/discover = project editor, and creating a
 workspace-scoped connection additionally requires workspace admin (it becomes
 visible to every project in the workspace). Test and discover reach into the
@@ -263,7 +263,7 @@ async def test_connection(
     except ConnectorOperationError as exc:
         ok, error = False, str(exc)
     except KeyError:
-        ok, error = False, "stored credentials are missing — update the connection"
+        ok, error = False, "stored credentials are missing - update the connection"
 
     async with user_connection(access.auth.user_id) as conn:
         updated = await conn_service.record_test_result(conn, connection_id, ok=ok, error=error)
@@ -401,7 +401,7 @@ async def trigger_sync(
 ) -> SyncResult:
     if body.mode == "incremental":
         raise ConnectorConfigError(
-            "incremental sync needs stored cursor progress — set up a scheduled "
+            "incremental sync needs stored cursor progress - set up a scheduled "
             "sync (POST .../scheduled-sync) and use its 'run now' endpoint instead "
             "of an ad hoc trigger"
         )
@@ -442,7 +442,7 @@ async def trigger_sync(
     except (SyncError, ConnectorOperationError) as exc:
         ok, error = False, str(exc)
     except KeyError:
-        ok, error = False, "stored credentials are missing — update the connection"
+        ok, error = False, "stored credentials are missing - update the connection"
     finally:
         import shutil as _shutil
 
@@ -499,7 +499,7 @@ async def sync_runs(
 
 
 # ---- scheduled/incremental sync (spec: cron-triggered, cursor-based sync) ---
-# A connection carries at most one managed sync target — migration 0014
+# A connection carries at most one managed sync target - migration 0014
 # completes the sync_mode/sync_schedule columns that existed since 0003 with
 # the fields a schedulable/incremental sync needs to be self-contained.
 # Firing on schedule is the worker's job (scheduled_connection_syncs);
@@ -617,7 +617,7 @@ async def run_scheduled_sync(
         )
         if not schedule["sync_source_table"]:
             raise ConnectorConfigError(
-                "no scheduled sync target is configured — set one with PUT .../scheduled-sync first"
+                "no scheduled sync target is configured - set one with PUT .../scheduled-sync first"
             )
         row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
         run_id = await sync_service.open_run(
@@ -681,7 +681,7 @@ async def run_scheduled_sync(
     except (SyncError, ConnectorOperationError) as exc:
         ok, error = False, str(exc)
     except KeyError:
-        ok, error = False, "stored credentials are missing — update the connection"
+        ok, error = False, "stored credentials are missing - update the connection"
     finally:
         import shutil as _shutil
 

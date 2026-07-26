@@ -1,8 +1,8 @@
 "use client";
 
-/** Canvas widgets — the components a saved app's Craft.js definition is
+/** Canvas widgets - the components a saved app's Craft.js definition is
  * built from. Each reads workspace/project id + edit-vs-run mode from
- * CanvasEnvProvider (never from its own serialised props — the same app
+ * CanvasEnvProvider (never from its own serialised props - the same app
  * renders from more than one route), and reuses the datasets/objects/
  * actions endpoints already built elsewhere; a widget only remembers which
  * dataset/action it's bound to, never a copy of the data itself. */
@@ -132,7 +132,7 @@ export function CanvasDatasetTable({ datasetId = null }: { datasetId?: string | 
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      {!datasetId && <p className="canvas-widget-empty">Table — pick a dataset in Settings</p>}
+      {!datasetId && <p className="canvas-widget-empty">Table - pick a dataset in Settings</p>}
       {datasetId && preview.isPending && <p className="canvas-widget-empty">Loading…</p>}
       {preview.data && (
         <div className="data-grid">
@@ -227,7 +227,7 @@ export function CanvasActionForm({ actionTypeId = null }: { actionTypeId?: strin
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      {!actionType && <p className="canvas-widget-empty">Action form — pick an action in Settings</p>}
+      {!actionType && <p className="canvas-widget-empty">Action form - pick an action in Settings</p>}
       {actionType && (
         <form
           className="card"
@@ -262,7 +262,7 @@ export function CanvasActionForm({ actionTypeId = null }: { actionTypeId?: strin
           <button type="submit" className="btn" disabled={!live || !instanceId || execute.isPending}>
             {execute.isPending ? "Submitting…" : "Submit"}
           </button>
-          {!live && <p className="canvas-widget-empty">Submitting is disabled while editing — use Preview to try it.</p>}
+          {!live && <p className="canvas-widget-empty">Submitting is disabled while editing - use Preview to try it.</p>}
           {execute.isSuccess && execute.data.ok && <p className="login-note">Saved.</p>}
           {execute.isSuccess && !execute.data.ok && <div className="form-error">{execute.data.error}</div>}
         </form>
@@ -319,7 +319,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
 ];
 
-/** Toolbox drag-source button — creates a new node of `Component` when
+/** Toolbox drag-source button - creates a new node of `Component` when
  * dropped onto the canvas. Kept here since it needs the same
  * `useEditor().connectors.create` every palette entry shares. */
 export function PaletteItem({ componentKey, label, hint }: { componentKey: keyof typeof CANVAS_RESOLVER; label: string; hint: string }) {

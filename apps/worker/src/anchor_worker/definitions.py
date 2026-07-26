@@ -47,7 +47,7 @@ defs = Definitions(
         ),
         ScheduleDefinition(
             job=scheduled_connection_syncs,
-            cron_schedule="*/5 * * * *",  # every 5 minutes — syncs are heavier
+            cron_schedule="*/5 * * * *",  # every 5 minutes - syncs are heavier
             name="poll_scheduled_syncs",
         ),
         ScheduleDefinition(

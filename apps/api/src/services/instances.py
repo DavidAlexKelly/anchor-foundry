@@ -4,12 +4,12 @@ stored and indexed in OpenSearch").
 Architecturally significant, flagged for review: this slice stores instances
 in Postgres (object_instances, migration 0012) rather than OpenSearch. That
 is not a drop-in gateway swap like storage (S3 vs local disk) or secrets
-(Secrets Manager vs in-memory) — Postgres RLS gives free, per-row workspace
+(Secrets Manager vs in-memory) - Postgres RLS gives free, per-row workspace
 isolation that a search index does not enforce on its own. The production
 OpenSearch-backed store now exists (services/instance_store.py:
 OpenSearchInstanceStore, index-per-workspace via the same search_prefix
 isolation anchor S3/pg_schema already use, object_type_id filtered within
-it) but is not wired in here yet — the cutover replaces the Postgres-
+it) but is not wired in here yet - the cutover replaces the Postgres-
 connection-shaped functions below with calls through that gateway, which is
 deliberately left as its own follow-up so it can be reviewed independently;
 see that module's docstring for the full design and why it isn't a one-line
@@ -20,7 +20,7 @@ dataset's current Parquet file through the same DuckDB path datasets/models
 already use, extracts the primary key + mapped columns, and upserts one row
 per source row keyed on (source_id, primary_key). A resync also removes any
 previously-synced instance whose primary key no longer appears in the
-current data — the store should not lag behind deletes upstream.
+current data - the store should not lag behind deletes upstream.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ INSTANCE_PAGE_SIZE = 50
 
 def _quote_source_column(name: str) -> str:
     """Dataset column names come from uploaded file headers, not a fixed
-    identifier grammar — quote-and-escape rather than assume they're safe
+    identifier grammar - quote-and-escape rather than assume they're safe
     unquoted SQL identifiers."""
     return '"' + name.replace('"', '""') + '"'
 
@@ -52,7 +52,7 @@ def extract_rows(
 ) -> list[tuple[str, dict[str, Any]]]:
     """Reads the primary key + mapped columns for every row. Returns
     (primary_key_as_text, {property_api_name: value}) tuples; rows with a
-    null primary key are skipped — they can't identify an instance."""
+    null primary key are skipped - they can't identify an instance."""
     import duckdb
 
     source_columns = [primary_key_column] + list(column_mappings.keys())
@@ -75,7 +75,7 @@ def extract_rows(
 
     if len(rows) > MAX_INSTANCE_SYNC_ROWS:
         raise DatasetEngineError(
-            f"dataset exceeds the {MAX_INSTANCE_SYNC_ROWS:,} row interactive sync limit — "
+            f"dataset exceeds the {MAX_INSTANCE_SYNC_ROWS:,} row interactive sync limit - "
             "scheduled worker syncs handle larger tables"
         )
 

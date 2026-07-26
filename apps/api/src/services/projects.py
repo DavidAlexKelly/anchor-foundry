@@ -2,7 +2,7 @@
 
 Permission modes (§4): 'inherited' (workspace roles map through) or 'custom'
 (explicit project_members entries, where role 'none' actively revokes).
-Resolution itself always goes through effective_project_role (db 0005) — this
+Resolution itself always goes through effective_project_role (db 0005) - this
 service only manages the rows that function reads.
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ async def list_for_user(
     conn: AsyncConnection, user_id: UUID, workspace_id: UUID
 ) -> list[dict[str, Any]]:
     """Workspace view project grid (§5): visible projects with effective role
-    from v_user_projects (db 0005) — a project with no effective role simply
+    from v_user_projects (db 0005) - a project with no effective role simply
     isn't in the list."""
     return await fetch_all(
         conn,
@@ -66,7 +66,7 @@ async def get(conn: AsyncConnection, project_id: UUID) -> dict[str, Any]:
 async def resource_counts(conn: AsyncConnection, project_id: UUID) -> dict[str, int]:
     """Sidebar badge counts (§5 project sidebar). object_types is a
     workspace-level table (the ontology is shared across a workspace), so the
-    Objects badge counts the workspace ontology visible from this project —
+    Objects badge counts the workspace ontology visible from this project -
     Flagged for review: spec shows a per-project count but defines object
     types per workspace."""
     row = await fetch_one(
@@ -202,7 +202,7 @@ async def set_member(
     group_id: UUID | None,
     role: str,
 ) -> dict[str, Any]:
-    """Upsert a custom permission entry. Role 'none' is a real entry — it
+    """Upsert a custom permission entry. Role 'none' is a real entry - it
     revokes access even when workspace roles or groups would grant it (§4)."""
     if (user_id is None) == (group_id is None):
         raise ValueError("exactly one of user_id or group_id is required")

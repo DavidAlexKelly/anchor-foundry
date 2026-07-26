@@ -9,33 +9,33 @@ once: RLS policies (keyed off the request's ``app.user_id`` GUC, checked
 against ``effective_workspace_role``) as a second, independent layer behind
 the route's own permission check. OpenSearch has no equivalent of "run this
 query as this authenticated user and let the store's own row policies do
-the access check" — there is no RLS at the index layer.
+the access check" - there is no RLS at the index layer.
 
 The design used here leans on the isolation anchors the platform already
 provisions per workspace (spec §16, db migration 0002: ``s3_prefix``,
-``pg_schema``, ``search_prefix`` — immutable, unique, assigned atomically at
+``pg_schema``, ``search_prefix`` - immutable, unique, assigned atomically at
 workspace creation): each workspace gets its own OpenSearch index, named
 from its ``search_prefix``, exactly mirroring how S3 keys are namespaced by
 ``s3_prefix``. That gives structural isolation (a query against one
 workspace's index cannot see another's documents even if a filter were
-forgotten) rather than relying solely on an application-level term filter —
+forgotten) rather than relying solely on an application-level term filter -
 though every query still includes an explicit ``object_type_id`` filter,
 since one workspace's index holds every object type's instances.
 
 The route layer must resolve ``workspace_id``/``search_prefix`` and do its
 permission check (``require_workspace_role`` et al) *before* calling this
-gateway, same as it already does for every other service call — this
+gateway, same as it already does for every other service call - this
 module trusts its caller completely and enforces no permissions of its
 own, only the index-per-workspace + object_type_id scoping described above.
 
 Not wired into routes/objects.py in this build: cutting over means
 services/instances.py's Postgres-connection-shaped functions (which take
 the request's already-open, RLS-scoped ``AsyncConnection``) get replaced by
-calls through this gateway instead — a service-layer change, not a
+calls through this gateway instead - a service-layer change, not a
 route-layer one, as already promised. That cutover is left for a follow-up
 so the swap can be reviewed on its own; the gateway itself is complete and
 production-shaped. Like Boto3SecretsGateway/S3StorageGateway, it is not
-unit-tested against a real cluster in this build — no OpenSearch instance
+unit-tested against a real cluster in this build - no OpenSearch instance
 is available in this dev/test environment, and there is no equivalent of
 moto for OpenSearch here.
 """
@@ -46,7 +46,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 INSTANCE_PAGE_SIZE = 50
-# OpenSearch's default index.max_result_window — from/size pagination past
+# OpenSearch's default index.max_result_window - from/size pagination past
 # this needs search_after instead; flagged rather than silently raised here,
 # since the day-one instance browser (services/instances.py) never needs it.
 MAX_RESULT_WINDOW = 10_000
@@ -55,7 +55,7 @@ MAX_RESULT_WINDOW = 10_000
 class InstanceStoreGateway(Protocol):
     """Mirrors the operations services/instances.py performs against
     Postgres, but workspace-scoped explicitly (via ``search_prefix``) rather
-    than implicitly via RLS — see the module docstring for why."""
+    than implicitly via RLS - see the module docstring for why."""
 
     async def upsert_instances(
         self,
@@ -86,13 +86,13 @@ class InstanceStoreGateway(Protocol):
 
 def _index_name(search_prefix: str) -> str:
     # search_prefix already ends in "-" (db 0002: f"{slug}-{short_id}-");
-    # index names must be lowercase with no leading "-" or "_" — search_prefix
+    # index names must be lowercase with no leading "-" or "_" - search_prefix
     # is always lowercase-slug-derived so this is safe without re-validating.
     return f"{search_prefix}object-instances"
 
 
 def _doc_id(source_id: UUID, primary_key: str) -> str:
-    """Deterministic, not random — re-syncing the same source row upserts
+    """Deterministic, not random - re-syncing the same source row upserts
     the same document instead of leaking a duplicate, and needs no
     round-trip to look up "does this instance already exist" first."""
     return f"{source_id}:{primary_key}"
@@ -197,7 +197,7 @@ class OpenSearchInstanceStore:
         offset = max(0, offset)
         if offset + limit > MAX_RESULT_WINDOW:
             raise ValueError(
-                f"pagination past {MAX_RESULT_WINDOW:,} rows needs search_after, not offset — "
+                f"pagination past {MAX_RESULT_WINDOW:,} rows needs search_after, not offset - "
                 "not implemented here (day-one instance browser never reaches it)"
             )
         index = _index_name(search_prefix)
@@ -233,7 +233,7 @@ class OpenSearchInstanceStore:
             return None
         source = resp["_source"]
         if str(source.get("object_type_id")) != str(object_type_id):
-            return None  # exists, but under a different type — not this caller's to see
+            return None  # exists, but under a different type - not this caller's to see
         return {
             "id": resp["_id"],
             "source_id": source["source_id"],
@@ -264,7 +264,7 @@ class OpenSearchInstanceStore:
 
 
 def gateway_from_env() -> InstanceStoreGateway | None:
-    """None means "no OpenSearch configured" — callers fall back to the
+    """None means "no OpenSearch configured" - callers fall back to the
     Postgres-backed services/instances.py path, matching how
     S3StorageGateway/Boto3SecretsGateway fall back to their dev counterparts
     when their env vars are unset."""

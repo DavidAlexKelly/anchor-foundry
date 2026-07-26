@@ -1,4 +1,4 @@
-"""Cron scheduling helper — the API's half of scheduling (spec: cron-
+"""Cron scheduling helper - the API's half of scheduling (spec: cron-
 triggered models, scheduled connection syncs). This computes only the
 *initial* next_run_at guess when a schedule is first set or changed; the
 worker (apps/worker/src/anchor_worker/jobs/{model_runs,sync_configs}.py) is

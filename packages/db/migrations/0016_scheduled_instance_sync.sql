@@ -4,7 +4,7 @@
 --
 -- object_type_source sync (0012) reads the mapped dataset's *current*
 -- Parquet snapshot in full and upserts every row by primary key
--- (mark-and-sweep removal of anything no longer present) — this is already
+-- (mark-and-sweep removal of anything no longer present) - this is already
 -- the right approach for this domain, not a stopgap: the underlying dataset
 -- is itself replaced wholesale on every upload/sync/model run, not an
 -- append log, so there is no "rows changed since a cursor" to filter on the

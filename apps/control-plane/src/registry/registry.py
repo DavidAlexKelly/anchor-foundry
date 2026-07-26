@@ -190,7 +190,7 @@ class StackRegistry:
         return self._to_record(row)
 
     def external_id_for(self, org_slug: str) -> str:
-        """Decrypt the external ID — used ONLY at STS assume-role time."""
+        """Decrypt the external ID - used ONLY at STS assume-role time."""
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT external_id_cipher FROM customer_stacks WHERE org_slug=%s",
