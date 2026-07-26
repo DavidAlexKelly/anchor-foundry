@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 import psycopg
+from psycopg import sql
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 FILENAME_RE = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
@@ -57,6 +58,22 @@ def discover_migrations() -> list[Path]:
 
 def checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sync_app_password(conn: psycopg.Connection) -> None:
+    """0006_rls.sql creates platform_app with a fixed placeholder password
+    (migrations are checksummed/immutable, so the real per-deployment
+    password can't live in the migration file itself). PLATFORM_APP_PASSWORD
+    carries the actual value from Secrets Manager in the deployed stack;
+    local dev/CI don't set it, so this is a no-op there. Safe to run on
+    every invocation, not just first-time — keeps the role in sync if the
+    secret is ever rotated."""
+    password = os.environ.get("PLATFORM_APP_PASSWORD")
+    if not password:
+        return
+    with conn.cursor() as cur:
+        cur.execute(sql.SQL("ALTER ROLE platform_app PASSWORD {}").format(sql.Literal(password)))
+    conn.commit()
 
 
 def main() -> int:
@@ -100,6 +117,8 @@ def main() -> int:
 
             if not pending:
                 print("database is up to date")
+                if not args.dry_run:
+                    sync_app_password(conn)
                 return 0
 
             for m in pending:
@@ -118,6 +137,8 @@ def main() -> int:
                     print(f"error applying {m.name}: {exc}", file=sys.stderr)
                     return 1
             conn.commit()
+            if not args.dry_run:
+                sync_app_password(conn)
     except psycopg.OperationalError as exc:
         print(f"error: could not connect to database: {exc}", file=sys.stderr)
         return 2
