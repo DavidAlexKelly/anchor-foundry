@@ -42,6 +42,7 @@ class Settings(BaseSettings):
                 f"postgresql+psycopg://{self.database_username}:"
                 f"{quote(self.database_password, safe='')}"
                 f"@{self.database_host}:{self.database_port}/{self.database_name}"
+                f"?sslmode=require"
             )
         return self
 
