@@ -120,6 +120,13 @@ Resources:
                 Action:
                   - rds:ModifyDBInstance
                   - rds:DescribeDBInstances
+                  # Deleted directly, not left to CloudFormation's delete-stack:
+                  # CloudFormation checks its own template's last-declared
+                  # DeletionProtection (still true) rather than the live value
+                  # ModifyDBInstance above just cleared, and silently skips
+                  # deleting the instance instead - confirmed against a real
+                  # stack (see deprovisioner.py's module docstring).
+                  - rds:DeleteDBInstance
                 Resource:
                   - !Sub "arn:aws:rds:*:${AWS::AccountId}:db:platformstack-*"
               - Sid: TeardownStorage

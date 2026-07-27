@@ -15,10 +15,18 @@ Order matters and is the whole reason this isn't just `cfn.delete_stack()`:
      these physical names, so this is the only reliable way to learn them
      (customer-stack.ts's DatabaseInstanceIdentifier/SearchDomainName/
      AccessLogBucketName/DataBucketName outputs exist for exactly this).
-  2. Disable RDS deletion protection and wait for it to actually clear -
-     CloudFormation will otherwise fail deleting the DB instance even
-     moments after the ModifyDBInstance call returns.
-  3. Delete the stack and poll until it's gone.
+  2. Disable RDS deletion protection, wait for it to actually clear, then
+     delete the DB instance *directly* - not left to the stack deletion in
+     step 3. CloudFormation decides whether to delete an RDS instance by
+     checking its own template's last-declared DeletionProtection property,
+     not the resource's live AWS state, so disabling it out-of-band doesn't
+     change what CloudFormation itself believes - it silently DELETE_SKIPs
+     the instance instead of deleting it, leaving its ENI attached and
+     blocking every security group/subnet that depends on it from ever
+     deleting. Confirmed against a real stack, not theoretical - deleting
+     it directly sidesteps CloudFormation's stale view entirely.
+  3. Delete the stack and poll until it's gone. CloudFormation will mark
+     the (already-deleted) DB instance DELETE_SKIPPED again, harmlessly.
   4. Only now clean up what RETAIN left behind: empty + delete both S3
      buckets, delete the OpenSearch domain. Best-effort and logged, not
      fatal to the overall result - the expensive, ongoing-cost resources
@@ -77,6 +85,16 @@ class Deprovisioner:
             if db_id:
                 self._aws.disable_deletion_protection(creds, region, db_id)
                 self._wait_for_deletion_protection_off(creds, region, db_id)
+                # Deleted directly, not left to delete_stack below:
+                # CloudFormation checks its own template's last-declared
+                # DeletionProtection (still true, from the original deploy)
+                # rather than the live value just cleared above, and
+                # silently DELETE_SKIPPED the instance instead of deleting
+                # it - which leaves its ENI attached and blocks every
+                # security group/subnet that depends on it from ever
+                # deleting. Confirmed against a real stack, not theoretical.
+                self._aws.delete_db_instance(creds, region, db_id)
+                self._wait_for_db_instance_deleted(creds, region, db_id)
             else:
                 logger.warning(
                     "no DatabaseInstanceIdentifier output for %s - stack predates this output; "
@@ -127,6 +145,16 @@ class Deprovisioner:
         raise TimeoutError(
             f"RDS deletion protection on {db_instance_identifier} did not clear "
             f"within {self._protection_wait_timeout}s"
+        )
+
+    def _wait_for_db_instance_deleted(self, creds: TempCredentials, region: str, db_instance_identifier: str) -> None:
+        deadline = time.monotonic() + self._poll_timeout
+        while time.monotonic() < deadline:
+            if self._aws.db_instance_status(creds, region, db_instance_identifier) is None:
+                return
+            time.sleep(self._poll_interval)
+        raise TimeoutError(
+            f"RDS instance {db_instance_identifier} did not finish deleting within {self._poll_timeout}s"
         )
 
     def _poll_until_deleted(self, creds: TempCredentials, region: str) -> None:
