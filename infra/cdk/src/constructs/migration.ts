@@ -1,4 +1,3 @@
-import { execSync } from "child_process";
 import * as path from "path";
 import { Duration } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
@@ -48,6 +47,24 @@ export class MigrationTriggerConstruct extends Construct {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       code: lambda.Code.fromAsset(DB_PACKAGE_DIR, {
         bundling: {
+          // Docker only, deliberately - no `local` fallback. CDK tries
+          // `local.tryBundle()` first UNCONDITIONALLY, regardless of
+          // whether Docker is available, falling back to Docker only if it
+          // returns false/throws - it is not "Docker if available, else
+          // local". A `local` fallback here that runs the *host's* pip with
+          // `--platform manylinux2014_x86_64 --only-binary=:all:` (added
+          // once, to let `cdk synth` run in a Docker-less dev sandbox)
+          // silently WON on a real deploy from a Mac that had Docker
+          // running the whole time, producing a psycopg_binary wheel that
+          // imported fine locally but failed at Lambda runtime ("no pq
+          // wrapper available" - none of psycopg's c/binary/python
+          // implementations actually worked). Native-extension deps like
+          // psycopg need the exact Amazon Linux build environment the
+          // official bundling image provides; there is no safe host-pip
+          // substitute for that, so this only ever bundles via Docker now -
+          // `cdk synth`/`cdk deploy` for this stack requires a running
+          // Docker daemon, same as this repo's own Dockerfile-based service
+          // images already do.
           image: lambda.Runtime.PYTHON_3_12.bundlingImage,
           command: [
             "bash",
@@ -56,31 +73,6 @@ export class MigrationTriggerConstruct extends Construct {
               "cp migrate.py lambda_handler.py /asset-output && " +
               "cp -r migrations /asset-output",
           ],
-          // Lets `cdk synth` succeed on hosts without a running Docker
-          // daemon (this repo's own dev sandbox included) by installing the
-          // same manylinux wheels pip would otherwise fetch inside the
-          // Docker bundling image above - identical resulting asset either
-          // way, so real deploys (which do have Docker) aren't affected.
-          local: {
-            tryBundle(outputDir: string): boolean {
-              try {
-                execSync(
-                  `pip install -r requirements.txt -t "${outputDir}" ` +
-                    "--platform manylinux2014_x86_64 --implementation cp " +
-                    "--python-version 3.12 --only-binary=:all:",
-                  { cwd: DB_PACKAGE_DIR, stdio: "inherit" }
-                );
-                execSync(`cp migrate.py lambda_handler.py "${outputDir}"`, {
-                  cwd: DB_PACKAGE_DIR,
-                  stdio: "inherit",
-                });
-                execSync(`cp -r migrations "${outputDir}"`, { cwd: DB_PACKAGE_DIR, stdio: "inherit" });
-                return true;
-              } catch {
-                return false;
-              }
-            },
-          },
         },
       }),
       environment: {
