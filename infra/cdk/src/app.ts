@@ -14,6 +14,14 @@ const platformUrl = app.node.tryGetContext("platformUrl") as string | undefined;
 const vendorEcrRegistry = app.node.tryGetContext("vendorEcrRegistry") as string | undefined;
 const imageTag = (app.node.tryGetContext("imageTag") as string | undefined) ?? "latest";
 const region = app.node.tryGetContext("region") as string | undefined;
+// Defaults true (spec §10 security default) - the control plane's own
+// deploys never pass this context key, so every real customer stack keeps
+// the safe default. Only ever set to "false" for a throwaway dry-run stack
+// that expects to be torn down repeatedly: without it, any failed CREATE
+// that reaches the RDS instance forces a manual teardown before
+// CloudFormation's own rollback can finish (see STATUS.md).
+const deletionProtectionCtx = app.node.tryGetContext("deletionProtection") as string | undefined;
+const deletionProtection = deletionProtectionCtx !== "false";
 
 if (!orgSlug || !platformUrl || !vendorEcrRegistry) {
   throw new Error(
@@ -29,6 +37,7 @@ new CustomerStack(app, "PlatformStack", {
   platformUrl,
   vendorEcrRegistry,
   imageTag,
+  deletionProtection,
   env: region ? { region } : undefined,
   description: `Platform stack for ${orgSlug} - provisioned by the platform control plane`,
 });

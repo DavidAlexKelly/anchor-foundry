@@ -16,6 +16,9 @@ export interface CustomerStackProps extends StackProps {
   readonly platformUrl: string;
   readonly vendorEcrRegistry: string; // e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com
   readonly imageTag: string;
+  /** See DataStoresConstruct - defaults to true, only ever overridden for
+   * throwaway dry-run stacks (app.ts's `deletionProtection` context flag). */
+  readonly deletionProtection?: boolean;
 }
 
 /**
@@ -51,7 +54,11 @@ export class CustomerStack extends Stack {
     new guardduty.CfnDetector(this, "GuardDuty", { enable: true });
 
     // ---- Stateful stores ----------------------------------------------------
-    const data = new DataStoresConstruct(this, "Data", { vpc, orgSlug: props.orgSlug });
+    const data = new DataStoresConstruct(this, "Data", {
+      vpc,
+      orgSlug: props.orgSlug,
+      deletionProtection: props.deletionProtection,
+    });
     Tags.of(data.dataBucket).add("platform:component", "storage");
     Tags.of(data.database).add("platform:component", "database");
     Tags.of(data.search).add("platform:component", "object-search");

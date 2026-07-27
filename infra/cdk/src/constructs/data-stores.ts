@@ -11,6 +11,15 @@ import { Construct } from "constructs";
 export interface DataStoresProps {
   readonly vpc: ec2.IVpc;
   readonly orgSlug: string;
+  /** Defaults to true (spec §10: a bad deploy can't wipe a customer's
+   * database). Only ever overridden false for throwaway dry-run stacks
+   * that expect to be torn down repeatedly - see app.ts's
+   * `deletionProtection` context flag. Without it, ANY failed CREATE that
+   * gets as far as this resource forces a manual RDS teardown before the
+   * automatic rollback can finish, because CloudFormation checks this
+   * template property (not the live value) before deleting the instance -
+   * true even during its own rollback, not just a deliberate delete-stack. */
+  readonly deletionProtection?: boolean;
 }
 
 /**
@@ -78,7 +87,7 @@ export class DataStoresConstruct extends Construct {
       storageEncrypted: true, // §10
       storageEncryptionKey: this.dataKey,
       publiclyAccessible: false, // §10
-      deletionProtection: true, // §10
+      deletionProtection: props.deletionProtection ?? true, // §10
       backupRetention: Duration.days(14), // §10: automated backups
       credentials: rds.Credentials.fromGeneratedSecret("platform"),
       databaseName: "platform",
