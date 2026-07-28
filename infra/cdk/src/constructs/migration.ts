@@ -1,5 +1,5 @@
 import * as path from "path";
-import { Duration } from "aws-cdk-lib";
+import { DockerImage, Duration } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as rds from "aws-cdk-lib/aws-rds";
@@ -18,6 +18,7 @@ export interface MigrationTriggerProps {
 }
 
 const DB_PACKAGE_DIR = path.join(__dirname, "..", "..", "..", "..", "packages", "db");
+const BUNDLING_DOCKERFILE_DIR = path.join(__dirname, "migration-bundling");
 
 /**
  * Runs packages/db's migrations against the customer's RDS instance on
@@ -41,6 +42,9 @@ export class MigrationTriggerConstruct extends Construct {
 
     this.trigger = new triggers.TriggerFunction(this, "Fn", {
       runtime: lambda.Runtime.PYTHON_3_12,
+      // Must match the bundling image's --platform below, explicitly - see
+      // that comment for why leaving either to its default breaks psycopg.
+      architecture: lambda.Architecture.X86_64,
       handler: "lambda_handler.handler",
       timeout: Duration.minutes(5),
       vpc,
@@ -65,7 +69,23 @@ export class MigrationTriggerConstruct extends Construct {
           // `cdk synth`/`cdk deploy` for this stack requires a running
           // Docker daemon, same as this repo's own Dockerfile-based service
           // images already do.
-          image: lambda.Runtime.PYTHON_3_12.bundlingImage,
+          // NOT `lambda.Runtime.PYTHON_3_12.bundlingImage` via
+          // `fromRegistry` - aws-cdk-lib 2.150.0's asset bundling silently
+          // drops a `bundling.platform` option for both BIND_MOUNT and
+          // VOLUME_COPY file access (confirmed by reading aws-cdk-lib's own
+          // source: neither forwards it into the eventual `docker run`).
+          // Without it, `docker run` defaults to the *host's* architecture,
+          // not the Lambda's: on Apple Silicon that built an arm64
+          // psycopg_binary wheel for this X86_64 function, failing at
+          // runtime with "no pq wrapper available" - a different root cause
+          // than the `local`-bundling-fallback bug above, same symptom.
+          // `DockerImage.fromBuild`'s `platform`, in contrast, IS passed to
+          // `docker build --platform`, producing a single-arch image that
+          // needs no further --platform flag at run time - the only
+          // reliable way in this CDK version to pin the bundling
+          // container's architecture regardless of the host machine
+          // running `cdk deploy`. Must match `architecture` above.
+          image: DockerImage.fromBuild(BUNDLING_DOCKERFILE_DIR, { platform: "linux/amd64" }),
           command: [
             "bash",
             "-c",
