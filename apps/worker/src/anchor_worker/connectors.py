@@ -15,13 +15,27 @@ to introduce by copy-paste.
 """
 
 import csv
+import os
 import re
+from dataclasses import dataclass
 
 
 class ConnectorError(RuntimeError):
     """User-safe extract failure: source unreachable, table missing/unreadable,
     or past the byte cap. Recorded as the sync run's error; jobs must include
     this in their per-candidate except tuple."""
+
+
+@dataclass(frozen=True)
+class Extract:
+    """What a snapshot produced: a file plus the extension dataset_engine
+    should read it as, and whether the source had nothing new past the cursor.
+    Mirrors the API-side Extract; see its docstring for why `empty` is an
+    explicit flag rather than an inferred row count."""
+
+    path: str
+    extension: str
+    empty: bool = False
 
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
@@ -74,20 +88,22 @@ class PostgresConnector:
             "connect_timeout": 8,
         }
 
-    def snapshot_to_csv(
+    def snapshot(
         self,
         config: dict,
         secret: dict,
         *,
         source_schema: str,
         source_table: str,
-        dest_csv: str,
+        dest_dir: str,
         max_bytes: int,
         cursor_column=None,
         cursor_value=None,
-    ) -> None:
+    ) -> "Extract":
         import psycopg
         from psycopg import sql
+
+        dest_csv = os.path.join(dest_dir, "snapshot.csv")
 
         qualified = sql.SQL("{}.{}").format(
             sql.Identifier(check_identifier(source_schema)),
@@ -125,12 +141,18 @@ class PostgresConnector:
         except psycopg.OperationalError as exc:
             reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "connection failed"
             raise ConnectorError(reason) from exc
+        return Extract(path=dest_csv, extension=".csv")
 
     def max_cursor_value(
         self, config: dict, secret: dict, *, source_schema: str, source_table: str, cursor_column: str
     ):
         import psycopg
         from psycopg import sql
+
+        # None rather than an error when no cursor column is configured - see
+        # the API-side connector for why callers rely on that.
+        if not cursor_column:
+            return None
 
         query = sql.SQL("SELECT max({}) FROM {}.{}").format(
             sql.Identifier(check_identifier(cursor_column)),
@@ -227,21 +249,22 @@ class MySQLConnector:
         reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "connection failed"
         return ConnectorError(reason)
 
-    def snapshot_to_csv(
+    def snapshot(
         self,
         config: dict,
         secret: dict,
         *,
         source_schema: str,
         source_table: str,
-        dest_csv: str,
+        dest_dir: str,
         max_bytes: int,
         cursor_column=None,
         cursor_value=None,
-    ) -> None:
+    ) -> "Extract":
         import pymysql
         import pymysql.cursors
 
+        dest_csv = os.path.join(dest_dir, "snapshot.csv")
         qualified = f"{_quote_mysql(source_schema)}.{_quote_mysql(source_table)}"
         params = ()
         if cursor_column and cursor_value is not None:
@@ -263,11 +286,15 @@ class MySQLConnector:
                             out.writerow([_csv_value(v) for v in row])
         except pymysql.MySQLError as exc:
             raise self._translate(exc, source_schema, source_table) from exc
+        return Extract(path=dest_csv, extension=".csv")
 
     def max_cursor_value(
         self, config: dict, secret: dict, *, source_schema: str, source_table: str, cursor_column: str
     ):
         import pymysql
+
+        if not cursor_column:
+            return None
 
         query = (
             f"SELECT max({_quote_mysql(cursor_column)}) "
@@ -283,10 +310,134 @@ class MySQLConnector:
         return None if row is None or row[0] is None else str(row[0])
 
 
+# ---- S3 / object storage -----------------------------------------------------
+# source_schema is the "folder" under the connection's configured prefix,
+# source_table the object's file name; the cursor is the object's LastModified
+# rather than a column, since the unit of change is the object. See the
+# API-side connector for the full reasoning.
+_S3_KEY_MAX = 1024
+
+
+class S3Connector:
+    type_name = "s3"
+
+    def _client(self, config: dict, secret: dict):
+        import boto3
+        from botocore.config import Config as BotoConfig
+
+        kwargs = {
+            "region_name": config.get("region") or "eu-north-1",
+            "config": BotoConfig(
+                connect_timeout=8, read_timeout=60, retries={"max_attempts": 3}
+            ),
+        }
+        if config.get("endpoint_url"):
+            kwargs["endpoint_url"] = config["endpoint_url"]
+        if secret.get("access_key_id") and secret.get("secret_access_key"):
+            kwargs["aws_access_key_id"] = secret["access_key_id"]
+            kwargs["aws_secret_access_key"] = secret["secret_access_key"]
+        return boto3.client("s3", **kwargs)
+
+    @staticmethod
+    def _translate(exc, what: str = "") -> ConnectorError:
+        from botocore.exceptions import ClientError, EndpointConnectionError, NoCredentialsError
+
+        if isinstance(exc, NoCredentialsError):
+            return ConnectorError("no AWS credentials available for the object storage source")
+        if isinstance(exc, EndpointConnectionError):
+            return ConnectorError("could not reach the object storage endpoint")
+        if isinstance(exc, ClientError):
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchBucket", "404", "NoSuchKey"):
+                return ConnectorError(f"{what or 'the object'} does not exist")
+            if code in ("AccessDenied", "403", "AllAccessDisabled"):
+                return ConnectorError(f"access denied reading {what or 'the bucket'}")
+            if code in ("InvalidAccessKeyId", "SignatureDoesNotMatch"):
+                return ConnectorError("the credentials were rejected by the endpoint")
+            return ConnectorError(f"object storage error: {code or 'unknown'}")
+        return ConnectorError(str(exc).strip().splitlines()[0] or "connection failed")
+
+    def _resolve_key(self, prefix: str, source_schema: str, source_table: str) -> str:
+        folder = (source_schema or "").strip("/")
+        name = (source_table or "").strip("/")
+        if not name:
+            raise ConnectorError("no object name given")
+        if ".." in folder or ".." in name or "/" in name:
+            raise ConnectorError(f"invalid object name {source_table!r}")
+        key = f"{prefix}{folder + '/' if folder else ''}{name}"
+        if len(key) > _S3_KEY_MAX or not key.startswith(prefix):
+            raise ConnectorError(f"invalid object name {source_table!r}")
+        return key
+
+    def snapshot(
+        self,
+        config: dict,
+        secret: dict,
+        *,
+        source_schema: str,
+        source_table: str,
+        dest_dir: str,
+        max_bytes: int,
+        cursor_column=None,
+        cursor_value=None,
+    ) -> "Extract":
+        bucket = config["bucket"]
+        prefix = config.get("prefix") or ""
+        client = self._client(config, secret)
+        key = self._resolve_key(prefix, source_schema, source_table)
+        extension = os.path.splitext(source_table)[1].lower()
+
+        try:
+            head = client.head_object(Bucket=bucket, Key=key)
+        except Exception as exc:
+            raise self._translate(exc, f"{bucket}/{key}") from exc
+
+        if int(head.get("ContentLength", 0)) > max_bytes:
+            raise size_cap_error(max_bytes)
+
+        last_modified = _s3_timestamp(head.get("LastModified"))
+        if cursor_value is not None and last_modified is not None and last_modified <= cursor_value:
+            return Extract(path="", extension=extension, empty=True)
+
+        local = os.path.join(dest_dir, f"snapshot{extension}")
+        try:
+            client.download_file(bucket, key, local)
+        except Exception as exc:
+            raise self._translate(exc, f"{bucket}/{key}") from exc
+        return Extract(path=local, extension=extension)
+
+    def max_cursor_value(
+        self, config: dict, secret: dict, *, source_schema: str, source_table: str, cursor_column: str
+    ):
+        bucket = config["bucket"]
+        prefix = config.get("prefix") or ""
+        client = self._client(config, secret)
+        key = self._resolve_key(prefix, source_schema, source_table)
+        try:
+            head = client.head_object(Bucket=bucket, Key=key)
+        except Exception as exc:
+            raise self._translate(exc, f"{bucket}/{key}") from exc
+        return _s3_timestamp(head.get("LastModified"))
+
+
+def _s3_timestamp(value):
+    """Fixed-width, lexicographically ordered UTC isoformat - sync_last_cursor_value
+    is a text column and the comparison it feeds is a string comparison.
+    Mirrors the API-side helper."""
+    if value is None:
+        return None
+    if hasattr(value, "astimezone"):
+        import datetime as _dt
+
+        return value.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+    return str(value)
+
+
 # ---- registry ----------------------------------------------------------------
 _REGISTRY = {
     PostgresConnector.type_name: PostgresConnector(),
     MySQLConnector.type_name: MySQLConnector(),
+    S3Connector.type_name: S3Connector(),
 }
 
 

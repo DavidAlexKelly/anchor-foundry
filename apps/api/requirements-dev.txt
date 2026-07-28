@@ -3,3 +3,4 @@
 -r requirements.txt
 pytest==8.3.3
 httpx==0.27.2
+moto[server]==5.0.13

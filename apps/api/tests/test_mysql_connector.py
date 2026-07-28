@@ -346,14 +346,16 @@ def test_identifier_rules_are_the_connectors_own(
     assert r.json()["ok"] is True, r.json()["error"]
 
     # And a genuinely malformed name is still refused before it reaches SQL.
-    with pytest.raises(SourceReadError):
-        MySQLConnector().snapshot_to_csv(
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp, pytest.raises(SourceReadError):
+        MySQLConnector().snapshot(
             {"host": MYSQL_HOST, "port": MYSQL_PORT, "database": SOURCE_DB,
              "user": SOURCE_USER, "ssl_mode": "disabled"},
             {"password": SOURCE_PASSWORD},
             source_schema=SOURCE_DB,
             source_table="orders; DROP TABLE orders",
-            dest_csv="/dev/null",
+            dest_dir=tmp,
             max_bytes=1024,
         )
 

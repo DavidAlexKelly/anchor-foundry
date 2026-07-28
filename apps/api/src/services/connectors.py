@@ -7,7 +7,7 @@ knows which driver is in play:
     validate_config(config)   -> the cleaned, non-secret config to store
     test(config, secret)      -> None; raises ConnectorOperationError
     discover(config, secret)  -> [TableInfo]
-    snapshot_to_csv(...)      -> extract rows to a CSV file, byte-capped
+    snapshot(...)             -> an Extract: a file on disk, byte-capped
     max_cursor_value(...)     -> the source's current high-water mark
 
 The last two are the roadmap's ``snapshot()``/``incremental(cursor)`` as a
@@ -16,6 +16,15 @@ single method rather than two: an incremental pull is the same extract with a
 that way. Splitting them would duplicate the byte-cap and error-translation
 loop in each connector for no behavioural difference; ``cursor_column`` being
 ``None`` (a full snapshot) is the only fork, and it is one line of SQL.
+
+``snapshot`` returns an ``Extract`` (path + extension) rather than always
+writing CSV, because not every source *has* a row-by-row wire format worth
+inventing one for. A database has to serialise its rows to something, and CSV
+is the honest choice there; an object-storage source is already sitting on a
+Parquet or JSON file that ``dataset_engine`` can read directly, and pushing it
+through CSV on the way would discard the types Parquet is carrying for no
+reason. Callers hand the returned extension straight to
+``ingest_to_parquet``, which has always taken one.
 
 Callers own *policy* (how many bytes an interactive sync may pull, which
 dataset the rows land in), connectors own *mechanism* (the driver call and
@@ -39,6 +48,7 @@ silent, per-connector failure.
 from __future__ import annotations
 
 import csv
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
@@ -88,8 +98,28 @@ class ColumnInfo:
 class TableInfo:
     schema: str
     name: str
-    kind: str  # "table" | "view"
+    kind: str  # "table" | "view" | "file"
     columns: list[ColumnInfo] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class Extract:
+    """What a snapshot produced: a file on disk plus the extension
+    dataset_engine should read it as.
+
+    `empty` means "the source had nothing past the cursor" - the ordinary
+    steady state of a scheduled incremental sync between source writes. It is
+    an explicit flag rather than something callers infer from a row count
+    because a source can legitimately produce *no file at all* in that case
+    (an object-storage connector with no new objects has nothing to write),
+    and because inferring it costs a pointless ingest of a header-only CSV -
+    the exact path that produced the all-VARCHAR type-inference bug this
+    codebase already had to fix once.
+    """
+
+    path: str
+    extension: str
+    empty: bool = False
 
 
 class SourceConnector(Protocol):
@@ -114,21 +144,22 @@ class SourceConnector(Protocol):
     def discover(self, config: dict[str, Any], secret: dict[str, str]) -> list[TableInfo]:
         """Every table/view the connection's user can see, with columns."""
 
-    def snapshot_to_csv(
+    def snapshot(
         self,
         config: dict[str, Any],
         secret: dict[str, str],
         *,
         source_schema: str,
         source_table: str,
-        dest_csv: str,
+        dest_dir: str,
         max_bytes: int,
         cursor_column: str | None = None,
         cursor_value: str | None = None,
-    ) -> None:
-        """Extract the table to a CSV file (header included). With
-        cursor_column/cursor_value set, only rows strictly past the cursor -
-        the incremental pull. Raises SourceReadError past max_bytes."""
+    ) -> Extract:
+        """Extract the table into a file inside dest_dir (which the caller
+        owns and cleans up). With cursor_column/cursor_value set, only what is
+        strictly past the cursor - the incremental pull. Raises SourceReadError
+        past max_bytes."""
 
     def max_cursor_value(
         self,
@@ -280,20 +311,22 @@ class PostgresConnector:
             )
         return list(tables.values())
 
-    def snapshot_to_csv(
+    def snapshot(
         self,
         config: dict[str, Any],
         secret: dict[str, str],
         *,
         source_schema: str,
         source_table: str,
-        dest_csv: str,
+        dest_dir: str,
         max_bytes: int,
         cursor_column: str | None = None,
         cursor_value: str | None = None,
-    ) -> None:
+    ) -> Extract:
         import psycopg
         from psycopg import sql
+
+        dest_csv = os.path.join(dest_dir, "snapshot.csv")
 
         qualified = sql.SQL("{}.{}").format(
             sql.Identifier(check_identifier(source_schema)),
@@ -332,6 +365,7 @@ class PostgresConnector:
             ) from exc
         except psycopg.OperationalError as exc:
             raise self._operational(exc) from exc
+        return Extract(path=dest_csv, extension=".csv")
 
     def max_cursor_value(
         self,
@@ -344,6 +378,14 @@ class PostgresConnector:
     ) -> str | None:
         import psycopg
         from psycopg import sql
+
+        # A relational source has no high-water mark without a column to take
+        # it from. Returning None (rather than raising) lets callers ask every
+        # incremental sync for a cursor without first knowing whether this
+        # particular connector needs a column - object storage, whose cursor is
+        # the object's own LastModified, ignores the argument entirely.
+        if not cursor_column:
+            return None
 
         query = sql.SQL("SELECT max({}) FROM {}.{}").format(
             sql.Identifier(check_identifier(cursor_column)),
@@ -547,21 +589,22 @@ class MySQLConnector:
             )
         return list(tables.values())
 
-    def snapshot_to_csv(
+    def snapshot(
         self,
         config: dict[str, Any],
         secret: dict[str, str],
         *,
         source_schema: str,
         source_table: str,
-        dest_csv: str,
+        dest_dir: str,
         max_bytes: int,
         cursor_column: str | None = None,
         cursor_value: str | None = None,
-    ) -> None:
+    ) -> Extract:
         import pymysql
         import pymysql.cursors
 
+        dest_csv = os.path.join(dest_dir, "snapshot.csv")
         qualified = f"{_quote_mysql(source_schema)}.{_quote_mysql(source_table)}"
         params: tuple[Any, ...] = ()
         if cursor_column and cursor_value is not None:
@@ -584,6 +627,7 @@ class MySQLConnector:
                             out.writerow([_csv_value(v) for v in row])
         except pymysql.MySQLError as exc:
             raise self._translate(exc, source_schema, source_table) from exc
+        return Extract(path=dest_csv, extension=".csv")
 
     def max_cursor_value(
         self,
@@ -595,6 +639,9 @@ class MySQLConnector:
         cursor_column: str,
     ) -> str | None:
         import pymysql
+
+        if not cursor_column:
+            return None  # see PostgresConnector.max_cursor_value
 
         query = (
             f"SELECT max({_quote_mysql(cursor_column)}) "
@@ -624,10 +671,313 @@ def _csv_value(value: Any) -> Any:
     return value
 
 
+# ---- S3 / object storage -----------------------------------------------------
+# The first non-relational source type, and the one that made `snapshot` return
+# an Extract rather than always writing CSV: these objects are already in a
+# format dataset_engine reads natively.
+#
+# Coordinate mapping, so the layers above keep one vocabulary (same move the
+# MySQL connector makes for database-means-schema):
+#   source_schema -> the "folder" the object sits in, relative to the
+#                    connection's configured base prefix ("" for the root)
+#   source_table  -> the object's file name within that folder
+# One object is one table is one dataset, per the roadmap's "sync each as a
+# dataset". Unioning every file under a prefix into a single dataset is a
+# natural follow-up and deliberately not day one - it needs a rule for what
+# happens when two files under the same prefix disagree on schema, which is a
+# real design question rather than an extra loop.
+#
+# Cursor semantics differ from a relational source and this is the interesting
+# part: there is no cursor *column*, because the unit of change is the object,
+# not the row. The cursor is the object's LastModified, so "incremental" means
+# "this file changed since we last read it" rather than "these rows are new".
+# `cursor_column` is therefore accepted and ignored, documented here rather
+# than silently - a caller that configures one is not wrong, it just does not
+# have a column-level concept to hang it on.
+_S3_KEY_MAX = 1024
+_MAX_DISCOVER_OBJECTS = 500
+# Schema inference downloads the object. Past this, discovery still lists the
+# file (so it can be selected and synced) but reports no columns rather than
+# pulling hundreds of MB to fill in a preview grid.
+_MAX_INSPECT_BYTES = 32 * 1024 * 1024
+
+
+class S3Config(BaseModel):
+    bucket: str = Field(min_length=3, max_length=63)
+    prefix: str = Field(default="", max_length=_S3_KEY_MAX)
+    region: str = Field(default="eu-north-1", min_length=1, max_length=64)
+    # Set for S3-compatible stores (MinIO, Ceph, R2). Empty means real AWS S3.
+    endpoint_url: str = Field(default="", max_length=253)
+
+
+class S3Connector:
+    """S3 and S3-compatible object storage.
+
+    Credentials are optional, unlike every other connector here: the common
+    in-AWS case is a bucket the platform's own task role can already read, and
+    forcing a long-lived access key into Secrets Manager to express that would
+    be strictly worse security than using the role. When the secret is absent
+    boto3 falls back to its normal credential chain.
+    """
+
+    type_name = "s3"
+    display_name = "S3 / object storage"
+    config_model: type[BaseModel] = S3Config
+    secret_fields = ("access_key_id", "secret_access_key")
+
+    _CONNECT_TIMEOUT_S = 8
+
+    def validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        try:
+            cleaned = S3Config(**config).model_dump()
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            loc = ".".join(str(p) for p in first["loc"])
+            raise ConnectorConfigError(f"{loc}: {first['msg']}") from exc
+        prefix = cleaned["prefix"].lstrip("/")
+        if ".." in prefix:
+            raise ConnectorConfigError("prefix: must not contain '..'")
+        # Normalised to a trailing slash so key joins are unambiguous later.
+        if prefix and not prefix.endswith("/"):
+            prefix += "/"
+        cleaned["prefix"] = prefix
+        return cleaned
+
+    def _client(self, config: dict[str, Any], secret: dict[str, str]):
+        import boto3
+        from botocore.config import Config as BotoConfig
+
+        cfg = S3Config(**config)
+        kwargs: dict[str, Any] = {
+            "region_name": cfg.region,
+            "config": BotoConfig(
+                connect_timeout=self._CONNECT_TIMEOUT_S,
+                read_timeout=60,
+                retries={"max_attempts": 3},
+            ),
+        }
+        if cfg.endpoint_url:
+            kwargs["endpoint_url"] = cfg.endpoint_url
+        if secret.get("access_key_id") and secret.get("secret_access_key"):
+            kwargs["aws_access_key_id"] = secret["access_key_id"]
+            kwargs["aws_secret_access_key"] = secret["secret_access_key"]
+        return boto3.client("s3", **kwargs)
+
+    @staticmethod
+    def _translate(exc: Exception, what: str = "") -> Exception:
+        """botocore reports everything as ClientError with a code in the
+        response body, so the code is what the mapping keys on. Messages are
+        user-safe: they name the bucket/key and the condition, never the
+        credentials."""
+        from botocore.exceptions import ClientError, EndpointConnectionError, NoCredentialsError
+
+        if isinstance(exc, NoCredentialsError):
+            return ConnectorOperationError(
+                "no AWS credentials available - add an access key to the "
+                "connection, or grant the platform's role access to the bucket"
+            )
+        if isinstance(exc, EndpointConnectionError):
+            return ConnectorOperationError("could not reach the object storage endpoint")
+        if isinstance(exc, ClientError):
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchBucket", "404", "NoSuchKey"):
+                return SourceReadError(f"{what or 'the object'} does not exist")
+            if code in ("AccessDenied", "403", "AllAccessDisabled"):
+                return SourceReadError(f"access denied reading {what or 'the bucket'}")
+            if code in ("InvalidAccessKeyId", "SignatureDoesNotMatch"):
+                return ConnectorOperationError("the credentials were rejected by the endpoint")
+            return ConnectorOperationError(f"object storage error: {code or 'unknown'}")
+        return ConnectorOperationError(str(exc).strip().splitlines()[0] or "connection failed")
+
+    def test(self, config: dict[str, Any], secret: dict[str, str]) -> None:
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        try:
+            # list rather than head_bucket: listing under the prefix is the
+            # permission the connector actually needs, and a role may be
+            # scoped to a prefix without being allowed to see the bucket.
+            client.list_objects_v2(Bucket=cfg.bucket, Prefix=cfg.prefix, MaxKeys=1)
+        except Exception as exc:
+            raise self._translate(exc, f"bucket {cfg.bucket}") from exc
+
+    def _list_objects(self, config: dict[str, Any], secret: dict[str, str], limit: int):
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        out: list[dict[str, Any]] = []
+        try:
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=cfg.bucket, Prefix=cfg.prefix):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if key.endswith("/"):
+                        continue  # a "directory" marker, not a file
+                    if os.path.splitext(key)[1].lower() not in SUPPORTED_FILE_EXTENSIONS:
+                        continue
+                    out.append(obj)
+                    if len(out) >= limit:
+                        return out
+        except Exception as exc:
+            raise self._translate(exc, f"bucket {cfg.bucket}") from exc
+        return out
+
+    @staticmethod
+    def _split_key(prefix: str, key: str) -> tuple[str, str]:
+        """(schema, table) for a key: the folder under the base prefix, and
+        the file name."""
+        relative = key[len(prefix):] if prefix and key.startswith(prefix) else key
+        folder, _, name = relative.rpartition("/")
+        return folder, name
+
+    def _resolve_key(self, prefix: str, source_schema: str, source_table: str) -> str:
+        """Rebuild the full object key from the (schema, table) coordinates,
+        refusing anything that tries to climb out of the configured prefix -
+        the connection's prefix is a real trust boundary, not a default."""
+        folder = (source_schema or "").strip("/")
+        name = (source_table or "").strip("/")
+        if not name:
+            raise SourceReadError("no object name given")
+        if ".." in folder or ".." in name or "/" in name:
+            raise SourceReadError(f"invalid object name {source_table!r}")
+        key = f"{prefix}{folder + '/' if folder else ''}{name}"
+        if len(key) > _S3_KEY_MAX or not key.startswith(prefix):
+            raise SourceReadError(f"invalid object name {source_table!r}")
+        return key
+
+    def discover(self, config: dict[str, Any], secret: dict[str, str]) -> list[TableInfo]:
+        import tempfile
+
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        tables: list[TableInfo] = []
+        for obj in self._list_objects(config, secret, _MAX_DISCOVER_OBJECTS):
+            key = obj["Key"]
+            folder, name = self._split_key(cfg.prefix, key)
+            columns: list[ColumnInfo] = []
+            if int(obj.get("Size", 0)) <= _MAX_INSPECT_BYTES:
+                with tempfile.TemporaryDirectory() as tmp:
+                    local = os.path.join(tmp, name)
+                    try:
+                        client.download_file(cfg.bucket, key, local)
+                        columns = _describe_file(local, os.path.splitext(name)[1].lower())
+                    except Exception:
+                        # One unreadable or malformed object must not sink the
+                        # whole listing - it is still shown, just without a
+                        # column preview.
+                        columns = []
+            tables.append(TableInfo(schema=folder, name=name, kind="file", columns=columns))
+        return tables
+
+    def snapshot(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+        dest_dir: str,
+        max_bytes: int,
+        cursor_column: str | None = None,
+        cursor_value: str | None = None,
+    ) -> Extract:
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        key = self._resolve_key(cfg.prefix, source_schema, source_table)
+        extension = os.path.splitext(source_table)[1].lower()
+        if extension not in SUPPORTED_FILE_EXTENSIONS:
+            supported = ", ".join(sorted(SUPPORTED_FILE_EXTENSIONS))
+            raise SourceReadError(
+                f"unsupported file type {extension or source_table!r} (supported: {supported})"
+            )
+
+        try:
+            head = client.head_object(Bucket=cfg.bucket, Key=key)
+        except Exception as exc:
+            raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
+
+        size = int(head.get("ContentLength", 0))
+        if size > max_bytes:
+            raise size_cap_error(max_bytes)
+
+        # Incremental: the object is the unit of change, so "nothing new" means
+        # the file has not been rewritten since the last successful sync.
+        last_modified = _s3_timestamp(head.get("LastModified"))
+        if cursor_value is not None and last_modified is not None and last_modified <= cursor_value:
+            return Extract(path="", extension=extension, empty=True)
+
+        local = os.path.join(dest_dir, f"snapshot{extension}")
+        try:
+            client.download_file(cfg.bucket, key, local)
+        except Exception as exc:
+            raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
+        return Extract(path=local, extension=extension)
+
+    def max_cursor_value(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+        cursor_column: str,
+    ) -> str | None:
+        """The object's LastModified. `cursor_column` is accepted and ignored -
+        see this section's header: an object store's unit of change is the
+        object, not a column within it."""
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        key = self._resolve_key(cfg.prefix, source_schema, source_table)
+        try:
+            head = client.head_object(Bucket=cfg.bucket, Key=key)
+        except Exception as exc:
+            raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
+        return _s3_timestamp(head.get("LastModified"))
+
+
+def _s3_timestamp(value: Any) -> str | None:
+    """LastModified as a sortable, storable string. sync_last_cursor_value is
+    a text column and the comparison it feeds is a string comparison, so the
+    format has to be fixed-width and lexicographically ordered - isoformat in
+    UTC is both."""
+    if value is None:
+        return None
+    if hasattr(value, "astimezone"):
+        import datetime as _dt
+
+        return value.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+    return str(value)
+
+
+def _describe_file(path: str, extension: str) -> list[ColumnInfo]:
+    """Column names/types for a downloaded object, via the same DuckDB readers
+    the datasets layer uses for uploads - so a file discovered here reports the
+    schema it will actually land with."""
+    from . import dataset_engine as _engine
+
+    try:
+        return [
+            ColumnInfo(name=c.name, data_type=c.data_type, nullable=True, is_primary_key=False)
+            for c in _engine.describe_file(path, extension)
+        ]
+    except _engine.DatasetEngineError:
+        return []
+
+
+# Kept in step with dataset_engine's readers: a connector must never offer a
+# file the ingest path cannot actually read.
+def _supported_file_extensions() -> tuple[str, ...]:
+    from . import dataset_engine as _engine
+
+    return _engine.SUPPORTED_EXTENSIONS
+
+
+SUPPORTED_FILE_EXTENSIONS: tuple[str, ...] = _supported_file_extensions()
+
+
 # ---- registry ----------------------------------------------------------------
 _REGISTRY: dict[str, SourceConnector] = {
     PostgresConnector.type_name: PostgresConnector(),
     MySQLConnector.type_name: MySQLConnector(),
+    S3Connector.type_name: S3Connector(),
 }
 
 

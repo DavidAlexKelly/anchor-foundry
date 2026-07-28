@@ -103,7 +103,23 @@ def workspace(storage_root: str):
             "INSERT INTO projects (workspace_id, name, slug, created_by) VALUES (%s,%s,%s,%s) RETURNING id",
             (wid, f"P {tag}", f"p-{tag}", user),
         ).fetchone()[0]
-    return {"tag": tag, "workspace_id": wid, "project_id": pid, "user_id": user}
+    yield {"tag": tag, "workspace_id": wid, "project_id": pid, "user_id": user}
+
+    # Un-schedule everything this test created. The job reschedules a
+    # connection after every run (cron "* * * * *" -> due again a minute
+    # later), so a test connection left behind stays *permanently due* and
+    # every later run of this suite picks it up again - against a source that
+    # no longer exists. That is slow rather than wrong (each dead source costs
+    # a connect timeout, and boto3 retries three times before giving up), and
+    # it compounds: the suite quietly grew from seconds to over ten minutes
+    # once a few dozen had accumulated. Clearing the schedule is enough -
+    # discovery only ever looks at connections with one.
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE connections SET sync_schedule = NULL, sync_next_run_at = NULL "
+            "WHERE workspace_id = %s",
+            (wid,),
+        )
 
 
 def _create_connection(
