@@ -2,21 +2,23 @@
 # build, minimal runtime. NEXT_PUBLIC_* values are baked at build time by
 # the control plane's image pipeline per customer (spec §6).
 #
-# All three stages pin --platform=linux/amd64 explicitly: `docker build`
-# with no --platform defaults to the *host's* architecture (e.g. arm64 on
-# Apple Silicon), not Fargate's x86_64 - an arm64 image on an x86_64 task
-# fails to start at all, before any application code runs (confirmed live:
-# zero CloudWatch log output, ECS deployment circuit breaker tripped).
-# Pinning here means every build is correct regardless of the machine or
-# `docker build` flags used.
-FROM --platform=linux/amd64 node:20-slim AS deps
+# All three stages pin this platform explicitly: `docker build` with no
+# --platform defaults to the *host's* architecture (e.g. arm64 on Apple
+# Silicon), not Fargate's x86_64 - an arm64 image on an x86_64 task fails to
+# start at all, before any application code runs (confirmed live: zero
+# CloudWatch log output, ECS deployment circuit breaker tripped). An ARG
+# default rather than a literal in each FROM, per BuildKit's own lint rule
+# (FromPlatformFlagConstDisallowed) - same fixed value, no lint warning.
+ARG PLATFORM=linux/amd64
+
+FROM --platform=$PLATFORM node:20-slim AS deps
 WORKDIR /repo
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/
 COPY packages/types/package.json packages/types/
 RUN npm ci --no-audit --no-fund
 
-FROM --platform=linux/amd64 node:20-slim AS build
+FROM --platform=$PLATFORM node:20-slim AS build
 WORKDIR /repo
 # Copy the whole deps-stage tree, not just /repo/node_modules: npm workspaces
 # can nest a package's deps under its own workspace directory (e.g. this
@@ -33,7 +35,7 @@ ENV NEXT_PUBLIC_COGNITO_DOMAIN=$NEXT_PUBLIC_COGNITO_DOMAIN \
     NEXT_TELEMETRY_DISABLED=1
 RUN npm run build -w @platform/web
 
-FROM --platform=linux/amd64 node:20-slim AS run
+FROM --platform=$PLATFORM node:20-slim AS run
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 RUN useradd --create-home --uid 10001 apprunner
