@@ -1,7 +1,13 @@
 # Anchor worker. Dagster daemon + code location in one container for the
 # single-tenant deployment size this platform targets (spec §6); split into
 # separate daemon/webserver/code-location services when scale demands it.
-FROM python:3.12-slim AS base
+# Pinned explicitly: `docker build` with no --platform defaults to the
+# *host's* architecture (e.g. arm64 on Apple Silicon), not Fargate's x86_64 -
+# an arm64 image on an x86_64 task fails to start at all, before any
+# application code runs (confirmed live: zero CloudWatch log output, ECS
+# deployment circuit breaker tripped). Pinning here means every build is
+# correct regardless of the machine or `docker build` flags used.
+FROM --platform=linux/amd64 python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
