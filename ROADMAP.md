@@ -1,0 +1,113 @@
+# Anchor — Roadmap: building out the six pillars
+
+_Companion to `STATUS.md` (what's built, in detail). This document is the build plan for reaching partial Palantir Foundry parity, organised around the platform's six core pillars — Connections, Datasets, Models, Objects, Canvas, Code — each in the detail needed to actually start building, not just a bullet list. Re-read `STATUS.md`'s "What's done" sections before starting any item here; several of these build directly on existing services/migrations named below._
+
+## Why this order
+
+Data flows downstream through this platform in one direction, and each pillar's build-out leans on the one before it actually working: **Connections** bring data in → **Datasets** store and version it → **Models** transform it → **Objects** give it a queryable, typed shape (the Ontology) → **Canvas** builds applications and dashboards on top of that ontology → **Code** is an alternate, version-controlled way of *authoring* the Models/Objects layers, so it comes last both because it has the least existing scaffolding (it's the one pillar not started at all) and because "version-control the pipeline" is only worth building once there's a real pipeline shape to version-control.
+
+Within each pillar, items are listed near-term-first; later items in a section usually depend on earlier ones in the same section.
+
+---
+
+## 1. Connections
+
+**Current state** (`STATUS.md` §6, §14): one connector type (PostgreSQL — test, schema discovery, full-snapshot and cursor-incremental sync), credentials exclusively in Secrets Manager, cron or manual scheduling, per-connection error isolation in the worker.
+
+A platform whose whole pitch is "connect your data" isn't credible to a real prospect on one source type. This pillar's build-out is mostly about breadth and resilience, not new concepts — the sync/credential/scheduling architecture already generalises, it just hasn't been asked to yet.
+
+1. **Generalise the connector registry before adding the second type.** Look at how `services/connections.py` currently hard-codes "PostgreSQL" through test/discover/sync — extract a small connector interface (`test()`, `discover_schema()`, `snapshot()`, `incremental(cursor)`) that a connector type implements, with a registry mapping `connection.type` to an implementation. Doing this refactor *before* adding MySQL means MySQL proves the abstraction instead of copy-pasting the Postgres path and drifting.
+2. **MySQL/MariaDB connector.** The nearest-shape addition to prove the registry — same relational model, same cursor-incremental logic, different driver (`pymysql`/`mysqlclient`) and a different `information_schema` dialect for discovery.
+3. **Object-storage file connector (S3/compatible).** Point at a bucket + prefix, list matching files (CSV/Parquet/JSON — reuse the exact format-detection and canonicalisation logic `datasets` already has for uploads), sync each as a dataset. This is a smaller lift than a new database driver since the ingestion format-handling already exists; the new part is listing/watching a prefix for new/changed files as the "source."
+4. **A cloud warehouse connector** (Snowflake or BigQuery — pick whichever a real prospect conversation actually names first; don't build both speculatively). Same relational shape as Postgres/MySQL again, but credential handling differs (key-pair auth for Snowflake, service-account JSON for BigQuery) — first connector to exercise a non-password credential shape in Secrets Manager.
+5. **Generic REST/API connector.** The highest-variance connector to build well: pagination styles, auth schemes (API key, OAuth2 client-credentials, bearer token), and response shapes differ per API. Scope the first cut narrowly — a connector that takes a URL template, an auth config, and a JSON-path for the result array/pagination cursor — rather than trying to cover every API's quirks generically.
+6. **Schema drift detection.** On every sync, compare the source's current discovered schema against what was recorded at connection-setup time; surface added/removed/retyped columns as a visible warning on the connection rather than letting a downstream dataset merge silently break or silently drop a column. Natural home: extend the existing `sync_runs` history row with a `schema_changes` field, computed at sync time.
+7. **Sync health surfaced in the product**, not just logs: last N runs with duration/row-count/status, a rolling success rate, next scheduled run — a "Connections" list page upgrade, not a new backend concept (the data — `sync_runs` — already exists).
+8. **Write-back connector (PostgreSQL first).** Actions today (§12) write back only to this platform's own dataset copy. Extend the PostgreSQL connector specifically to support a write path (an explicit opt-in per connection, scoped to specific tables/columns, audited the same way `action_runs` already is) — this is real new scope (conflict resolution: what happens if the source row changed since the last sync; permissions: who can enable write-back on a connection at all) and deserves its own design note before implementation starts, not just an extra method on the connector interface.
+9. **Streaming sources (Kafka/Kinesis)** — explicitly a stretch item, likely not worth building until a real customer conversation names a concrete streaming need; the existing batch sync (full-snapshot + cursor-incremental) covers the overwhelming majority of "connect a data source" requests a Foundry-shaped product actually gets.
+
+---
+
+## 2. Datasets
+
+**Current state** (`STATUS.md` §7): upload (CSV/TSV/Parquet/JSON/JSONL → canonical Parquet via DuckDB), preview, sandboxed arbitrary SQL query, export (CSV/Parquet), linear versioning.
+
+The storage/versioning core is solid; what's missing is everything Foundry users actually mean by "Data Health" and richer lineage — the observability and trust layer on top of a dataset, not the storage mechanics themselves.
+
+1. **Column-level profiling in preview.** Cheap DuckDB aggregates (min/max/null-rate/distinct-count per column) computed once per dataset version and cached alongside it — the single highest-value, lowest-effort addition here, since it turns "preview" from a raw row grid into an actual first-look-at-unfamiliar-data tool.
+2. **Data quality / expectations.** Per-dataset validation rules (not-null, unique, value-in-range, regex-match, a column existing at all) evaluated against every new version at creation time (upload, sync, or model output alike — one evaluation point, called from wherever `dataset_versions` rows are currently created), producing a pass/fail/warn health badge on the dataset. This is the platform's analog of Foundry's Data Health checks and the foundation Models item 4 (build-gating on input health) depends on — build this before that.
+3. **Schema enforcement policy per dataset.** Decide and implement, per dataset, whether a new version must match the previous version's schema (strict) or may drift freely (permissive, today's implicit behaviour) — strict mode should be the recommended default for anything with a downstream Model or Object mapping depending on it, since a silent schema drift there is exactly the kind of bug this session's real-deploy debugging kept finding in infrastructure — better caught at the data layer than discovered at runtime three layers downstream.
+4. **Wire the Athena path that's already promised in code.** Upload/sync/model size caps (50MB/200MB/5M rows) are commented in code as "the point where the Athena/worker path takes over," but nothing calls Athena anywhere despite `workerTaskRole` already holding the IAM permissions for it (`infra/cdk/src/constructs/services.ts`). Either build the large-dataset path for real (a worker job that runs the same transform via Athena against data staged in S3, for datasets over the interactive cap) or remove the promise from the comments and the unused IAM grant — don't leave a customer's oversized upload hitting an opaque rejection with no real path forward.
+5. **Interactive lineage graph.** Today's lineage (§9) renders a static Mermaid diagram; a real pan/zoom/click-to-navigate graph view (reusing whatever graph-rendering approach Models item 2's pipeline DAG view settles on — build these two together, they're the same underlying graph problem viewed from two entry points) matches what a Foundry user actually expects from a lineage explorer.
+6. **Dataset forking (lightweight branching).** True git-style branching is a large lift — start smaller: let a user fork a dataset at a specific version into a new, independent dataset (for experimenting with a transform without touching the original), rather than building full branch/merge semantics day one. Flag true branching as a later, bigger-scoped item only if forking turns out not to be enough for real usage.
+7. **Export to a connection**, symmetric with Connections item 8's write-back — once a connection can accept writes, "export this dataset back to source" becomes a natural Datasets-side feature reusing the same path.
+
+---
+
+## 3. Models
+
+**Current state** (`STATUS.md` §9, §14): SQL (DuckDB sandbox, synchronous) and Python (subprocess sandbox, worker-queued) transforms, manual/cron scheduling, run history, per-model lineage.
+
+Foundry's Pipeline Builder is essentially this layer plus a real DAG view, real incremental builds, and quality gates — the conceptual pieces (models, datasets, versions, runs) already all exist here.
+
+1. **Upstream trigger mode.** `trigger_mode` already accepts `upstream` at the schema/validation level (§16, §not-started list) but nothing fires on it. Implement using the same discover-then-verify worker pattern every other scheduled job in this build already uses (§14/§16's `SECURITY DEFINER` discovery function + workspace-scoped re-verification), triggered off new rows in `dataset_versions` for a model's declared input datasets rather than off a cron tick. This is the single most-referenced missing piece across the existing "not started" notes and unlocks real multi-step pipelines (A feeds B feeds C, automatically) for the first time.
+2. **A real pipeline DAG view.** A project- (or workspace-) level page rendering every model and dataset together as one graph — not lineage-on-demand for a single node, but the whole pipeline at once, each node showing last-run status/timestamp, click-through to that model/dataset's own page. This is the single biggest visible Foundry-parity win in this pillar; build it on the same graph-rendering choice as Datasets item 5.
+3. **Data quality gating.** Once Datasets item 2 (expectations) exists, let a model's run be configured to refuse to execute (or execute but flag its output) when an input dataset's latest version failed its health checks — closing the loop between "we can detect bad data" and "we stop it from silently propagating."
+4. **Incremental model builds.** Today a model run appears to fully recompute from its inputs' current state every time. For SQL models over a connection-backed dataset that's itself grown large, add an incremental mode mirroring Connections' cursor-incremental sync (process only rows new since the last successful run, keyed on a declared cursor column) — matters for real performance parity once datasets aren't toy-sized.
+5. **Model version history / rollback.** Today `model_runs` tracks *output* versions; the model *definition* itself (its SQL/Python source) has no history — editing a model's code overwrites it in place with nothing to diff against or revert to. Add versioning on the definition itself, same pattern as dataset versioning, so a bad edit can be rolled back without reconstructing it from memory.
+6. **Dependency-aware scheduling.** Once item 1 (upstream triggers) exists for the common case, this becomes mostly moot for chained pipelines — but independent cron-scheduled models with an implicit ordering expectation (B should run sometime after A's daily sync, but isn't literally fed by A) still race today. Lower priority than items 1–5; revisit once upstream triggering is live and it's clear whether this gap still matters in practice.
+
+---
+
+## 4. Objects (Ontology)
+
+**Current state** (`STATUS.md` §10, §11, §12, §14): object types + typed properties + link types (workspace-scoped), dataset→type mappings with sync (project-scoped), a complete but *unwired* production `OpenSearchInstanceStore` (§14), Actions for write-back to the platform's own dataset copy.
+
+This is the pillar where the single biggest structural gap already lives, and it should be the first thing done here, ahead of any new-feature work in this section — every other item below is more valuable once instances are actually searchable at real scale.
+
+1. **Cut the instance store over to OpenSearch.** §14 already built `OpenSearchInstanceStore` (index-per-workspace via the existing `search_prefix` isolation anchor, `object_type_id` filtering) — `routes/objects.py`/`services/instances.py` still call the Postgres-backed functions directly. §14's own docstring already flags this as "a real service-layer change deserving its own review," not a drop-in swap: plan for a migration step that backfills existing Postgres-stored instances into the new index, a cutover flag or dual-write period to avoid a hard downtime cutover, and re-verifying every existing instance-browsing/sync/action test against the new store before removing the Postgres path entirely.
+2. **Global Ontology / Object Explorer.** A workspace-wide search-and-browse surface across every object type and instance at once (search by any property value, filter by type), not just per-type instance browsing. This is the ontology-equivalent of Datasets/Models' need for a bigger-picture view, and it's the feature that actually makes OpenSearch's cutover (item 1) pay off — sequence it directly after.
+3. **Relationship/link traversal UI.** Link types are defined today (§10) but there's no way to *browse* a link from an instance's detail view — add an "explore" panel on an instance showing its linked objects, with click-through navigation across the link graph. The ontology's core value proposition is connected data, not just typed rows; this is currently the biggest gap between "we store links" and "a user experiences a connected ontology."
+4. **Richer property types.** Today's typed properties are presumably basic scalars — add geopoint (unlocks a Canvas map widget, item 3 in that section), timestamp-with-timezone if not already distinct from a plain string, and a media/attachment-reference type (pointing at a file in the existing S3 storage gateway, not a new storage mechanism).
+5. **Ontology change history.** Changing an object type (adding/removing/retyping a property) has no audit/version trail today — a consumer (a Model, a Canvas app, a mapped dataset) relying on a property that gets silently removed just breaks. Add versioning on object-type definitions, surfaced as a warning when a change would affect an existing mapping/action/model, mirroring Models item 5's rationale for the same problem one layer up.
+6. **Richer Actions.** Today's actions write back to exactly one instance. Bulk/multi-object actions (apply the same write across a filtered set of instances) and action side-effect chaining (an action that also, say, triggers a model run) are natural extensions of the existing `action_types`/`action_runs` shape — scope as a follow-up once single-instance actions have real production usage to learn from, not before.
+
+---
+
+## 5. Canvas
+
+**Current state** (`STATUS.md` §15): Craft.js-based visual editor, four widgets (Container, Text, Dataset table, Action form), publish visibility (private/workspace/groups).
+
+The "BI" half of "app/BI builder" is the explicit, named gap here (STATUS.md's own words) — this pillar's build-out is mostly about closing that.
+
+1. **Parameter/filter widgets.** Before charts are useful, cross-widget interactivity needs a mechanism: a dropdown/date-range/search-box widget that other widgets can subscribe to (via the existing `CanvasEnvProvider` context, extended to carry shared parameter state alongside workspace/project id and edit-mode). Build this first — chart widgets and cross-widget interactivity both depend on it existing.
+2. **Chart/BI widgets.** Bar/line/scatter/pie at minimum, bound to a dataset (reusing the existing preview/query endpoint for the underlying data, aggregated client-side for small results or via a new lightweight aggregation endpoint for larger ones) and reactive to item 1's filter widgets. This is the single most-requested-sounding gap in the whole roadmap given the "BI" framing — prioritise it right after the filter-widget foundation.
+3. **An Ontology Object browser widget.** A live, filterable table bound directly to an object type (via item 4's Global Object Explorer work), not just a raw dataset — this is a more Foundry-native pattern than the dataset-table widget alone, since real Workshop-style apps are built on ontology objects far more than on raw datasets. Sequence after Objects item 2 (Global Ontology view) exists to reuse its query surface.
+4. **Map widget**, once Objects item 4 (geopoint property type) exists — bind to any object type/dataset carrying a geopoint column, render pins/clusters.
+5. **Cross-widget interactivity beyond filters** — e.g. a table row selection driving another widget's detail view — same resolver/widget extension pattern as the rest of this pillar, lower priority than items 1–4 since parameter widgets (item 1) already cover the most common real use case.
+6. **Drag-and-drop reordering of placed widgets**, published-apps nav page (the read API already exists, §15/§not-started — just needs a list page and a nav entry) — smaller, standalone polish items, fine to slot in whenever convenient rather than needing to wait on anything above.
+7. **Embedding/sharing outside the platform** (a public or token-scoped share link) — explicitly a stretch item; bigger scope (auth model for an unauthenticated or token-authenticated viewer) than anything else in this section, revisit once the widget set itself is actually competitive.
+
+---
+
+## 6. Code
+
+**Current state**: not started at all — the one pillar with zero existing scaffolding.
+
+Foundry's real Code Repositories are git-backed and tightly coupled to the pipeline layer (checked-in transform code building datasets via CI, with review-gated promotion). Because nothing exists yet and this platform's whole premise is running entirely inside the customer's own AWS account (not phoning home to an external git host), this pillar needs a short design spike *before* implementation — unlike the other five sections, don't start writing code for item 2+ until item 1 is actually decided.
+
+1. **Design spike: where does the git data live?** The core open question is whether to build a lightweight self-hosted git backend (e.g. `dulwich` or the real `git` binary operating against a repo directory backed by EFS or S3, running inside the customer's own VPC — consistent with "runs entirely inside the customer's account") versus federating with the customer's own external GitHub/GitLab (much less backend work, but couples a from-the-customer's-account-outward dependency into a platform whose entire pitch is self-contained deployment, and raises the question of where credentials for that external service live). Write this up as a short decision doc before touching code — it changes the shape of everything below.
+2. **Scope narrowly: transform code first, not a general IDE.** The first cut should be a git-backed store for Model definitions specifically (the SQL/Python source Models already has, §9/§14) with real commit history — not a general-purpose repository browser for arbitrary files. This keeps the surface small enough to actually ship, and gives Code a clear, immediate connection to a pillar that already works.
+3. **Round-trip with Models.** Editing a Model's code through Code should trigger the same build path (`model_runs`/`dataset_versions`) the existing inline editor already produces — Code becomes an alternate, version-controlled *authoring surface* for the same underlying pipeline concept from Models item 5, not a parallel, disconnected system. This also means Models item 5 (definition versioning) and Code's commit history may end up being the same mechanism viewed two ways — worth explicitly reconciling during item 1's design spike rather than building both independently and merging later.
+4. **Review-gated promotion.** A PR-like review step before a change to a transform's code takes effect on whichever branch/environment is considered "live," mirroring Foundry's actual review-gated pipeline model. This is meaningfully large scope on its own (review UI, approval state, branch-to-environment mapping) — sequence last within this pillar, once items 1–3 are proven with real usage.
+
+---
+
+## Carried forward: still open from the last deploy session
+
+Not dropped, just no longer the main focus of this document per the redirect to the six pillars above — see `STATUS.md` §20 for full detail on each:
+
+- **First-login blocker** (owner password rejected at the Cognito hosted UI) — still unresolved, still worth fixing before treating the real dry-run stack as a usable testing environment for any of the pillar work above.
+- **21 orphaned Cognito User Pools** from failed dry-run attempts — manual cleanup still outstanding.
+- **Deploy pipeline hardening** (CI image builds with `--platform` baked in, no mutable tags anywhere, automated custom-domain/ACM attachment, deploying through `Provisioner` instead of by hand, observability, backups, secrets rotation) — everything from the previous version of this roadmap's Phase 1 still stands and still matters, just deprioritised behind the feature build-out above for now. Revisit before onboarding any real (non-dry-run) customer, regardless of how much pillar work has landed by then.
+- **Governance/scale items** (SSO/SAML, an audit log UI, global search, an internal operator console, multi-region, billing, compliance) — condensed here rather than repeated in full; nothing in this tier blocks any of the six-pillar work above, revisit once the pillars reach real feature parity.
