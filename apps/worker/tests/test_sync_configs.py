@@ -110,6 +110,7 @@ def _create_connection(
     workspace: dict, source_db: dict, *, mode: str, dataset_name: str,
     primary_key_column: str | None = None, cursor_column: str | None = None,
     source_table: str = "items", cron_schedule: str = "* * * * *", next_run_at=None,
+    source_type: str = "postgres", source_schema: str = "public",
 ) -> uuid.UUID:
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         cid = uuid.uuid4()
@@ -120,13 +121,13 @@ def _create_connection(
                                      sync_source_schema, sync_source_table, sync_dataset_name,
                                      sync_primary_key_column, sync_cursor_column, sync_next_run_at,
                                      created_by)
-            VALUES (%s,%s,%s,'project',%s,'postgres', %s::jsonb, %s,
-                    CAST(%s AS sync_mode), %s, 'public', %s, %s, %s, %s, %s, %s)
+            VALUES (%s,%s,%s,'project',%s,%s, %s::jsonb, %s,
+                    CAST(%s AS sync_mode), %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 cid, workspace["workspace_id"], workspace["project_id"], f"Src {uuid.uuid4().hex[:6]}",
-                json.dumps(source_db), "fake:secret:arn",
-                mode, cron_schedule, source_table, dataset_name,
+                source_type, json.dumps(source_db), "fake:secret:arn",
+                mode, cron_schedule, source_schema, source_table, dataset_name,
                 primary_key_column, cursor_column, next_run_at, workspace["user_id"],
             ),
         )

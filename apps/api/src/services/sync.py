@@ -27,13 +27,16 @@ Scope in this slice (each flagged where it bites):
   * Size cap mirrors the interactive cap; beyond it the answer is the worker
     path, not a 30-minute request.
 
-Identifier safety: source schema/table names must match a strict pattern and
-are then double-quoted - user input never reaches SQL unquoted.
+Driver independence: the two functions below that touch the customer's source
+system dispatch on the connection's source_type through the connector
+registry - this module owns the *policy* (the byte cap, which dataset the
+rows land in, how versions roll forward) and knows nothing about psycopg,
+PyMySQL, or whatever the next source type ships with. Identifier safety and
+error translation live with the driver, in services/connectors.py.
 """
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 from typing import Any
 from uuid import UUID, uuid4
@@ -44,39 +47,19 @@ from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError
 from . import dataset_engine as engine
 from . import datasets as ds_service
-from .connectors import ConnectorOperationError, PostgresConfig
+from .connectors import get_connector
 from .secrets import SecretsGateway
 from .storage import StorageGateway
 
 MAX_SYNC_BYTES = 200 * 1024 * 1024  # flag: worker/Athena path beyond this
-
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
 
 
 class SyncError(RuntimeError):
     """User-safe sync failure."""
 
 
-def _quote_ident(name: str) -> str:
-    if not _IDENT_RE.match(name):
-        raise SyncError(f"invalid identifier {name!r}")
-    return '"' + name.replace('"', '""') + '"'
-
-
-def _conninfo(config: dict[str, Any], secret: dict[str, str]) -> dict[str, Any]:
-    cfg = PostgresConfig(**config)
-    return {
-        "host": cfg.host,
-        "port": cfg.port,
-        "dbname": cfg.database,
-        "user": cfg.user,
-        "password": secret.get("password", ""),
-        "sslmode": cfg.sslmode,
-        "connect_timeout": 8,
-    }
-
-
 def snapshot_source_table(
+    source_type: str,
     config: dict[str, Any],
     secret: dict[str, str],
     source_schema: str,
@@ -85,48 +68,23 @@ def snapshot_source_table(
     cursor_column: str | None = None,
     cursor_value: str | None = None,
 ) -> None:
-    """COPY the table (optionally filtered to rows newer than cursor_value)
-    to a CSV file, byte-capped. Synchronous; run in a worker thread."""
-    import psycopg
-    from psycopg import sql
-
-    qualified = f"{_quote_ident(source_schema)}.{_quote_ident(source_table)}"
-    conninfo = _conninfo(config, secret)
-    if cursor_column and cursor_value is not None:
-        query = sql.SQL(
-            "COPY (SELECT * FROM {} WHERE {} > {}) TO STDOUT (FORMAT csv, HEADER true)"
-        ).format(sql.SQL(qualified), sql.Identifier(cursor_column), sql.Literal(cursor_value))
-    else:
-        query = sql.SQL("COPY (SELECT * FROM {}) TO STDOUT (FORMAT csv, HEADER true)").format(
-            sql.SQL(qualified)
-        )
-
-    written = 0
-    try:
-        with psycopg.connect(**conninfo) as conn:
-            with conn.cursor() as cur, open(dest_csv, "wb") as out:
-                with cur.copy(query) as copy:
-                    for chunk in copy:
-                        written += len(chunk)
-                        if written > MAX_SYNC_BYTES:
-                            cap_mb = MAX_SYNC_BYTES // (1024 * 1024)
-                            raise SyncError(
-                                f"table exceeds the {cap_mb} MB interactive sync limit - "
-                                "scheduled worker syncs handle larger tables"
-                            )
-                        out.write(bytes(chunk))
-    except psycopg.errors.UndefinedTable as exc:
-        raise SyncError(f"table {source_schema}.{source_table} does not exist") from exc
-    except psycopg.errors.InsufficientPrivilege as exc:
-        raise SyncError(
-            f"the connection's user cannot read {source_schema}.{source_table}"
-        ) from exc
-    except psycopg.OperationalError as exc:
-        reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "connection failed"
-        raise ConnectorOperationError(reason) from exc
+    """Extract the table (optionally filtered to rows past cursor_value) to a
+    CSV file, byte-capped at this layer's interactive limit. Synchronous; run
+    in a worker thread. Raises ConnectorOperationError/SourceReadError."""
+    get_connector(source_type).snapshot_to_csv(
+        config,
+        secret,
+        source_schema=source_schema,
+        source_table=source_table,
+        dest_csv=dest_csv,
+        max_bytes=MAX_SYNC_BYTES,
+        cursor_column=cursor_column,
+        cursor_value=cursor_value,
+    )
 
 
 def max_cursor_value(
+    source_type: str,
     config: dict[str, Any],
     secret: dict[str, str],
     source_schema: str,
@@ -135,20 +93,13 @@ def max_cursor_value(
 ) -> str | None:
     """The highest cursor value currently in the source table - becomes the
     connection's new sync_last_cursor_value once the sync succeeds."""
-    import psycopg
-    from psycopg import sql
-
-    qualified = f"{_quote_ident(source_schema)}.{_quote_ident(source_table)}"
-    query = sql.SQL("SELECT max({}) FROM {}").format(sql.Identifier(cursor_column), sql.SQL(qualified))
-    try:
-        with psycopg.connect(**_conninfo(config, secret)) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query)
-                row = cur.fetchone()
-    except psycopg.OperationalError as exc:
-        reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "connection failed"
-        raise ConnectorOperationError(reason) from exc
-    return None if row is None or row[0] is None else str(row[0])
+    return get_connector(source_type).max_cursor_value(
+        config,
+        secret,
+        source_schema=source_schema,
+        source_table=source_table,
+        cursor_column=cursor_column,
+    )
 
 
 async def find_existing_sync_dataset(
