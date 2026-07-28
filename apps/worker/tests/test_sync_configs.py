@@ -176,6 +176,53 @@ def _ctx():
     return build_op_context(resources={"platform_db": PlatformDatabase(dsn=APP_DSN)})
 
 
+def test_schema_drift_is_recorded_on_the_scheduled_run(
+    workspace: dict, source_database: dict
+) -> None:
+    """The worker records drift on its own runs too (migration 0018) - the
+    API's inline sync doing it is no evidence about the scheduled path, which
+    writes its sync_runs row from a different place entirely."""
+    cid = _create_connection(
+        workspace, source_database, mode="full", dataset_name="drifting_items"
+    )
+    assert run_due_scheduled_syncs(_ctx()) >= 1
+    assert _latest_run_drift(cid) is None  # first version, no baseline
+
+    src_dsn = ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
+    with psycopg.connect(src_dsn, autocommit=True) as conn:
+        conn.execute("ALTER TABLE public.items ADD COLUMN score double precision")
+        conn.execute("UPDATE public.items SET score = id * 1.5")
+    try:
+        _make_due(cid)
+        assert run_due_scheduled_syncs(_ctx()) >= 1
+        drift = _latest_run_drift(cid)
+        assert drift is not None, "an added source column must be reported"
+        assert [c["name"] for c in drift["added"]] == ["score"]
+    finally:
+        # _seed_items only resets rows, not columns - put the shared table back
+        # so the other tests in this module see the schema they expect.
+        with psycopg.connect(src_dsn, autocommit=True) as conn:
+            conn.execute("ALTER TABLE public.items DROP COLUMN IF EXISTS score")
+
+
+def _latest_run_drift(connection_id: uuid.UUID):
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        row = conn.execute(
+            "SELECT schema_changes FROM sync_runs WHERE connection_id=%s "
+            "ORDER BY started_at DESC LIMIT 1",
+            (connection_id,),
+        ).fetchone()
+    return None if row is None else row[0]
+
+
+def _make_due(connection_id: uuid.UUID) -> None:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE connections SET sync_next_run_at = now() - interval '1 minute' WHERE id=%s",
+            (connection_id,),
+        )
+
+
 def test_incremental_sync_first_run_then_merges_new_rows(workspace: dict, source_database: dict) -> None:
     cid = _create_connection(
         workspace, source_database, mode="incremental", dataset_name="synced_items",

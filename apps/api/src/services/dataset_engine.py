@@ -101,6 +101,48 @@ def ingest_to_parquet(src_path: str, extension: str, dest_path: str) -> tuple[li
         con.close()
 
 
+def diff_schemas(
+    previous: list[dict[str, str]] | None, current: list[ColumnSchema]
+) -> dict[str, Any] | None:
+    """Schema drift between the previous dataset version and the one about to
+    be written (roadmap Connections item 6, migration 0018).
+
+    `previous` is a stored `table_schema` jsonb array (or None for a dataset's
+    first version). Returns None when there is nothing to report - no baseline,
+    or no change - so a caller can store the result directly and
+    `schema_changes IS NOT NULL` means "this run drifted".
+
+    Column order is deliberately not drift: a source reordering its SELECT
+    changes nothing about what downstream consumers can read, and reporting it
+    would bury the changes that do matter.
+    """
+    if not previous:
+        return None
+    before = {c["name"]: c.get("data_type", "") for c in previous if c.get("name")}
+    after = {c.name: c.data_type for c in current}
+
+    added = [
+        {"name": name, "data_type": after[name]} for name in after if name not in before
+    ]
+    removed = [
+        {"name": name, "data_type": before[name]} for name in before if name not in after
+    ]
+    retyped = [
+        {"name": name, "from": before[name], "to": after[name]}
+        for name in after
+        if name in before and before[name] != after[name]
+    ]
+
+    changes: dict[str, Any] = {}
+    if added:
+        changes["added"] = added
+    if removed:
+        changes["removed"] = removed
+    if retyped:
+        changes["retyped"] = retyped
+    return changes or None
+
+
 def describe_file(src_path: str, extension: str) -> list[ColumnSchema]:
     """Column names/types of a source file without converting it.
 

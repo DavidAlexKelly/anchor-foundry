@@ -223,6 +223,11 @@ export const sync = {
     request<import("./types").SyncRun[]>(
       `/workspaces/${wid}/projects/${pid}/connections/${cid}/sync-runs`,
     ),
+  // One request for the whole list page rather than per-connection health.
+  health: (wid: string, pid: string) =>
+    request<import("./types").SyncHealth[]>(
+      `/workspaces/${wid}/projects/${pid}/connections/sync-health`,
+    ),
 };
 
 export const scheduledSync = {

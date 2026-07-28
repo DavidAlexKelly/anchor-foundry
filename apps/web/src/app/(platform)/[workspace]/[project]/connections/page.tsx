@@ -11,7 +11,13 @@ import {
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { Connection, DiscoveredTable, SourceTypeInfo } from "@/lib/types";
+import type {
+  Connection,
+  DiscoveredTable,
+  SchemaChanges,
+  SourceTypeInfo,
+  SyncHealth,
+} from "@/lib/types";
 
 function StatusBadge({ connection }: { connection: Connection }) {
   const label =
@@ -62,6 +68,185 @@ function resolveTable(
   return match ? { schema: match.schema_name, name: match.name } : null;
 }
 
+function relativeTime(iso: string | null): string {
+  if (!iso) return "never";
+  const delta = Date.now() - new Date(iso).getTime();
+  const future = delta < 0;
+  const seconds = Math.abs(delta) / 1000;
+  const [value, unit] =
+    seconds < 60
+      ? [Math.round(seconds), "s"]
+      : seconds < 3600
+        ? [Math.round(seconds / 60), "m"]
+        : seconds < 86400
+          ? [Math.round(seconds / 3600), "h"]
+          : [Math.round(seconds / 86400), "d"];
+  return future ? `in ${value}${unit}` : `${value}${unit} ago`;
+}
+
+function duration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+}
+
+/** One line describing a schema change, e.g. "+2 columns, -1, 1 retyped".
+ * Returns null when nothing drifted, so callers can render conditionally. */
+function driftSummary(changes: SchemaChanges | null | undefined): string | null {
+  if (!changes) return null;
+  const parts: string[] = [];
+  if (changes.added?.length) parts.push(`+${changes.added.length}`);
+  if (changes.removed?.length) parts.push(`-${changes.removed.length}`);
+  if (changes.retyped?.length) parts.push(`${changes.retyped.length} retyped`);
+  return parts.length ? parts.join(", ") : null;
+}
+
+function DriftDetail({ changes }: { changes: SchemaChanges }) {
+  return (
+    <div style={{ fontSize: 12 }}>
+      {changes.added?.map((c) => (
+        <div key={`a-${c.name}`}>
+          <strong>+ {c.name}</strong> <span className="count">{c.data_type}</span>
+        </div>
+      ))}
+      {changes.removed?.map((c) => (
+        <div key={`r-${c.name}`}>
+          <strong>− {c.name}</strong> <span className="count">{c.data_type}</span>
+        </div>
+      ))}
+      {changes.retyped?.map((c) => (
+        <div key={`t-${c.name}`}>
+          <strong>~ {c.name}</strong>{" "}
+          <span className="count">
+            {c.from} → {c.to}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Run history for one connection: what ran, how long it took, how many rows,
+ * and whether the source changed shape underneath it. */
+function HistoryDialog({
+  workspaceId,
+  projectId,
+  connection,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  connection: Connection;
+  onClose: () => void;
+}) {
+  const runs = useQuery({
+    queryKey: ["sync-runs", connection.id],
+    queryFn: () => syncApi.runs(workspaceId, projectId, connection.id),
+  });
+
+  return (
+    <Dialog open title={`Sync history — ${connection.name}`} onClose={onClose}>
+      {runs.isPending && <div className="state">Loading history…</div>}
+      {runs.data && runs.data.length === 0 && (
+        <div className="state">This connection hasn&apos;t been synced yet.</div>
+      )}
+      {runs.data && runs.data.length > 0 && (
+        <div style={{ maxHeight: 380, overflowY: "auto" }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Table</th>
+                <th>Rows</th>
+                <th>Took</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.data.map((run) => {
+                const drift = driftSummary(run.schema_changes);
+                const took =
+                  run.finished_at && run.started_at
+                    ? (new Date(run.finished_at).getTime() -
+                        new Date(run.started_at).getTime()) /
+                      1000
+                    : null;
+                return (
+                  <tr key={run.id}>
+                    <td title={run.started_at}>{relativeTime(run.started_at)}</td>
+                    <td>
+                      <span className="slug">{run.source_table}</span>
+                      <div className="count">{run.mode}</div>
+                    </td>
+                    <td>{run.rows_synced.toLocaleString()}</td>
+                    <td>{duration(took)}</td>
+                    <td>
+                      <span className={`status-${run.status === "succeeded" ? "ok" : "error"}`}>
+                        <span className="status-dot" />
+                        <span className="status-label">{run.status}</span>
+                      </span>
+                      {run.error && <div className="form-error">{run.error}</div>}
+                      {drift && run.schema_changes && (
+                        <details>
+                          <summary className="chip">schema changed ({drift})</summary>
+                          <DriftDetail changes={run.schema_changes} />
+                        </details>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="form-actions">
+        <button className="btn" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+/** The health cell in the connections list: last result, how reliable it has
+ * been lately, when it next runs, and a warning when the source changed shape.
+ * Everything here is one shared request for the whole page. */
+function HealthCell({ health }: { health: SyncHealth | undefined }) {
+  if (!health || health.total_runs === 0) {
+    return <span className="count">Never synced</span>;
+  }
+  const rate = health.success_rate === null ? null : Math.round(health.success_rate * 100);
+  const drift = driftSummary(health.last_schema_changes);
+  return (
+    <div style={{ fontSize: 12 }}>
+      <span className={`status-${health.last_status === "succeeded" ? "ok" : "error"}`}>
+        <span className="status-dot" />
+        <span className="status-label">
+          {health.last_status} {relativeTime(health.last_started_at)}
+        </span>
+      </span>
+      <div className="count">
+        {rate !== null && (
+          <>
+            {rate}% of last {health.total_runs} · {duration(health.last_duration_seconds)} ·{" "}
+            {(health.last_rows_synced ?? 0).toLocaleString()} rows
+          </>
+        )}
+      </div>
+      {health.next_run_at && (
+        <div className="count">next {relativeTime(health.next_run_at)}</div>
+      )}
+      {drift && (
+        <div className="chip" title="The source changed shape on the most recent sync">
+          schema changed ({drift})
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Spec §"Build Plan": pick type → configure → test → save. Save happens
  * first (credentials must reach Secrets Manager before any driver call),
  * then the wizard runs the test and reports on the saved connection. */
@@ -110,6 +295,7 @@ function AddConnectionWizard({
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["sync-health", projectId] });
       await queryClient.invalidateQueries({ queryKey: ["project", workspaceId] });
     },
   });
@@ -388,6 +574,8 @@ function SyncDialog({
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["datasets", projectId] });
       await queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["sync-health", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["sync-runs", connection.id] });
       await queryClient.invalidateQueries({ queryKey: ["project", workspaceId] });
     },
   });
@@ -538,6 +726,7 @@ function ScheduledSyncDialog({
   const invalidate = async () => {
     await queryClient.invalidateQueries({ queryKey: ["scheduled-sync", connection.id] });
     await queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
+    await queryClient.invalidateQueries({ queryKey: ["sync-health", projectId] });
   };
 
   const save = useMutation({
@@ -720,18 +909,22 @@ function ConnectionRow({
   projectId,
   connection,
   canEdit,
+  health,
 }: {
   workspaceId: string;
   projectId: string;
   connection: Connection;
   canEdit: boolean;
+  health: SyncHealth | undefined;
 }) {
   const queryClient = useQueryClient();
   const [showSchema, setShowSchema] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [showSync, setShowSync] = useState(false);
   const [showScheduledSync, setShowScheduledSync] = useState(false);
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
+    queryClient.invalidateQueries({ queryKey: ["sync-health", projectId] });
 
   const test = useMutation({
     mutationFn: () => connApi.test(workspaceId, projectId, connection.id),
@@ -762,6 +955,9 @@ function ConnectionRow({
         <StatusBadge connection={connection} />
       </td>
       <td>
+        <HealthCell health={health} />
+      </td>
+      <td>
         {canEdit && (
           <div className="row-actions">
             <button
@@ -789,6 +985,13 @@ function ConnectionRow({
             <button
               className="btn quiet"
               style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setShowHistory(true)}
+            >
+              History
+            </button>
+            <button
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
               onClick={() => setShowScheduledSync(true)}
             >
               Scheduled sync
@@ -806,6 +1009,14 @@ function ConnectionRow({
               Remove
             </button>
           </div>
+        )}
+        {showHistory && (
+          <HistoryDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            connection={connection}
+            onClose={() => setShowHistory(false)}
+          />
         )}
         {showSync && (
           <SyncDialog
@@ -846,6 +1057,17 @@ export default function ConnectionsPage() {
     queryFn: () => connApi.list(workspace!.id, project!.id),
     enabled: !!workspace && !!project,
   });
+
+  // One request covering every connection on the page, rather than a runs
+  // request per row. Health is informational, so a failure here must not take
+  // the list down with it - the cell just renders empty.
+  const health = useQuery({
+    queryKey: ["sync-health", project?.id],
+    queryFn: () => syncApi.health(workspace!.id, project!.id),
+    enabled: !!workspace && !!project,
+    retry: false,
+  });
+  const healthById = new Map((health.data ?? []).map((h) => [h.connection_id, h]));
 
   const canEdit = project ? project.effective_role !== "viewer" : false;
   const canWorkspaceScope = workspace?.effective_role === "admin";
@@ -893,6 +1115,7 @@ export default function ConnectionsPage() {
               <th>Name</th>
               <th>Sharing</th>
               <th>Status</th>
+              <th>Sync health</th>
               <th aria-label="Actions" />
             </tr>
           </thead>
@@ -904,6 +1127,7 @@ export default function ConnectionsPage() {
                 projectId={project.id}
                 connection={c}
                 canEdit={canEdit}
+                health={healthById.get(c.id)}
               />
             ))}
           </tbody>

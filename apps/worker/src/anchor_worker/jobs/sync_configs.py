@@ -37,6 +37,19 @@ from ..storage import StorageKeyError, gateway_from_env, slugify, storage_prefix
 MAX_SYNC_BYTES = 200 * 1024 * 1024  # matches the API's day-one interactive cap
 
 
+def _stored_schema(value):
+    """A dataset's table_schema jsonb as a list - psycopg decodes jsonb for us,
+    but be tolerant of a string on either path. Mirrors the API-side helper."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, list) else None
+
+
 def _workspace_s3_prefix(cur, workspace_id: UUID) -> str:
     cur.execute("SELECT s3_prefix FROM workspaces WHERE id = %s", (str(workspace_id),))
     row = cur.fetchone()
@@ -57,10 +70,14 @@ def _record_synced_dataset(
     parquet_bytes: bytes,
     schema: list[engine.ColumnSchema],
     row_count: int,
-) -> UUID:
+) -> "tuple[UUID, dict | None]":
     """Create-or-version the connection's managed sync dataset. Same shape
     as jobs/model_runs.py's _record_output, with origin='sync' and
-    produced_by_kind='sync' in place of 'model_output'/'model'."""
+    produced_by_kind='sync' in place of 'model_output'/'model'.
+
+    Returns (dataset id, schema_changes) - the drift against the version this
+    one replaces, or None for a first version or an unchanged schema
+    (migration 0018)."""
     schema_json = json.dumps([c.as_dict() for c in schema])
     ws_prefix = _workspace_s3_prefix(cur, workspace_id)
 
@@ -92,11 +109,15 @@ def _record_synced_dataset(
         )
         cur.execute("UPDATE connections SET sync_dataset_id = %s WHERE id = %s", (str(new_id), str(connection_id)))
         dataset_id = new_id
+        schema_changes = None  # first version: no baseline to drift from
     else:
-        cur.execute("SELECT current_version FROM datasets WHERE id = %s", (str(dataset_id),))
+        cur.execute(
+            "SELECT current_version, table_schema FROM datasets WHERE id = %s", (str(dataset_id),)
+        )
         row = cur.fetchone()
         if row is None:
             raise engine.DatasetEngineError("the synced dataset no longer exists")
+        schema_changes = engine.diff_schemas(_stored_schema(row[1]), schema)
         version = int(row[0]) + 1
         parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
         storage.put(parquet_key, parquet_bytes)
@@ -117,7 +138,7 @@ def _record_synced_dataset(
         """,
         (str(dataset_id), version, parquet_key, schema_json, row_count, str(connection_id)),
     )
-    return dataset_id
+    return dataset_id, schema_changes
 
 
 @op
@@ -229,8 +250,9 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                 with conn.cursor() as cur:
                     if nothing_new:
                         new_dataset_id = dataset_id
+                        schema_changes = None
                     else:
-                        new_dataset_id = _record_synced_dataset(
+                        new_dataset_id, schema_changes = _record_synced_dataset(
                             cur, storage,
                             connection_id=UUID(str(connection_id)),
                             dataset_name=dataset_name or source_table,
@@ -240,8 +262,11 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                         )
                     cur.execute(
                         "INSERT INTO sync_runs (connection_id, dataset_id, mode, source_table, "
-                        "status, rows_synced, finished_at) VALUES (%s, %s, %s, %s, 'succeeded', %s, now())",
-                        (str(connection_id), str(new_dataset_id), mode, f"{source_schema}.{source_table}", rows_synced),
+                        "status, rows_synced, finished_at, schema_changes) "
+                        "VALUES (%s, %s, %s, %s, 'succeeded', %s, now(), %s)",
+                        (str(connection_id), str(new_dataset_id), mode,
+                         f"{source_schema}.{source_table}", rows_synced,
+                         json.dumps(schema_changes) if schema_changes else None),
                     )
                 conn.commit()
         # Every exception type on the call path, enumerated deliberately (the

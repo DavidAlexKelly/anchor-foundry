@@ -97,6 +97,34 @@ def extract_instance_rows(
     return out
 
 
+def diff_schemas(previous, current) -> dict | None:
+    """Schema drift between the previous dataset version and the one about to
+    be written (migration 0018). Mirrors the API's dataset_engine.diff_schemas;
+    see its docstring and the migration for why the comparison is
+    version-to-version rather than against a setup-time baseline."""
+    if not previous:
+        return None
+    before = {c["name"]: c.get("data_type", "") for c in previous if c.get("name")}
+    after = {c.name: c.data_type for c in current}
+
+    added = [{"name": n, "data_type": after[n]} for n in after if n not in before]
+    removed = [{"name": n, "data_type": before[n]} for n in before if n not in after]
+    retyped = [
+        {"name": n, "from": before[n], "to": after[n]}
+        for n in after
+        if n in before and before[n] != after[n]
+    ]
+
+    changes = {}
+    if added:
+        changes["added"] = added
+    if removed:
+        changes["removed"] = removed
+    if retyped:
+        changes["retyped"] = retyped
+    return changes or None
+
+
 def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 

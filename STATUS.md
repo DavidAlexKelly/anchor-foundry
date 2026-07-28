@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3: connector registry generalised, MySQL/MariaDB, and the S3/object-storage connector — see §21, §22). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 6, 7: connector registry generalised, MySQL/MariaDB, S3/object storage, schema drift detection, sync health — see §21–§23). Test counts below are from the last full regression run.
 
 ---
 
@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app - synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0013) + migration runner
+│   ├── db/              SQL migrations (0001–0018) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0013)
+### 1. Database schema (migrations 0001–0018)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -260,6 +260,24 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **A fourth bug, in the test suite itself rather than the product**, found because the worker suite had quietly gone from 16 seconds to over ten minutes: scheduled-sync tests left their connections scheduled, and the job reschedules after every run, so each one stayed permanently due and every later run re-synced it against a source that no longer existed. 81 had accumulated. Both worker `workspace` fixtures now clear the schedule on teardown; the suite is back to ~16s. Written up in the rough-edges list below, since the next fixture that schedules something needs to do the same.
 
 **Current totals: API 176/176** (163 + 13), **worker 31/31** (26 + 5), **control-plane 13/13** (untouched).
+
+---
+
+### 23. Schema drift detection + sync health in the product (this session)
+
+`ROADMAP.md` Connections items 6 and 7, built together: item 6 produces the signal, item 7 is the only reason anyone would see it.
+
+**Drift — migration 0018, `sync_runs.schema_changes`.** Every sync now records what changed about the dataset's shape: `{added|removed|retyped}`, only the non-empty keys present, `NULL` when nothing changed or there was no previous version — so `WHERE schema_changes IS NOT NULL` is exactly "runs that drifted", and a healthy run carries no payload. Written by both the API's inline sync and the worker's scheduled job, which build their `sync_runs` row in completely different places; there's a test on each path, because one working is no evidence about the other.
+
+**One deliberate deviation from the roadmap's phrasing**, argued in the migration itself so it isn't re-litigated: it said "compare against what was recorded at connection-setup time", but nothing records a schema at setup, and adding that would mean a discovery round trip on every sync — for the S3 connector that means listing and downloading objects purely to read their headers — against a baseline that goes stale the moment someone edits the connection. Comparing each new dataset version against the one it replaces is free (both schemas are already computed on the way through), connector-agnostic, and describes what actually landed. The costs, written down: drift is reported one sync *after* it happens rather than as a warning before the write; a change in a source column nobody syncs is invisible; and because the wire format is CSV with re-inferred types, it reports the type the data landed as, not the type the source declares. That last one is not theoretical — the first version of the drift test retyped a column to `bigint` while leaving it all-NULL, and nothing registered, because DuckDB reads an all-NULL column as text either way. The test now retypes with real values, and the caveat is in the migration.
+
+**Health — `GET .../connections/sync-health`.** One aggregate for the whole page rather than a runs request per connection: the list renders every connection, and N+1 requests to fill a status column is what makes a list page feel broken past a handful of sources. Per connection: run counts and a success rate over the last 20 runs (not all time — "has this been failing lately" is the question a health column answers, and an all-time rate takes months to move after a source is fixed), the last run's status/duration/row count/error, its drift, and the schedule plus next run time. A connection with no runs still gets a row with `success_rate: null` — not `0`, which would read as "0% healthy" rather than "nothing to rate yet".
+
+**Frontend.** The Connections list gains a **Sync health** column (last result and when, success rate, duration, rows, next run, and a drift badge) and a **History** button per connection opening the full run list — when, table, rows, duration, result, the error on a failure, and an expandable "schema changed (+1, −1)" detail listing the exact columns. Every cache invalidation that refreshes the connection list now refreshes health alongside it, since a sync changes both and a stale health cell is worse than none.
+
+**Testing.** `apps/api/tests/test_schema_drift.py` (11 new) covers the diff as a pure function (no baseline, unchanged, column *reordering* deliberately not counted as drift, and added/removed/retyped reported separately) and then end to end by actually running `ALTER TABLE` against the real Postgres source between syncs, plus the health summary including a failed run moving the success rate, a never-synced connection, schedule reporting, and outsider 404. `apps/worker/tests/test_sync_configs.py` gains a drift test on the scheduled path. Verified in a real browser: four runs against a live source (one of them drifting the table, one failing), health showing `75% of last 4`, and the history dialog expanding the drift to `+ region` / `− customer`.
+
+**Current totals: API 187/187** (176 + 11), **worker 32/32** (31 + 1), **control-plane 13/13** (untouched).
 
 ---
 

@@ -201,9 +201,11 @@ export interface DiscoveredColumn {
 }
 
 export interface DiscoveredTable {
+  /** For object storage this is the folder under the connection's configured
+   * prefix, empty for a file at the root - not a database schema. */
   schema_name: string;
   name: string;
-  kind: "table" | "view";
+  kind: "table" | "view" | "file";
   columns: DiscoveredColumn[];
 }
 
@@ -249,6 +251,15 @@ export interface SyncResult {
   } | null;
 }
 
+/** Schema drift between a synced dataset version and the one it replaced
+ * (migration 0018). Only the non-empty keys are present, so the object itself
+ * is truthy exactly when something changed. */
+export interface SchemaChanges {
+  added?: { name: string; data_type: string }[];
+  removed?: { name: string; data_type: string }[];
+  retyped?: { name: string; from: string; to: string }[];
+}
+
 export interface SyncRun {
   id: string;
   mode: SyncMode;
@@ -260,6 +271,27 @@ export interface SyncRun {
   finished_at: string | null;
   dataset_id: string | null;
   dataset_name: string | null;
+  schema_changes: SchemaChanges | null;
+}
+
+/** Per-connection sync health for the connections list. Rates are over the
+ * most recent runs, not all time. */
+export interface SyncHealth {
+  connection_id: string;
+  sync_schedule: string | null;
+  next_run_at: string | null;
+  total_runs: number;
+  succeeded: number;
+  failed: number;
+  drifted: number;
+  success_rate: number | null;
+  last_status: "running" | "succeeded" | "failed" | null;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_duration_seconds: number | null;
+  last_rows_synced: number | null;
+  last_error: string | null;
+  last_schema_changes: SchemaChanges | null;
 }
 
 // A connection carries at most one managed scheduled/incremental sync
