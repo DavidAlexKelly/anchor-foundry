@@ -349,9 +349,12 @@ from ..services.sync import SyncError
 
 class SyncRequest(BaseModel):
     # 64, not Postgres' 63: MySQL allows one more character, and this model is
-    # shared across source types. For MySQL, source_schema is the database name.
-    source_schema: str = Field(default="public", min_length=1, max_length=64)
-    source_table: str = Field(min_length=1, max_length=64)
+    # shared across source types. For MySQL, source_schema is the database name;
+    # for object storage it is the folder under the connection's prefix, which
+    # is legitimately empty for a file at the root - hence no min_length. The
+    # source-specific meaning and validation belong to the connector.
+    source_schema: str = Field(default="public", max_length=1024)
+    source_table: str = Field(min_length=1, max_length=1024)
     dataset_name: str | None = Field(default=None, min_length=1, max_length=200)
     mode: str = Field(default="full", pattern="^(full|incremental)$")
 
@@ -420,13 +423,12 @@ async def trigger_sync(
     ok, error, rows_synced, created = True, None, 0, False
     dataset: dict[str, Any] | None = None
     tmp_dir = _tempfile.mkdtemp()
-    csv_path = _os.path.join(tmp_dir, "snapshot.csv")
     try:
         secret = conn_service.secret_values_for(_secrets, row)
-        await anyio.to_thread.run_sync(
+        extract = await anyio.to_thread.run_sync(
             sync_service.snapshot_source_table,
             str(row["source_type"]), config, secret,
-            body.source_schema, body.source_table, csv_path,
+            body.source_schema, body.source_table, tmp_dir,
         )
         async with user_connection(access.auth.user_id) as conn:
             dataset, rows_synced, created = await sync_service.run_full_sync(
@@ -440,7 +442,8 @@ async def trigger_sync(
                 source_table=body.source_table,
                 dataset_name=body.dataset_name,
                 requested_by=access.auth.user_id,
-                snapshot_csv_path=csv_path,
+                snapshot_path=extract.path,
+                snapshot_extension=extract.extension,
             )
     except (SyncError, ConnectorOperationError) as exc:
         ok, error = False, str(exc)
@@ -510,9 +513,9 @@ async def sync_runs(
 # models' manual run vs. its own scheduled_model_runs job.
 class ScheduledSyncSet(BaseModel):
     mode: str = Field(pattern="^(full|incremental)$")
-    # 64 for the same reason as SyncRequest above.
-    source_schema: str = Field(default="public", min_length=1, max_length=64)
-    source_table: str = Field(min_length=1, max_length=64)
+    # Bounds and optionality for the same reasons as SyncRequest above.
+    source_schema: str = Field(default="public", max_length=1024)
+    source_table: str = Field(min_length=1, max_length=1024)
     dataset_name: str | None = Field(default=None, min_length=1, max_length=200)
     primary_key_column: str | None = Field(default=None, min_length=1, max_length=200)
     cursor_column: str | None = Field(default=None, min_length=1, max_length=200)
@@ -637,18 +640,21 @@ async def run_scheduled_sync(
     dataset: dict[str, Any] | None = None
     new_cursor_value = schedule["sync_last_cursor_value"]
     tmp_dir = _tempfile.mkdtemp()
-    csv_path = _os.path.join(tmp_dir, "snapshot.csv")
     try:
         secret = conn_service.secret_values_for(_secrets, row)
         cursor_col = schedule["sync_cursor_column"] if mode == "incremental" else None
         source_type = str(row["source_type"])
-        await anyio.to_thread.run_sync(
+        extract = await anyio.to_thread.run_sync(
             sync_service.snapshot_source_table,
             source_type, config, secret,
             schedule["sync_source_schema"], schedule["sync_source_table"],
-            csv_path, cursor_col, schedule["sync_last_cursor_value"],
+            tmp_dir, cursor_col, schedule["sync_last_cursor_value"],
         )
-        if mode == "incremental" and cursor_col:
+        if mode == "incremental":
+            # Asked for unconditionally: whether a cursor needs a column at all
+            # is the connector's business (object storage uses the object's own
+            # LastModified), and a connector with nothing to report returns
+            # None, leaving the stored value untouched.
             new_cursor_value = await anyio.to_thread.run_sync(
                 sync_service.max_cursor_value,
                 source_type, config, secret,
@@ -667,7 +673,9 @@ async def run_scheduled_sync(
                     primary_key_column=schedule["sync_primary_key_column"],
                     new_cursor_value=new_cursor_value,
                     requested_by=access.auth.user_id,
-                    snapshot_csv_path=csv_path,
+                    snapshot_path=extract.path,
+                    snapshot_extension=extract.extension,
+                    snapshot_empty=extract.empty,
                 )
             else:
                 dataset, rows_synced, created = await sync_service.run_full_sync(
@@ -678,7 +686,8 @@ async def run_scheduled_sync(
                     source_table=schedule["sync_source_table"],
                     dataset_name=schedule["sync_dataset_name"],
                     requested_by=access.auth.user_id,
-                    snapshot_csv_path=csv_path,
+                    snapshot_path=extract.path,
+                    snapshot_extension=extract.extension,
                 )
                 if dataset:
                     await conn.execute(

@@ -101,6 +101,27 @@ def ingest_to_parquet(src_path: str, extension: str, dest_path: str) -> tuple[li
         con.close()
 
 
+def describe_file(src_path: str, extension: str) -> list[ColumnSchema]:
+    """Column names/types of a source file without converting it.
+
+    Same readers as ingest_to_parquet, so what a connector reports at
+    discovery time is what the file will actually land with - but DESCRIBE
+    only, since discovery inspects files it has no intention of ingesting."""
+    reader = _reader_expr(src_path, extension)
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(f"CREATE VIEW src AS SELECT * FROM {reader}")
+            return [
+                ColumnSchema(name=row[0], data_type=row[1])
+                for row in con.execute("DESCRIBE src").fetchall()
+            ]
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+
+
 def preview(parquet_path: str, limit: int = PREVIEW_ROWS) -> TabularResult:
     limit = max(1, min(limit, MAX_RESULT_ROWS))
     con = duckdb.connect()

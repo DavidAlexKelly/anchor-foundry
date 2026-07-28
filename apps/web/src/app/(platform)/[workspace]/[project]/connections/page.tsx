@@ -28,6 +28,40 @@ function StatusBadge({ connection }: { connection: Connection }) {
   );
 }
 
+// A discovered entry is identified by its (schema, name) pair, but a <select>
+// value is a single string. Encoding it as "schema.name" and splitting on the
+// first dot is ambiguous the moment a schema itself contains one - which
+// object-storage sources make ordinary, since a "schema" there is a folder.
+// Encode with a separator that cannot occur in either half, and resolve back
+// through the discovered list rather than by parsing.
+const TABLE_KEY_SEP = "\u0000";
+
+function tableKey(t: { schema_name: string; name: string }): string {
+  return `${t.schema_name}${TABLE_KEY_SEP}${t.name}`;
+}
+
+function tableLabel(t: { schema_name: string; name: string }): string {
+  // A file at the root of an object-storage prefix has no folder; showing it
+  // as ".orders.csv" would be noise.
+  return t.schema_name ? `${t.schema_name}/${t.name}` : t.name;
+}
+
+// What a sync can actually read. Views stay excluded as they always have
+// been; object-storage entries ("file") are syncable and were being silently
+// dropped by an equality check against "table".
+function isSyncable(t: { kind: string }): boolean {
+  return t.kind !== "view";
+}
+
+function resolveTable(
+  tables: DiscoveredTable[] | undefined,
+  key: string | null,
+): { schema: string; name: string } | null {
+  if (!key) return null;
+  const match = (tables ?? []).find((t) => tableKey(t) === key);
+  return match ? { schema: match.schema_name, name: match.name } : null;
+}
+
 /** Spec §"Build Plan": pick type → configure → test → save. Save happens
  * first (credentials must reach Secrets Manager before any driver call),
  * then the wizard runs the test and reports on the saved connection. */
@@ -285,7 +319,7 @@ function DiscoverDialog({
         <div className="discover-tree" style={{ maxHeight: 380, overflowY: "auto" }}>
           {[...bySchema.entries()].map(([schema, tables]) => (
             <div key={schema}>
-              <div className="schema-name">{schema}</div>
+              <div className="schema-name">{schema || "/"}</div>
               {tables.map((t) => (
                 <table key={t.name}>
                   <tbody>
@@ -343,13 +377,11 @@ function SyncDialog({
 
   const run = useMutation({
     mutationFn: () => {
-      if (!table) throw new Error("pick a table");
-      const dot = table.indexOf(".");
-      const schema = dot === -1 ? "public" : table.slice(0, dot);
-      const name = dot === -1 ? table : table.slice(dot + 1);
+      const picked = resolveTable(discover.data, table);
+      if (!picked) throw new Error("pick a table");
       return syncApi.trigger(workspaceId, projectId, connection.id, {
-        source_schema: schema,
-        source_table: name,
+        source_schema: picked.schema,
+        source_table: picked.name,
         dataset_name: datasetName || undefined,
       });
     },
@@ -408,18 +440,17 @@ function SyncDialog({
                 value={table ?? ""}
                 onChange={(e) => {
                   setTable(e.target.value || null);
-                  const dot = e.target.value.indexOf(".");
-                  const name = dot === -1 ? e.target.value : e.target.value.slice(dot + 1);
-                  if (name && !datasetName) setDatasetName(name);
+                  const picked = resolveTable(discover.data, e.target.value);
+                  if (picked && !datasetName) setDatasetName(picked.name);
                 }}
                 required
               >
                 <option value="">Choose a table…</option>
                 {discover.data
-                  .filter((t) => t.kind === "table")
+                  .filter(isSyncable)
                   .map((t) => (
-                    <option key={`${t.schema_name}.${t.name}`} value={`${t.schema_name}.${t.name}`}>
-                      {t.schema_name}.{t.name} ({t.columns.length} columns)
+                    <option key={tableKey(t)} value={tableKey(t)}>
+                      {tableLabel(t)} ({t.columns.length} columns)
                     </option>
                   ))}
               </select>
@@ -488,8 +519,13 @@ function ScheduledSyncDialog({
   useEffect(() => {
     if (!schedule.data) return;
     setMode(schedule.data.sync_mode === "incremental" ? "incremental" : "full");
-    if (schedule.data.sync_source_schema && schedule.data.sync_source_table) {
-      setTable(`${schedule.data.sync_source_schema}.${schedule.data.sync_source_table}`);
+    if (schedule.data.sync_source_table) {
+      setTable(
+        tableKey({
+          schema_name: schedule.data.sync_source_schema ?? "",
+          name: schedule.data.sync_source_table,
+        }),
+      );
     }
     setDatasetName(schedule.data.sync_dataset_name ?? "");
     setPkColumn(schedule.data.sync_primary_key_column ?? "");
@@ -497,7 +533,7 @@ function ScheduledSyncDialog({
     if (schedule.data.sync_schedule) setCronSchedule(schedule.data.sync_schedule);
   }, [schedule.data]);
 
-  const columns = discover.data?.find((t) => `${t.schema_name}.${t.name}` === table)?.columns ?? [];
+  const columns = discover.data?.find((t) => tableKey(t) === table)?.columns ?? [];
 
   const invalidate = async () => {
     await queryClient.invalidateQueries({ queryKey: ["scheduled-sync", connection.id] });
@@ -506,14 +542,12 @@ function ScheduledSyncDialog({
 
   const save = useMutation({
     mutationFn: () => {
-      if (!table) throw new Error("pick a table");
-      const dot = table.indexOf(".");
-      const schemaName = dot === -1 ? "public" : table.slice(0, dot);
-      const tableName = dot === -1 ? table : table.slice(dot + 1);
+      const picked = resolveTable(discover.data, table);
+      if (!picked) throw new Error("pick a table");
       return scheduledSyncApi.set(workspaceId, projectId, connection.id, {
         mode,
-        source_schema: schemaName,
-        source_table: tableName,
+        source_schema: picked.schema,
+        source_table: picked.name,
         dataset_name: datasetName || undefined,
         primary_key_column: mode === "incremental" ? pkColumn : undefined,
         cursor_column: mode === "incremental" ? cursorColumn : undefined,
@@ -545,8 +579,11 @@ function ScheduledSyncDialog({
           {configured && (
             <div className="card" style={{ marginBottom: 14 }}>
               <p className="login-note" style={{ marginTop: 0 }}>
-                {schedule.data.sync_mode} sync of {schedule.data.sync_source_schema}.
-                {schedule.data.sync_source_table}
+                {schedule.data.sync_mode} sync of{" "}
+                {tableLabel({
+                  schema_name: schedule.data.sync_source_schema ?? "",
+                  name: schedule.data.sync_source_table ?? "",
+                })}
                 {schedule.data.sync_schedule
                   ? ` on ${schedule.data.sync_schedule}`
                   : " - no cron, run manually with the button below"}
@@ -609,10 +646,10 @@ function ScheduledSyncDialog({
                 <select value={table ?? ""} onChange={(e) => setTable(e.target.value || null)} required>
                   <option value="">Choose a table…</option>
                   {discover.data
-                    .filter((t) => t.kind === "table")
+                    .filter(isSyncable)
                     .map((t) => (
-                      <option key={`${t.schema_name}.${t.name}`} value={`${t.schema_name}.${t.name}`}>
-                        {t.schema_name}.{t.name}
+                      <option key={tableKey(t)} value={tableKey(t)}>
+                        {tableLabel(t)}
                       </option>
                     ))}
                 </select>

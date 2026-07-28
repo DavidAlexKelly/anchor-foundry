@@ -1,0 +1,11 @@
+# Test-only dependencies, not part of the runtime image (Dockerfile installs
+# requirements.txt only). Same split as apps/api and apps/control-plane.
+#
+# moto[server] backs the S3 connector tests: they run a real moto.server
+# process and drive genuinely signed HTTP requests at it, rather than patching
+# botocore in-process, because the connector builds its own boto3 client and
+# the endpoint/credential config path is part of what ships. The S3 test files
+# skip cleanly when it isn't installed.
+-r requirements.txt
+pytest==8.3.3
+moto[server]==5.0.13

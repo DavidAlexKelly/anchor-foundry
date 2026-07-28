@@ -148,9 +148,16 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                 (project_id, config, secret_arn, mode, _schedule, source_schema, source_table,
                  dataset_name, dataset_id, primary_key_column, cursor_column, last_cursor,
                  source_type) = row
-                if not source_schema or not source_table:
+                # Only the table half is required. An empty source_schema is
+                # legitimate for object storage - it means "at the root of the
+                # connection's configured prefix" - so testing it for
+                # truthiness here would silently skip every root-level file
+                # sync, logging "no sync target set" about a target that is
+                # perfectly well set.
+                if not source_table:
                     context.log.warning("connection %s has a schedule but no sync target set", connection_id)
                     continue
+                source_schema = source_schema or ""
             conn.commit()
 
         ok, error, rows_synced = True, None, 0
@@ -159,15 +166,14 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
         try:
             connector = get_connector(source_type)
             with tempfile.TemporaryDirectory() as tmp:
-                csv_path = os.path.join(tmp, "snapshot.csv")
                 cursor_for_query = cursor_column if mode == "incremental" else None
-                connector.snapshot_to_csv(
+                extract = connector.snapshot(
                     config, secret,
                     source_schema=source_schema, source_table=source_table,
-                    dest_csv=csv_path, max_bytes=MAX_SYNC_BYTES,
+                    dest_dir=tmp, max_bytes=MAX_SYNC_BYTES,
                     cursor_column=cursor_for_query, cursor_value=last_cursor,
                 )
-                if mode == "incremental" and cursor_column:
+                if mode == "incremental":
                     new_cursor_value = connector.max_cursor_value(
                         config, secret,
                         source_schema=source_schema, source_table=source_table,
@@ -175,9 +181,21 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                     ) or last_cursor
 
                 new_parquet = os.path.join(tmp, "new.parquet")
-                schema, new_row_count = _ingest_csv(csv_path, new_parquet)
+                if extract.empty:
+                    # The connector already knows nothing changed (an object
+                    # store with no rewritten object writes no file at all),
+                    # so there is nothing to ingest.
+                    schema, new_row_count = [], 0
+                else:
+                    schema, new_row_count = _ingest_file(
+                        extract.path, extract.extension, new_parquet
+                    )
 
-                nothing_new = mode == "incremental" and dataset_id is not None and new_row_count == 0
+                nothing_new = (
+                    mode == "incremental"
+                    and dataset_id is not None
+                    and (new_row_count == 0 or extract.empty)
+                )
                 if nothing_new:
                     # Steady state for a cron-scheduled sync between source
                     # writes. An empty CSV (header only) gives DuckDB nothing
@@ -294,12 +312,29 @@ def _read_secret(secret_arn: str | None) -> dict[str, str]:
     return json.loads(resp["SecretString"])
 
 
-def _ingest_csv(csv_path: str, dest_parquet: str) -> tuple[list, int]:
+_READERS = {
+    ".csv": "read_csv_auto({path!r})",
+    ".tsv": "read_csv_auto({path!r}, delim='\\t')",
+    ".parquet": "read_parquet({path!r})",
+    ".json": "read_json_auto({path!r})",
+    ".jsonl": "read_json_auto({path!r}, format='newline_delimited')",
+}
+
+
+def _ingest_file(src_path: str, extension: str, dest_parquet: str) -> tuple[list, int]:
+    """Mirrors the API's dataset_engine.ingest_to_parquet reader table - a
+    connector that hands back Parquet or JSON (object storage does) must not be
+    forced through the CSV reader."""
     import duckdb
 
+    template = _READERS.get((extension or ".csv").lower())
+    if template is None:
+        raise engine.DatasetEngineError(
+            f"unsupported file type {extension!r} (supported: {', '.join(_READERS)})"
+        )
     con = duckdb.connect()
     try:
-        con.execute(f"CREATE VIEW src AS SELECT * FROM read_csv_auto({csv_path!r})")
+        con.execute(f"CREATE VIEW src AS SELECT * FROM {template.format(path=src_path)}")
         os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
         con.execute(f"COPY src TO {dest_parquet!r} (FORMAT parquet)")
         schema = [engine.ColumnSchema(name=r[0], data_type=r[1]) for r in con.execute("DESCRIBE src").fetchall()]

@@ -47,7 +47,7 @@ from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError
 from . import dataset_engine as engine
 from . import datasets as ds_service
-from .connectors import get_connector
+from .connectors import Extract, get_connector
 from .secrets import SecretsGateway
 from .storage import StorageGateway
 
@@ -64,19 +64,20 @@ def snapshot_source_table(
     secret: dict[str, str],
     source_schema: str,
     source_table: str,
-    dest_csv: str,
+    dest_dir: str,
     cursor_column: str | None = None,
     cursor_value: str | None = None,
-) -> None:
-    """Extract the table (optionally filtered to rows past cursor_value) to a
-    CSV file, byte-capped at this layer's interactive limit. Synchronous; run
-    in a worker thread. Raises ConnectorOperationError/SourceReadError."""
-    get_connector(source_type).snapshot_to_csv(
+) -> Extract:
+    """Extract the table (optionally filtered to what is past cursor_value)
+    into dest_dir, byte-capped at this layer's interactive limit. Returns the
+    file written and the extension to read it as. Synchronous; run in a worker
+    thread. Raises ConnectorOperationError/SourceReadError."""
+    return get_connector(source_type).snapshot(
         config,
         secret,
         source_schema=source_schema,
         source_table=source_table,
-        dest_csv=dest_csv,
+        dest_dir=dest_dir,
         max_bytes=MAX_SYNC_BYTES,
         cursor_column=cursor_column,
         cursor_value=cursor_value,
@@ -128,10 +129,11 @@ async def run_full_sync(
     source_table: str,
     dataset_name: str | None,
     requested_by: UUID,
-    snapshot_csv_path: str,
+    snapshot_path: str,
+    snapshot_extension: str = ".csv",
 ) -> tuple[dict[str, Any], int, bool]:
-    """DB half of a sync, called after snapshot_source_table produced the CSV.
-    Returns (dataset row, rows_synced, created_new_dataset)."""
+    """DB half of a sync, called after snapshot_source_table produced the
+    extract. Returns (dataset row, rows_synced, created_new_dataset)."""
     name = dataset_name or source_table
     slug = ds_service.slugify(name)
 
@@ -139,7 +141,7 @@ async def run_full_sync(
         parquet_tmp = os.path.join(tmp, "data.parquet")
         try:
             schema, row_count = engine.ingest_to_parquet(
-                snapshot_csv_path, ".csv", parquet_tmp
+                snapshot_path, snapshot_extension, parquet_tmp
             )
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
@@ -260,7 +262,9 @@ async def run_incremental_sync(
     primary_key_column: str,
     new_cursor_value: str | None,
     requested_by: UUID,
-    snapshot_csv_path: str,
+    snapshot_path: str,
+    snapshot_extension: str = ".csv",
+    snapshot_empty: bool = False,
 ) -> tuple[dict[str, Any], int, bool]:
     """DB half of an incremental sync, called after snapshot_source_table
     (cursor-filtered) produced the CSV of just the new/changed rows.
@@ -278,7 +282,27 @@ async def run_incremental_sync(
     with tempfile.TemporaryDirectory() as tmp:
         new_parquet = os.path.join(tmp, "new.parquet")
         try:
-            _, new_row_count = engine.ingest_to_parquet(snapshot_csv_path, ".csv", new_parquet)
+            if snapshot_empty:
+                # The connector already knows there is nothing new (an object
+                # store with no changed object writes no file at all), so
+                # there is nothing to ingest - skip straight to the
+                # nothing-changed branch below.
+                new_row_count = 0
+                if existing_dataset_id is None:
+                    # Only reachable if the connection carries a cursor but
+                    # lost its dataset, since a connector reports `empty` only
+                    # when a previous sync stored a cursor. Say so plainly
+                    # rather than falling through to a merge against a file
+                    # the connector never wrote.
+                    raise SyncError(
+                        "nothing new at the source, but this connection has no "
+                        "dataset to merge into - clear the schedule's stored "
+                        "cursor and run a full sync first"
+                    )
+            else:
+                _, new_row_count = engine.ingest_to_parquet(
+                    snapshot_path, snapshot_extension, new_parquet
+                )
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
 

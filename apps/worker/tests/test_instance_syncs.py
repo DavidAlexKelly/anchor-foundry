@@ -96,10 +96,21 @@ def workspace(storage_root: str):
                VALUES (%s,%s,%s,'customer_id', %s)""",
             (sid, otid, did, json.dumps({"name": "name", "email": "email"})),
         )
-    return {
+    yield {
         "tag": tag, "workspace_id": wid, "project_id": pid, "user_id": user,
         "ws_prefix": ws_prefix, "dataset_id": did, "object_type_id": otid, "source_id": sid,
     }
+
+    # Same reason as test_sync_configs.py's workspace fixture: the job
+    # reschedules a source after every run, so one left scheduled stays
+    # permanently due and every later suite run picks it up again - against a
+    # tmp storage root that no longer exists.
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE object_type_sources SET sync_schedule = NULL, sync_next_run_at = NULL "
+            "WHERE id = %s",
+            (sid,),
+        )
 
 
 def _set_due(source_id: uuid.UUID, cron: str = "*/15 * * * *") -> None:
