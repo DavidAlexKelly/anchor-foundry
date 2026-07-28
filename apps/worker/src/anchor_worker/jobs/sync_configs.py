@@ -212,10 +212,18 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                         extract.path, extract.extension, new_parquet
                     )
 
-                nothing_new = (
-                    mode == "incremental"
-                    and dataset_id is not None
-                    and (new_row_count == 0 or extract.empty)
+                # An empty extract means the source had nothing at all (a REST
+                # collection that is simply empty, an object that has not been
+                # rewritten). With a dataset already in place there is nothing
+                # to do in either mode; without one, full mode has no schema to
+                # infer and says so rather than failing inside DuckDB.
+                if extract.empty and dataset_id is None:
+                    raise engine.DatasetEngineError(
+                        "the source returned no records, so there is nothing to "
+                        "create a dataset from yet"
+                    )
+                nothing_new = dataset_id is not None and (
+                    extract.empty or (mode == "incremental" and new_row_count == 0)
                 )
                 if nothing_new:
                     # Steady state for a cron-scheduled sync between source

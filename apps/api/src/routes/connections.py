@@ -449,6 +449,7 @@ async def trigger_sync(
                 requested_by=access.auth.user_id,
                 snapshot_path=extract.path,
                 snapshot_extension=extract.extension,
+                snapshot_empty=extract.empty,
             )
     except (SyncError, ConnectorOperationError) as exc:
         ok, error = False, str(exc)
@@ -511,7 +512,12 @@ class SyncHealthOut(BaseModel):
     succeeded: int
     failed: int
     drifted: int
-    success_rate: float | None  # None when there are no runs yet to rate
+    # Over finished runs only, and None when there are none to rate. A run
+    # still in flight (or orphaned by a restart) is neither a success nor a
+    # failure, and counting it as one turns a healthy connection mid-sync into
+    # "0%", which is worse than saying nothing.
+    success_rate: float | None
+    running: int
     last_status: str | None
     last_started_at: datetime | None
     last_finished_at: datetime | None
@@ -531,6 +537,9 @@ async def sync_health(
     out: list[SyncHealthOut] = []
     for row in rows:
         total = int(row["total_runs"] or 0)
+        succeeded = int(row["succeeded"] or 0)
+        failed = int(row["failed"] or 0)
+        settled = succeeded + failed
         started, finished = row["last_started_at"], row["last_finished_at"]
         out.append(
             SyncHealthOut(
@@ -538,10 +547,11 @@ async def sync_health(
                 sync_schedule=row["sync_schedule"],
                 next_run_at=row["sync_next_run_at"],
                 total_runs=total,
-                succeeded=int(row["succeeded"] or 0),
-                failed=int(row["failed"] or 0),
+                succeeded=succeeded,
+                failed=failed,
+                running=total - settled,
                 drifted=int(row["drifted"] or 0),
-                success_rate=(int(row["succeeded"] or 0) / total) if total else None,
+                success_rate=(succeeded / settled) if settled else None,
                 last_status=row["last_status"],
                 last_started_at=started,
                 last_finished_at=finished,
@@ -766,6 +776,7 @@ async def run_scheduled_sync(
                     requested_by=access.auth.user_id,
                     snapshot_path=extract.path,
                     snapshot_extension=extract.extension,
+                    snapshot_empty=extract.empty,
                 )
                 if dataset:
                     await conn.execute(

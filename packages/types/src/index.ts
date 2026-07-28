@@ -177,7 +177,9 @@ export interface SourceTypeInfo {
   display_name: string;
   config_schema: {
     // `enum` is present for constrained choices (a connector's TLS mode, say),
-    // which the wizard renders as a picker rather than a free-text box.
+    // which the wizard renders as a picker rather than a free-text box;
+    // `type` is JSON Schema's, so "boolean" and "integer" both occur and each
+    // needs its own input.
     properties: Record<
       string,
       { type?: string; default?: unknown; title?: string; enum?: string[] }
@@ -205,7 +207,7 @@ export interface DiscoveredTable {
    * prefix, empty for a file at the root - not a database schema. */
   schema_name: string;
   name: string;
-  kind: "table" | "view" | "file";
+  kind: "table" | "view" | "file" | "endpoint";
   columns: DiscoveredColumn[];
 }
 
@@ -283,6 +285,9 @@ export interface SyncHealth {
   total_runs: number;
   succeeded: number;
   failed: number;
+  /** Runs neither succeeded nor failed - in flight, or orphaned by a restart.
+   * Excluded from success_rate rather than counted against it. */
+  running: number;
   drifted: number;
   success_rate: number | null;
   last_status: "running" | "succeeded" | "failed" | null;

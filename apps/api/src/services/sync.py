@@ -125,7 +125,8 @@ async def find_existing_sync_dataset(
     return await fetch_one(
         conn,
         """
-        SELECT id, name, slug, origin, connection_id, current_version, table_schema
+        SELECT id, name, slug, origin, connection_id, current_version, table_schema,
+               row_count
           FROM datasets
          WHERE project_id = :pid AND slug = :slug
         """,
@@ -147,6 +148,7 @@ async def run_full_sync(
     requested_by: UUID,
     snapshot_path: str,
     snapshot_extension: str = ".csv",
+    snapshot_empty: bool = False,
 ) -> tuple[dict[str, Any], int, bool, dict[str, Any] | None]:
     """DB half of a sync, called after snapshot_source_table produced the
     extract. Returns (dataset row, rows_synced, created_new_dataset,
@@ -154,6 +156,22 @@ async def run_full_sync(
     or None when there is no baseline or nothing changed (migration 0018)."""
     name = dataset_name or source_table
     slug = ds_service.slugify(name)
+
+    if snapshot_empty:
+        # The source produced no records at all - legitimate for a REST
+        # collection that is simply empty. There is nothing to infer a schema
+        # from, so keep whatever version already exists rather than replacing a
+        # working dataset with an unreadable one; with no dataset yet, say why
+        # instead of letting DuckDB fail on an empty file.
+        existing_empty = await find_existing_sync_dataset(
+            conn, project_id, UUID(str(connection_row["id"])), slug
+        )
+        if existing_empty is None:
+            raise SyncError(
+                "the source returned no records, so there is nothing to create a "
+                "dataset from yet - sync again once it has data"
+            )
+        return dict(existing_empty), int(existing_empty.get("row_count") or 0), False, None
 
     with tempfile.TemporaryDirectory() as tmp:
         parquet_tmp = os.path.join(tmp, "data.parquet")

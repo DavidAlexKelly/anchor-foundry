@@ -317,3 +317,29 @@ def test_outsider_cannot_read_sync_health(client: TestClient, fx: Fixture) -> No
     assert client.get(
         f"{cbase(fx)}/sync-health", headers=hdr(fx.outsider_sub)
     ).status_code == 404
+
+
+def test_an_unfinished_run_is_not_counted_as_a_failure(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """A run still in flight - or orphaned by a restart - is neither a success
+    nor a failure. Counting it as one turns a healthy connection mid-sync into
+    "0% healthy", which is worse than reporting nothing. Found by looking at a
+    real dev database that had an orphaned `running` row in it."""
+    import psycopg
+
+    before = _health(client, fx, connection_id)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO sync_runs (connection_id, mode, source_table, status) "
+            "VALUES (%s, 'full', 'public.whatever', 'running')",
+            (connection_id,),
+        )
+
+    after = _health(client, fx, connection_id)
+    assert after["running"] == before["running"] + 1
+    assert after["total_runs"] == before["total_runs"] + 1
+    assert after["failed"] == before["failed"]
+    assert after["succeeded"] == before["succeeded"]
+    # The rate is over settled runs, so an in-flight one leaves it untouched.
+    assert after["success_rate"] == before["success_rate"]

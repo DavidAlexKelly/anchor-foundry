@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 6, 7: connector registry generalised, MySQL/MariaDB, S3/object storage, schema drift detection, sync health — see §21–§23). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7 — the Connections pillar is now built out as far as it can go without a product decision; see §21–§24). Test counts below are from the last full regression run.
 
 ---
 
@@ -45,7 +45,7 @@ Orgs, workspaces (with isolation anchors: S3 prefix / pg schema / search prefix,
 **Key bug fixed:** `INSERT ... RETURNING` under RLS fails when the SELECT policy's helper re-queries the table mid-transaction (rows from the current command aren't visible yet). Fixed by splitting creates into INSERT-then-SELECT rather than weakening any policy.
 
 ### 6. Connections (Layer 1) - tests included in the total below
-CRUD, credential handling (AWS Secrets Manager only - passwords never touch a response, log, or the `config` jsonb column), connector registry (PostgreSQL fully implemented: test, schema discovery), workspace vs. project scope. **Superseded in part by §21/§22**: the registry now covers the extract path too (`snapshot`/`max_cursor_value`, dispatched on `source_type`) and carries three source types — PostgreSQL, MySQL/MariaDB, and S3/object storage.
+CRUD, credential handling (AWS Secrets Manager only - passwords never touch a response, log, or the `config` jsonb column), connector registry (PostgreSQL fully implemented: test, schema discovery), workspace vs. project scope. **Superseded in part by §21–§24**: the registry now covers the extract path too (`snapshot`/`max_cursor_value`, dispatched on `source_type`) and carries four source types — PostgreSQL, MySQL/MariaDB, S3/object storage, and generic REST/HTTP JSON.
 
 ### 7. Datasets - tests included in the total below
 Upload (CSV/TSV/Parquet/JSON/JSONL → canonical Parquet via DuckDB), preview, **sandboxed SQL query** (a user can run arbitrary SQL against their dataset with zero filesystem/network access - verified by trying to read `/etc/passwd` and having it fail), export (CSV/Parquet), versioning.
@@ -278,6 +278,32 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Testing.** `apps/api/tests/test_schema_drift.py` (11 new) covers the diff as a pure function (no baseline, unchanged, column *reordering* deliberately not counted as drift, and added/removed/retyped reported separately) and then end to end by actually running `ALTER TABLE` against the real Postgres source between syncs, plus the health summary including a failed run moving the success rate, a never-synced connection, schedule reporting, and outsider 404. `apps/worker/tests/test_sync_configs.py` gains a drift test on the scheduled path. Verified in a real browser: four runs against a live source (one of them drifting the table, one failing), health showing `75% of last 4`, and the history dialog expanding the drift to `+ region` / `− customer`.
 
 **Current totals: API 187/187** (176 + 11), **worker 32/32** (31 + 1), **control-plane 13/13** (untouched).
+
+---
+
+### 24. Generic REST / HTTP JSON connector — the fourth source type (this session)
+
+`ROADMAP.md` Connections item 5, which that document calls "the highest-variance connector to build well" and tells you to scope narrowly. The scope is written into the connector itself rather than left implied, because the way this feature goes wrong is by quietly becoming a general HTTP client:
+
+- **GET only.** A connector that POSTs is write-back (item 8), which wants its own design.
+- **The response must contain a JSON array of objects**, found by a dotted `records_path` (`""` when the body *is* the array). XML, CSV-over-HTTP, and an object-keyed-by-id all say so rather than guessing.
+- **Two pagination styles** — an incrementing page number, and an opaque cursor echoed back from the response body via a dotted `cursor_path`. Link headers and offset/limit are not handled.
+- **Three auth schemes**, as the roadmap listed: API key in a configurable header, bearer token, and OAuth2 client-credentials (token fetched per operation; a cache would need invalidation and a clock, and earns nothing until an API rate-limits it).
+- **No server-side incrementality.** There is no universal "changed since" for REST, so `max_cursor_value` returns `None` and every run fetches the whole collection. Incremental mode still merges by primary key — useful for an append-only endpoint, but not a bandwidth saving, and documented as such rather than implied by the mode's name.
+
+**Records land as JSONL.** This is the other half of why §22 made `snapshot` return a format alongside a path: a REST payload routinely nests objects and arrays, and pushing that through CSV would turn them into unparseable text. A test asserts a nested `tags` array survives into the dataset as structure, and that `id`/`active`/`score` arrive as `BIGINT`/`BOOLEAN`/`DOUBLE` rather than all-text.
+
+**Two things that are security decisions, not features.** `allow_insecure_http` defaults false, so plaintext has to be asked for — same shape as MySQL's `ssl_mode` in §21. And the URL is checked against the **link-local range**: this connector fetches an operator-supplied URL from inside the customer's VPC, so a project editor who has no AWS access could otherwise point it at `169.254.169.254` and read the task role's credentials out of the response body. Other private ranges are deliberately *not* blocked — an internal API on a private subnet is a legitimate thing to sync, and blocking it would break the ordinary case to defend against nothing. The OAuth2 error path also refuses to echo the token endpoint's response body, since a token endpoint can quote back the `client_secret` it was sent; there is a test asserting the secret does not appear in the error.
+
+**Empty collections needed handling one level up.** A REST collection that is legitimately empty produces no records, and DuckDB cannot infer a schema from an empty file. `snapshot` reports `empty=True` (the flag §22 added), and both the API's full-sync path and the worker's now honour it: with a dataset already in place, keep the existing version rather than replacing a working dataset with an unreadable one; with no dataset yet, fail with a sentence explaining why instead of a DuckDB error.
+
+**A bug found by looking at a screenshot, not by a test.** While browser-verifying the §23 health column, a connection showed "0% of last 1" — it had an orphaned `running` sync run, and the success rate was `succeeded / total`, so a run still in flight counted as a failure. A healthy connection mid-sync would read as 0% healthy. The rate is now over *settled* runs (`succeeded + failed`), `running` is reported separately, and the health cell gives an in-flight run the neutral dot rather than the red one. Test added.
+
+**Testing.** `apps/api/tests/test_rest_connector.py` (20) and `apps/worker/tests/test_rest_sync_configs.py` (5) run against a real HTTP server (`apps/api/tests/rest_fixture_server.py`, started as its own process) rather than a patched `urlopen` — the same standard as the real Postgres/MariaDB/moto suites, and for the same reason: a mocked client tests the mock's shape. The fixture serves both pagination styles, all three auth schemes, and every malformed-response case (not-a-list, not-JSON, 500, 401/403). Verified end to end in a browser: built a REST connection through the wizard, tested it, discovered the endpoint's 5 columns, and synced 3 records across two cursor pages.
+
+**Frontend.** REST is the first connector with a boolean config field, which the schema-driven wizard was rendering as a text box — a boolean typed as "true" is a wrong answer waiting to happen. Booleans now render as a checkbox, alongside §21's enum dropdowns.
+
+**Current totals: API 208/208** (187 + 21), **worker 37/37** (32 + 5), **control-plane 13/13** (untouched).
 
 ---
 

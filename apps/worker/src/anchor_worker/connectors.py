@@ -433,11 +433,194 @@ def _s3_timestamp(value):
     return str(value)
 
 
+# ---- Generic REST / HTTP JSON ------------------------------------------------
+# GET only, JSON array of records located by a dotted records_path, two
+# pagination styles, records written as JSONL. No server-side incrementality -
+# max_cursor_value is always None. See the API-side connector for the full
+# reasoning and the scope boundaries.
+_REST_TIMEOUT_S = 20
+_REST_MAX_PAGES = 1000
+
+
+class RestConnector:
+    type_name = "rest"
+
+    def _auth_headers(self, config: dict, secret: dict) -> dict:
+        auth = config.get("auth_type", "none")
+        if auth == "none":
+            return {}
+        if auth == "api_key_header":
+            key = secret.get("api_key")
+            if not key:
+                raise ConnectorError("no api_key stored for this connection")
+            return {config.get("auth_header_name") or "X-API-Key": key}
+        if auth == "bearer":
+            token = secret.get("api_key")
+            if not token:
+                raise ConnectorError("no bearer token stored for this connection")
+            return {"Authorization": f"Bearer {token}"}
+        return {"Authorization": f"Bearer {self._oauth_token(config, secret)}"}
+
+    def _oauth_token(self, config: dict, secret: dict) -> str:
+        import json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        client_id = secret.get("client_id")
+        client_secret = secret.get("client_secret")
+        if not client_id or not client_secret:
+            raise ConnectorError(
+                "oauth2_client_credentials needs both client_id and client_secret"
+            )
+        form = {"grant_type": "client_credentials", "client_id": client_id,
+                "client_secret": client_secret}
+        if config.get("oauth_scope"):
+            form["scope"] = config["oauth_scope"]
+        request = urllib.request.Request(
+            config["token_url"],
+            data=urllib.parse.urlencode(form).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+                payload = json.loads(response.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as exc:
+            # Never echo the body - a token endpoint can quote back the secret.
+            raise ConnectorError(
+                f"the token endpoint rejected the credentials (HTTP {exc.code})"
+            ) from exc
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise ConnectorError(f"could not get an access token: {exc}") from exc
+        token = payload.get("access_token") if isinstance(payload, dict) else None
+        if not token:
+            raise ConnectorError("the token endpoint returned no access_token")
+        return str(token)
+
+    def _fetch_page(self, config: dict, secret: dict, params: dict):
+        import json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        base = config["base_url"]
+        path = config.get("resource_path") or ""
+        url = f"{base.rstrip('/')}/{path.lstrip('/')}" if path else base
+        if params:
+            separator = "&" if urllib.parse.urlparse(url).query else "?"
+            url = f"{url}{separator}{urllib.parse.urlencode(params)}"
+
+        headers = {"Accept": "application/json", **self._auth_headers(config, secret)}
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+                body = response.read()
+        except urllib.error.HTTPError as exc:
+            raise ConnectorError(f"the API returned HTTP {exc.code}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise ConnectorError(f"could not reach the API: {exc}") from exc
+        try:
+            return json.loads(body.decode("utf-8", "replace"))
+        except ValueError as exc:
+            raise ConnectorError("the API did not return JSON") from exc
+
+    def _records(self, payload, config: dict) -> list:
+        located = _json_path(payload, config.get("records_path") or "")
+        if not isinstance(located, list):
+            where = config.get("records_path") or "the response body"
+            raise ConnectorError(f"expected a JSON array at {where}")
+        return [row for row in located if isinstance(row, dict)]
+
+    def _pages(self, config: dict, secret: dict):
+        style = config.get("pagination", "none")
+        params = {}
+        if config.get("page_size_param"):
+            params[config["page_size_param"]] = config.get("page_size", 100)
+
+        page_number = 1
+        cursor = None
+        for _ in range(_REST_MAX_PAGES):
+            page_params = dict(params)
+            if style == "page_number":
+                page_params[config.get("page_param") or "page"] = page_number
+            elif style == "cursor" and cursor is not None:
+                page_params[config.get("cursor_param") or "cursor"] = cursor
+
+            payload = self._fetch_page(config, secret, page_params)
+            records = self._records(payload, config)
+            yield records
+
+            if style == "none":
+                return
+            if style == "page_number":
+                if not records:
+                    return
+                page_number += 1
+            else:
+                cursor = _json_path(payload, config.get("cursor_path") or "")
+                if cursor in (None, "", []):
+                    return
+
+    def snapshot(
+        self,
+        config: dict,
+        secret: dict,
+        *,
+        source_schema: str,
+        source_table: str,
+        dest_dir: str,
+        max_bytes: int,
+        cursor_column=None,
+        cursor_value=None,
+    ) -> "Extract":
+        import json
+
+        dest = os.path.join(dest_dir, "snapshot.jsonl")
+        written = 0
+        rows = 0
+        with open(dest, "w", encoding="utf-8") as handle:
+            for page in self._pages(config, secret):
+                for record in page:
+                    line = json.dumps(record, default=str) + "\n"
+                    written += len(line.encode("utf-8"))
+                    if written > max_bytes:
+                        raise size_cap_error(max_bytes)
+                    handle.write(line)
+                    rows += 1
+        if rows == 0:
+            return Extract(path=dest, extension=".jsonl", empty=True)
+        return Extract(path=dest, extension=".jsonl")
+
+    def max_cursor_value(
+        self, config: dict, secret: dict, *, source_schema: str, source_table: str, cursor_column: str
+    ):
+        """Always None - REST has no universal "changed since". See the
+        API-side connector."""
+        return None
+
+
+def _json_path(payload, path: str):
+    """Dotted lookup into a decoded JSON body; empty path means the body
+    itself. Mirrors the API-side helper."""
+    if not path:
+        return payload
+    current = payload
+    for part in path.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return None
+    return current
+
+
 # ---- registry ----------------------------------------------------------------
 _REGISTRY = {
     PostgresConnector.type_name: PostgresConnector(),
     MySQLConnector.type_name: MySQLConnector(),
     S3Connector.type_name: S3Connector(),
+    RestConnector.type_name: RestConnector(),
 }
 
 

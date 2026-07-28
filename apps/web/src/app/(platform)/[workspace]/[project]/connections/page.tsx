@@ -219,20 +219,31 @@ function HealthCell({ health }: { health: SyncHealth | undefined }) {
   }
   const rate = health.success_rate === null ? null : Math.round(health.success_rate * 100);
   const drift = driftSummary(health.last_schema_changes);
+  const settled = health.succeeded + health.failed;
+  // "running" is neither good nor bad news, so it gets the neutral dot rather
+  // than the red one - a sync in flight is not a failure.
+  const tone =
+    health.last_status === "succeeded"
+      ? "ok"
+      : health.last_status === "failed"
+        ? "error"
+        : "testing";
   return (
     <div style={{ fontSize: 12 }}>
-      <span className={`status-${health.last_status === "succeeded" ? "ok" : "error"}`}>
+      <span className={`status-${tone}`}>
         <span className="status-dot" />
         <span className="status-label">
           {health.last_status} {relativeTime(health.last_started_at)}
         </span>
       </span>
       <div className="count">
-        {rate !== null && (
+        {rate !== null ? (
           <>
-            {rate}% of last {health.total_runs} · {duration(health.last_duration_seconds)} ·{" "}
+            {rate}% of last {settled} · {duration(health.last_duration_seconds)} ·{" "}
             {(health.last_rows_synced ?? 0).toLocaleString()} rows
           </>
+        ) : (
+          <>no finished runs yet</>
         )}
       </div>
       {health.next_run_at && (
@@ -281,7 +292,12 @@ function AddConnectionWizard({
       for (const [key, value] of Object.entries(config)) {
         if (value === "") continue;
         const prop = selected.config_schema.properties[key];
-        typedConfig[key] = prop?.type === "integer" ? Number(value) : value;
+        typedConfig[key] =
+          prop?.type === "integer"
+            ? Number(value)
+            : prop?.type === "boolean"
+              ? value === "true"
+              : value;
       }
       const created = await connApi.create(workspaceId, projectId, {
         name,
@@ -410,6 +426,16 @@ function AddConnectionWizard({
                       </option>
                     ))}
                   </select>
+                ) : prop.type === "boolean" ? (
+                  // A boolean typed into a text box ("true"/"false") is a
+                  // wrong answer waiting to happen.
+                  <input
+                    type="checkbox"
+                    checked={config[key] === "true"}
+                    onChange={(e) =>
+                      setConfig({ ...config, [key]: e.target.checked ? "true" : "false" })
+                    }
+                  />
                 ) : (
                   <input
                     type={prop.type === "integer" ? "number" : "text"}
