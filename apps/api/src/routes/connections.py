@@ -348,8 +348,10 @@ from ..services.sync import SyncError
 
 
 class SyncRequest(BaseModel):
-    source_schema: str = Field(default="public", min_length=1, max_length=63)
-    source_table: str = Field(min_length=1, max_length=63)
+    # 64, not Postgres' 63: MySQL allows one more character, and this model is
+    # shared across source types. For MySQL, source_schema is the database name.
+    source_schema: str = Field(default="public", min_length=1, max_length=64)
+    source_table: str = Field(min_length=1, max_length=64)
     dataset_name: str | None = Field(default=None, min_length=1, max_length=200)
     mode: str = Field(default="full", pattern="^(full|incremental)$")
 
@@ -423,7 +425,8 @@ async def trigger_sync(
         secret = conn_service.secret_values_for(_secrets, row)
         await anyio.to_thread.run_sync(
             sync_service.snapshot_source_table,
-            config, secret, body.source_schema, body.source_table, csv_path,
+            str(row["source_type"]), config, secret,
+            body.source_schema, body.source_table, csv_path,
         )
         async with user_connection(access.auth.user_id) as conn:
             dataset, rows_synced, created = await sync_service.run_full_sync(
@@ -507,8 +510,9 @@ async def sync_runs(
 # models' manual run vs. its own scheduled_model_runs job.
 class ScheduledSyncSet(BaseModel):
     mode: str = Field(pattern="^(full|incremental)$")
-    source_schema: str = Field(default="public", min_length=1, max_length=63)
-    source_table: str = Field(min_length=1, max_length=63)
+    # 64 for the same reason as SyncRequest above.
+    source_schema: str = Field(default="public", min_length=1, max_length=64)
+    source_table: str = Field(min_length=1, max_length=64)
     dataset_name: str | None = Field(default=None, min_length=1, max_length=200)
     primary_key_column: str | None = Field(default=None, min_length=1, max_length=200)
     cursor_column: str | None = Field(default=None, min_length=1, max_length=200)
@@ -637,15 +641,18 @@ async def run_scheduled_sync(
     try:
         secret = conn_service.secret_values_for(_secrets, row)
         cursor_col = schedule["sync_cursor_column"] if mode == "incremental" else None
+        source_type = str(row["source_type"])
         await anyio.to_thread.run_sync(
             sync_service.snapshot_source_table,
-            config, secret, schedule["sync_source_schema"], schedule["sync_source_table"],
+            source_type, config, secret,
+            schedule["sync_source_schema"], schedule["sync_source_table"],
             csv_path, cursor_col, schedule["sync_last_cursor_value"],
         )
         if mode == "incremental" and cursor_col:
             new_cursor_value = await anyio.to_thread.run_sync(
                 sync_service.max_cursor_value,
-                config, secret, schedule["sync_source_schema"], schedule["sync_source_table"], cursor_col,
+                source_type, config, secret,
+                schedule["sync_source_schema"], schedule["sync_source_table"], cursor_col,
             ) or schedule["sync_last_cursor_value"]
 
         async with user_connection(access.auth.user_id) as conn:

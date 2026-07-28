@@ -176,12 +176,28 @@ function AddConnectionWizard({
             </Field>
             {Object.entries(selected.config_schema.properties).map(([key, prop]) => (
               <Field key={key} label={prop.title ?? key}>
-                <input
-                  type={prop.type === "integer" ? "number" : "text"}
-                  value={config[key] ?? ""}
-                  onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
-                  required={selected.config_schema.required?.includes(key) ?? false}
-                />
+                {prop.enum ? (
+                  // A constrained choice is a picker: typing one of a fixed set
+                  // of values by hand only ever produces a 422 on a typo.
+                  <select
+                    value={config[key] ?? ""}
+                    onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
+                    required={selected.config_schema.required?.includes(key) ?? false}
+                  >
+                    {prop.enum.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={prop.type === "integer" ? "number" : "text"}
+                    value={config[key] ?? ""}
+                    onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
+                    required={selected.config_schema.required?.includes(key) ?? false}
+                  />
+                )}
               </Field>
             ))}
             {selected.secret_fields.map((key) => (

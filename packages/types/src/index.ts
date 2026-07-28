@@ -176,7 +176,12 @@ export interface SourceTypeInfo {
   type: string;
   display_name: string;
   config_schema: {
-    properties: Record<string, { type?: string; default?: unknown; title?: string }>;
+    // `enum` is present for constrained choices (a connector's TLS mode, say),
+    // which the wizard renders as a picker rather than a free-text box.
+    properties: Record<
+      string,
+      { type?: string; default?: unknown; title?: string; enum?: string[] }
+    >;
     required?: string[];
   };
   secret_fields: string[];
