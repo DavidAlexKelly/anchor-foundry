@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ApiError, datasets as dsApi, downloadFile } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { Dataset, TabularResult } from "@/lib/types";
+import type { Dataset, DatasetHealth, TabularResult } from "@/lib/types";
 
 function ResultGrid({ result }: { result: TabularResult }) {
   return (
@@ -127,6 +127,244 @@ function UploadDialog({ workspaceId, projectId }: { workspaceId: string; project
   );
 }
 
+const RULE_TYPES: { value: string; label: string; needs: "range" | "pattern" | null }[] = [
+  { value: "not_null", label: "Not null", needs: null },
+  { value: "unique", label: "Unique", needs: null },
+  { value: "value_in_range", label: "In range", needs: "range" },
+  { value: "regex_match", label: "Matches pattern", needs: "pattern" },
+  { value: "column_exists", label: "Column exists", needs: null },
+];
+
+/** The dataset's overall health. "none" is deliberately not a pass - nothing
+ * was checked, which is a different fact and reads differently. */
+function HealthBadge({ status }: { status: DatasetHealth["status"] | undefined }) {
+  if (!status || status === "none") return <span className="count">no checks</span>;
+  const tone = status === "pass" ? "ok" : status === "warn" ? "testing" : "error";
+  return (
+    <span className={`status-${tone}`}>
+      <span className="status-dot" />
+      <span className="status-label">{status}</span>
+    </span>
+  );
+}
+
+/** Define what "good" means for this dataset, and see whether the current
+ * version lives up to it. */
+function ChecksPanel({
+  workspaceId,
+  projectId,
+  dataset,
+  canEdit,
+}: {
+  workspaceId: string;
+  projectId: string;
+  dataset: Dataset;
+  canEdit: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [ruleType, setRuleType] = useState("not_null");
+  const [column, setColumn] = useState(dataset.table_schema[0]?.name ?? "");
+  const [severity, setSeverity] = useState("error");
+  const [min, setMin] = useState("");
+  const [max, setMax] = useState("");
+  const [pattern, setPattern] = useState("");
+
+  const health = useQuery({
+    queryKey: ["health", dataset.id],
+    queryFn: () => dsApi.health(workspaceId, projectId, dataset.id),
+    retry: false,
+  });
+  const rules = useQuery({
+    queryKey: ["expectations", dataset.id],
+    queryFn: () => dsApi.expectations(workspaceId, projectId, dataset.id),
+    retry: false,
+  });
+
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["expectations", dataset.id] });
+    await queryClient.invalidateQueries({ queryKey: ["health", dataset.id] });
+    await queryClient.invalidateQueries({ queryKey: ["datasets", projectId] });
+  };
+
+  const add = useMutation({
+    mutationFn: () => {
+      const needs = RULE_TYPES.find((r) => r.value === ruleType)?.needs;
+      const config: Record<string, unknown> = {};
+      if (needs === "range") {
+        if (min !== "") config.min = Number(min);
+        if (max !== "") config.max = Number(max);
+      } else if (needs === "pattern") {
+        config.pattern = pattern;
+      }
+      return dsApi.addExpectation(workspaceId, projectId, dataset.id, {
+        rule_type: ruleType,
+        column_name: column,
+        config,
+        severity,
+      });
+    },
+    onSuccess: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) =>
+      dsApi.removeExpectation(workspaceId, projectId, dataset.id, id),
+    onSuccess: refresh,
+  });
+
+  const needs = RULE_TYPES.find((r) => r.value === ruleType)?.needs;
+  const resultsById = new Map(
+    (health.data?.results ?? []).map((r) => [r.expectation_id, r]),
+  );
+
+  return (
+    <div>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        Health of version {health.data?.version_number ?? dataset.current_version}:{" "}
+        <HealthBadge status={health.data?.status} />
+      </p>
+
+      {rules.data && rules.data.length > 0 && (
+        <table className="table" style={{ marginBottom: 12 }}>
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>Check</th>
+              <th>Severity</th>
+              <th>Result</th>
+              {canEdit && <th aria-label="Actions" />}
+            </tr>
+          </thead>
+          <tbody>
+            {rules.data.map((rule) => {
+              const result = resultsById.get(rule.id);
+              return (
+                <tr key={rule.id}>
+                  <td>
+                    <strong>{rule.column_name}</strong>
+                  </td>
+                  <td>
+                    {RULE_TYPES.find((r) => r.value === rule.rule_type)?.label ??
+                      rule.rule_type}
+                    {Object.keys(rule.config).length > 0 && (
+                      <div className="count">{JSON.stringify(rule.config)}</div>
+                    )}
+                  </td>
+                  <td className="count">{rule.severity}</td>
+                  <td>
+                    {result ? (
+                      <>
+                        <span
+                          className={`status-${
+                            result.status === "pass"
+                              ? "ok"
+                              : result.status === "error"
+                                ? "testing"
+                                : "error"
+                          }`}
+                        >
+                          <span className="status-dot" />
+                          <span className="status-label">{result.status}</span>
+                        </span>
+                        {result.message && (
+                          <div className="count">{result.message}</div>
+                        )}
+                      </>
+                    ) : (
+                      <span className="count">—</span>
+                    )}
+                  </td>
+                  {canEdit && (
+                    <td>
+                      <button
+                        className="btn quiet"
+                        style={{ padding: "3px 9px", fontSize: 12 }}
+                        onClick={() => remove.mutate(rule.id)}
+                        disabled={remove.isPending}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {rules.data && rules.data.length === 0 && (
+        <div className="state">
+          No checks yet. Add one below to start tracking this dataset&apos;s health.
+        </div>
+      )}
+
+      {canEdit && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            add.mutate();
+          }}
+        >
+          <Field label="Column">
+            <select value={column} onChange={(e) => setColumn(e.target.value)} required>
+              {dataset.table_schema.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Check">
+            <select value={ruleType} onChange={(e) => setRuleType(e.target.value)}>
+              {RULE_TYPES.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {needs === "range" && (
+            <>
+              <Field label="Min" hint="Leave blank for no lower bound">
+                <input type="number" value={min} onChange={(e) => setMin(e.target.value)} />
+              </Field>
+              <Field label="Max" hint="Leave blank for no upper bound">
+                <input type="number" value={max} onChange={(e) => setMax(e.target.value)} />
+              </Field>
+            </>
+          )}
+          {needs === "pattern" && (
+            <Field label="Pattern" hint="A regular expression every value must match">
+              <input
+                type="text"
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+                required
+              />
+            </Field>
+          )}
+          <Field label="Severity" hint="A warning surfaces without failing the dataset">
+            <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+            </select>
+          </Field>
+          {add.isError && (
+            <div className="form-error">
+              {add.error instanceof ApiError ? add.error.message : "Couldn't add the check."}
+            </div>
+          )}
+          <div className="form-actions">
+            <button className="btn" type="submit" disabled={add.isPending || !column}>
+              {add.isPending ? "Adding…" : "Add check"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 /** Column statistics for the current version - the "what am I actually
  * looking at" half of exploring a dataset, next to the row grid's "what does
  * a row look like". Fetched separately from preview so the grid is not held
@@ -215,14 +453,16 @@ function ExploreDialog({
   workspaceId,
   projectId,
   dataset,
+  canEdit,
   onClose,
 }: {
   workspaceId: string;
   projectId: string;
   dataset: Dataset;
+  canEdit: boolean;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<"rows" | "columns">("rows");
+  const [tab, setTab] = useState<"rows" | "columns" | "checks">("rows");
   const [sql, setSql] = useState(`SELECT * FROM dataset LIMIT 20`);
   const preview = useQuery({
     queryKey: ["preview", dataset.id],
@@ -254,6 +494,12 @@ function ExploreDialog({
         >
           Columns
         </button>
+        <button
+          className={tab === "checks" ? "btn" : "btn quiet"}
+          onClick={() => setTab("checks")}
+        >
+          Checks
+        </button>
       </div>
       {tab === "rows" ? (
         <>
@@ -277,11 +523,18 @@ function ExploreDialog({
           {preview.isPending && !shown && <div className="state">Loading preview…</div>}
           {shown && <ResultGrid result={shown} />}
         </>
-      ) : (
+      ) : tab === "columns" ? (
         <ProfilePanel
           workspaceId={workspaceId}
           projectId={projectId}
           dataset={dataset}
+        />
+      ) : (
+        <ChecksPanel
+          workspaceId={workspaceId}
+          projectId={projectId}
+          dataset={dataset}
+          canEdit={canEdit}
         />
       )}
       <div className="form-actions">
@@ -377,6 +630,7 @@ function DatasetRow({
             workspaceId={workspaceId}
             projectId={projectId}
             dataset={dataset}
+            canEdit={canEdit}
             onClose={() => setExploring(false)}
           />
         )}

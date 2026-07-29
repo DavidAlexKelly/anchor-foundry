@@ -251,6 +251,46 @@ export interface DatasetProfile {
   columns: ColumnProfile[];
 }
 
+// ---- data health (roadmap Datasets item 2, migration 0020) ------------------
+export type ExpectationRuleType =
+  | "not_null"
+  | "unique"
+  | "value_in_range"
+  | "regex_match"
+  | "column_exists";
+
+export interface Expectation {
+  id: string;
+  dataset_id: string;
+  rule_type: ExpectationRuleType;
+  column_name: string;
+  config: Record<string, unknown>;
+  severity: "error" | "warn";
+  created_at: string;
+}
+
+export interface ExpectationResult {
+  expectation_id: string | null;
+  rule_type: ExpectationRuleType;
+  column_name: string;
+  severity: "error" | "warn";
+  /** `error` means the rule could not be evaluated - which is not the same as
+   * the data being bad, and must not be shown as though it were. */
+  status: "pass" | "fail" | "error";
+  failing_rows: number;
+  rows_checked: number;
+  message: string | null;
+}
+
+export interface DatasetHealth {
+  dataset_id: string;
+  version_number: number;
+  /** "none" when the dataset has no rules - distinct from passing. */
+  status: "pass" | "warn" | "fail" | "none";
+  evaluated_at: string | null;
+  results: ExpectationResult[];
+}
+
 export interface TabularResult {
   columns: { name: string; data_type: string }[];
   rows: unknown[][];

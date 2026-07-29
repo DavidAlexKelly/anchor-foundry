@@ -182,6 +182,34 @@ export const datasets = {
     request<import("./types").DatasetProfile>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile`,
     ),
+  health: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetHealth>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/health`,
+    ),
+  expectations: (wid: string, pid: string, did: string) =>
+    request<import("./types").Expectation[]>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/expectations`,
+    ),
+  addExpectation: (
+    wid: string,
+    pid: string,
+    did: string,
+    input: {
+      rule_type: string;
+      column_name: string;
+      config?: Record<string, unknown>;
+      severity?: string;
+    },
+  ) =>
+    request<import("./types").Expectation>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/expectations`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  removeExpectation: (wid: string, pid: string, did: string, rid: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/expectations/${rid}`,
+      { method: "DELETE" },
+    ),
   query: (wid: string, pid: string, did: string, sql: string) =>
     request<import("./types").TabularResult>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/query`,

@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7 and Datasets 1 — see §21–§25). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7 and Datasets 1–2 — see §21–§26). Test counts below are from the last full regression run.
 
 ---
 
@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app - synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0019) + migration runner
+│   ├── db/              SQL migrations (0001–0020) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0019)
+### 1. Database schema (migrations 0001–0020)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -326,6 +326,28 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Testing.** `apps/api/tests/test_column_profile.py` (8) against a real uploaded file with a deliberately awkward shape — a complete key, a column with one gap, a mostly-empty column, a constant, and text. Covers the statistics, the empty-dataset case, the unorderable-type case (via a real Parquet with a list column), the lazy-compute-then-cache behaviour asserted against the database, per-version cache keying, and viewer/outsider access. Verified in a browser end to end: uploaded a file, opened Columns, and read back `75% (3)` nulls on the mostly-empty column and the `unique` chip on the key.
 
 **Current totals: API 216/216** (208 + 8), **worker 37/37**, **control-plane 13/13** (both untouched).
+
+---
+
+### 26. Data quality expectations and dataset health (this session)
+
+`ROADMAP.md` Datasets item 2 — the platform's analog of Foundry's Data Health checks, and the thing the Models pillar's build-gating item was waiting on.
+
+**What a rule is.** One assertion about one column: `not_null`, `unique`, `value_in_range`, `regex_match`, or `column_exists` (migration 0020). Severity decides what a failure *means*: `error` fails the dataset's health, `warn` surfaces without condemning it — because "this column has some nulls" and "this join key has duplicates" are not the same kind of news. A dataset's overall status is `pass`, `warn`, `fail`, or **`none`** — that last one because "nothing is checked" and "everything checked out" are different facts and must not render the same.
+
+**`error` is not `fail`, and that distinction is the design.** A rule that *cannot be evaluated* — its column is gone, its bounds are non-numeric, a range check was pointed at a text column — has not proven the data bad. Reporting that as a data failure sends someone looking in entirely the wrong place. Unevaluatable rules report `error`, degrade health to `warn` rather than `fail`, and never stop the other rules running: a dataset's health is the whole picture, and the first broken rule is the least useful place to stop. `column_exists` is the one rule that *does* fail on a missing column, because asserting presence is its entire job.
+
+**When rules are evaluated — the deviation from the roadmap, argued in migration 0020.** The plan said "evaluated against every new version at creation time … one evaluation point, called from wherever `dataset_versions` rows are currently created." There are **seven** such places across two independently deployed codebases (upload, two sync paths, two model paths, action write-back, plus the worker's mirrors). That is a large blast radius, but the deciding argument is different: **a result computed at creation time is stale the moment somebody edits the rules**, which is exactly when a health badge most needs to be right. So results are computed on demand, cached on the version, and *any* rule change clears the cache for that dataset. Consumers go through one function that computes-if-absent, so all seven creation paths are covered without touching any of them. The one thing this genuinely cannot do — flagged in the migration as a decision, not an omission — is alert at the moment a bad version lands, because there is no reader to trigger the computation. Building alerting means adding real eager evaluation there.
+
+**Null semantics, decided rather than inherited.** Nulls do not count against `unique` (SQL uniqueness does not constrain them) or against `value_in_range` (a missing value is outside no range). Double-reporting what `not_null` already covers would make a single gap look like three problems. There is a test pinning it.
+
+**Bad configuration is refused at save time**, not discovered on a later health read: an invalid regex, a range with no bounds or with min above max, a non-numeric bound, and an unknown rule type are all 422s on the form the user is looking at. The one place rule config reaches SQL — range bounds — refuses anything that is not a number rather than interpolating it.
+
+**Frontend.** The dataset Explore dialog gains a third tab, **Checks**, alongside Rows and Columns: current health, each rule with its result and failing-row count, and a form to add one (the form shows min/max or pattern inputs only for the rules that take them). Editors define rules; viewers see health and results but get no controls.
+
+**Testing.** `apps/api/tests/test_expectations.py` (14) against real Parquet written by the real upload path, so a "fail" means DuckDB counted bad rows. Covers each rule type against data engineered to break it, the rules that hold, null semantics, `error`-vs-`fail` on a missing column and on a type mismatch, severity changing the overall verdict, lazy evaluation then caching, cache invalidation on both rule creation and deletion, every bad-config rejection, the duplicate-rule conflict, role floors, outsider 404, and the audit trail. Verified in a browser: added a not-null check and a warn-severity range check through the form and watched health go to `fail` with `1 null value(s)` and `1 value(s) outside the range`.
+
+**Current totals: API 230/230** (216 + 14), **worker 37/37**, **control-plane 13/13** (both untouched).
 
 ---
 
