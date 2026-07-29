@@ -9,16 +9,21 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from fastapi.responses import JSONResponse
 from starlette.requests import Request as StarletteRequest
 
 from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
+from .lib.errors import BreakingChangeError
 from .services.connectors import ConnectorConfigError
 from .services.dataset_engine import DatasetEngineError
+from .services.datasets import SCHEMA_POLICY_SQLSTATE
+from .services import instance_store
 from .services.orgs import Boto3CognitoGateway
 from .services.secrets import Boto3SecretsGateway
 from .services.storage import S3StorageGateway, StorageKeyError
@@ -58,6 +63,12 @@ def _wire_production_gateways() -> None:
     bootstrap_routes.configure_cognito_gateway(
         Boto3CognitoGateway(settings.cognito_user_pool_id, region)
     )
+    # Roadmap Objects item 1: installs the OpenSearch instance store when the
+    # deployment has one, leaving every other environment on the Postgres
+    # fallback. gateway_from_env() returns None when OPENSEARCH_ENDPOINT /
+    # OPENSEARCH_SECRET_ARN are unset, and configure_instance_store(None) is
+    # exactly "keep using Postgres".
+    instance_store.configure_instance_store(instance_store.gateway_from_env())
 
 
 @asynccontextmanager
@@ -107,6 +118,45 @@ def create_app() -> FastAPI:
     async def storage_key_error(request: StarletteRequest, exc: StorageKeyError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
+    @app.exception_handler(DBAPIError)
+    async def database_constraint_error(
+        request: StarletteRequest, exc: DBAPIError
+    ) -> JSONResponse:
+        """Migration 0023 enforces a dataset's schema policy in a trigger, so
+        the refusal arrives here as a database error rather than from a
+        service. It carries its own SQLSTATE precisely so it can be told
+        apart from every other constraint on the table; anything else is a
+        genuine server fault and is re-raised to the 500 handler unchanged."""
+        original = getattr(exc, "orig", None)
+        if getattr(original, "sqlstate", None) != SCHEMA_POLICY_SQLSTATE:
+            raise exc
+        diag = getattr(original, "diag", None)
+        detail = getattr(diag, "message_primary", None) or str(original).splitlines()[0]
+        hint = getattr(diag, "message_hint", None)
+        return JSONResponse(
+            status_code=422,
+            content={"detail": detail if not hint else f"{detail} - {hint}"},
+        )
+
+    @app.exception_handler(BreakingChangeError)
+    async def breaking_change_error(
+        request: StarletteRequest, exc: BreakingChangeError
+    ) -> JSONResponse:
+        """A 409 that carries its reasons as data (roadmap Objects item 5).
+
+        `detail` stays a plain string, so every existing client that reads
+        `detail` still gets a usable sentence; `impacts` is an additional
+        top-level key holding the same information as a list, because a
+        warning listing four affected consumers is a list in the UI and
+        parsing it back out of prose would be absurd.
+        """
+        # jsonable_encoder, not the raw list: the impacts carry consumer UUIDs
+        # straight off the row, which json.dumps refuses.
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=jsonable_encoder({"detail": exc.detail, "impacts": exc.impacts}),
+        )
+
     @app.exception_handler(ValueError)
     async def service_value_error(request: StarletteRequest, exc: ValueError) -> JSONResponse:
         # Service-layer input rejections (bad role names, XOR violations) are
@@ -121,6 +171,7 @@ def create_app() -> FastAPI:
     app.include_router(connection_routes.router, prefix=prefix)
     app.include_router(dataset_routes.router, prefix=prefix)
     app.include_router(model_routes.router, prefix=prefix)
+    app.include_router(model_routes.project_router, prefix=prefix)
     app.include_router(object_routes.router, prefix=prefix)
     app.include_router(object_routes.project_router, prefix=prefix)
     app.include_router(action_routes.router, prefix=prefix)

@@ -26,6 +26,21 @@ function RunBadge({ model }: { model: Model }) {
 }
 
 function ScheduleSummary({ model }: { model: Model }) {
+  if (model.trigger_mode === "upstream") {
+    // The watermark is the newest input version already reacted to; until
+    // it's set the model has never fired, which is the same "due now" the
+    // cron branch shows for a NULL next_run_at.
+    const since = model.upstream_watermark
+      ? `since ${new Date(model.upstream_watermark).toLocaleString()}`
+      : "due now";
+    const names = model.inputs.map((i) => i.dataset_name).join(", ");
+    return (
+      <span title={names ? `Watching ${names}` : undefined}>
+        <span className="chip">on new input data</span>
+        <div className="slug">{since}</div>
+      </span>
+    );
+  }
   if (model.trigger_mode !== "cron") return <span className="count">manual</span>;
   const next = model.next_run_at ? new Date(model.next_run_at).toLocaleString() : "due now";
   return (
@@ -33,6 +48,115 @@ function ScheduleSummary({ model }: { model: Model }) {
       <span className="chip">{model.cron_schedule}</span>
       <div className="slug">next: {next}</div>
     </span>
+  );
+}
+
+function HistoryDialog({
+  workspaceId,
+  projectId,
+  model,
+  canEdit,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  model: Model;
+  canEdit: boolean;
+  onClose: () => void;
+}) {
+  const [open, setOpen] = useState<number | null>(null);
+  const queryClient = useQueryClient();
+  const history = useQuery({
+    queryKey: ["model-versions", model.id],
+    queryFn: () => modelApi.versions(workspaceId, projectId, model.id),
+  });
+  const restore = useMutation({
+    mutationFn: (versionNumber: number) =>
+      modelApi.restoreVersion(workspaceId, projectId, model.id, versionNumber),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["model-versions", model.id] });
+      await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
+    },
+  });
+
+  return (
+    <Dialog open wide title={`${model.name} — history`} onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        Every saved definition, newest first. Restoring writes a new version
+        rather than deleting the ones after it, so the record stays true.
+      </p>
+      {history.isPending && <div className="state">Loading history…</div>}
+      {restore.isError && (
+        <div className="form-error">
+          {restore.error instanceof ApiError ? restore.error.message : "Couldn't restore."}
+        </div>
+      )}
+      <div className="data-grid">
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Saved</th>
+              <th>By</th>
+              <th>Inputs</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {history.data?.map((v, index) => (
+              <tr key={v.id}>
+                <td>
+                  <strong>v{v.version_number}</strong>
+                  {index === 0 && <span className="chip"> current</span>}
+                  {v.restored_from !== null && (
+                    <div className="slug">reverted to v{v.restored_from}</div>
+                  )}
+                </td>
+                <td>{new Date(v.created_at).toLocaleString()}</td>
+                <td className="slug">{v.created_by_email ?? "—"}</td>
+                <td className="slug">
+                  {v.inputs.map((i) => i.input_alias).join(", ") || "none"}
+                </td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      className="btn quiet"
+                      style={{ padding: "3px 9px", fontSize: 12 }}
+                      onClick={() => setOpen(open === v.version_number ? null : v.version_number)}
+                    >
+                      {open === v.version_number ? "Hide" : "Code"}
+                    </button>
+                    {canEdit && index > 0 && (
+                      <button
+                        className="btn quiet"
+                        style={{ padding: "3px 9px", fontSize: 12 }}
+                        disabled={restore.isPending}
+                        onClick={() => restore.mutate(v.version_number)}
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {open !== null && (
+        <pre
+          className="sql-box"
+          style={{ marginTop: 10, whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto" }}
+        >
+          {history.data?.find((v) => v.version_number === open)?.code}
+        </pre>
+      )}
+      <div className="form-actions">
+        <button className="btn quiet" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -53,10 +177,13 @@ function ModelDialog({
   const [inputs, setInputs] = useState<{ dataset_id: string; input_alias: string }[]>(
     existing?.inputs.map((i) => ({ dataset_id: i.dataset_id, input_alias: i.input_alias })) ?? [],
   );
-  const [triggerMode, setTriggerMode] = useState<"manual" | "cron">(
-    existing?.trigger_mode === "cron" ? "cron" : "manual",
+  const [triggerMode, setTriggerMode] = useState<"manual" | "cron" | "upstream">(
+    existing?.trigger_mode ?? "manual",
   );
   const [cronSchedule, setCronSchedule] = useState(existing?.cron_schedule ?? "0 * * * *");
+  const [healthPolicy, setHealthPolicy] = useState<"ignore" | "warn" | "block">(
+    existing?.input_health_policy ?? "ignore",
+  );
   const queryClient = useQueryClient();
 
   const availableDatasets = useQuery({
@@ -73,6 +200,7 @@ function ModelDialog({
             inputs,
             trigger_mode: triggerMode,
             cron_schedule: triggerMode === "cron" ? cronSchedule : null,
+            input_health_policy: healthPolicy,
           })
         : modelApi.create(workspaceId, projectId, { name, language, code, inputs }),
     onSuccess: async () => {
@@ -208,14 +336,24 @@ function ModelDialog({
           />
         </Field>
         {existing && (
-          <Field label="Schedule" hint="Cron runs are queued for the background worker, same as Python">
+          <Field
+            label="Trigger"
+            hint={
+              triggerMode === "upstream"
+                ? "Runs when any input dataset gains a new version — chain models by pointing one at another's output"
+                : "Scheduled and upstream runs are queued for the background worker, same as Python"
+            }
+          >
             <div className="row-actions">
               <select
                 value={triggerMode}
-                onChange={(e) => setTriggerMode(e.target.value as "manual" | "cron")}
+                onChange={(e) =>
+                  setTriggerMode(e.target.value as "manual" | "cron" | "upstream")
+                }
               >
                 <option value="manual">Manual only</option>
                 <option value="cron">On a schedule</option>
+                <option value="upstream">When inputs change</option>
               </select>
               {triggerMode === "cron" && (
                 <input
@@ -230,6 +368,23 @@ function ModelDialog({
             </div>
           </Field>
         )}
+        {existing && (
+          <Field
+            label="Input data quality"
+            hint="Checks come from each input dataset's Checks tab; only a failing check counts"
+          >
+            <select
+              value={healthPolicy}
+              onChange={(e) =>
+                setHealthPolicy(e.target.value as "ignore" | "warn" | "block")
+              }
+            >
+              <option value="ignore">Run regardless</option>
+              <option value="warn">Run, but record failing checks</option>
+              <option value="block">Don&apos;t run if an input failed its checks</option>
+            </select>
+          </Field>
+        )}
         {save.isError && (
           <div className="form-error">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the model."}
@@ -242,7 +397,14 @@ function ModelDialog({
           <button
             type="submit"
             className="btn"
-            disabled={save.isPending || !name.trim() || !code.trim()}
+            disabled={
+              save.isPending ||
+              !name.trim() ||
+              !code.trim() ||
+              // An upstream model with nothing to watch would never fire;
+              // the API refuses it with a 422, this just says so sooner.
+              (triggerMode === "upstream" && !inputs.some((i) => i.dataset_id))
+            }
           >
             {save.isPending ? "Saving…" : existing ? "Save changes" : "Create model"}
           </button>
@@ -264,6 +426,7 @@ function ModelRow({
   canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const queryClient = useQueryClient();
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
@@ -307,9 +470,21 @@ function ModelRow({
       </td>
       <td>
         <RunBadge model={model} />
+        {result && !result.ok && result.error?.startsWith("blocked:") && (
+          <div className="slug" style={{ color: "var(--danger)" }}>
+            input data quality
+          </div>
+        )}
       </td>
       <td>
         <ScheduleSummary model={model} />
+        {model.input_health_policy !== "ignore" && (
+          <div className="slug" title="Migration 0022: only a failing check gates a run">
+            {model.input_health_policy === "block"
+              ? "blocks on failing input"
+              : "warns on failing input"}
+          </div>
+        )}
       </td>
       <td>
         {canEdit && (
@@ -330,6 +505,13 @@ function ModelRow({
               Edit
             </button>
             <button
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setShowHistory(true)}
+            >
+              History
+            </button>
+            <button
               className="btn danger"
               style={{ padding: "3px 9px", fontSize: 12 }}
               disabled={remove.isPending}
@@ -342,6 +524,15 @@ function ModelRow({
               Delete
             </button>
           </div>
+        )}
+        {showHistory && (
+          <HistoryDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            model={model}
+            canEdit={canEdit}
+            onClose={() => setShowHistory(false)}
+          />
         )}
         {editing && (
           <ModelDialog
@@ -408,7 +599,7 @@ export default function ModelsPage() {
             <tr>
               <th>Model</th>
               <th>Last run</th>
-              <th>Schedule</th>
+              <th>Trigger</th>
               <th aria-label="Actions" />
             </tr>
           </thead>

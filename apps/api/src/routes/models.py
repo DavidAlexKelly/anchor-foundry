@@ -12,6 +12,7 @@ worker jobs isn't built here.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from datetime import datetime
 from typing import Any
@@ -27,10 +28,18 @@ from ..services import audit
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import models as model_service
+from ..services import pipeline as pipeline_service
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/models",
+    tags=["models"],
+)
+# The pipeline graph spans datasets and models, so it hangs off the project
+# rather than either resource - the same shape objects.py/actions.py already
+# use for their project-scoped routes.
+project_router = APIRouter(
+    prefix="/workspaces/{workspace_id}/projects/{project_id}",
     tags=["models"],
 )
 
@@ -63,6 +72,12 @@ class ModelOut(BaseModel):
     trigger_mode: str
     cron_schedule: str | None = None
     next_run_at: datetime | None = None
+    # Newest input version an upstream-triggered model has reacted to; NULL
+    # until it fires once. Surfaced so the UI can say what it is waiting on.
+    upstream_watermark: datetime | None = None
+    # 'ignore' | 'warn' | 'block' - what a run does when an input dataset's
+    # data-quality health is 'fail' (migration 0022).
+    input_health_policy: str = "ignore"
     last_run_status: str | None = None
     last_run_at: datetime | None = None
     inputs: list[ModelInputOut] = []
@@ -85,6 +100,7 @@ class ModelUpdate(BaseModel):
     inputs: list[ModelInputIn] | None = Field(default=None, max_length=20)
     trigger_mode: str | None = Field(default=None, pattern="^(manual|cron|upstream)$")
     cron_schedule: str | None = Field(default=None, max_length=100)
+    input_health_policy: str | None = Field(default=None, pattern="^(ignore|warn|block)$")
 
 
 class RunOut(BaseModel):
@@ -97,6 +113,25 @@ class RunOut(BaseModel):
     rows_produced: int | None
     error_message: str | None
     output_version: UUID | None
+    # The definition this run executed (migration 0024). NULL for runs that
+    # predate it - unknown, not v1.
+    model_version: UUID | None = None
+    # What the gate saw per input, captured at run time; NULL when the run
+    # was not gated (migration 0022).
+    input_health: list[dict[str, Any]] | None = None
+
+
+class ModelVersionOut(BaseModel):
+    id: UUID
+    model_id: UUID
+    version_number: int
+    code: str
+    inputs: list[dict[str, str]]
+    # Set when this version was made by restoring an earlier one, so the
+    # history reads "reverted to v2" rather than showing old code reappearing.
+    restored_from: int | None
+    created_by_email: str | None = None
+    created_at: datetime
 
 
 class RunResult(BaseModel):
@@ -106,6 +141,19 @@ class RunResult(BaseModel):
     error: str | None
     rows_produced: int
     output_dataset: dict[str, Any] | None
+
+
+def _version_out(row: dict[str, Any]) -> dict[str, Any]:
+    data = dict(row)
+    if isinstance(data.get("inputs"), str):
+        import json
+
+        data["inputs"] = json.loads(data["inputs"])
+    data["inputs"] = [
+        {"dataset_id": str(i["dataset_id"]), "input_alias": str(i["input_alias"])}
+        for i in (data.get("inputs") or [])
+    ]
+    return data
 
 
 async def _with_inputs(conn, row: dict[str, Any]) -> ModelOut:
@@ -183,6 +231,8 @@ async def update_model(
             inputs=[i.model_dump() for i in body.inputs] if body.inputs is not None else None,
             trigger_mode=body.trigger_mode,
             cron_schedule=body.cron_schedule,
+            input_health_policy=body.input_health_policy,
+            updated_by=access.auth.user_id,
         )
         await audit.record(
             conn,
@@ -195,7 +245,8 @@ async def update_model(
             project_id=access.project_id,
             metadata={"code_changed": body.code is not None,
                       "inputs_changed": body.inputs is not None,
-                      "trigger_mode": body.trigger_mode},
+                      "trigger_mode": body.trigger_mode,
+                      "input_health_policy": body.input_health_policy},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -239,11 +290,46 @@ async def run_model(
         if not inputs:
             raise DatasetEngineError("add at least one input dataset before running")
 
+        # The gate runs before either path (migration 0022). It comes before
+        # the Python branch on purpose: a queued run that will be blocked
+        # should be refused here, where the caller is watching, rather than
+        # in the worker a poll cycle later.
+        policy = str(model["input_health_policy"])
+        seen, refusal = await model_service.check_input_health(
+            conn, storage,
+            project_id=access.project_id, model_id=model_id, policy=policy,
+        )
+        if refusal is not None:
+            run_id = await model_service.open_run(conn, model_id, access.auth.user_id, seen)
+            await model_service.close_run(
+                conn, run_id, ok=False, rows_produced=None,
+                output_version_id=None, error=refusal,
+            )
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="model.run",
+                resource_type="model",
+                resource_id=model_id,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                metadata={"status": "blocked", "policy": policy},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            return RunResult(
+                run_id=run_id, status="failed", ok=False, error=refusal,
+                rows_produced=0, output_dataset=None,
+            )
+
         if model["language"] == "python":
             # Needs a real process boundary DuckDB can't give it - leave the
             # run queued for the worker's scheduled_model_runs job and return
             # immediately rather than blocking on its poll cycle.
-            run_id = await model_service.open_queued_run(conn, model_id, access.auth.user_id)
+            run_id = await model_service.open_queued_run(
+                conn, model_id, access.auth.user_id, seen
+            )
             await audit.record(
                 conn,
                 organisation_id=access.auth.organisation_id,
@@ -271,7 +357,7 @@ async def run_model(
                 storage.local_path, str(ds_row["s3_location"])
             )
             input_paths[str(item["input_alias"])] = path
-        run_id = await model_service.open_run(conn, model_id, access.auth.user_id)
+        run_id = await model_service.open_run(conn, model_id, access.auth.user_id, seen)
 
     ok, error, rows_produced = True, None, 0
     output_dataset: dict[str, Any] | None = None
@@ -331,6 +417,49 @@ async def run_model(
     )
 
 
+@router.get("/{model_id}/versions", response_model=list[ModelVersionOut])
+async def list_model_versions(
+    model_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[ModelVersionOut]:
+    """Every definition this model has had, newest first. Viewer level, like
+    run history - it exposes nothing a viewer cannot already read off the
+    model itself."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await model_service.list_versions(conn, access.project_id, model_id)
+    return [ModelVersionOut(**_version_out(r)) for r in rows]
+
+
+@router.post("/{model_id}/versions/{version_number}/restore", response_model=ModelOut)
+async def restore_model_version(
+    model_id: UUID,
+    version_number: int,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ModelOut:
+    """Put the model's code and inputs back to an earlier version. Recorded
+    as a new version rather than a rewind - see services/models.py."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await model_service.restore_version(
+            conn, access.project_id, model_id, version_number,
+            restored_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="model.restore_version",
+            resource_type="model",
+            resource_id=model_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"restored_from": version_number},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        return await _with_inputs(conn, row)
+
+
 @router.get("/{model_id}/runs", response_model=list[RunOut])
 async def run_history(
     model_id: UUID,
@@ -340,3 +469,65 @@ async def run_history(
         await model_service.get(conn, access.project_id, model_id)
         rows = await model_service.list_runs(conn, model_id)
     return [RunOut(**r) for r in rows]
+
+
+# ---- pipeline graph (ROADMAP Models item 2) ---------------------------------
+class GraphNode(BaseModel):
+    id: str                       # "dataset:<uuid>" / "model:<uuid>"
+    kind: str                     # 'dataset' | 'model'
+    resource_id: UUID
+    name: str
+    layer: int                    # distance downstream; every edge points right
+    position: int                 # index within the layer, name-ordered
+    in_cycle: bool
+    # True on the node a lineage view was centred on; always false for the
+    # whole-project graph.
+    is_focus: bool = False
+    slug: str | None = None
+    origin: str | None = None
+    row_count: int | None = None
+    current_version: int | None = None
+    health_status: str | None = None
+    language: str | None = None
+    trigger_mode: str | None = None
+    last_run_status: str | None = None
+    last_run_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class GraphEdge(BaseModel):
+    from_: str = Field(alias="from")
+    to: str
+    label: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class PipelineGraph(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+    cycles: list[list[str]]
+    layer_count: int
+
+
+@project_router.get("/pipeline", response_model=PipelineGraph)
+async def pipeline_graph(
+    focus: str | None = None,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> PipelineGraph:
+    """Every dataset and model in the project as one laid-out graph. Viewer
+    level, like the other read surfaces - it exposes nothing a viewer can't
+    already list one resource at a time.
+
+    `focus` ("dataset:<uuid>" or "model:<uuid>") narrows the result to that
+    node's connected component, which is what the lineage view asks for -
+    one endpoint rather than two, since a project graph and a lineage graph
+    are the same question from different entry points."""
+    if focus is not None and not re.fullmatch(
+        r"(dataset|model):[0-9a-fA-F-]{36}", focus
+    ):
+        raise ValueError("focus must be 'dataset:<uuid>' or 'model:<uuid>'")
+    async with user_connection(access.auth.user_id) as conn:
+        return PipelineGraph(
+            **await pipeline_service.project_graph(conn, access.project_id, focus=focus)
+        )

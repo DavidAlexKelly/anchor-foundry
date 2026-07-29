@@ -1,19 +1,14 @@
 """Object instance materialisation and browsing (spec: "object instances are
 stored and indexed in OpenSearch").
 
-Architecturally significant, flagged for review: this slice stores instances
-in Postgres (object_instances, migration 0012) rather than OpenSearch. That
-is not a drop-in gateway swap like storage (S3 vs local disk) or secrets
-(Secrets Manager vs in-memory) - Postgres RLS gives free, per-row workspace
-isolation that a search index does not enforce on its own. The production
-OpenSearch-backed store now exists (services/instance_store.py:
-OpenSearchInstanceStore, index-per-workspace via the same search_prefix
-isolation anchor S3/pg_schema already use, object_type_id filtered within
-it) but is not wired in here yet - the cutover replaces the Postgres-
-connection-shaped functions below with calls through that gateway, which is
-deliberately left as its own follow-up so it can be reviewed independently;
-see that module's docstring for the full design and why it isn't a one-line
-swap.
+This module is now the *SQL layer* rather than the store: the functions
+below still own every statement against object_instances (migration 0012),
+but callers reach them through services/instance_store.py's
+``PostgresInstanceStore``, which implements the same Protocol as the
+OpenSearch-backed store. Routes ask ``store_for(conn)`` which one they have
+and never find out. Postgres remains the fallback and the local-dev default
+- RLS gives free per-row workspace isolation that a search index cannot,
+which is why this path is kept rather than deleted at cutover.
 
 Sync (project-scoped, triggered per object_type_source): reads the mapped
 dataset's current Parquet file through the same DuckDB path datasets/models
@@ -38,6 +33,20 @@ from .dataset_engine import DatasetEngineError, json_safe
 
 MAX_INSTANCE_SYNC_ROWS = 20_000  # flag: worker/OpenSearch bulk path beyond this
 INSTANCE_PAGE_SIZE = 50
+
+
+async def workspace_search_prefix(conn: AsyncConnection, workspace_id: UUID) -> str:
+    """The workspace's immutable search namespace (db 0002), which the
+    OpenSearch store uses as its index name. Resolved by the caller and
+    handed to the store, the same way s3_prefix is for storage - the store
+    never looks up workspaces itself."""
+    row = await fetch_one(
+        conn, "SELECT search_prefix FROM workspaces WHERE id = :wid",
+        {"wid": str(workspace_id)},
+    )
+    if row is None:
+        raise NotFoundError("workspace")
+    return str(row["search_prefix"])
 
 
 def _quote_source_column(name: str) -> str:
@@ -180,3 +189,106 @@ async def update_properties(
         ),
         {"props": json.dumps(properties), "iid": str(instance_id)},
     )
+
+
+async def search(
+    conn: AsyncConnection,
+    *,
+    workspace_id: UUID,
+    query: str | None,
+    object_type_ids: list[UUID] | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Workspace-wide instance search, Postgres edition (roadmap Objects
+    item 2).
+
+    **This is substring matching over the properties JSON, not search.** No
+    tokenisation, no relevance, no prefix handling beyond what LIKE gives -
+    "ada" finds "Ada Lovelace" and also finds a department called "Adaptive".
+    That is the honest capability of the fallback store, and it is precisely
+    why the roadmap sequenced the Object Explorer after the OpenSearch
+    cutover: this path exists so the feature works in local dev and on a
+    deployment that has not moved yet, not because Postgres is a search
+    engine.
+    """
+    limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
+    offset = max(0, offset)
+    where = ["t.workspace_id = :wid"]
+    params: dict[str, Any] = {"wid": str(workspace_id), "limit": limit, "offset": offset}
+    if object_type_ids:
+        where.append("i.object_type_id = ANY(CAST(:types AS uuid[]))")
+        params["types"] = [str(t) for t in object_type_ids]
+    if query:
+        where.append("(i.properties::text ILIKE :q OR i.primary_key ILIKE :q)")
+        params["q"] = f"%{query}%"
+    predicate = " AND ".join(where)
+
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
+          FROM object_instances i
+          JOIN object_types t ON t.id = i.object_type_id
+         WHERE {predicate}
+         ORDER BY i.updated_at DESC
+         LIMIT :limit OFFSET :offset
+        """,
+        params,
+    )
+    total_row = await fetch_one(
+        conn,
+        f"""
+        SELECT count(*) AS n FROM object_instances i
+          JOIN object_types t ON t.id = i.object_type_id
+         WHERE {predicate}
+        """,
+        {k: v for k, v in params.items() if k not in ("limit", "offset")},
+    )
+    return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0
+
+
+async def find_by_property(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    property_name: str | None,
+    key: str,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Exact-equality lookup, Postgres edition: the far end of a link
+    traversal (roadmap Objects item 3). ``property_name=None`` means the
+    primary key. ``key`` is already the text form (instance_store.join_key).
+
+    ``jsonb_extract_path_text`` rather than ``properties ->> :prop``: the
+    function form takes the property name as an ordinary bind parameter, so a
+    property named by the user is never concatenated into SQL. The comparison
+    is text-to-text, matching what join_key promises.
+    """
+    if property_name is None:
+        predicate = "i.primary_key = :key"
+        params: dict[str, Any] = {"key": key}
+    else:
+        predicate = "jsonb_extract_path_text(i.properties, :prop) = :key"
+        params = {"prop": property_name, "key": key}
+    params.update({"tid": str(object_type_id)})
+
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
+          FROM object_instances i
+         WHERE i.object_type_id = :tid AND {predicate}
+         ORDER BY i.primary_key
+         LIMIT :limit OFFSET :offset
+        """,
+        {**params, "limit": max(1, min(limit, INSTANCE_PAGE_SIZE)), "offset": max(0, offset)},
+    )
+    total_row = await fetch_one(
+        conn,
+        f"SELECT count(*) AS n FROM object_instances i "
+        f"WHERE i.object_type_id = :tid AND {predicate}",
+        params,
+    )
+    return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0

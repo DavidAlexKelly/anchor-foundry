@@ -387,6 +387,10 @@ class SyncRunOut(BaseModel):
     finished_at: datetime | None
     dataset_id: UUID | None
     dataset_name: str | None
+    # Migration 0018: the schema diff against the previous dataset version, or
+    # null when nothing drifted. Shape is {added|removed|retyped: [...]}, only
+    # the non-empty keys present.
+    schema_changes: dict[str, Any] | None = None
 
 
 def _dataset_storage() -> "_StorageGateway":
@@ -422,6 +426,7 @@ async def trigger_sync(
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     ok, error, rows_synced, created = True, None, 0, False
     dataset: dict[str, Any] | None = None
+    schema_changes: dict[str, Any] | None = None
     tmp_dir = _tempfile.mkdtemp()
     try:
         secret = conn_service.secret_values_for(_secrets, row)
@@ -431,7 +436,7 @@ async def trigger_sync(
             body.source_schema, body.source_table, tmp_dir,
         )
         async with user_connection(access.auth.user_id) as conn:
-            dataset, rows_synced, created = await sync_service.run_full_sync(
+            dataset, rows_synced, created, schema_changes = await sync_service.run_full_sync(
                 conn,
                 _dataset_storage(),
                 _secrets,
@@ -444,6 +449,7 @@ async def trigger_sync(
                 requested_by=access.auth.user_id,
                 snapshot_path=extract.path,
                 snapshot_extension=extract.extension,
+                snapshot_empty=extract.empty,
             )
     except (SyncError, ConnectorOperationError) as exc:
         ok, error = False, str(exc)
@@ -462,6 +468,7 @@ async def trigger_sync(
             rows_synced=rows_synced,
             dataset_id=UUID(str(dataset["id"])) if dataset else None,
             error=error,
+            schema_changes=schema_changes,
         )
         await conn_service.record_test_result(conn, connection_id, ok=ok, error=error)
         if ok:
@@ -491,6 +498,86 @@ async def trigger_sync(
         created_dataset=created,
         dataset=SyncDatasetOut(**dataset) if dataset else None,
     )
+
+
+class SyncHealthOut(BaseModel):
+    """Per-connection health for the connections list (roadmap item 7). Every
+    field is derived from data that already existed - sync_runs plus the
+    connection's own schedule - so this is a read surface, not a new concept."""
+
+    connection_id: UUID
+    sync_schedule: str | None
+    next_run_at: datetime | None
+    total_runs: int
+    succeeded: int
+    failed: int
+    drifted: int
+    # Over finished runs only, and None when there are none to rate. A run
+    # still in flight (or orphaned by a restart) is neither a success nor a
+    # failure, and counting it as one turns a healthy connection mid-sync into
+    # "0%", which is worse than saying nothing.
+    success_rate: float | None
+    running: int
+    last_status: str | None
+    last_started_at: datetime | None
+    last_finished_at: datetime | None
+    last_duration_seconds: float | None
+    last_rows_synced: int | None
+    last_error: str | None
+    last_schema_changes: dict[str, Any] | None
+
+
+@router.get("/sync-health", response_model=list[SyncHealthOut])
+async def sync_health(
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[SyncHealthOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await sync_service.sync_health(conn, access.workspace_id, access.project_id)
+
+    out: list[SyncHealthOut] = []
+    for row in rows:
+        total = int(row["total_runs"] or 0)
+        succeeded = int(row["succeeded"] or 0)
+        failed = int(row["failed"] or 0)
+        settled = succeeded + failed
+        started, finished = row["last_started_at"], row["last_finished_at"]
+        out.append(
+            SyncHealthOut(
+                connection_id=row["connection_id"],
+                sync_schedule=row["sync_schedule"],
+                next_run_at=row["sync_next_run_at"],
+                total_runs=total,
+                succeeded=succeeded,
+                failed=failed,
+                running=total - settled,
+                drifted=int(row["drifted"] or 0),
+                success_rate=(succeeded / settled) if settled else None,
+                last_status=row["last_status"],
+                last_started_at=started,
+                last_finished_at=finished,
+                # A run still in flight has no finished_at, so no duration yet -
+                # reporting 0 would read as "instant" rather than "running".
+                last_duration_seconds=(
+                    (finished - started).total_seconds() if started and finished else None
+                ),
+                last_rows_synced=row["last_rows_synced"],
+                last_error=row["last_error"],
+                last_schema_changes=_as_dict(row["last_schema_changes"]),
+            )
+        )
+    return out
+
+
+def _as_dict(value: Any) -> dict[str, Any] | None:
+    if value is None or isinstance(value, dict):
+        return value
+    import json
+
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 @router.get("/{connection_id}/sync-runs", response_model=list[SyncRunOut])
@@ -638,6 +725,7 @@ async def run_scheduled_sync(
     mode = schedule["sync_mode"]
     ok, error, rows_synced, created = True, None, 0, False
     dataset: dict[str, Any] | None = None
+    schema_changes: dict[str, Any] | None = None
     new_cursor_value = schedule["sync_last_cursor_value"]
     tmp_dir = _tempfile.mkdtemp()
     try:
@@ -663,7 +751,7 @@ async def run_scheduled_sync(
 
         async with user_connection(access.auth.user_id) as conn:
             if mode == "incremental":
-                dataset, rows_synced, created = await sync_service.run_incremental_sync(
+                dataset, rows_synced, created, schema_changes = await sync_service.run_incremental_sync(
                     conn, _dataset_storage(),
                     connection_row=schedule,
                     workspace_id=access.workspace_id, project_id=access.project_id,
@@ -678,7 +766,7 @@ async def run_scheduled_sync(
                     snapshot_empty=extract.empty,
                 )
             else:
-                dataset, rows_synced, created = await sync_service.run_full_sync(
+                dataset, rows_synced, created, schema_changes = await sync_service.run_full_sync(
                     conn, _dataset_storage(),
                     connection_row=row,
                     workspace_id=access.workspace_id, project_id=access.project_id,
@@ -688,6 +776,7 @@ async def run_scheduled_sync(
                     requested_by=access.auth.user_id,
                     snapshot_path=extract.path,
                     snapshot_extension=extract.extension,
+                    snapshot_empty=extract.empty,
                 )
                 if dataset:
                     await conn.execute(
@@ -707,6 +796,7 @@ async def run_scheduled_sync(
         await sync_service.close_run(
             conn, run_id, ok=ok, rows_synced=rows_synced,
             dataset_id=UUID(str(dataset["id"])) if dataset else None, error=error,
+            schema_changes=schema_changes,
         )
         await conn_service.record_test_result(conn, connection_id, ok=ok, error=error)
         if ok:

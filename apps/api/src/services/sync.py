@@ -58,6 +58,36 @@ class SyncError(RuntimeError):
     """User-safe sync failure."""
 
 
+async def _insert_version(conn: AsyncConnection, sql: str, params: dict[str, Any]) -> Any:
+    """Append a dataset_versions row, translating migration 0023's schema
+    policy refusal into a DatasetEngineError. The callers here own a run
+    record that has to be closed truthfully, so the refusal must land in
+    their existing failure handling rather than escaping as a database error
+    - see services/datasets.py `schema_policy_error`."""
+    from sqlalchemy.exc import DBAPIError
+
+    try:
+        return await fetch_one(conn, sql, params)
+    except DBAPIError as exc:
+        raise (ds_service.schema_policy_error(exc) or exc) from exc
+
+
+def _stored_schema(value: Any) -> list[dict[str, str]] | None:
+    """A dataset's `table_schema` jsonb as a list. The driver hands jsonb back
+    already decoded on some paths and as a string on others, so normalise
+    rather than assume."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        import json
+
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, list) else None
+
+
 def snapshot_source_table(
     source_type: str,
     config: dict[str, Any],
@@ -109,7 +139,8 @@ async def find_existing_sync_dataset(
     return await fetch_one(
         conn,
         """
-        SELECT id, name, slug, origin, connection_id, current_version
+        SELECT id, name, slug, origin, connection_id, current_version, table_schema,
+               row_count
           FROM datasets
          WHERE project_id = :pid AND slug = :slug
         """,
@@ -131,11 +162,30 @@ async def run_full_sync(
     requested_by: UUID,
     snapshot_path: str,
     snapshot_extension: str = ".csv",
-) -> tuple[dict[str, Any], int, bool]:
+    snapshot_empty: bool = False,
+) -> tuple[dict[str, Any], int, bool, dict[str, Any] | None]:
     """DB half of a sync, called after snapshot_source_table produced the
-    extract. Returns (dataset row, rows_synced, created_new_dataset)."""
+    extract. Returns (dataset row, rows_synced, created_new_dataset,
+    schema_changes) - the last being the drift against the previous version,
+    or None when there is no baseline or nothing changed (migration 0018)."""
     name = dataset_name or source_table
     slug = ds_service.slugify(name)
+
+    if snapshot_empty:
+        # The source produced no records at all - legitimate for a REST
+        # collection that is simply empty. There is nothing to infer a schema
+        # from, so keep whatever version already exists rather than replacing a
+        # working dataset with an unreadable one; with no dataset yet, say why
+        # instead of letting DuckDB fail on an empty file.
+        existing_empty = await find_existing_sync_dataset(
+            conn, project_id, UUID(str(connection_row["id"])), slug
+        )
+        if existing_empty is None:
+            raise SyncError(
+                "the source returned no records, so there is nothing to create a "
+                "dataset from yet - sync again once it has data"
+            )
+        return dict(existing_empty), int(existing_empty.get("row_count") or 0), False, None
 
     with tempfile.TemporaryDirectory() as tmp:
         parquet_tmp = os.path.join(tmp, "data.parquet")
@@ -188,6 +238,7 @@ async def run_full_sync(
         assert row is not None
         version = 1
         created = True
+        schema_changes = None  # first version: no baseline to drift from
     else:
         # Re-sync: the slug must belong to this connection's synced dataset -
         # a name collision with an upload or another connection is a conflict,
@@ -198,6 +249,7 @@ async def run_full_sync(
             raise ConflictError(
                 f"a different dataset already uses the name '{slug}' in this project"
             )
+        schema_changes = engine.diff_schemas(_stored_schema(existing["table_schema"]), schema)
         version = int(existing["current_version"]) + 1
         dataset_id = UUID(str(existing["id"]))
         parquet_key = (
@@ -226,7 +278,7 @@ async def run_full_sync(
         assert row is not None
         created = False
 
-    await fetch_one(
+    await _insert_version(
         conn,
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
@@ -245,7 +297,7 @@ async def run_full_sync(
             "by": str(requested_by),
         },
     )
-    return dict(row), row_count, created
+    return dict(row), row_count, created, schema_changes
 
 
 # ---- sync_runs bookkeeping ---------------------------------------------------
@@ -265,7 +317,7 @@ async def run_incremental_sync(
     snapshot_path: str,
     snapshot_extension: str = ".csv",
     snapshot_empty: bool = False,
-) -> tuple[dict[str, Any], int, bool]:
+) -> tuple[dict[str, Any], int, bool, dict[str, Any] | None]:
     """DB half of an incremental sync, called after snapshot_source_table
     (cursor-filtered) produced the CSV of just the new/changed rows.
     Upserts them into the connection's existing sync_dataset_id by primary
@@ -325,17 +377,19 @@ async def run_incremental_sync(
                 _text_noop("UPDATE connections SET sync_last_cursor_value = :cur WHERE id = :cid"),
                 {"cur": new_cursor_value, "cid": str(connection_row["id"])},
             )
-            return dict(existing), int(existing["row_count"]), False
+            return dict(existing), int(existing["row_count"]), False, None
 
         existing_local_path = None
+        previous_schema = None
         if existing_dataset_id is not None:
             existing_row = await fetch_one(
-                conn, "SELECT s3_location FROM datasets WHERE id = :did",
+                conn, "SELECT s3_location, table_schema FROM datasets WHERE id = :did",
                 {"did": str(existing_dataset_id)},
             )
             if existing_row is None:
                 raise SyncError("the synced dataset no longer exists")
             existing_local_path = storage.local_path(existing_row["s3_location"])
+            previous_schema = _stored_schema(existing_row["table_schema"])
 
         merged_parquet = os.path.join(tmp, "merged.parquet")
         try:
@@ -349,6 +403,7 @@ async def run_incremental_sync(
 
     ws_prefix = await ds_service.workspace_s3_prefix(conn, workspace_id)
     schema_json = json.dumps([c.as_dict() for c in schema])
+    schema_changes = engine.diff_schemas(previous_schema, schema)
 
     if existing_dataset_id is None:
         dataset_id = uuid4()
@@ -408,7 +463,7 @@ async def run_incremental_sync(
         assert row is not None
         created = False
 
-    await fetch_one(
+    await _insert_version(
         conn,
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
@@ -429,7 +484,7 @@ async def run_incremental_sync(
         _text2("UPDATE connections SET sync_last_cursor_value = :cur WHERE id = :cid"),
         {"cur": new_cursor_value, "cid": str(connection_row["id"])},
     )
-    return dict(row), row_count, created
+    return dict(row), row_count, created, schema_changes
 
 
 async def open_run(
@@ -456,13 +511,17 @@ async def close_run(
     rows_synced: int,
     dataset_id: UUID | None,
     error: str | None,
+    schema_changes: dict[str, Any] | None = None,
 ) -> None:
+    import json
+
     await fetch_one(
         conn,
         """
         UPDATE sync_runs
            SET status = :status, rows_synced = :rows, dataset_id = :did,
-               error = :error, finished_at = now()
+               error = :error, finished_at = now(),
+               schema_changes = CAST(:drift AS jsonb)
          WHERE id = :id
         RETURNING id
         """,
@@ -471,8 +530,70 @@ async def close_run(
             "rows": rows_synced,
             "did": str(dataset_id) if dataset_id else None,
             "error": error,
+            "drift": json.dumps(schema_changes) if schema_changes else None,
             "id": str(run_id),
         },
+    )
+
+
+HEALTH_WINDOW = 20
+
+
+async def sync_health(
+    conn: AsyncConnection, workspace_id: UUID, project_id: UUID
+) -> list[dict[str, Any]]:
+    """Per-connection sync health for the project's connection list (roadmap
+    Connections item 7).
+
+    One query for the whole page rather than a runs request per connection:
+    the list already renders every connection, and N+1 requests to build a
+    status column is exactly the shape that makes a list page feel broken once
+    a workspace has more than a handful of sources.
+
+    Rates are over the last HEALTH_WINDOW runs, not all time - "this source
+    has been failing lately" is the question a health column answers, and an
+    all-time rate takes months to move after a source is fixed.
+    """
+    return await fetch_all(
+        conn,
+        f"""
+        SELECT c.id AS connection_id,
+               c.sync_schedule,
+               c.sync_next_run_at,
+               COALESCE(h.total_runs, 0)  AS total_runs,
+               COALESCE(h.succeeded, 0)   AS succeeded,
+               COALESCE(h.failed, 0)      AS failed,
+               COALESCE(h.drifted, 0)     AS drifted,
+               h.last_status,
+               h.last_started_at,
+               h.last_finished_at,
+               h.last_rows_synced,
+               h.last_error,
+               h.last_schema_changes
+          FROM connections c
+          LEFT JOIN LATERAL (
+              SELECT count(*)                                        AS total_runs,
+                     count(*) FILTER (WHERE r.status = 'succeeded')  AS succeeded,
+                     count(*) FILTER (WHERE r.status = 'failed')     AS failed,
+                     count(*) FILTER (WHERE r.schema_changes IS NOT NULL) AS drifted,
+                     (array_agg(r.status ORDER BY r.started_at DESC))[1]        AS last_status,
+                     (array_agg(r.started_at ORDER BY r.started_at DESC))[1]    AS last_started_at,
+                     (array_agg(r.finished_at ORDER BY r.started_at DESC))[1]   AS last_finished_at,
+                     (array_agg(r.rows_synced ORDER BY r.started_at DESC))[1]   AS last_rows_synced,
+                     (array_agg(r.error ORDER BY r.started_at DESC))[1]         AS last_error,
+                     (array_agg(r.schema_changes ORDER BY r.started_at DESC))[1] AS last_schema_changes
+                FROM (
+                    SELECT * FROM sync_runs
+                     WHERE connection_id = c.id
+                     ORDER BY started_at DESC
+                     LIMIT {HEALTH_WINDOW}
+                ) r
+          ) h ON true
+         WHERE (c.scope = 'project' AND c.project_id = :pid)
+            OR (c.scope = 'workspace' AND c.workspace_id = :wid)
+         ORDER BY c.name
+        """,
+        {"pid": str(project_id), "wid": str(workspace_id)},
     )
 
 
@@ -481,7 +602,8 @@ async def list_runs(conn: AsyncConnection, connection_id: UUID) -> list[dict[str
         conn,
         """
         SELECT r.id, r.mode, r.source_table, r.status, r.rows_synced, r.error,
-               r.started_at, r.finished_at, r.dataset_id, d.name AS dataset_name
+               r.started_at, r.finished_at, r.dataset_id, d.name AS dataset_name,
+               r.schema_changes
           FROM sync_runs r
           LEFT JOIN datasets d ON d.id = r.dataset_id
          WHERE r.connection_id = :cid

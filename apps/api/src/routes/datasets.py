@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
+from ..services import expectations
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services.dataset_engine import DatasetEngineError
@@ -60,6 +61,13 @@ class DatasetOut(BaseModel):
     table_schema: list[dict[str, str]]
     row_count: int
     current_version: int
+    # 'permissive' | 'strict' - whether a new version may remove or retype an
+    # existing column (migration 0023). Adding columns is allowed under both.
+    schema_policy: str = "permissive"
+    # Where a forked dataset came from (migration 0025). Provenance only -
+    # a fork never recomputes, so this is not a pipeline-graph edge.
+    forked_from_dataset_id: UUID | None = None
+    forked_from_version: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -67,6 +75,7 @@ class DatasetOut(BaseModel):
 class DatasetUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    schema_policy: str | None = Field(default=None, pattern="^(permissive|strict)$")
 
 
 class QueryRequest(BaseModel):
@@ -88,6 +97,65 @@ class VersionOut(BaseModel):
     table_schema: list[dict[str, str]]
     produced_by_kind: str | None
     created_at: datetime
+
+
+class ColumnProfileOut(BaseModel):
+    name: str
+    data_type: str
+    null_count: int
+    null_rate: float
+    distinct_count: int
+    # Text because one array holds every column's type, and nothing computes
+    # against these - null for types DuckDB cannot order (structs, lists).
+    min: str | None
+    max: str | None
+
+
+class ExpectationOut(BaseModel):
+    id: UUID
+    dataset_id: UUID
+    rule_type: str
+    column_name: str
+    config: dict[str, Any]
+    severity: str
+    created_at: datetime
+
+
+class ExpectationCreate(BaseModel):
+    rule_type: str = Field(min_length=1, max_length=64)
+    column_name: str = Field(min_length=1, max_length=200)
+    config: dict[str, Any] = Field(default_factory=dict)
+    severity: str = Field(default="error", pattern="^(error|warn)$")
+
+
+class ExpectationResultOut(BaseModel):
+    expectation_id: UUID | None
+    rule_type: str
+    column_name: str
+    severity: str
+    # `error` is not `fail`: the rule could not be evaluated, which says
+    # nothing about whether the data is good.
+    status: str
+    failing_rows: int
+    rows_checked: int
+    message: str | None
+
+
+class DatasetHealthOut(BaseModel):
+    dataset_id: UUID
+    version_number: int
+    # "none" when the dataset has no rules - different from passing, and shown
+    # differently.
+    status: str
+    evaluated_at: str | None
+    results: list[ExpectationResultOut]
+
+
+class DatasetProfileOut(BaseModel):
+    dataset_id: UUID
+    version_number: int
+    row_count: int
+    columns: list[ColumnProfileOut]
 
 
 def _out(row: dict[str, Any]) -> DatasetOut:
@@ -214,7 +282,8 @@ async def update_dataset(
 ) -> DatasetOut:
     async with user_connection(access.auth.user_id) as conn:
         row = await ds_service.update(
-            conn, access.project_id, dataset_id, name=body.name, description=body.description
+            conn, access.project_id, dataset_id, name=body.name,
+            description=body.description, schema_policy=body.schema_policy,
         )
         await audit.record(
             conn,
@@ -226,6 +295,51 @@ async def update_dataset(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata=body.model_dump(exclude_none=True),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _out(row)
+
+
+class DatasetFork(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    # Defaults to the source's current version - forking "as it is now" is
+    # the common case.
+    version_number: int | None = Field(default=None, ge=1)
+
+
+@router.post("/{dataset_id}/fork", response_model=DatasetOut,
+             status_code=status.HTTP_201_CREATED)
+async def fork_dataset(
+    dataset_id: UUID,
+    body: DatasetFork,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> DatasetOut:
+    """Copy a version into a new, independent dataset to experiment against.
+    Editor level: it creates a resource, and reading one you can already read
+    is not the operative permission."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ds_service.fork(
+            conn,
+            _storage,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            dataset_id=dataset_id,
+            name=body.name,
+            version_number=body.version_number,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.fork",
+            resource_type="dataset",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"source": str(dataset_id), "version": row["forked_from_version"]},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -276,6 +390,158 @@ async def preview_dataset(
     path, _ = await _parquet_path(access, dataset_id)
     result = await anyio.to_thread.run_sync(engine.preview, path)
     return _tabular(result)
+
+
+@router.get("/{dataset_id}/profile", response_model=DatasetProfileOut)
+async def profile_dataset(
+    dataset_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> DatasetProfileOut:
+    """Per-column statistics for the dataset's current version.
+
+    Computed on first request and cached on the version row (migration 0019):
+    a version's data never changes, so the answer is valid forever once
+    written. Viewer-level like preview and query - this is a read of data the
+    caller can already see, just aggregated.
+    """
+    path, row = await _parquet_path(access, dataset_id)
+    version_number = int(row["current_version"])
+
+    async with user_connection(access.auth.user_id) as conn:
+        cached = await ds_service.get_cached_profile(conn, dataset_id, version_number)
+
+    if cached is None:
+        cached = await anyio.to_thread.run_sync(engine.profile_columns, path)
+        async with user_connection(access.auth.user_id) as conn:
+            await ds_service.store_profile(conn, dataset_id, version_number, cached)
+
+    return DatasetProfileOut(
+        dataset_id=dataset_id,
+        version_number=version_number,
+        row_count=int(row["row_count"]),
+        columns=[ColumnProfileOut(**column) for column in cached],
+    )
+
+
+# ---- expectations / data health (roadmap Datasets item 2) -------------------
+@router.get("/{dataset_id}/expectations", response_model=list[ExpectationOut])
+async def list_expectations(
+    dataset_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[ExpectationOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await expectations.list_rules(conn, access.project_id, dataset_id)
+    return [ExpectationOut(**_rule_out(r)) for r in rows]
+
+
+@router.post(
+    "/{dataset_id}/expectations",
+    response_model=ExpectationOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_expectation(
+    dataset_id: UUID,
+    body: ExpectationCreate,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ExpectationOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await expectations.create_rule(
+            conn,
+            access.project_id,
+            dataset_id,
+            rule_type=body.rule_type,
+            column_name=body.column_name,
+            config=body.config,
+            severity=body.severity,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.expectation.create",
+            resource_type="dataset",
+            resource_id=dataset_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"rule_type": body.rule_type, "column": body.column_name,
+                      "severity": body.severity},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ExpectationOut(**_rule_out(row))
+
+
+@router.delete(
+    "/{dataset_id}/expectations/{expectation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def delete_expectation(
+    dataset_id: UUID,
+    expectation_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await expectations.delete_rule(conn, access.project_id, dataset_id, expectation_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.expectation.delete",
+            resource_type="dataset",
+            resource_id=dataset_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+
+@router.get("/{dataset_id}/health", response_model=DatasetHealthOut)
+async def dataset_health(
+    dataset_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> DatasetHealthOut:
+    """The dataset's current version evaluated against its rules.
+
+    The single read path for expectations: it returns the cached result, or
+    computes and caches one if there isn't a current one. That is what lets
+    every version-creating path stay unaware expectations exist - see
+    migration 0020.
+    """
+    path, row = await _parquet_path(access, dataset_id)
+    version_number = int(row["current_version"])
+
+    async with user_connection(access.auth.user_id) as conn:
+        cached = await expectations.cached_health(conn, dataset_id, version_number)
+        rules = await expectations.list_rules(conn, access.project_id, dataset_id)
+
+    if cached is None:
+        cached = await anyio.to_thread.run_sync(
+            expectations.evaluate, path, [dict(r) for r in rules]
+        )
+        async with user_connection(access.auth.user_id) as conn:
+            await expectations.store_health(conn, dataset_id, version_number, cached)
+
+    return DatasetHealthOut(
+        dataset_id=dataset_id,
+        version_number=version_number,
+        status=str(cached.get("status", "none")),
+        evaluated_at=cached.get("evaluated_at"),
+        results=[ExpectationResultOut(**r) for r in cached.get("results", [])],
+    )
+
+
+def _rule_out(row: dict[str, Any]) -> dict[str, Any]:
+    data = dict(row)
+    if isinstance(data.get("config"), str):
+        import json
+
+        data["config"] = json.loads(data["config"])
+    return data
 
 
 @router.post("/{dataset_id}/query", response_model=TabularOut)

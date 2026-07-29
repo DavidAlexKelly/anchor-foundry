@@ -13,10 +13,13 @@ Scope, each deviation flagged:
   * trigger_mode='cron': the API only computes an initial next_run_at guess
     (lib/cron.py) when the schedule is set or changed; the worker
     recomputes it after every firing, since it's the process that actually
-    observes "this just fired." trigger_mode='upstream' and the cancel
-    endpoint remain out of scope - a synchronous SQL run has no meaningful
-    cancel, and 'upstream' triggers belong with a real dependency graph,
-    neither built here.
+    observes "this just fired." trigger_mode='upstream' is the same shape
+    with a different due-ness test - the worker polls
+    models.upstream_watermark against the model's input dataset versions
+    (migration 0021); the API only clears the watermark when the trigger
+    mode changes, so switching a model to 'upstream' fires it once and then
+    reacts to genuinely new data. The cancel endpoint remains out of scope:
+    a synchronous SQL run has no meaningful cancel.
   * Run logs live in error_message/rows_produced; log_s3_key is written by
     the worker runtime for long runs.
 
@@ -46,7 +49,8 @@ from .storage import StorageGateway
 
 _COLUMNS = """
     id, project_id, name, description, language, code, output_dataset_id,
-    trigger_mode, cron_schedule, next_run_at, created_by, created_at, updated_at
+    trigger_mode, cron_schedule, next_run_at, upstream_watermark,
+    input_health_policy, created_by, created_at, updated_at
 """
 
 
@@ -90,6 +94,92 @@ async def list_inputs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, A
     )
 
 
+async def _insert_version(conn: AsyncConnection, sql: str, params: dict[str, Any]) -> Any:
+    """Append a dataset_versions row, translating migration 0023's schema
+    policy refusal into a DatasetEngineError. The callers here own a run
+    record that has to be closed truthfully, so the refusal must land in
+    their existing failure handling rather than escaping as a database error
+    - see services/datasets.py `schema_policy_error`."""
+    from sqlalchemy.exc import DBAPIError
+
+    try:
+        return await fetch_one(conn, sql, params)
+    except DBAPIError as exc:
+        raise (ds_service.schema_policy_error(exc) or exc) from exc
+
+
+async def _refuse_cycles(
+    conn: AsyncConnection,
+    model_id: UUID,
+    project_id: UUID,
+    inputs: list[dict[str, Any]],
+) -> None:
+    """Refuse an input set that would make the model depend on its own output
+    (roadmap Models item 7).
+
+    The pipeline graph already *reports* cycles (services/pipeline.py); this
+    is the other half. A cycle matters beyond being confusing: a model in one
+    with trigger_mode='upstream' re-fires on every worker pass forever, since
+    each run produces a version the loop is watching. Migration 0021's
+    self-loop guard only covers a model reading its own output directly - it
+    cannot see A -> B -> A, because it only ever looks at one model's inputs.
+
+    Checked at edit time, and only here, because that is the only moment a
+    cycle can appear. A model's output dataset is created by its first run
+    and nothing points at a brand-new dataset yet, so running a model can
+    never close a loop that saving it did not.
+
+    **Existing cycles are grandfathered**, deliberately: this validates the
+    proposed input set, so a loop created before this existed keeps working
+    until someone edits one of its models, at which point the edit is refused
+    until they break it. Force-breaking on next edit would mean silently
+    deleting an input somebody configured on purpose; the Pipeline page names
+    the loop instead, which is a better place to be told.
+    """
+    row = await fetch_one(
+        conn,
+        "SELECT output_dataset_id FROM models WHERE id = :mid",
+        {"mid": str(model_id)},
+    )
+    output_dataset_id = None if row is None else row["output_dataset_id"]
+    if output_dataset_id is None:
+        return  # nothing downstream of a model that has never produced anything
+
+    # Every dataset reachable downstream of this model's output. UNION, not
+    # UNION ALL: a pre-existing cycle elsewhere in the project would
+    # otherwise make this walk run forever.
+    reachable = await fetch_all(
+        conn,
+        """
+        WITH RECURSIVE downstream AS (
+            SELECT CAST(:out AS uuid) AS dataset_id
+            UNION
+            SELECT m.output_dataset_id
+              FROM downstream d
+              JOIN model_inputs mi ON mi.dataset_id = d.dataset_id
+              JOIN models m ON m.id = mi.model_id
+             WHERE m.output_dataset_id IS NOT NULL
+               AND m.project_id = :pid
+        )
+        SELECT d.dataset_id, ds.name
+          FROM downstream d JOIN datasets ds ON ds.id = d.dataset_id
+        """,
+        {"out": str(output_dataset_id), "pid": str(project_id)},
+    )
+    downstream = {str(r["dataset_id"]): str(r["name"]) for r in reachable}
+
+    offending = [
+        downstream[str(item["dataset_id"])]
+        for item in inputs
+        if str(item["dataset_id"]) in downstream
+    ]
+    if offending:
+        raise ValueError(
+            f"this would create a dependency loop: {', '.join(sorted(set(offending)))} "
+            "is produced downstream of this model, so it cannot also be an input"
+        )
+
+
 async def _validate_and_set_inputs(
     conn: AsyncConnection,
     model_id: UUID,
@@ -112,6 +202,7 @@ async def _validate_and_set_inputs(
         )
         if ds is None:
             raise NotFoundError("input dataset")
+    await _refuse_cycles(conn, model_id, project_id, inputs)
     from sqlalchemy import text
 
     await conn.execute(
@@ -129,6 +220,136 @@ async def _validate_and_set_inputs(
                 "alias": str(item["input_alias"]),
             },
         )
+
+
+# ---- definition history (migration 0024) ------------------------------------
+_VERSION_COLUMNS = "id, model_id, version_number, code, inputs, restored_from, created_by, created_at"
+
+
+def _inputs_snapshot(inputs: list[dict[str, Any]]) -> str:
+    """The stored form of an input set: dataset ids and aliases only, alias
+    ordered so two saves of the same set compare equal regardless of the
+    order they arrived in."""
+    import json
+
+    return json.dumps(
+        sorted(
+            (
+                {"dataset_id": str(i["dataset_id"]), "input_alias": str(i["input_alias"])}
+                for i in inputs
+            ),
+            key=lambda i: i["input_alias"],
+        )
+    )
+
+
+async def _record_definition(
+    conn: AsyncConnection,
+    model_id: UUID,
+    *,
+    code: str,
+    inputs: list[dict[str, Any]],
+    created_by: UUID,
+    restored_from: int | None = None,
+) -> dict[str, Any]:
+    """Append a definition version. Numbering is max+1 within the model, read
+    in the caller's transaction - two concurrent edits to one model would
+    collide on the (model_id, version_number) unique index rather than
+    silently interleave, which is the failure we want."""
+    row = await fetch_one(
+        conn,
+        f"""
+        INSERT INTO model_versions (model_id, version_number, code, inputs,
+                                    restored_from, created_by)
+        VALUES (:mid,
+                COALESCE((SELECT max(version_number) FROM model_versions
+                           WHERE model_id = :mid), 0) + 1,
+                :code, CAST(:inputs AS jsonb), :restored, :by)
+        RETURNING {_VERSION_COLUMNS}
+        """,
+        {
+            "mid": str(model_id), "code": code, "inputs": _inputs_snapshot(inputs),
+            "restored": restored_from, "by": str(created_by),
+        },
+    )
+    assert row is not None
+    return dict(row)
+
+
+async def list_versions(
+    conn: AsyncConnection, project_id: UUID, model_id: UUID
+) -> list[dict[str, Any]]:
+    await get(conn, project_id, model_id)
+    return await fetch_all(
+        conn,
+        f"""
+        SELECT {_VERSION_COLUMNS},
+               (SELECT u.email FROM users u WHERE u.id = model_versions.created_by)
+                   AS created_by_email
+          FROM model_versions WHERE model_id = :mid
+         ORDER BY version_number DESC
+        """,
+        {"mid": str(model_id)},
+    )
+
+
+async def restore_version(
+    conn: AsyncConnection,
+    project_id: UUID,
+    model_id: UUID,
+    version_number: int,
+    *,
+    restored_by: UUID,
+) -> dict[str, Any]:
+    """Set the model's code and inputs back to an earlier version, and record
+    that as a *new* version rather than rewinding the pointer (migration
+    0024). History stays a true record, and a run stamped with a version
+    still resolves to exactly one piece of code however many times someone
+    has rolled back.
+
+    Restoring goes through the same input validation a normal edit does: the
+    graph may have changed since, so an input set that was legal then can
+    close a dependency loop now, and it must be refused the same way.
+    """
+    await get(conn, project_id, model_id)
+    version = await fetch_one(
+        conn,
+        f"SELECT {_VERSION_COLUMNS} FROM model_versions "
+        "WHERE model_id = :mid AND version_number = :v",
+        {"mid": str(model_id), "v": version_number},
+    )
+    if version is None:
+        raise NotFoundError("model version")
+
+    stored = version["inputs"]
+    if isinstance(stored, str):
+        import json
+
+        stored = json.loads(stored)
+    inputs = [dict(i) for i in (stored or [])]
+
+    await _validate_and_set_inputs(conn, model_id, project_id, inputs)
+    row = await fetch_one(
+        conn,
+        f"UPDATE models SET code = :code WHERE id = :mid RETURNING {_COLUMNS}",
+        {"code": version["code"], "mid": str(model_id)},
+    )
+    assert row is not None
+    await _record_definition(
+        conn, model_id, code=str(version["code"]), inputs=inputs,
+        created_by=restored_by, restored_from=version_number,
+    )
+    return dict(row)
+
+
+async def current_version_id(conn: AsyncConnection, model_id: UUID) -> UUID | None:
+    row = await fetch_one(
+        conn,
+        "SELECT id FROM model_versions WHERE model_id = :mid "
+        "ORDER BY version_number DESC LIMIT 1",
+        {"mid": str(model_id)},
+    )
+    return None if row is None else UUID(str(row["id"]))
 
 
 async def create(
@@ -166,7 +387,15 @@ async def create(
         },
     )
     assert row is not None
-    await _validate_and_set_inputs(conn, UUID(str(row["id"])), project_id, inputs)
+    model_id = UUID(str(row["id"]))
+    await _validate_and_set_inputs(conn, model_id, project_id, inputs)
+    # Version 1 exists from the moment the model does, so "every model has at
+    # least one definition version" holds everywhere and no read path has to
+    # special-case an empty history (migration 0024 backfilled the same
+    # invariant onto every model that predates it).
+    await _record_definition(
+        conn, model_id, code=code, inputs=inputs, created_by=created_by
+    )
     return dict(row)
 
 
@@ -181,8 +410,11 @@ async def update(
     inputs: list[dict[str, Any]] | None,
     trigger_mode: str | None = None,
     cron_schedule: str | None = None,
+    input_health_policy: str | None = None,
+    updated_by: UUID,
 ) -> dict[str, Any]:
-    await get(conn, project_id, model_id)
+    before = await get(conn, project_id, model_id)
+    before_inputs = await list_inputs(conn, model_id)
     if trigger_mode == "cron":
         if not cron_schedule:
             raise ValueError("cron_schedule is required when trigger_mode is 'cron'")
@@ -203,19 +435,57 @@ async def update(
                                     WHEN :trigger IS NOT NULL THEN NULL
                                     ELSE cron_schedule END,
                next_run_at = CASE WHEN :trigger IS NOT NULL THEN :next_run_at
-                                  ELSE next_run_at END
+                                  ELSE next_run_at END,
+               -- Changing the trigger mode at all resets the upstream
+               -- watermark: switching to 'upstream' should fire once
+               -- promptly (0021's NULL = '-infinity' convention), and
+               -- switching away should not leave a stale watermark that
+               -- silently swallows the first version after switching back.
+               upstream_watermark = CASE WHEN :trigger IS NOT NULL THEN NULL
+                                         ELSE upstream_watermark END,
+               input_health_policy = COALESCE(
+                   CAST(:health_policy AS model_health_policy), input_health_policy)
          WHERE id = :mid
         RETURNING {_COLUMNS}
         """,
         {
             "name": name, "descr": description, "code": code,
             "trigger": trigger_mode, "cron": cron_schedule, "next_run_at": next_run_at,
-            "mid": str(model_id),
+            "health_policy": input_health_policy, "mid": str(model_id),
         },
     )
     assert row is not None
     if inputs is not None:
         await _validate_and_set_inputs(conn, model_id, project_id, inputs)
+
+    # Only a change to what the model *computes* makes a new version. Trigger
+    # mode, schedule, health policy, name and description are how and when it
+    # runs, and versioning those would fill the history with entries nobody
+    # would ever roll back to (migration 0024).
+    effective_inputs = inputs if inputs is not None else [
+        {"dataset_id": i["dataset_id"], "input_alias": i["input_alias"]}
+        for i in before_inputs
+    ]
+    if str(row["code"]) != str(before["code"]) or (
+        inputs is not None
+        and _inputs_snapshot(effective_inputs) != _inputs_snapshot([
+            {"dataset_id": i["dataset_id"], "input_alias": i["input_alias"]}
+            for i in before_inputs
+        ])
+    ):
+        await _record_definition(
+            conn, model_id, code=str(row["code"]), inputs=effective_inputs,
+            created_by=updated_by,
+        )
+
+    if row["trigger_mode"] == "upstream" and not await list_inputs(conn, model_id):
+        # Checked after the input replacement above, so a single PATCH may set
+        # the mode and the inputs together. An upstream model with no inputs
+        # has nothing to watch and would never fire - the exact silent
+        # no-op 0021 exists to remove, so it is refused rather than stored.
+        raise ValueError(
+            "trigger_mode 'upstream' needs at least one input dataset to watch"
+        )
     return dict(row)
 
 
@@ -228,9 +498,89 @@ async def delete(conn: AsyncConnection, project_id: UUID, model_id: UUID) -> Non
     # someone may depend on. models.output_dataset_id FK is SET NULL.
 
 
+# ---- input health gating (migration 0022) -----------------------------------
+async def check_input_health(
+    conn: AsyncConnection,
+    storage: StorageGateway,
+    *,
+    project_id: UUID,
+    model_id: UUID,
+    policy: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Evaluate every input dataset's health and decide whether the run may
+    proceed. Returns (what the gate saw, refusal message or None).
+
+    The gate is the "reader" migration 0020 said expectations were missing:
+    it computes health when nothing has cached it, so `block` is enforced
+    against data nobody has opened - the automated case that most needs it.
+    That is also its cost: one DuckDB pass per input the first time each
+    version is seen.
+
+    `ignore` short-circuits before any of that, so an ungated model pays
+    nothing.
+    """
+    import anyio
+
+    from . import expectations
+
+    if policy == "ignore":
+        return [], None
+
+    seen: list[dict[str, Any]] = []
+    for item in await list_inputs(conn, model_id):
+        dataset_id = UUID(str(item["dataset_id"]))
+        ds_row = await ds_service.get(conn, project_id, dataset_id)
+        version = int(ds_row["current_version"])
+        health = await expectations.cached_health(conn, dataset_id, version)
+        if health is None:
+            rules = await expectations.list_rules(conn, project_id, dataset_id)
+            path = await anyio.to_thread.run_sync(
+                storage.local_path, str(ds_row["s3_location"])
+            )
+            health = await anyio.to_thread.run_sync(
+                expectations.evaluate, path, [dict(r) for r in rules]
+            )
+            await expectations.store_health(conn, dataset_id, version, health)
+        seen.append({
+            "dataset_id": str(dataset_id),
+            "name": str(ds_row["name"]),
+            "version": version,
+            "status": str(health.get("status", "none")),
+            "failing": expectations.failing_summary(health),
+        })
+
+    return seen, gate_message(seen, policy)
+
+
+def gate_message(seen: list[dict[str, Any]], policy: str) -> str | None:
+    """The refusal, or None if the run may proceed. Only `fail` gates - see
+    migration 0022 on why `warn` and `none` do not."""
+    if policy != "block":
+        return None
+    bad = [s for s in seen if s["status"] == "fail"]
+    if not bad:
+        return None
+    detail = "; ".join(f"{s['name']} ({', '.join(s['failing']) or 'failed its checks'})" for s in bad)
+    return (
+        f"blocked: {len(bad)} input dataset(s) failed their data quality checks - {detail}"
+    )
+
+
 # ---- runs -------------------------------------------------------------------
+def _json_or_null(value: list[dict[str, Any]] | None) -> str | None:
+    """An empty gate result is stored as NULL, not `[]`: migration 0022 reads
+    NULL as "this run was not gated", and a model with no inputs under a
+    `warn` policy has nothing to say either way."""
+    import json
+
+    return json.dumps(value) if value else None
+
+
 async def open_run(
-    conn: AsyncConnection, model_id: UUID, triggered_by: UUID
+    conn: AsyncConnection,
+    model_id: UUID,
+    triggered_by: UUID,
+    input_health: list[dict[str, Any]] | None = None,
 ) -> UUID:
     """SQL runs only - the route executes the transform immediately after
     this call, so 'running'/started_at=now() is accurate the instant it's
@@ -239,29 +589,38 @@ async def open_run(
     row = await fetch_one(
         conn,
         """
-        INSERT INTO model_runs (model_id, status, triggered_by, trigger_kind, started_at)
-        VALUES (:mid, 'running', :by, 'manual', now())
+        INSERT INTO model_runs (model_id, status, triggered_by, trigger_kind,
+                                started_at, input_health, model_version)
+        VALUES (:mid, 'running', :by, 'manual', now(), CAST(:health AS jsonb), :ver)
         RETURNING id
         """,
-        {"mid": str(model_id), "by": str(triggered_by)},
+        {"mid": str(model_id), "by": str(triggered_by),
+         "health": _json_or_null(input_health),
+         "ver": str(await current_version_id(conn, model_id) or "") or None},
     )
     assert row is not None
     return UUID(str(row["id"]))
 
 
 async def open_queued_run(
-    conn: AsyncConnection, model_id: UUID, triggered_by: UUID
+    conn: AsyncConnection,
+    model_id: UUID,
+    triggered_by: UUID,
+    input_health: list[dict[str, Any]] | None = None,
 ) -> UUID:
     """Python runs: left at the table's default status='queued' with no
     started_at - that only gets set when the worker actually starts it."""
     row = await fetch_one(
         conn,
         """
-        INSERT INTO model_runs (model_id, triggered_by, trigger_kind)
-        VALUES (:mid, :by, 'manual')
+        INSERT INTO model_runs (model_id, triggered_by, trigger_kind, input_health,
+                                model_version)
+        VALUES (:mid, :by, 'manual', CAST(:health AS jsonb), :ver)
         RETURNING id
         """,
-        {"mid": str(model_id), "by": str(triggered_by)},
+        {"mid": str(model_id), "by": str(triggered_by),
+         "health": _json_or_null(input_health),
+         "ver": str(await current_version_id(conn, model_id) or "") or None},
     )
     assert row is not None
     return UUID(str(row["id"]))
@@ -300,7 +659,8 @@ async def list_runs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, Any
         conn,
         """
         SELECT id, status, trigger_kind, queued_at, started_at, finished_at,
-               rows_produced, error_message, output_version
+               rows_produced, error_message, output_version, input_health,
+               model_version
           FROM model_runs
          WHERE model_id = :mid
          ORDER BY queued_at DESC
@@ -408,7 +768,7 @@ async def record_output(
         )
         assert row is not None
 
-    version_row = await fetch_one(
+    version_row = await _insert_version(
         conn,
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,

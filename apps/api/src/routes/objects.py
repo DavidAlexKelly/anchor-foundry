@@ -33,6 +33,8 @@ from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import datasets as dataset_service
+from ..lib.errors import NotFoundError
+from ..services import instance_store
 from ..services import instances as instances_service
 from ..services import ontology as ontology_service
 from ..services.dataset_engine import DatasetEngineError
@@ -120,6 +122,16 @@ class LinkTypeOut(BaseModel):
     to_object_type_id: UUID
     to_display_name: str
     created_at: datetime
+    # NULL as a pair when the link type has no join mapped, in which case it
+    # is a valid ontology statement that cannot yet be traversed (db 0027).
+    from_property: str | None = None
+    to_property: str | None = None
+
+
+# Either a property api_name or the reserved '$primary_key' (db 0027). Empty
+# string is accepted and normalised to "unset" in the service, because that is
+# what an unselected HTML <select> sends.
+_JOIN_PROPERTY = r"^([a-z][a-z0-9_]{0,99}|\$primary_key)?$"
 
 
 class LinkTypeCreate(BaseModel):
@@ -128,6 +140,16 @@ class LinkTypeCreate(BaseModel):
     from_type_id: UUID
     to_type_id: UUID
     cardinality: str = Field(pattern="^(one_to_one|one_to_many|many_to_many)$")
+    from_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+    to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+
+
+class LinkJoinUpdate(BaseModel):
+    """Only the join is patchable - see ontology.set_link_join for why an
+    endpoint or cardinality change is a different link type, not an edit."""
+
+    from_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+    to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
 
 
 class SourceOut(BaseModel):
@@ -264,6 +286,157 @@ async def get_object_type(
         return await _type_detail(conn, access.workspace_id, type_id)
 
 
+class ObjectTypeUpdate(BaseModel):
+    """The whole definition, not a patch — see `ontology.update_type` for why.
+    `api_name` is absent because it is immutable (db 0003 calls it the stable
+    machine name used by exports)."""
+
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    icon: str = Field(default="cube", max_length=64)
+    colour: str = Field(default="#2f6f4f", max_length=32)
+    properties: list[PropertyIn] = Field(min_length=1, max_length=100)
+    title_property: str | None = Field(default=None, max_length=100)
+    # Required to push through a change that would break an existing mapping,
+    # action or link join. Default false so a client that never asks about
+    # impact cannot silently break something.
+    acknowledge_breaking: bool = False
+
+
+class ImpactOut(BaseModel):
+    property: str
+    change: str  # "removed" | "retyped"
+    consumer_kind: str  # "dataset_mapping" | "action" | "link"
+    consumer_id: UUID
+    consumer_name: str
+    detail: str
+    blocking: bool
+
+
+class ObjectTypeVersionOut(BaseModel):
+    id: UUID
+    version_number: int
+    display_name: str
+    description: str
+    icon: str
+    colour: str
+    properties: list[dict[str, Any]]
+    title_property: str | None
+    restored_from: int | None
+    created_at: datetime
+    created_by_email: str | None
+
+
+@router.post("/object-types/{type_id}/impact", response_model=list[ImpactOut])
+async def object_type_impact(
+    type_id: UUID,
+    body: ObjectTypeUpdate,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ImpactOut]:
+    """Dry-run an edit: what would this change break? (roadmap Objects item 5)
+
+    A POST because it takes a proposed definition, and read-only despite that
+    — hence the viewer floor. Separate from the PATCH so the UI can warn
+    *before* asking for confirmation; the PATCH re-computes the same analysis
+    itself rather than trusting that this was called.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        impacts = await ontology_service.type_impact(
+            conn, access.workspace_id, type_id, [p.model_dump() for p in body.properties]
+        )
+    return [ImpactOut(**i) for i in impacts]
+
+
+@router.patch("/object-types/{type_id}", response_model=ObjectTypeDetail)
+async def update_object_type(
+    type_id: UUID,
+    body: ObjectTypeUpdate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectTypeDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.update_type(
+            conn,
+            workspace_id=access.workspace_id,
+            type_id=type_id,
+            display_name=body.display_name,
+            description=body.description,
+            icon=body.icon,
+            colour=body.colour,
+            properties=[p.model_dump() for p in body.properties],
+            title_property=body.title_property,
+            updated_by=access.auth.user_id,
+            acknowledge_breaking=body.acknowledge_breaking,
+        )
+        detail = await _type_detail(conn, access.workspace_id, type_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.update",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"properties": len(body.properties),
+                      "acknowledged_breaking": body.acknowledge_breaking},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return detail
+
+
+@router.get("/object-types/{type_id}/versions", response_model=list[ObjectTypeVersionOut])
+async def list_object_type_versions(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ObjectTypeVersionOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await ontology_service.list_type_versions(conn, access.workspace_id, type_id)
+    return [
+        ObjectTypeVersionOut(**{**r, "properties": _jsonb(r["properties"]) or []})
+        for r in rows
+    ]
+
+
+class RestoreVersionIn(BaseModel):
+    acknowledge_breaking: bool = False
+
+
+@router.post("/object-types/{type_id}/versions/{version_number}/restore",
+             response_model=ObjectTypeDetail)
+async def restore_object_type_version(
+    type_id: UUID,
+    version_number: int,
+    body: RestoreVersionIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectTypeDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.restore_type_version(
+            conn,
+            workspace_id=access.workspace_id,
+            type_id=type_id,
+            version_number=version_number,
+            updated_by=access.auth.user_id,
+            acknowledge_breaking=body.acknowledge_breaking,
+        )
+        detail = await _type_detail(conn, access.workspace_id, type_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.restore_version",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"restored_from": version_number,
+                      "acknowledged_breaking": body.acknowledge_breaking},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return detail
+
+
 @router.delete(
     "/object-types/{type_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
 )
@@ -297,8 +470,9 @@ async def list_instances(
 ) -> InstancePage:
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)  # 404 if invisible
-        rows, total = await instances_service.list_for_type(
-            conn, type_id, limit=limit, offset=offset
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        rows, total = await instance_store.store_for(conn).list_for_type(
+            search_prefix=prefix, object_type_id=type_id, limit=limit, offset=offset
         )
     return InstancePage(
         items=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
@@ -316,8 +490,73 @@ async def get_instance(
 ) -> InstanceOut:
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)
-        row = await instances_service.get(conn, type_id, instance_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        row = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
+        )
+    if row is None:
+        raise NotFoundError("object instance")
     return InstanceOut(**{**row, "properties": _jsonb(row["properties"])})
+
+
+class ExplorerInstanceOut(InstanceOut):
+    """An instance plus the type it belongs to - a workspace-wide result set
+    is meaningless without saying what each row *is*."""
+
+    object_type_id: UUID
+    object_type_api_name: str
+    object_type_display_name: str
+
+
+class ExplorerPage(BaseModel):
+    items: list[ExplorerInstanceOut]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("/object-instances", response_model=ExplorerPage)
+async def explore_instances(
+    q: str | None = Query(default=None, max_length=200),
+    type_id: list[UUID] | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ExplorerPage:
+    """Search and browse every instance in the workspace at once (roadmap
+    Objects item 2), across types rather than within one.
+
+    Workspace-scoped like the ontology it searches: object types are
+    workspace-wide, so an explorer that stopped at a project boundary would
+    show a partial ontology and call it the whole one.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        rows, total = await instance_store.store_for(conn).search(
+            search_prefix=prefix,
+            workspace_id=access.workspace_id,
+            query=q,
+            object_type_ids=type_id,
+            limit=limit,
+            offset=offset,
+        )
+        # Type names come from Postgres whichever store held the instances -
+        # the ontology definition never moved.
+        types = {
+            str(t["id"]): t
+            for t in await ontology_service.list_types(conn, access.workspace_id)
+        }
+    items = []
+    for row in rows:
+        meta = types.get(str(row["object_type_id"]))
+        if meta is None:
+            continue  # type deleted since the instance was indexed
+        items.append(ExplorerInstanceOut(
+            **{**row, "properties": _jsonb(row["properties"])},
+            object_type_api_name=str(meta["api_name"]),
+            object_type_display_name=str(meta["display_name"]),
+        ))
+    return ExplorerPage(items=items, total=total, limit=limit, offset=offset)
 
 
 # ---- link types (workspace-scoped) ------------------------------------------
@@ -346,6 +585,8 @@ async def create_link_type(
             to_type_id=body.to_type_id,
             cardinality=body.cardinality,
             created_by=access.auth.user_id,
+            from_property=body.from_property,
+            to_property=body.to_property,
         )
         from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
         to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
@@ -366,6 +607,139 @@ async def create_link_type(
         from_display_name=from_type["display_name"],
         to_display_name=to_type["display_name"],
     )
+
+
+@router.patch("/link-types/{link_id}", response_model=LinkTypeOut)
+async def update_link_join(
+    link_id: UUID,
+    body: LinkJoinUpdate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> LinkTypeOut:
+    """Map the properties a link joins on, so it becomes traversable (roadmap
+    Objects item 3), or clear them back to a definition-only link type."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ontology_service.set_link_join(
+            conn,
+            access.workspace_id,
+            link_id,
+            from_property=body.from_property,
+            to_property=body.to_property,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="link_type.update_join",
+            resource_type="link_type",
+            resource_id=link_id,
+            workspace_id=access.workspace_id,
+            metadata={"from_property": row["from_property"], "to_property": row["to_property"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return LinkTypeOut(**row)
+
+
+# ---- link traversal ----------------------------------------------------------
+class LinkedInstances(BaseModel):
+    """One link, from the point of view of the instance in hand: what the
+    relationship is called, which way it runs, and a first page of the
+    instances on the far side."""
+
+    link_type_id: UUID
+    api_name: str
+    display_name: str
+    cardinality: str
+    direction: str  # "outbound" (this type is the from end) | "inbound"
+    far_type_id: UUID
+    far_type_display_name: str
+    near_property: str
+    far_property: str
+    matched_value: Any | None
+    total: int
+    items: list[InstanceOut]
+
+
+LINK_PREVIEW_LIMIT = 10
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/links",
+    response_model=list[LinkedInstances],
+)
+async def instance_links(
+    type_id: UUID,
+    instance_id: UUID,
+    limit: int = Query(default=LINK_PREVIEW_LIMIT, ge=1, le=50),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[LinkedInstances]:
+    """Traverse every mapped link from one instance (roadmap Objects item 3).
+
+    All of an instance's links in one response rather than one request per
+    link: the point of the panel is "what is this object connected to", and
+    that question is not answerable a link at a time - the client would have
+    to fetch the link types, work out which end it is on, and fan out, which
+    is exactly the reasoning that belongs here.
+
+    Each group carries a `total` and a first page, not the whole far side. A
+    one_to_many link can traverse to thousands of instances, and the panel
+    that shows them is a preview with a count, so paging every group to
+    exhaustion would be work nobody asked for. Follow-up paging goes through
+    the ordinary instance list for the far type.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        # Type visibility first, so an object type in a workspace this caller
+        # cannot see 404s on the type rather than on the instance - the
+        # instance lookup would also miss, but for the wrong reason.
+        links = await ontology_service.links_for_type(conn, access.workspace_id, type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        instance = await store.get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
+        )
+        if instance is None:
+            raise NotFoundError("object instance")
+        properties = _jsonb(instance["properties"])
+
+        groups: list[LinkedInstances] = []
+        for link in links:
+            near = str(link["near_property"])
+            far = str(link["far_property"])
+            value = (
+                instance["primary_key"]
+                if near == ontology_service.PRIMARY_KEY_REF
+                else properties.get(near)
+            )
+            rows, total = await store.find_by_property(
+                search_prefix=prefix,
+                object_type_id=UUID(str(link["far_type_id"])),
+                property_name=None if far == ontology_service.PRIMARY_KEY_REF else far,
+                value=value,
+                limit=limit,
+                offset=0,
+            )
+            groups.append(LinkedInstances(
+                link_type_id=UUID(str(link["id"])),
+                api_name=str(link["api_name"]),
+                display_name=str(link["display_name"]),
+                cardinality=str(link["cardinality"]),
+                direction=str(link["direction"]),
+                far_type_id=UUID(str(link["far_type_id"])),
+                far_type_display_name=str(link["far_type_display_name"]),
+                near_property=near,
+                far_property=far,
+                matched_value=value,
+                total=total,
+                items=[
+                    InstanceOut(**{
+                        "id": r["id"], "primary_key": r["primary_key"],
+                        "properties": _jsonb(r["properties"]), "updated_at": r["updated_at"],
+                    })
+                    for r in rows
+                ],
+            ))
+    return groups
 
 
 @router.delete(
@@ -503,15 +877,17 @@ async def sync_source(
 
     if ok:
         async with user_connection(access.auth.user_id) as conn:
-            upserted = await instances_service.upsert_instances(
-                conn,
+            prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+            store = instance_store.store_for(conn)
+            upserted = await store.upsert_instances(
+                search_prefix=prefix,
                 object_type_id=UUID(str(source["object_type_id"])),
                 source_id=source_id,
                 rows=rows,
                 synced_at=synced_at,
             )
-            removed = await instances_service.delete_stale_instances(
-                conn, source_id=source_id, synced_before=synced_at
+            removed = await store.delete_stale_instances(
+                search_prefix=prefix, source_id=source_id, synced_before=synced_at
             )
 
     async with user_connection(access.auth.user_id) as conn:

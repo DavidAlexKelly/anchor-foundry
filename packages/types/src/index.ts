@@ -177,7 +177,9 @@ export interface SourceTypeInfo {
   display_name: string;
   config_schema: {
     // `enum` is present for constrained choices (a connector's TLS mode, say),
-    // which the wizard renders as a picker rather than a free-text box.
+    // which the wizard renders as a picker rather than a free-text box;
+    // `type` is JSON Schema's, so "boolean" and "integer" both occur and each
+    // needs its own input.
     properties: Record<
       string,
       { type?: string; default?: unknown; title?: string; enum?: string[] }
@@ -201,14 +203,16 @@ export interface DiscoveredColumn {
 }
 
 export interface DiscoveredTable {
+  /** For object storage this is the folder under the connection's configured
+   * prefix, empty for a file at the root - not a database schema. */
   schema_name: string;
   name: string;
-  kind: "table" | "view";
+  kind: "table" | "view" | "file" | "endpoint";
   columns: DiscoveredColumn[];
 }
 
 // ---- datasets (Layer 1.5) ---------------------------------------------------
-export type DatasetOrigin = "upload" | "sync" | "model_output";
+export type DatasetOrigin = "upload" | "sync" | "model_output" | "fork";
 
 export interface Dataset {
   id: string;
@@ -222,8 +226,77 @@ export interface Dataset {
   table_schema: { name: string; data_type: string }[];
   row_count: number;
   current_version: number;
+  /** Whether a new version may remove or retype an existing column
+   *  (migration 0023). Adding columns is allowed under both. */
+  schema_policy: "permissive" | "strict";
+  /** Where a forked dataset came from (migration 0025). Provenance only —
+   *  a fork never recomputes, so it is not a pipeline-graph edge, and the
+   *  id is a historical record that survives the source being deleted. */
+  forked_from_dataset_id: string | null;
+  forked_from_version: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Per-column statistics for a dataset version (migration 0019). Computed on
+ * first request and cached - a version's data is immutable. min/max are text
+ * because one array holds every column's type; null for types with no
+ * meaningful ordering (lists, structs). */
+export interface ColumnProfile {
+  name: string;
+  data_type: string;
+  null_count: number;
+  null_rate: number;
+  distinct_count: number;
+  min: string | null;
+  max: string | null;
+}
+
+export interface DatasetProfile {
+  dataset_id: string;
+  version_number: number;
+  row_count: number;
+  columns: ColumnProfile[];
+}
+
+// ---- data health (roadmap Datasets item 2, migration 0020) ------------------
+export type ExpectationRuleType =
+  | "not_null"
+  | "unique"
+  | "value_in_range"
+  | "regex_match"
+  | "column_exists";
+
+export interface Expectation {
+  id: string;
+  dataset_id: string;
+  rule_type: ExpectationRuleType;
+  column_name: string;
+  config: Record<string, unknown>;
+  severity: "error" | "warn";
+  created_at: string;
+}
+
+export interface ExpectationResult {
+  expectation_id: string | null;
+  rule_type: ExpectationRuleType;
+  column_name: string;
+  severity: "error" | "warn";
+  /** `error` means the rule could not be evaluated - which is not the same as
+   * the data being bad, and must not be shown as though it were. */
+  status: "pass" | "fail" | "error";
+  failing_rows: number;
+  rows_checked: number;
+  message: string | null;
+}
+
+export interface DatasetHealth {
+  dataset_id: string;
+  version_number: number;
+  /** "none" when the dataset has no rules - distinct from passing. */
+  status: "pass" | "warn" | "fail" | "none";
+  evaluated_at: string | null;
+  results: ExpectationResult[];
 }
 
 export interface TabularResult {
@@ -249,6 +322,15 @@ export interface SyncResult {
   } | null;
 }
 
+/** Schema drift between a synced dataset version and the one it replaced
+ * (migration 0018). Only the non-empty keys are present, so the object itself
+ * is truthy exactly when something changed. */
+export interface SchemaChanges {
+  added?: { name: string; data_type: string }[];
+  removed?: { name: string; data_type: string }[];
+  retyped?: { name: string; from: string; to: string }[];
+}
+
 export interface SyncRun {
   id: string;
   mode: SyncMode;
@@ -260,6 +342,30 @@ export interface SyncRun {
   finished_at: string | null;
   dataset_id: string | null;
   dataset_name: string | null;
+  schema_changes: SchemaChanges | null;
+}
+
+/** Per-connection sync health for the connections list. Rates are over the
+ * most recent runs, not all time. */
+export interface SyncHealth {
+  connection_id: string;
+  sync_schedule: string | null;
+  next_run_at: string | null;
+  total_runs: number;
+  succeeded: number;
+  failed: number;
+  /** Runs neither succeeded nor failed - in flight, or orphaned by a restart.
+   * Excluded from success_rate rather than counted against it. */
+  running: number;
+  drifted: number;
+  success_rate: number | null;
+  last_status: "running" | "succeeded" | "failed" | null;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  last_duration_seconds: number | null;
+  last_rows_synced: number | null;
+  last_error: string | null;
+  last_schema_changes: SchemaChanges | null;
 }
 
 // A connection carries at most one managed scheduled/incremental sync
@@ -296,11 +402,67 @@ export interface Model {
   trigger_mode: "manual" | "cron" | "upstream";
   cron_schedule: string | null;
   next_run_at: string | null;
+  /** Newest input dataset version an upstream-triggered model has reacted to. */
+  upstream_watermark: string | null;
+  /** What a run does when an input dataset's health is 'fail' (migration 0022). */
+  input_health_policy: "ignore" | "warn" | "block";
   last_run_status: string | null;
   last_run_at: string | null;
   inputs: ModelInput[];
   created_at: string;
   updated_at: string;
+}
+
+/** One node in a project's pipeline graph. Dataset-only and model-only
+ *  fields are both nullable rather than split into a union, so the view can
+ *  map over `nodes` without narrowing on every access. */
+export interface PipelineNode {
+  id: string;                 // "dataset:<uuid>" | "model:<uuid>"
+  kind: "dataset" | "model";
+  resource_id: string;
+  name: string;
+  /** Distance downstream; every edge points from a lower layer to a higher one. */
+  layer: number;
+  /** Index within the layer, name-ordered and stable across requests. */
+  position: number;
+  in_cycle: boolean;
+  /** True on the node a lineage view was centred on; always false for the
+   *  whole-project graph. */
+  is_focus: boolean;
+  slug: string | null;
+  origin: string | null;
+  row_count: number | null;
+  current_version: number | null;
+  health_status: string | null;
+  language: string | null;
+  trigger_mode: string | null;
+  last_run_status: string | null;
+  last_run_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PipelineEdge {
+  from: string;
+  to: string;
+  /** The model's input alias, on dataset → model edges only. */
+  label: string | null;
+}
+
+export interface PipelineGraph {
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
+  /** Node ids grouped per cycle; empty when the graph is a clean DAG. */
+  cycles: string[][];
+  layer_count: number;
+}
+
+/** Per-input dataset health as a gated run saw it, captured at run time. */
+export interface RunInputHealth {
+  dataset_id: string;
+  name: string;
+  version: number;
+  status: string;
+  failing: string[];
 }
 
 export interface ModelRun {
@@ -313,6 +475,25 @@ export interface ModelRun {
   rows_produced: number | null;
   error_message: string | null;
   output_version: string | null;
+  /** Null when the run was not gated (the model's policy was 'ignore'). */
+  input_health: RunInputHealth[] | null;
+  /** The definition this run executed (migration 0024). Null for runs that
+   *  predate it — unknown, not v1. */
+  model_version: string | null;
+}
+
+/** One entry in a model's definition history. Append-only: restoring an
+ *  earlier version writes a new one rather than rewinding. */
+export interface ModelVersion {
+  id: string;
+  model_id: string;
+  version_number: number;
+  code: string;
+  inputs: { dataset_id: string; input_alias: string }[];
+  /** Set when this version was created by restoring an earlier one. */
+  restored_from: number | null;
+  created_by_email: string | null;
+  created_at: string;
 }
 
 export interface ModelRunResult {
@@ -322,6 +503,26 @@ export interface ModelRunResult {
   error: string | null;
   rows_produced: number;
   output_dataset: { id: string; name: string; slug: string; current_version: number } | null;
+}
+
+/** One row of the workspace-wide Object Explorer: an instance plus the type
+ *  it belongs to, since a cross-type result set is meaningless without
+ *  saying what each row is. */
+export interface ExplorerInstance {
+  id: string;
+  primary_key: string;
+  properties: Record<string, unknown>;
+  updated_at: string;
+  object_type_id: string;
+  object_type_api_name: string;
+  object_type_display_name: string;
+}
+
+export interface ExplorerPage {
+  items: ExplorerInstance[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 // ---- objects (ontology) -----------------------------------------------------
@@ -366,6 +567,47 @@ export interface ObjectTypeDetail {
   updated_at: string;
 }
 
+/**
+ * One consumer a proposed object-type change would disturb (db 0028).
+ * `blocking` changes are refused unless explicitly acknowledged; the rest are
+ * advisory (a retyped link join still traverses, since the join compares the
+ * text form of both values).
+ */
+export interface ObjectTypeImpact {
+  property: string;
+  change: "removed" | "retyped";
+  consumer_kind: "dataset_mapping" | "action" | "link";
+  consumer_id: string;
+  consumer_name: string;
+  detail: string;
+  blocking: boolean;
+}
+
+/** An append-only snapshot of an object type's definition (db 0028). */
+export interface ObjectTypeVersion {
+  id: string;
+  version_number: number;
+  display_name: string;
+  description: string;
+  icon: string;
+  colour: string;
+  /** The properties as declared at the time — a snapshot, not live rows. */
+  properties: {
+    api_name: string;
+    display_name: string;
+    data_type: PropertyDataType;
+    required: boolean;
+    description: string;
+    sort_order: number;
+  }[];
+  /** The title property's api_name; property ids do not survive an edit. */
+  title_property: string | null;
+  /** Set when this version was created by restoring an earlier one. */
+  restored_from: number | null;
+  created_at: string;
+  created_by_email: string | null;
+}
+
 export interface LinkType {
   id: string;
   api_name: string;
@@ -376,6 +618,38 @@ export interface LinkType {
   to_object_type_id: string;
   to_display_name: string;
   created_at: string;
+  /**
+   * The properties whose values are compared to derive instance-level links
+   * (db 0027). Null as a pair when the link type is defined but not
+   * traversable. `"$primary_key"` refers to the instance's primary key
+   * rather than one of its properties.
+   */
+  from_property: string | null;
+  to_property: string | null;
+}
+
+/** Reserved join reference: the instance's primary key, not a property. */
+export const PRIMARY_KEY_REF = "$primary_key";
+
+/**
+ * One link traversed from a single instance: which relationship, which way it
+ * runs, and a first page of what is on the far side.
+ */
+export interface LinkedInstances {
+  link_type_id: string;
+  api_name: string;
+  display_name: string;
+  cardinality: LinkCardinality;
+  /** "outbound" when the instance's type is the link's from end. */
+  direction: "outbound" | "inbound";
+  far_type_id: string;
+  far_type_display_name: string;
+  near_property: string;
+  far_property: string;
+  /** The value read off this instance and matched against far_property. */
+  matched_value: unknown;
+  total: number;
+  items: ObjectInstance[];
 }
 
 export interface ObjectTypeSource {

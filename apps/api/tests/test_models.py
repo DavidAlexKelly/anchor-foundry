@@ -152,6 +152,204 @@ def test_cron_schedule_sets_next_run_at(client: TestClient, fx: Fixture, model_i
     assert body["next_run_at"] is None
 
 
+def test_upstream_trigger_needs_inputs_and_resets_the_watermark(
+    client: TestClient, fx: Fixture, input_datasets: dict[str, str]
+) -> None:
+    ids = list(input_datasets.values())
+    r = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Upstream {fx.tag}", "code": "SELECT * FROM orders",
+              "inputs": [{"dataset_id": ids[0], "input_alias": "orders"}]},
+    )
+    assert r.status_code == 201, r.text
+    mid = r.json()["id"]
+
+    r = client.patch(
+        f"{mbase(fx)}/{mid}", headers=hdr(fx.editor_sub), json={"trigger_mode": "upstream"}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["trigger_mode"] == "upstream"
+    assert body["cron_schedule"] is None and body["next_run_at"] is None
+    # NULL watermark = "-infinity" (migration 0021): it fires on the next
+    # worker pass rather than waiting for a version that arrives after the
+    # switch.
+    assert body["upstream_watermark"] is None
+
+    # A model with nothing to watch would never fire - refused, not stored.
+    r = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Orphan {fx.tag}", "code": "SELECT 1"},
+    )
+    assert r.status_code == 201, r.text
+    orphan = r.json()["id"]
+    r = client.patch(
+        f"{mbase(fx)}/{orphan}", headers=hdr(fx.editor_sub), json={"trigger_mode": "upstream"}
+    )
+    assert r.status_code == 422, r.text
+    assert "input dataset" in r.json()["detail"].lower()
+    r = client.get(f"{mbase(fx)}/{orphan}", headers=hdr(fx.viewer_sub))
+    assert r.json()["trigger_mode"] == "manual", "the rejected PATCH must roll back"
+
+    # Setting the mode and the inputs in one PATCH is allowed.
+    r = client.patch(
+        f"{mbase(fx)}/{orphan}", headers=hdr(fx.editor_sub),
+        json={"trigger_mode": "upstream",
+              "inputs": [{"dataset_id": ids[0], "input_alias": "orders"}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["trigger_mode"] == "upstream"
+
+
+BAD_ROWS = b"customer_id,region\n10,north\n,south\n12,north\n"
+
+
+@pytest.fixture()
+def gated(client: TestClient, fx: Fixture) -> dict[str, str]:
+    """A model over a dataset with a null in a not-null column, so its input
+    health is genuinely `fail` rather than mocked into being."""
+    import uuid as _uuid
+
+    tag = _uuid.uuid4().hex[:6]
+    r = client.post(
+        f"{dbase(fx)}/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Gated input {tag}"},
+        files={"file": ("bad.csv", io.BytesIO(BAD_ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset = r.json()["id"]
+    r = client.post(
+        f"{dbase(fx)}/{dataset}/expectations", headers=hdr(fx.editor_sub),
+        json={"column_name": "customer_id", "rule_type": "not_null"},
+    )
+    assert r.status_code == 201, r.text
+    r = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Gated {tag}", "code": "SELECT * FROM rows_in",
+              "inputs": [{"dataset_id": dataset, "input_alias": "rows_in"}]},
+    )
+    assert r.status_code == 201, r.text
+    return {"model": r.json()["id"], "dataset": dataset}
+
+
+def test_ignore_is_the_default_and_runs_on_failing_input(
+    client: TestClient, fx: Fixture, gated: dict[str, str]
+) -> None:
+    """Migration 0022 defaults to 'ignore' deliberately: applying the
+    migration must not silently start failing models that ran fine before."""
+    r = client.get(f"{mbase(fx)}/{gated['model']}", headers=hdr(fx.viewer_sub))
+    assert r.json()["input_health_policy"] == "ignore"
+
+    r = client.post(f"{mbase(fx)}/{gated['model']}/run", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+
+    runs = client.get(f"{mbase(fx)}/{gated['model']}/runs", headers=hdr(fx.viewer_sub)).json()
+    assert runs[0]["input_health"] is None, "an ungated run records no gate evidence"
+
+
+def test_block_refuses_the_run_and_records_why(
+    client: TestClient, fx: Fixture, gated: dict[str, str]
+) -> None:
+    r = client.patch(
+        f"{mbase(fx)}/{gated['model']}", headers=hdr(fx.editor_sub),
+        json={"input_health_policy": "block"},
+    )
+    assert r.status_code == 200 and r.json()["input_health_policy"] == "block"
+
+    r = client.post(f"{mbase(fx)}/{gated['model']}/run", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False and body["status"] == "failed"
+    assert "blocked" in body["error"] and "customer_id" in body["error"]
+
+    run = client.get(f"{mbase(fx)}/{gated['model']}/runs", headers=hdr(fx.viewer_sub)).json()[0]
+    assert run["status"] == "failed"
+    # The evidence rides on the run: health is cached per version and cleared
+    # whenever rules change, so re-deriving this later could disagree.
+    assert run["input_health"] is not None
+    assert run["input_health"][0]["status"] == "fail"
+    assert run["input_health"][0]["failing"] == ["customer_id: 1 null value(s)"]
+
+
+def test_warn_runs_anyway_but_records_what_it_saw(
+    client: TestClient, fx: Fixture, gated: dict[str, str]
+) -> None:
+    """The mode you turn on first, to find out how often blocking would have
+    fired before committing to it."""
+    client.patch(
+        f"{mbase(fx)}/{gated['model']}", headers=hdr(fx.editor_sub),
+        json={"input_health_policy": "warn"},
+    )
+    r = client.post(f"{mbase(fx)}/{gated['model']}/run", headers=hdr(fx.editor_sub))
+    assert r.json()["ok"] is True, r.text
+
+    run = client.get(f"{mbase(fx)}/{gated['model']}/runs", headers=hdr(fx.viewer_sub)).json()[0]
+    assert run["status"] == "succeeded"
+    assert run["input_health"][0]["status"] == "fail"
+
+
+def test_the_gate_evaluates_health_nothing_has_asked_for(
+    client: TestClient, fx: Fixture, gated: dict[str, str]
+) -> None:
+    """Migration 0020 flagged that expectations had no reader to trigger
+    computation; 0022's gate is that reader. Nothing has opened this
+    dataset's health, so a cached result must not exist until the gate runs.
+    """
+    import psycopg
+    from test_api import ADMIN_DSN
+
+    def cached() -> object:
+        with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+            return conn.execute(
+                """SELECT v.expectation_results FROM dataset_versions v
+                    JOIN datasets d ON d.id = v.dataset_id
+                   WHERE d.id = %s AND v.version_number = d.current_version""",
+                (gated["dataset"],),
+            ).fetchone()[0]
+
+    assert cached() is None, "nothing has read this dataset's health yet"
+
+    client.patch(
+        f"{mbase(fx)}/{gated['model']}", headers=hdr(fx.editor_sub),
+        json={"input_health_policy": "block"},
+    )
+    client.post(f"{mbase(fx)}/{gated['model']}/run", headers=hdr(fx.editor_sub))
+    assert cached() is not None, "the gate must compute health, not just read it"
+
+
+def test_passing_input_does_not_block(
+    client: TestClient, fx: Fixture, input_datasets: dict[str, str]
+) -> None:
+    """Only `fail` gates - a dataset with no rules is `none`, which is not
+    evidence of anything."""
+    ids = list(input_datasets.values())
+    r = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Clean {fx.tag}", "code": "SELECT * FROM orders",
+              "inputs": [{"dataset_id": ids[0], "input_alias": "orders"}]},
+    )
+    mid = r.json()["id"]
+    client.patch(
+        f"{mbase(fx)}/{mid}", headers=hdr(fx.editor_sub),
+        json={"input_health_policy": "block"},
+    )
+    r = client.post(f"{mbase(fx)}/{mid}/run", headers=hdr(fx.editor_sub))
+    assert r.json()["ok"] is True, r.text
+    run = client.get(f"{mbase(fx)}/{mid}/runs", headers=hdr(fx.viewer_sub)).json()[0]
+    assert run["input_health"][0]["status"] == "none"
+
+
+def test_an_unknown_policy_is_refused(
+    client: TestClient, fx: Fixture, model_id: str
+) -> None:
+    r = client.patch(
+        f"{mbase(fx)}/{model_id}", headers=hdr(fx.editor_sub),
+        json={"input_health_policy": "everything"},
+    )
+    assert r.status_code == 422
+
+
 def test_viewer_cannot_create_or_run(client: TestClient, fx: Fixture, model_id: str) -> None:
     r = client.post(mbase(fx), headers=hdr(fx.viewer_sub), json={"name": "Nope"})
     assert r.status_code == 403

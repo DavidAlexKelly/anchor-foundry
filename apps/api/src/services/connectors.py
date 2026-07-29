@@ -98,7 +98,7 @@ class ColumnInfo:
 class TableInfo:
     schema: str
     name: str
-    kind: str  # "table" | "view" | "file"
+    kind: str  # "table" | "view" | "file" | "endpoint"
     columns: list[ColumnInfo] = field(default_factory=list)
 
 
@@ -973,11 +973,429 @@ def _supported_file_extensions() -> tuple[str, ...]:
 SUPPORTED_FILE_EXTENSIONS: tuple[str, ...] = _supported_file_extensions()
 
 
+# ---- Generic REST / HTTP JSON ------------------------------------------------
+# The roadmap calls this "the highest-variance connector to build well" and says
+# to scope the first cut narrowly rather than trying to cover every API's
+# quirks. That is exactly what this is, and the boundaries are worth stating
+# outright so nobody mistakes it for a general HTTP client:
+#
+#   * GET only. A sync reads; a REST connector that POSTs is a write-back
+#     feature (Connections item 8), which wants its own design.
+#   * The response must contain a JSON *array of objects* somewhere, located by
+#     a dotted `records_path` ("" when the body is itself the array). Anything
+#     else - XML, CSV-over-HTTP, an object keyed by id - is out of scope, and
+#     says so rather than guessing.
+#   * Two pagination styles, because they cover most of what real APIs do:
+#     an incrementing page number, and an opaque cursor echoed from the
+#     response. Link headers, RFC 5988, and offset/limit are not handled yet.
+#   * No server-side incrementality. There is no universal "changed since" for
+#     REST, so `max_cursor_value` returns None and every run fetches the whole
+#     collection. In incremental mode the platform still merges by primary key,
+#     which is useful (an append-only endpoint converges) but is not a
+#     bandwidth saving, and is documented as such rather than implied.
+#
+# Records land as JSONL rather than CSV - the other half of why `snapshot`
+# returns an extension. A REST payload routinely has nested objects, and
+# flattening those through CSV would turn them into unparseable text.
+
+_REST_TIMEOUT_S = 20
+_REST_MAX_PAGES = 1000  # a guard against a mis-configured cursor looping forever
+
+
+class RestConfig(BaseModel):
+    base_url: str = Field(min_length=1, max_length=2048)
+    # Split from base_url so the same connection can name the collection it
+    # syncs while `source_table` stays a display coordinate like every other
+    # connector's.
+    resource_path: str = Field(default="", max_length=2048)
+    auth_type: Literal["none", "api_key_header", "bearer", "oauth2_client_credentials"] = "none"
+    auth_header_name: str = Field(default="X-API-Key", min_length=1, max_length=128)
+    token_url: str = Field(default="", max_length=2048)
+    oauth_scope: str = Field(default="", max_length=512)
+    records_path: str = Field(default="", max_length=256)
+    pagination: Literal["none", "page_number", "cursor"] = "none"
+    page_param: str = Field(default="page", min_length=1, max_length=64)
+    page_size_param: str = Field(default="", max_length=64)
+    page_size: int = Field(default=100, ge=1, le=10000)
+    # Where the next cursor lives in the response, and what to send it back as.
+    cursor_path: str = Field(default="", max_length=256)
+    cursor_param: str = Field(default="cursor", min_length=1, max_length=64)
+    # Same shape of decision as MySQL's ssl_mode: plaintext has to be asked for.
+    allow_insecure_http: bool = False
+
+
+class RestConnector:
+    type_name = "rest"
+    display_name = "REST / HTTP JSON"
+    config_model: type[BaseModel] = RestConfig
+    secret_fields = ("api_key", "client_id", "client_secret")
+
+    def validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        try:
+            cleaned = RestConfig(**config).model_dump()
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            loc = ".".join(str(p) for p in first["loc"])
+            raise ConnectorConfigError(f"{loc}: {first['msg']}") from exc
+
+        _check_url(cleaned["base_url"], cleaned["allow_insecure_http"], field="base_url")
+        if cleaned["auth_type"] == "oauth2_client_credentials":
+            if not cleaned["token_url"]:
+                raise ConnectorConfigError(
+                    "token_url: required for oauth2_client_credentials"
+                )
+            _check_url(cleaned["token_url"], cleaned["allow_insecure_http"], field="token_url")
+        if cleaned["pagination"] == "cursor" and not cleaned["cursor_path"]:
+            raise ConnectorConfigError(
+                "cursor_path: required when pagination is 'cursor' - without it "
+                "there is no way to find the next page in the response"
+            )
+        return cleaned
+
+    # -- request plumbing ------------------------------------------------------
+    def _auth_headers(self, config: dict[str, Any], secret: dict[str, str]) -> dict[str, str]:
+        auth = config.get("auth_type", "none")
+        if auth == "none":
+            return {}
+        if auth == "api_key_header":
+            key = secret.get("api_key")
+            if not key:
+                raise ConnectorOperationError("no api_key stored for this connection")
+            return {config.get("auth_header_name") or "X-API-Key": key}
+        if auth == "bearer":
+            token = secret.get("api_key")
+            if not token:
+                raise ConnectorOperationError("no bearer token stored for this connection")
+            return {"Authorization": f"Bearer {token}"}
+        return {"Authorization": f"Bearer {self._oauth_token(config, secret)}"}
+
+    def _oauth_token(self, config: dict[str, Any], secret: dict[str, str]) -> str:
+        """client_credentials grant. Fetched per operation rather than cached:
+        a sync is a handful of requests over a few seconds, and a cache would
+        need invalidation, a clock, and somewhere to live - none of which earn
+        their keep before someone has an API that actually rate-limits it."""
+        import json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        client_id = secret.get("client_id")
+        client_secret = secret.get("client_secret")
+        if not client_id or not client_secret:
+            raise ConnectorOperationError(
+                "oauth2_client_credentials needs both client_id and client_secret"
+            )
+        form = {"grant_type": "client_credentials", "client_id": client_id,
+                "client_secret": client_secret}
+        if config.get("oauth_scope"):
+            form["scope"] = config["oauth_scope"]
+        request = urllib.request.Request(
+            config["token_url"],
+            data=urllib.parse.urlencode(form).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+                payload = json.loads(response.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as exc:
+            # Deliberately not echoing the body: a token endpoint's error can
+            # quote back what was sent, which is the client_secret.
+            raise ConnectorOperationError(
+                f"the token endpoint rejected the credentials (HTTP {exc.code})"
+            ) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise ConnectorOperationError(f"could not reach the token endpoint: {_reason(exc)}") from exc
+        except ValueError as exc:
+            raise ConnectorOperationError("the token endpoint did not return JSON") from exc
+
+        token = payload.get("access_token") if isinstance(payload, dict) else None
+        if not token:
+            raise ConnectorOperationError("the token endpoint returned no access_token")
+        return str(token)
+
+    def _fetch_page(
+        self, config: dict[str, Any], secret: dict[str, str], params: dict[str, Any]
+    ) -> Any:
+        import json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        url = _join_url(config["base_url"], config.get("resource_path") or "")
+        _check_url(url, config.get("allow_insecure_http", False))
+        if params:
+            separator = "&" if urllib.parse.urlparse(url).query else "?"
+            url = f"{url}{separator}{urllib.parse.urlencode(params)}"
+
+        headers = {"Accept": "application/json", **self._auth_headers(config, secret)}
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=_REST_TIMEOUT_S) as response:
+                body = response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise SourceReadError(
+                    f"the API rejected the request (HTTP {exc.code}) - check the credentials"
+                ) from exc
+            if exc.code == 404:
+                raise SourceReadError(f"the API returned 404 for {config.get('resource_path') or '/'}") from exc
+            raise ConnectorOperationError(f"the API returned HTTP {exc.code}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise ConnectorOperationError(f"could not reach the API: {_reason(exc)}") from exc
+
+        try:
+            return json.loads(body.decode("utf-8", "replace"))
+        except ValueError as exc:
+            raise SourceReadError("the API did not return JSON") from exc
+
+    def _records(self, payload: Any, config: dict[str, Any]) -> list[dict[str, Any]]:
+        located = _json_path(payload, config.get("records_path") or "")
+        if not isinstance(located, list):
+            where = config.get("records_path") or "the response body"
+            raise SourceReadError(
+                f"expected a JSON array at {where}, got {type(located).__name__} - "
+                "set records_path to wherever the list of records lives"
+            )
+        rows = [row for row in located if isinstance(row, dict)]
+        if located and not rows:
+            raise SourceReadError(
+                "the records array does not contain objects - this connector "
+                "reads a list of records, not a list of scalars"
+            )
+        return rows
+
+    def _pages(self, config: dict[str, Any], secret: dict[str, str]):
+        """Yields one page of records at a time, following the configured
+        pagination style until it runs out or hits the page guard."""
+        style = config.get("pagination", "none")
+        params: dict[str, Any] = {}
+        if config.get("page_size_param"):
+            params[config["page_size_param"]] = config.get("page_size", 100)
+
+        page_number = 1
+        cursor: Any = None
+        for _ in range(_REST_MAX_PAGES):
+            page_params = dict(params)
+            if style == "page_number":
+                page_params[config.get("page_param") or "page"] = page_number
+            elif style == "cursor" and cursor is not None:
+                page_params[config.get("cursor_param") or "cursor"] = cursor
+
+            payload = self._fetch_page(config, secret, page_params)
+            records = self._records(payload, config)
+            yield records
+
+            if style == "none":
+                return
+            if style == "page_number":
+                # An empty page is the end. Pages that keep returning data
+                # forever are what _REST_MAX_PAGES is for.
+                if not records:
+                    return
+                page_number += 1
+            else:
+                cursor = _json_path(payload, config["cursor_path"])
+                if cursor in (None, "", []):
+                    return
+
+    # -- interface -------------------------------------------------------------
+    def test(self, config: dict[str, Any], secret: dict[str, str]) -> None:
+        payload = self._fetch_page(config, secret, {})
+        self._records(payload, config)  # proves records_path is right too
+
+    def discover(self, config: dict[str, Any], secret: dict[str, str]) -> list[TableInfo]:
+        """A REST API has no catalog to enumerate, so discovery reports the one
+        collection this connection is configured for, with columns inferred
+        from the first page's records."""
+        payload = self._fetch_page(config, secret, {})
+        records = self._records(payload, config)
+        columns: dict[str, str] = {}
+        nullable: set[str] = set()
+        for row in records[:200]:
+            for key, value in row.items():
+                inferred = _json_type(value)
+                if value is None:
+                    nullable.add(key)
+                if key not in columns or columns[key] == "NULL":
+                    columns[key] = inferred
+                elif inferred != columns[key] and inferred != "NULL":
+                    columns[key] = "VARCHAR"  # mixed types degrade to text
+        # Any key missing from some record is effectively nullable.
+        for row in records[:200]:
+            for key in columns:
+                if key not in row:
+                    nullable.add(key)
+        return [
+            TableInfo(
+                schema="",
+                name=_resource_name(config),
+                kind="endpoint",
+                columns=[
+                    ColumnInfo(
+                        name=key,
+                        data_type=data_type,
+                        nullable=key in nullable,
+                        is_primary_key=False,
+                    )
+                    for key, data_type in columns.items()
+                ],
+            )
+        ]
+
+    def snapshot(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+        dest_dir: str,
+        max_bytes: int,
+        cursor_column: str | None = None,
+        cursor_value: str | None = None,
+    ) -> Extract:
+        import json
+
+        dest = os.path.join(dest_dir, "snapshot.jsonl")
+        written = 0
+        rows = 0
+        with open(dest, "w", encoding="utf-8") as handle:
+            for page in self._pages(config, secret):
+                for record in page:
+                    line = json.dumps(record, default=str) + "\n"
+                    written += len(line.encode("utf-8"))
+                    if written > max_bytes:
+                        raise size_cap_error(max_bytes)
+                    handle.write(line)
+                    rows += 1
+        if rows == 0:
+            # DuckDB cannot infer a schema from an empty JSONL file, and an
+            # empty collection is a legitimate steady state rather than an
+            # error - report it the same way an object store reports "nothing
+            # new" so callers skip the write instead of failing.
+            return Extract(path=dest, extension=".jsonl", empty=True)
+        return Extract(path=dest, extension=".jsonl")
+
+    def max_cursor_value(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+        cursor_column: str,
+    ) -> str | None:
+        """Always None: see this section's header. REST has no universal
+        "changed since", so there is no high-water mark to store, and every run
+        fetches the whole collection."""
+        return None
+
+
+def _reason(exc: Exception) -> str:
+    text = str(getattr(exc, "reason", exc)).strip()
+    return text.splitlines()[0] if text else "connection failed"
+
+
+def _resource_name(config: dict[str, Any]) -> str:
+    """A display name for the one collection a REST connection reads - the last
+    non-empty path segment, falling back to the host."""
+    import urllib.parse
+
+    path = (config.get("resource_path") or urllib.parse.urlparse(config["base_url"]).path or "").strip("/")
+    if path:
+        return path.split("/")[-1] or path
+    return urllib.parse.urlparse(config["base_url"]).netloc or "records"
+
+
+def _join_url(base: str, path: str) -> str:
+    if not path:
+        return base
+    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _check_url(url: str, allow_insecure_http: bool, *, field: str = "base_url") -> None:
+    """Scheme and destination guard.
+
+    A connector that fetches an operator-supplied URL runs inside the
+    customer's own VPC, so an editor who cannot otherwise reach AWS could point
+    it at the instance metadata service and read the task role's credentials
+    out of the response. Link-local is refused for that reason. Other private
+    ranges are deliberately *not* blocked - an internal API on a private
+    subnet is a legitimate thing to sync, and blocking it would break the
+    ordinary case to defend against nothing in particular.
+    """
+    import ipaddress
+    import socket
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ConnectorConfigError(f"{field}: must be an http(s) URL")
+    if parsed.scheme == "http" and not allow_insecure_http:
+        raise ConnectorConfigError(
+            f"{field}: refusing plaintext http - use https, or set "
+            "allow_insecure_http to accept an unencrypted connection"
+        )
+    host = parsed.hostname
+    if not host:
+        raise ConnectorConfigError(f"{field}: no host in URL")
+
+    try:
+        resolved = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except OSError:
+        return  # unresolvable is the request's problem to report, not config's
+    for address in resolved:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if ip.is_link_local:
+            raise ConnectorConfigError(
+                f"{field}: refusing to reach the link-local address range "
+                "(this is where cloud instance metadata lives)"
+            )
+
+
+def _json_path(payload: Any, path: str) -> Any:
+    """Dotted lookup into a decoded JSON body. Empty path means the body
+    itself. Deliberately not a JSONPath implementation - a dotted key walk is
+    what almost every paginated API actually needs, and a real expression
+    language here would be a dependency and a support surface."""
+    if not path:
+        return payload
+    current = payload
+    for part in path.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return None
+    return current
+
+
+def _json_type(value: Any) -> str:
+    """DuckDB's name for what this JSON value will land as, so discovery
+    reports the same vocabulary the other connectors do."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "BOOLEAN"
+    if isinstance(value, int):
+        return "BIGINT"
+    if isinstance(value, float):
+        return "DOUBLE"
+    if isinstance(value, (dict, list)):
+        return "JSON"
+    return "VARCHAR"
+
+
 # ---- registry ----------------------------------------------------------------
 _REGISTRY: dict[str, SourceConnector] = {
     PostgresConnector.type_name: PostgresConnector(),
     MySQLConnector.type_name: MySQLConnector(),
     S3Connector.type_name: S3Connector(),
+    RestConnector.type_name: RestConnector(),
 }
 
 

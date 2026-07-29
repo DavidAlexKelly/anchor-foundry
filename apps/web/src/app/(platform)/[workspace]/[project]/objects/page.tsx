@@ -12,21 +12,24 @@ import {
   type PropertyInput,
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
+import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
+import {
+  EditObjectTypeDialog,
+  PropertyRows,
+  TitlePropertyField,
+} from "@/components/object-type-editor";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type {
-  ActionType,
-  Dataset,
-  LinkCardinality,
-  LinkType,
-  ObjectTypeSource,
-  ObjectTypeSummary,
-  ObjectTypeSuggestion,
-  PropertyDataType,
+import {
+  PRIMARY_KEY_REF,
+  type ActionType,
+  type Dataset,
+  type LinkCardinality,
+  type LinkType,
+  type ObjectTypeSource,
+  type ObjectTypeSummary,
+  type ObjectTypeSuggestion,
 } from "@/lib/types";
 
-const PROPERTY_TYPES: PropertyDataType[] = [
-  "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
-];
 const CARDINALITIES: LinkCardinality[] = ["one_to_one", "one_to_many", "many_to_many"];
 
 function toApiName(display: string, typeCase: boolean): string {
@@ -104,78 +107,13 @@ function ObjectTypeDialog({
           />
         </Field>
         <Field label="Properties" hint="Typed fields on this object">
-          <div>
-            {properties.map((prop, index) => (
-              <div key={index} className="row-actions" style={{ marginBottom: 6 }}>
-                <input
-                  type="text"
-                  placeholder="property_name"
-                  style={{
-                    fontFamily: "var(--font-mono)", fontSize: 12.5,
-                    padding: "4px 8px", border: "1px solid var(--line-strong)",
-                    borderRadius: "var(--radius)", width: 160,
-                  }}
-                  value={prop.api_name}
-                  onChange={(e) => {
-                    const next = [...properties];
-                    next[index] = { ...prop, api_name: toApiName(e.target.value, false) };
-                    setProperties(next);
-                  }}
-                />
-                <select
-                  value={prop.data_type}
-                  onChange={(e) => {
-                    const next = [...properties];
-                    next[index] = { ...prop, data_type: e.target.value as PropertyDataType };
-                    setProperties(next);
-                  }}
-                >
-                  {PROPERTY_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={!!prop.required}
-                    onChange={(e) => {
-                      const next = [...properties];
-                      next[index] = { ...prop, required: e.target.checked };
-                      setProperties(next);
-                    }}
-                  />
-                  required
-                </label>
-                <button
-                  type="button"
-                  className="btn danger"
-                  style={{ padding: "3px 9px", fontSize: 12 }}
-                  onClick={() => setProperties(properties.filter((_, i) => i !== index))}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              className="btn quiet"
-              style={{ padding: "4px 10px", fontSize: 12.5 }}
-              onClick={() =>
-                setProperties([...properties, { api_name: "", data_type: "string", required: false }])
-              }
-            >
-              Add property
-            </button>
-          </div>
+          <PropertyRows properties={properties} onChange={setProperties} />
         </Field>
-        <Field label="Title property" hint="Shown as the object's name - optional">
-          <select value={titleProperty} onChange={(e) => setTitleProperty(e.target.value)}>
-            <option value="">None</option>
-            {properties.filter((p) => p.api_name).map((p) => (
-              <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
-            ))}
-          </select>
-        </Field>
+        <TitlePropertyField
+          properties={properties}
+          value={titleProperty}
+          onChange={setTitleProperty}
+        />
         {create.isError && (
           <div className="form-error">
             {create.error instanceof ApiError && create.error.status === 409
@@ -333,6 +271,49 @@ function SuggestDialog({
 }
 
 // ---- link types -------------------------------------------------------------
+/** Picks the property one end of a link joins on. The primary key is offered
+ * first because it is what the far end of a foreign key nearly always is, and
+ * it is not one of the type's properties, so nothing else would list it. */
+function JoinPropertyField({
+  label,
+  workspaceId,
+  typeId,
+  value,
+  onChange,
+}: {
+  label: string;
+  workspaceId: string;
+  typeId: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId),
+    enabled: !!typeId,
+  });
+  return (
+    <Field label={label}>
+      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={!typeId}>
+        <option value="">Not set</option>
+        <option value={PRIMARY_KEY_REF}>Primary key</option>
+        {(type.data?.properties ?? []).map((p) => (
+          <option key={p.api_name} value={p.api_name}>
+            {p.display_name || p.api_name}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
+function joinLabel(property: string): string {
+  return property === PRIMARY_KEY_REF ? "primary key" : property;
+}
+
+const JOIN_HINT =
+  "Instances are linked by matching these two values - a foreign key, in the data the objects were synced from. Leave unset to define the relationship without making it traversable yet.";
+
 function LinkTypeDialog({
   workspaceId,
   types,
@@ -346,6 +327,8 @@ function LinkTypeDialog({
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [cardinality, setCardinality] = useState<LinkCardinality>("one_to_many");
+  const [fromProperty, setFromProperty] = useState("");
+  const [toProperty, setToProperty] = useState("");
   const queryClient = useQueryClient();
 
   const create = useMutation({
@@ -356,12 +339,18 @@ function LinkTypeDialog({
         from_type_id: fromId,
         to_type_id: toId,
         cardinality,
+        from_property: fromProperty || null,
+        to_property: toProperty || null,
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
       onClose();
     },
   });
+
+  // Both ends or neither: half a join cannot answer a question, and the API
+  // refuses it, so the form does too rather than sending it to be rejected.
+  const halfJoin = !fromProperty !== !toProperty;
 
   return (
     <Dialog open title="New link type" onClose={onClose}>
@@ -370,13 +359,21 @@ function LinkTypeDialog({
           <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={200} autoFocus />
         </Field>
         <Field label="From">
-          <select value={fromId} onChange={(e) => setFromId(e.target.value)} required>
+          <select
+            value={fromId}
+            onChange={(e) => { setFromId(e.target.value); setFromProperty(""); }}
+            required
+          >
             <option value="">Choose a type…</option>
             {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
           </select>
         </Field>
         <Field label="To">
-          <select value={toId} onChange={(e) => setToId(e.target.value)} required>
+          <select
+            value={toId}
+            onChange={(e) => { setToId(e.target.value); setToProperty(""); }}
+            required
+          >
             <option value="">Choose a type…</option>
             {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
           </select>
@@ -386,6 +383,24 @@ function LinkTypeDialog({
             {CARDINALITIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
+        <JoinPropertyField
+          label="Join on (from)"
+          workspaceId={workspaceId}
+          typeId={fromId}
+          value={fromProperty}
+          onChange={setFromProperty}
+        />
+        <JoinPropertyField
+          label="Join on (to)"
+          workspaceId={workspaceId}
+          typeId={toId}
+          value={toProperty}
+          onChange={setToProperty}
+        />
+        <p className="login-note" style={{ marginTop: 0 }}>{JOIN_HINT}</p>
+        {halfJoin && (
+          <div className="form-error">Set the property on both ends, or on neither.</div>
+        )}
         {create.isError && (
           <div className="form-error">
             {create.error instanceof ApiError ? create.error.message : "Couldn't create the link type."}
@@ -393,8 +408,77 @@ function LinkTypeDialog({
         )}
         <div className="form-actions">
           <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={create.isPending || !displayName.trim() || !fromId || !toId}>
+          <button type="submit" className="btn" disabled={create.isPending || !displayName.trim() || !fromId || !toId || halfJoin}>
             {create.isPending ? "Creating…" : "Create link type"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Maps (or clears) the join on a link type that already exists - the upgrade
+ * path for every link defined before joins existed. */
+function LinkJoinDialog({
+  workspaceId,
+  link,
+  onClose,
+}: {
+  workspaceId: string;
+  link: LinkType;
+  onClose: () => void;
+}) {
+  const [fromProperty, setFromProperty] = useState(link.from_property ?? "");
+  const [toProperty, setToProperty] = useState(link.to_property ?? "");
+  const queryClient = useQueryClient();
+
+  const save = useMutation({
+    mutationFn: () =>
+      objApi.setLinkJoin(workspaceId, link.id, {
+        from_property: fromProperty || null,
+        to_property: toProperty || null,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
+      await queryClient.invalidateQueries({ queryKey: ["instance-links"] });
+      onClose();
+    },
+  });
+
+  const halfJoin = !fromProperty !== !toProperty;
+
+  return (
+    <Dialog open title={`Join - ${link.display_name}`} onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+        <p className="login-note" style={{ marginTop: 0 }}>
+          {link.from_display_name} → {link.to_display_name}. {JOIN_HINT}
+        </p>
+        <JoinPropertyField
+          label={`Join on (${link.from_display_name})`}
+          workspaceId={workspaceId}
+          typeId={link.from_object_type_id}
+          value={fromProperty}
+          onChange={setFromProperty}
+        />
+        <JoinPropertyField
+          label={`Join on (${link.to_display_name})`}
+          workspaceId={workspaceId}
+          typeId={link.to_object_type_id}
+          value={toProperty}
+          onChange={setToProperty}
+        />
+        {halfJoin && (
+          <div className="form-error">Set the property on both ends, or on neither.</div>
+        )}
+        {save.isError && (
+          <div className="form-error">
+            {save.error instanceof ApiError ? save.error.message : "Couldn't save the join."}
+          </div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn" disabled={save.isPending || halfJoin}>
+            {save.isPending ? "Saving…" : "Save join"}
           </button>
         </div>
       </form>
@@ -789,6 +873,182 @@ function SourceRow({
   );
 }
 
+function ObjectExplorer({
+  workspaceId,
+  workspaceSlug,
+  projectSlug,
+  types,
+}: {
+  workspaceId: string;
+  workspaceSlug: string;
+  projectSlug: string;
+  types: { id: string; display_name: string }[];
+}) {
+  const [exploring, setExploring] = useState<LinkStop | null>(null);
+  const [draft, setDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [typeId, setTypeId] = useState("");
+  const [offset, setOffset] = useState(0);
+  const limit = 25;
+
+  const page = useQuery({
+    queryKey: ["object-explorer", workspaceId, query, typeId, offset],
+    queryFn: () =>
+      objApi.explore(workspaceId, {
+        q: query || undefined,
+        typeIds: typeId ? [typeId] : undefined,
+        limit,
+        offset,
+      }),
+    enabled: !!workspaceId,
+  });
+
+  // Every property name present in the current page, so a cross-type result
+  // set still shows values rather than just ids. Union rather than
+  // intersection: a column that only some rows have is still worth seeing.
+  const columns = Array.from(
+    new Set((page.data?.items ?? []).flatMap((i) => Object.keys(i.properties))),
+  ).slice(0, 6);
+
+  return (
+    <>
+      <div className="page-head" style={{ marginTop: 32 }}>
+        <div>
+          <h2 style={{ fontSize: 15, margin: 0 }}>Explore instances</h2>
+          <p className="sub">Every instance in this workspace, across all object types</p>
+        </div>
+      </div>
+      <form
+        className="row-actions"
+        style={{ marginBottom: 12 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          setOffset(0);
+          setQuery(draft.trim());
+        }}
+      >
+        <input
+          type="search"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Search any property value…"
+          style={{ minWidth: 260 }}
+          aria-label="Search instances"
+        />
+        <select
+          value={typeId}
+          onChange={(e) => {
+            setOffset(0);
+            setTypeId(e.target.value);
+          }}
+          aria-label="Filter by object type"
+        >
+          <option value="">All types</option>
+          {types.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.display_name}
+            </option>
+          ))}
+        </select>
+        <button className="btn" type="submit">
+          Search
+        </button>
+      </form>
+
+      {page.isPending && <div className="state">Searching…</div>}
+      {page.isError && <div className="state error">Couldn&apos;t search instances.</div>}
+      {page.data && page.data.total === 0 && (
+        <div className="state">
+          {query || typeId
+            ? "Nothing matches that."
+            : "No instances yet — sync a dataset mapping to create some."}
+        </div>
+      )}
+      {page.data && page.data.total > 0 && (
+        <>
+          <div className="data-grid">
+            <table>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Key</th>
+                  {columns.map((c) => (
+                    <th key={c}>{c}</th>
+                  ))}
+                  <th>Updated</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {page.data.items.map((i) => (
+                  <tr key={i.id}>
+                    <td>
+                      <span className="chip">{i.object_type_display_name}</span>
+                    </td>
+                    <td className="slug">{i.primary_key}</td>
+                    {columns.map((c) => (
+                      <td key={c}>
+                        {i.properties[c] === undefined || i.properties[c] === null
+                          ? "∅"
+                          : String(i.properties[c])}
+                      </td>
+                    ))}
+                    <td className="slug">{new Date(i.updated_at).toLocaleString()}</td>
+                    <td>
+                      <button
+                        className="btn quiet"
+                        style={{ padding: "3px 9px", fontSize: 12 }}
+                        onClick={() =>
+                          setExploring({
+                            typeId: i.object_type_id,
+                            typeName: i.object_type_display_name,
+                            instance: i,
+                          })
+                        }
+                      >
+                        Explore
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="row-actions" style={{ marginTop: 8 }}>
+            <button
+              className="btn quiet"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - limit))}
+            >
+              Previous
+            </button>
+            <span className="slug">
+              {offset + 1}–{Math.min(offset + limit, page.data.total)} of {page.data.total}
+            </span>
+            <button
+              className="btn quiet"
+              disabled={offset + limit >= page.data.total}
+              onClick={() => setOffset(offset + limit)}
+            >
+              Next
+            </button>
+          </div>
+        </>
+      )}
+
+      {exploring && (
+        <LinkExplorerDialog
+          workspaceId={workspaceId}
+          workspaceSlug={workspaceSlug}
+          projectSlug={projectSlug}
+          start={exploring}
+          onClose={() => setExploring(null)}
+        />
+      )}
+    </>
+  );
+}
+
 export default function ObjectsPage() {
   const params = useParams<{ workspace: string; project: string }>();
   const { workspace } = useWorkspaceBySlug(params.workspace);
@@ -796,6 +1056,10 @@ export default function ObjectsPage() {
   const [creatingType, setCreatingType] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [creatingLink, setCreatingLink] = useState(false);
+  const [joining, setJoining] = useState<LinkType | null>(null);
+  // The id, not the row: the edit dialog needs the full definition (properties
+  // and the title property), which the summary list does not carry.
+  const [editingType, setEditingType] = useState<string | null>(null);
   const [creatingSource, setCreatingSource] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
   const queryClient = useQueryClient();
@@ -819,6 +1083,11 @@ export default function ObjectsPage() {
     queryKey: ["action-types", workspace?.id],
     queryFn: () => actionApi.listTypes(workspace!.id),
     enabled: !!workspace,
+  });
+  const editingDetail = useQuery({
+    queryKey: ["object-type", editingType],
+    queryFn: () => objApi.getType(workspace!.id, editingType!),
+    enabled: !!workspace && !!editingType,
   });
 
   const removeType = useMutation({
@@ -906,6 +1175,15 @@ export default function ObjectsPage() {
                       </Link>
                       {canEditOntology && (
                         <button
+                          className="btn quiet"
+                          style={{ padding: "3px 9px", fontSize: 12 }}
+                          onClick={() => setEditingType(t.id)}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {canEditOntology && (
+                        <button
                           className="btn danger"
                           style={{ padding: "3px 9px", fontSize: 12 }}
                           disabled={removeType.isPending}
@@ -925,6 +1203,13 @@ export default function ObjectsPage() {
             </tbody>
           </table>
 
+          <ObjectExplorer
+            workspaceId={workspace!.id}
+            workspaceSlug={params.workspace}
+            projectSlug={params.project}
+            types={types.data}
+          />
+
           <div className="page-head" style={{ marginTop: 32 }}>
             <div><h2 style={{ fontSize: 15, margin: 0 }}>Link types</h2></div>
             {canEditOntology && types.data.length >= 2 && (
@@ -936,24 +1221,40 @@ export default function ObjectsPage() {
           )}
           {linkTypes.data && linkTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>
-              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th>Joins on</th><th aria-label="Actions" /></tr></thead>
               <tbody>
                 {linkTypes.data.map((lt: LinkType) => (
                   <tr key={lt.id}>
                     <td><strong>{lt.display_name}</strong></td>
                     <td>{lt.from_display_name} → {lt.to_display_name}</td>
                     <td className="count">{lt.cardinality}</td>
+                    <td className="slug">
+                      {lt.from_property
+                        ? `${joinLabel(lt.from_property)} = ${joinLabel(lt.to_property!)}`
+                        : "not traversable"}
+                    </td>
                     <td>
-                      {canEditOntology && (
-                        <button
-                          className="btn danger"
-                          style={{ padding: "3px 9px", fontSize: 12 }}
-                          disabled={removeLink.isPending}
-                          onClick={() => removeLink.mutate(lt.id)}
-                        >
-                          Delete
-                        </button>
-                      )}
+                      <div className="row-actions">
+                        {canEditOntology && (
+                          <button
+                            className="btn quiet"
+                            style={{ padding: "3px 9px", fontSize: 12 }}
+                            onClick={() => setJoining(lt)}
+                          >
+                            {lt.from_property ? "Edit join" : "Set join"}
+                          </button>
+                        )}
+                        {canEditOntology && (
+                          <button
+                            className="btn danger"
+                            style={{ padding: "3px 9px", fontSize: 12 }}
+                            disabled={removeLink.isPending}
+                            onClick={() => removeLink.mutate(lt.id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1040,6 +1341,16 @@ export default function ObjectsPage() {
       )}
       {creatingLink && workspace && types.data && (
         <LinkTypeDialog workspaceId={workspace.id} types={types.data} onClose={() => setCreatingLink(false)} />
+      )}
+      {joining && workspace && (
+        <LinkJoinDialog workspaceId={workspace.id} link={joining} onClose={() => setJoining(null)} />
+      )}
+      {editingType && workspace && editingDetail.data && (
+        <EditObjectTypeDialog
+          workspaceId={workspace.id}
+          type={editingDetail.data}
+          onClose={() => setEditingType(null)}
+        />
       )}
       {creatingSource && workspace && project && types.data && (
         <SourceDialog

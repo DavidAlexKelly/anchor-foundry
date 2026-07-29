@@ -9,7 +9,11 @@ import type {
 } from "./types";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** The parsed error body, when there was one. Some refusals carry their
+   * reasons as data alongside the message — an object-type edit blocked by
+   * existing consumers lists them under `impacts` (db 0028) — and a caller
+   * that wants to render a list rather than a sentence needs the original. */
+  constructor(public status: number, message: string, public body?: unknown) {
     super(message);
   }
 }
@@ -33,13 +37,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     let detail = res.statusText;
+    let body: unknown;
     try {
-      const body: { detail?: string } = await res.json();
-      if (typeof body.detail === "string") detail = body.detail;
+      body = await res.json();
+      const parsed = body as { detail?: string };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
     } catch {
       /* non-JSON error body - keep statusText */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, body);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -174,9 +180,65 @@ export const datasets = {
     }
     return (await res.json()) as import("./types").Dataset;
   },
+  update: (
+    wid: string,
+    pid: string,
+    did: string,
+    input: {
+      name?: string;
+      description?: string;
+      schema_policy?: "permissive" | "strict";
+    },
+  ) =>
+    request<import("./types").Dataset>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+  fork: (
+    wid: string,
+    pid: string,
+    did: string,
+    input: { name: string; version_number?: number },
+  ) =>
+    request<import("./types").Dataset>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/fork`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   preview: (wid: string, pid: string, did: string) =>
     request<import("./types").TabularResult>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview`,
+    ),
+  profile: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetProfile>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile`,
+    ),
+  health: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetHealth>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/health`,
+    ),
+  expectations: (wid: string, pid: string, did: string) =>
+    request<import("./types").Expectation[]>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/expectations`,
+    ),
+  addExpectation: (
+    wid: string,
+    pid: string,
+    did: string,
+    input: {
+      rule_type: string;
+      column_name: string;
+      config?: Record<string, unknown>;
+      severity?: string;
+    },
+  ) =>
+    request<import("./types").Expectation>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/expectations`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  removeExpectation: (wid: string, pid: string, did: string, rid: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/expectations/${rid}`,
+      { method: "DELETE" },
     ),
   query: (wid: string, pid: string, did: string, sql: string) =>
     request<import("./types").TabularResult>(
@@ -222,6 +284,11 @@ export const sync = {
   runs: (wid: string, pid: string, cid: string) =>
     request<import("./types").SyncRun[]>(
       `/workspaces/${wid}/projects/${pid}/connections/${cid}/sync-runs`,
+    ),
+  // One request for the whole list page rather than per-connection health.
+  health: (wid: string, pid: string) =>
+    request<import("./types").SyncHealth[]>(
+      `/workspaces/${wid}/projects/${pid}/connections/sync-health`,
     ),
 };
 
@@ -288,6 +355,7 @@ export const models = {
       inputs?: { dataset_id: string; input_alias: string }[];
       trigger_mode?: "manual" | "cron" | "upstream";
       cron_schedule?: string | null;
+      input_health_policy?: "ignore" | "warn" | "block";
     },
   ) =>
     request<import("./types").Model>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, {
@@ -305,6 +373,22 @@ export const models = {
     ),
   remove: (wid: string, pid: string, mid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, { method: "DELETE" }),
+  versions: (wid: string, pid: string, mid: string) =>
+    request<import("./types").ModelVersion[]>(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/versions`,
+    ),
+  restoreVersion: (wid: string, pid: string, mid: string, versionNumber: number) =>
+    request<import("./types").Model>(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/versions/${versionNumber}/restore`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  /** The whole project as one graph — datasets and models together, already
+   *  laid out by the API (see apps/api/src/services/pipeline.py). */
+  pipeline: (wid: string, pid: string, focus?: string) =>
+    request<import("./types").PipelineGraph>(
+      `/workspaces/${wid}/projects/${pid}/pipeline` +
+        (focus ? `?focus=${encodeURIComponent(focus)}` : ""),
+    ),
 };
 
 export interface PropertyInput {
@@ -325,12 +409,29 @@ export interface ObjectTypeCreateInput {
   title_property?: string | null;
 }
 
+/** The whole definition, not a patch — `api_name` is immutable, so it is
+ * absent rather than optional. */
+export interface ObjectTypeUpdateInput {
+  display_name: string;
+  description?: string;
+  icon?: string;
+  colour?: string;
+  properties: PropertyInput[];
+  title_property?: string | null;
+  /** Required to push through a change that breaks an existing consumer. */
+  acknowledge_breaking?: boolean;
+}
+
 export interface LinkTypeCreateInput {
   api_name: string;
   display_name: string;
   from_type_id: string;
   to_type_id: string;
   cardinality: import("./types").LinkCardinality;
+  /** Both or neither; "$primary_key" for the instance key. Omit for an
+   * ontology-only link type that is not traversable yet. */
+  from_property?: string | null;
+  to_property?: string | null;
 }
 
 export interface SourceCreateInput {
@@ -341,6 +442,21 @@ export interface SourceCreateInput {
 }
 
 export const objects = {
+  /** Workspace-wide instance search across every object type at once. */
+  explore: (
+    wid: string,
+    input: { q?: string; typeIds?: string[]; limit?: number; offset?: number },
+  ) => {
+    const search = new URLSearchParams();
+    if (input.q) search.set("q", input.q);
+    for (const t of input.typeIds ?? []) search.append("type_id", t);
+    if (input.limit) search.set("limit", String(input.limit));
+    if (input.offset) search.set("offset", String(input.offset));
+    const qs = search.toString();
+    return request<import("./types").ExplorerPage>(
+      `/workspaces/${wid}/object-instances${qs ? `?${qs}` : ""}`,
+    );
+  },
   listTypes: (wid: string) =>
     request<import("./types").ObjectTypeSummary[]>(`/workspaces/${wid}/object-types`),
   getType: (wid: string, typeId: string) =>
@@ -350,6 +466,28 @@ export const objects = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  updateType: (wid: string, typeId: string, input: ObjectTypeUpdateInput) =>
+    request<import("./types").ObjectTypeDetail>(`/workspaces/${wid}/object-types/${typeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  /** Dry-run an edit: which mappings, actions and link joins it would break. */
+  typeImpact: (wid: string, typeId: string, input: ObjectTypeUpdateInput) =>
+    request<import("./types").ObjectTypeImpact[]>(
+      `/workspaces/${wid}/object-types/${typeId}/impact`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  listTypeVersions: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeVersion[]>(
+      `/workspaces/${wid}/object-types/${typeId}/versions`,
+    ),
+  restoreTypeVersion: (
+    wid: string, typeId: string, versionNumber: number, acknowledgeBreaking = false,
+  ) =>
+    request<import("./types").ObjectTypeDetail>(
+      `/workspaces/${wid}/object-types/${typeId}/versions/${versionNumber}/restore`,
+      { method: "POST", body: JSON.stringify({ acknowledge_breaking: acknowledgeBreaking }) },
+    ),
   removeType: (wid: string, typeId: string) =>
     request<void>(`/workspaces/${wid}/object-types/${typeId}`, { method: "DELETE" }),
   listLinkTypes: (wid: string) =>
@@ -358,6 +496,15 @@ export const objects = {
     request<import("./types").LinkType>(`/workspaces/${wid}/link-types`, {
       method: "POST",
       body: JSON.stringify(input),
+    }),
+  setLinkJoin: (
+    wid: string,
+    linkId: string,
+    join: { from_property: string | null; to_property: string | null },
+  ) =>
+    request<import("./types").LinkType>(`/workspaces/${wid}/link-types/${linkId}`, {
+      method: "PATCH",
+      body: JSON.stringify(join),
     }),
   removeLinkType: (wid: string, linkId: string) =>
     request<void>(`/workspaces/${wid}/link-types/${linkId}`, { method: "DELETE" }),
@@ -405,6 +552,10 @@ export const objects = {
   getInstance: (wid: string, typeId: string, instanceId: string) =>
     request<import("./types").ObjectInstance>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}`,
+    ),
+  instanceLinks: (wid: string, typeId: string, instanceId: string) =>
+    request<import("./types").LinkedInstances[]>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/links`,
     ),
 };
 

@@ -61,6 +61,12 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
           <Link href={base} aria-current={pathname === base}>
             <span>Overview</span>
           </Link>
+          {/* Above the divider with Overview, not in SECTIONS: both are
+              whole-project views rather than a list of one resource type,
+              and the pipeline has no count of its own to show. */}
+          <Link href={`${base}/pipeline`} aria-current={pathname === `${base}/pipeline`}>
+            <span>Pipeline</span>
+          </Link>
           <div className="divider" />
           {SECTIONS.map((s) => (
             <Link

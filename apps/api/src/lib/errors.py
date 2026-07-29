@@ -32,3 +32,19 @@ class UnauthorizedError(HTTPException):
 class ConflictError(HTTPException):
     def __init__(self, detail: str) -> None:
         super().__init__(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+class BreakingChangeError(ConflictError):
+    """A change that is legal but would silently break something already
+    built on the current definition (roadmap Objects item 5).
+
+    A 409 rather than a 422: the request is well-formed and the caller is
+    allowed to make it - the state of the world is what makes it refusable,
+    and the caller can re-send it acknowledged. It carries the impacts
+    alongside the message so the client can render them as a list rather than
+    parse a sentence.
+    """
+
+    def __init__(self, detail: str, *, impacts: list[dict[str, object]]) -> None:
+        super().__init__(detail)
+        self.impacts = impacts

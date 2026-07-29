@@ -1,0 +1,306 @@
+"""Pipeline graph tests (ROADMAP Models item 2).
+
+Its own project rather than a case in test_models.py: this endpoint returns
+*everything* in a project, so sharing a project with tests that create models
+would make the assertions depend on test order.
+"""
+from __future__ import annotations
+
+import io
+import os
+import sys
+
+import pytest
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from src.main import create_app  # noqa: E402
+from src.middleware import auth as auth_mw  # noqa: E402
+from src.routes import datasets as ds_routes  # noqa: E402
+from src.services.storage import LocalStorageGateway  # noqa: E402
+
+ROWS = b"id,val\n1,10\n2,20\n3,30\n"
+
+
+@pytest.fixture(scope="module")
+def fx() -> Fixture:
+    return Fixture()
+
+
+@pytest.fixture(scope="module")
+def client(tmp_path_factory: pytest.TempPathFactory) -> TestClient:
+    auth_mw.configure_verifier(LocalVerifier())
+    ds_routes.configure_storage_gateway(
+        LocalStorageGateway(str(tmp_path_factory.mktemp("pipeline-storage")))
+    )
+    app = create_app()
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
+
+
+@pytest.fixture(autouse=True)
+def _fresh_identity_cache() -> None:
+    auth_mw.clear_identity_cache()
+
+
+def base(fx: Fixture) -> str:
+    return f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+
+
+def graph(client: TestClient, fx: Fixture, sub: str | None = None) -> dict:
+    r = client.get(f"{base(fx)}/pipeline", headers=hdr(sub or fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def node(g: dict, name: str, kind: str) -> dict:
+    # Kind is required, not a convenience: a model's output dataset is named
+    # after the model, so every chain here has two nodes per name.
+    matches = [n for n in g["nodes"] if n["name"] == name and n["kind"] == kind]
+    assert len(matches) == 1, f"{kind} {name!r} not in {[(n['kind'], n['name']) for n in g['nodes']]}"
+    return matches[0]
+
+
+@pytest.fixture(scope="module")
+def chain(client: TestClient, fx: Fixture) -> dict[str, str]:
+    """source -> A -> A out -> B -> B out. Built through the real API, so
+    the output datasets exist because the models actually ran."""
+    r = client.post(
+        f"{base(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Source {fx.tag}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    source = r.json()["id"]
+
+    r = client.post(
+        f"{base(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"A {fx.tag}", "code": "SELECT id, val * 2 AS doubled FROM raw",
+              "inputs": [{"dataset_id": source, "input_alias": "raw"}]},
+    )
+    assert r.status_code == 201, r.text
+    a = r.json()["id"]
+    r = client.post(f"{base(fx)}/models/{a}/run", headers=hdr(fx.editor_sub))
+    assert r.json()["ok"], r.text
+    a_out = r.json()["output_dataset"]["id"]
+
+    r = client.post(
+        f"{base(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"B {fx.tag}", "code": "SELECT sum(doubled) AS total FROM a",
+              "inputs": [{"dataset_id": a_out, "input_alias": "a"}]},
+    )
+    assert r.status_code == 201, r.text
+    b = r.json()["id"]
+    r = client.post(f"{base(fx)}/models/{b}/run", headers=hdr(fx.editor_sub))
+    assert r.json()["ok"], r.text
+    b_out = r.json()["output_dataset"]["id"]
+
+    return {"source": source, "a": a, "a_out": a_out, "b": b, "b_out": b_out,
+            "a_name": f"A {fx.tag}", "b_name": f"B {fx.tag}",
+            "source_name": f"Source {fx.tag}"}
+
+
+def test_chain_layers_strictly_left_to_right(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    g = graph(client, fx)
+    assert g["cycles"] == []
+    assert g["layer_count"] == 5
+
+    layers = {n["id"]: n["layer"] for n in g["nodes"]}
+    # Every edge must point strictly rightwards - that is the whole promise
+    # the frontend lays out against.
+    for e in g["edges"]:
+        assert layers[e["to"]] > layers[e["from"]], e
+
+    assert node(g, chain["source_name"], "dataset")["layer"] == 0
+    assert node(g, chain["a_name"], "model")["layer"] == 1
+    assert node(g, chain["b_name"], "model")["layer"] == 3
+
+
+def test_nodes_carry_the_state_the_view_renders(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    g = graph(client, fx)
+
+    source = node(g, chain["source_name"], "dataset")
+    assert source["kind"] == "dataset" and source["origin"] == "upload"
+    assert source["row_count"] == 3 and source["current_version"] == 1
+    # Nothing has asked for this dataset's health, so it is not computed
+    # here - one project-wide request must not trigger a DuckDB pass per
+    # dataset (services/pipeline.py's docstring).
+    assert source["health_status"] is None
+
+    a = node(g, chain["a_name"], "model")
+    assert a["kind"] == "model" and a["language"] == "sql"
+    assert a["trigger_mode"] == "manual"
+    assert a["last_run_status"] == "succeeded" and a["last_run_at"] is not None
+    assert a["row_count"] is None, "model nodes carry no dataset fields"
+
+    aliased = [e for e in g["edges"] if e["to"] == a["id"]]
+    assert [e["label"] for e in aliased] == ["raw"]
+
+
+def test_health_appears_once_something_has_evaluated_it(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    r = client.post(
+        f"{base(fx)}/datasets/{chain['source']}/expectations", headers=hdr(fx.editor_sub),
+        json={"column_name": "id", "rule_type": "not_null"},
+    )
+    assert r.status_code == 201, r.text
+    assert client.get(
+        f"{base(fx)}/datasets/{chain['source']}/health", headers=hdr(fx.viewer_sub)
+    ).json()["status"] == "pass"
+
+    assert node(graph(client, fx), chain["source_name"], "dataset")["health_status"] == "pass"
+
+
+def test_closing_a_loop_is_refused_at_save_time(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """Roadmap Models item 7. B reads A's output, so feeding B's output back
+    into A would make A depend on itself two hops away - which migration
+    0021's self-loop guard cannot see, and which re-fires forever under
+    upstream triggers."""
+    r = client.patch(
+        f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.editor_sub),
+        json={"inputs": [{"dataset_id": chain["source"], "input_alias": "raw"},
+                         {"dataset_id": chain["b_out"], "input_alias": "loop"}]},
+    )
+    assert r.status_code == 422, r.text
+    assert "dependency loop" in r.json()["detail"]
+
+    # Refused, not half-applied.
+    r = client.get(f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.viewer_sub))
+    assert [i["input_alias"] for i in r.json()["inputs"]] == ["raw"]
+    assert graph(client, fx)["cycles"] == []
+
+    # A model reading its own output directly is the same refusal.
+    r = client.patch(
+        f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.editor_sub),
+        json={"inputs": [{"dataset_id": chain["a_out"], "input_alias": "self_ref"}]},
+    )
+    assert r.status_code == 422 and "dependency loop" in r.json()["detail"]
+
+    # A sibling reading the same output is not a loop and must still be
+    # allowed - the walk is directional, not "anything already in the graph".
+    r = client.post(
+        f"{base(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"Sibling {fx.tag}", "code": "SELECT count(*) AS n FROM d",
+              "inputs": [{"dataset_id": chain["a_out"], "input_alias": "d"}]},
+    )
+    assert r.status_code == 201, r.text
+    client.delete(f"{base(fx)}/models/{r.json()['id']}", headers=hdr(fx.editor_sub))
+
+
+def test_a_pre_existing_cycle_is_reported_rather_than_hidden(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """Cycles created before the save-time check existed are grandfathered
+    (services/models.py `_refuse_cycles`), so the graph still has to report
+    one. Written straight to the database, which is the only way to get one
+    now - and exactly the state an older deployment can be in."""
+    import psycopg
+    from test_api import ADMIN_DSN
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO model_inputs (model_id, dataset_id, input_alias) VALUES (%s,%s,'loop')",
+            (chain["a"], chain["b_out"]),
+        )
+    try:
+        g = graph(client, fx)
+        assert len(g["cycles"]) == 1, g["cycles"]
+        members = set(g["cycles"][0])
+        assert members == {
+            f"model:{chain['a']}", f"dataset:{chain['a_out']}",
+            f"model:{chain['b']}", f"dataset:{chain['b_out']}",
+        }, members
+        # A cyclic node still lands somewhere sensible rather than vanishing.
+        assert node(g, chain["a_name"], "model")["in_cycle"] is True
+        assert node(g, chain["source_name"], "dataset")["in_cycle"] is False
+        assert all(n["layer"] >= 0 for n in g["nodes"])
+    finally:
+        # Editing your way *out* of a grandfathered cycle must be allowed -
+        # the check validates the proposed set, not the current one.
+        r = client.patch(
+            f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.editor_sub),
+            json={"inputs": [{"dataset_id": chain["source"], "input_alias": "raw"}]},
+        )
+        assert r.status_code == 200, r.text
+    assert graph(client, fx)["cycles"] == []
+
+
+def test_focus_narrows_the_graph_to_one_node_s_lineage(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """Roadmap Datasets item 5. Lineage is the connected component around a
+    node, computed by the same endpoint the whole-project view uses."""
+    # An unrelated dataset in the same project must not appear.
+    r = client.post(
+        f"{base(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Unrelated {fx.tag}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+
+    whole = graph(client, fx)
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=dataset:{chain['a_out']}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    focused = r.json()
+
+    assert len(focused["nodes"]) < len(whole["nodes"])
+    assert {n["name"] for n in focused["nodes"]} == {
+        chain["source_name"], chain["a_name"], chain["b_name"],
+    }, [n["name"] for n in focused["nodes"]]
+
+    # Both directions: what produced it and what reads it.
+    ids = {n["id"] for n in focused["nodes"]}
+    assert f"model:{chain['a']}" in ids and f"model:{chain['b']}" in ids
+    assert f"dataset:{chain['source']}" in ids
+
+    marked = [n for n in focused["nodes"] if n["is_focus"]]
+    assert [n["id"] for n in marked] == [f"dataset:{chain['a_out']}"]
+    assert all(not n["is_focus"] for n in whole["nodes"])
+
+    # It is still a laid-out graph, not just a filtered list.
+    layers = {n["id"]: n["layer"] for n in focused["nodes"]}
+    for e in focused["edges"]:
+        assert layers[e["to"]] > layers[e["from"]], e
+
+
+def test_a_bad_or_unknown_focus_is_refused(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    import uuid as _uuid
+
+    r = client.get(f"{base(fx)}/pipeline?focus=nonsense", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 422
+
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=dataset:{_uuid.uuid4()}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 404, "a node outside this project is not lineage to show"
+
+
+def test_an_empty_project_is_an_empty_graph(client: TestClient, fx: Fixture) -> None:
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Empty {fx.tag}", "slug": f"empty-{fx.tag}"},
+    )
+    assert r.status_code == 201, r.text
+    empty = r.json()["id"]
+    r = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{empty}/pipeline", headers=hdr(fx.owner_sub)
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"nodes": [], "edges": [], "cycles": [], "layer_count": 0}
+
+
+def test_an_outsider_cannot_read_the_graph(client: TestClient, fx: Fixture) -> None:
+    assert client.get(f"{base(fx)}/pipeline", headers=hdr(fx.outsider_sub)).status_code == 404

@@ -33,6 +33,8 @@ from ..services import actions as actions_service
 from ..services import audit
 from ..services import dataset_engine as engine
 from ..services import datasets as dataset_service
+from ..lib.errors import NotFoundError
+from ..services import instance_store
 from ..services import instances as instances_service
 from ..services import ontology as ontology_service
 from ..services.dataset_engine import DatasetEngineError
@@ -208,7 +210,13 @@ async def execute_action(
     async with user_connection(access.auth.user_id) as conn:
         action_type = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
         object_type_id = UUID(str(action_type["object_type_id"]))
-        instance = await instances_service.get(conn, object_type_id, body.instance_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=object_type_id,
+            instance_id=str(body.instance_id),
+        )
+        if instance is None:
+            raise NotFoundError("object instance")
         # 404s if this instance's source isn't a mapping in this project.
         source = await ontology_service.get_source(
             conn, access.project_id, UUID(str(instance["source_id"]))
@@ -265,7 +273,12 @@ async def execute_action(
                 created_by=access.auth.user_id,
             )
             dataset_version = int(updated_dataset["current_version"])
-            await instances_service.update_properties(conn, body.instance_id, body.values)
+            await instance_store.store_for(conn).update_properties(
+                search_prefix=prefix,
+                object_type_id=UUID(str(action_type["object_type_id"])),
+                instance_id=str(body.instance_id),
+                properties=body.values,
+            )
     except DatasetEngineError as exc:
         ok, error = False, str(exc)
 
@@ -273,7 +286,10 @@ async def execute_action(
         await actions_service.close_run(
             conn, run_id, ok=ok, dataset_version=dataset_version, error=error
         )
-        updated_instance = await instances_service.get(conn, object_type_id, body.instance_id)
+        updated_instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=object_type_id,
+            instance_id=str(body.instance_id),
+        ) or instance
         await audit.record(
             conn,
             organisation_id=access.auth.organisation_id,
