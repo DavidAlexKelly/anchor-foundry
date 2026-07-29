@@ -51,6 +51,115 @@ function ScheduleSummary({ model }: { model: Model }) {
   );
 }
 
+function HistoryDialog({
+  workspaceId,
+  projectId,
+  model,
+  canEdit,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  model: Model;
+  canEdit: boolean;
+  onClose: () => void;
+}) {
+  const [open, setOpen] = useState<number | null>(null);
+  const queryClient = useQueryClient();
+  const history = useQuery({
+    queryKey: ["model-versions", model.id],
+    queryFn: () => modelApi.versions(workspaceId, projectId, model.id),
+  });
+  const restore = useMutation({
+    mutationFn: (versionNumber: number) =>
+      modelApi.restoreVersion(workspaceId, projectId, model.id, versionNumber),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["model-versions", model.id] });
+      await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
+    },
+  });
+
+  return (
+    <Dialog open wide title={`${model.name} — history`} onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        Every saved definition, newest first. Restoring writes a new version
+        rather than deleting the ones after it, so the record stays true.
+      </p>
+      {history.isPending && <div className="state">Loading history…</div>}
+      {restore.isError && (
+        <div className="form-error">
+          {restore.error instanceof ApiError ? restore.error.message : "Couldn't restore."}
+        </div>
+      )}
+      <div className="data-grid">
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Saved</th>
+              <th>By</th>
+              <th>Inputs</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {history.data?.map((v, index) => (
+              <tr key={v.id}>
+                <td>
+                  <strong>v{v.version_number}</strong>
+                  {index === 0 && <span className="chip"> current</span>}
+                  {v.restored_from !== null && (
+                    <div className="slug">reverted to v{v.restored_from}</div>
+                  )}
+                </td>
+                <td>{new Date(v.created_at).toLocaleString()}</td>
+                <td className="slug">{v.created_by_email ?? "—"}</td>
+                <td className="slug">
+                  {v.inputs.map((i) => i.input_alias).join(", ") || "none"}
+                </td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      className="btn quiet"
+                      style={{ padding: "3px 9px", fontSize: 12 }}
+                      onClick={() => setOpen(open === v.version_number ? null : v.version_number)}
+                    >
+                      {open === v.version_number ? "Hide" : "Code"}
+                    </button>
+                    {canEdit && index > 0 && (
+                      <button
+                        className="btn quiet"
+                        style={{ padding: "3px 9px", fontSize: 12 }}
+                        disabled={restore.isPending}
+                        onClick={() => restore.mutate(v.version_number)}
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {open !== null && (
+        <pre
+          className="sql-box"
+          style={{ marginTop: 10, whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto" }}
+        >
+          {history.data?.find((v) => v.version_number === open)?.code}
+        </pre>
+      )}
+      <div className="form-actions">
+        <button className="btn quiet" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function ModelDialog({
   workspaceId,
   projectId,
@@ -317,6 +426,7 @@ function ModelRow({
   canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const queryClient = useQueryClient();
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
@@ -395,6 +505,13 @@ function ModelRow({
               Edit
             </button>
             <button
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setShowHistory(true)}
+            >
+              History
+            </button>
+            <button
               className="btn danger"
               style={{ padding: "3px 9px", fontSize: 12 }}
               disabled={remove.isPending}
@@ -407,6 +524,15 @@ function ModelRow({
               Delete
             </button>
           </div>
+        )}
+        {showHistory && (
+          <HistoryDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            model={model}
+            canEdit={canEdit}
+            onClose={() => setShowHistory(false)}
+          />
         )}
         {editing && (
           <ModelDialog

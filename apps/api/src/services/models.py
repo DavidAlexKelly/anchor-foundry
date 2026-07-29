@@ -222,6 +222,136 @@ async def _validate_and_set_inputs(
         )
 
 
+# ---- definition history (migration 0024) ------------------------------------
+_VERSION_COLUMNS = "id, model_id, version_number, code, inputs, restored_from, created_by, created_at"
+
+
+def _inputs_snapshot(inputs: list[dict[str, Any]]) -> str:
+    """The stored form of an input set: dataset ids and aliases only, alias
+    ordered so two saves of the same set compare equal regardless of the
+    order they arrived in."""
+    import json
+
+    return json.dumps(
+        sorted(
+            (
+                {"dataset_id": str(i["dataset_id"]), "input_alias": str(i["input_alias"])}
+                for i in inputs
+            ),
+            key=lambda i: i["input_alias"],
+        )
+    )
+
+
+async def _record_definition(
+    conn: AsyncConnection,
+    model_id: UUID,
+    *,
+    code: str,
+    inputs: list[dict[str, Any]],
+    created_by: UUID,
+    restored_from: int | None = None,
+) -> dict[str, Any]:
+    """Append a definition version. Numbering is max+1 within the model, read
+    in the caller's transaction - two concurrent edits to one model would
+    collide on the (model_id, version_number) unique index rather than
+    silently interleave, which is the failure we want."""
+    row = await fetch_one(
+        conn,
+        f"""
+        INSERT INTO model_versions (model_id, version_number, code, inputs,
+                                    restored_from, created_by)
+        VALUES (:mid,
+                COALESCE((SELECT max(version_number) FROM model_versions
+                           WHERE model_id = :mid), 0) + 1,
+                :code, CAST(:inputs AS jsonb), :restored, :by)
+        RETURNING {_VERSION_COLUMNS}
+        """,
+        {
+            "mid": str(model_id), "code": code, "inputs": _inputs_snapshot(inputs),
+            "restored": restored_from, "by": str(created_by),
+        },
+    )
+    assert row is not None
+    return dict(row)
+
+
+async def list_versions(
+    conn: AsyncConnection, project_id: UUID, model_id: UUID
+) -> list[dict[str, Any]]:
+    await get(conn, project_id, model_id)
+    return await fetch_all(
+        conn,
+        f"""
+        SELECT {_VERSION_COLUMNS},
+               (SELECT u.email FROM users u WHERE u.id = model_versions.created_by)
+                   AS created_by_email
+          FROM model_versions WHERE model_id = :mid
+         ORDER BY version_number DESC
+        """,
+        {"mid": str(model_id)},
+    )
+
+
+async def restore_version(
+    conn: AsyncConnection,
+    project_id: UUID,
+    model_id: UUID,
+    version_number: int,
+    *,
+    restored_by: UUID,
+) -> dict[str, Any]:
+    """Set the model's code and inputs back to an earlier version, and record
+    that as a *new* version rather than rewinding the pointer (migration
+    0024). History stays a true record, and a run stamped with a version
+    still resolves to exactly one piece of code however many times someone
+    has rolled back.
+
+    Restoring goes through the same input validation a normal edit does: the
+    graph may have changed since, so an input set that was legal then can
+    close a dependency loop now, and it must be refused the same way.
+    """
+    await get(conn, project_id, model_id)
+    version = await fetch_one(
+        conn,
+        f"SELECT {_VERSION_COLUMNS} FROM model_versions "
+        "WHERE model_id = :mid AND version_number = :v",
+        {"mid": str(model_id), "v": version_number},
+    )
+    if version is None:
+        raise NotFoundError("model version")
+
+    stored = version["inputs"]
+    if isinstance(stored, str):
+        import json
+
+        stored = json.loads(stored)
+    inputs = [dict(i) for i in (stored or [])]
+
+    await _validate_and_set_inputs(conn, model_id, project_id, inputs)
+    row = await fetch_one(
+        conn,
+        f"UPDATE models SET code = :code WHERE id = :mid RETURNING {_COLUMNS}",
+        {"code": version["code"], "mid": str(model_id)},
+    )
+    assert row is not None
+    await _record_definition(
+        conn, model_id, code=str(version["code"]), inputs=inputs,
+        created_by=restored_by, restored_from=version_number,
+    )
+    return dict(row)
+
+
+async def current_version_id(conn: AsyncConnection, model_id: UUID) -> UUID | None:
+    row = await fetch_one(
+        conn,
+        "SELECT id FROM model_versions WHERE model_id = :mid "
+        "ORDER BY version_number DESC LIMIT 1",
+        {"mid": str(model_id)},
+    )
+    return None if row is None else UUID(str(row["id"]))
+
+
 async def create(
     conn: AsyncConnection,
     *,
@@ -257,7 +387,15 @@ async def create(
         },
     )
     assert row is not None
-    await _validate_and_set_inputs(conn, UUID(str(row["id"])), project_id, inputs)
+    model_id = UUID(str(row["id"]))
+    await _validate_and_set_inputs(conn, model_id, project_id, inputs)
+    # Version 1 exists from the moment the model does, so "every model has at
+    # least one definition version" holds everywhere and no read path has to
+    # special-case an empty history (migration 0024 backfilled the same
+    # invariant onto every model that predates it).
+    await _record_definition(
+        conn, model_id, code=code, inputs=inputs, created_by=created_by
+    )
     return dict(row)
 
 
@@ -273,8 +411,10 @@ async def update(
     trigger_mode: str | None = None,
     cron_schedule: str | None = None,
     input_health_policy: str | None = None,
+    updated_by: UUID,
 ) -> dict[str, Any]:
-    await get(conn, project_id, model_id)
+    before = await get(conn, project_id, model_id)
+    before_inputs = await list_inputs(conn, model_id)
     if trigger_mode == "cron":
         if not cron_schedule:
             raise ValueError("cron_schedule is required when trigger_mode is 'cron'")
@@ -317,6 +457,27 @@ async def update(
     assert row is not None
     if inputs is not None:
         await _validate_and_set_inputs(conn, model_id, project_id, inputs)
+
+    # Only a change to what the model *computes* makes a new version. Trigger
+    # mode, schedule, health policy, name and description are how and when it
+    # runs, and versioning those would fill the history with entries nobody
+    # would ever roll back to (migration 0024).
+    effective_inputs = inputs if inputs is not None else [
+        {"dataset_id": i["dataset_id"], "input_alias": i["input_alias"]}
+        for i in before_inputs
+    ]
+    if str(row["code"]) != str(before["code"]) or (
+        inputs is not None
+        and _inputs_snapshot(effective_inputs) != _inputs_snapshot([
+            {"dataset_id": i["dataset_id"], "input_alias": i["input_alias"]}
+            for i in before_inputs
+        ])
+    ):
+        await _record_definition(
+            conn, model_id, code=str(row["code"]), inputs=effective_inputs,
+            created_by=updated_by,
+        )
+
     if row["trigger_mode"] == "upstream" and not await list_inputs(conn, model_id):
         # Checked after the input replacement above, so a single PATCH may set
         # the mode and the inputs together. An upstream model with no inputs
@@ -429,12 +590,13 @@ async def open_run(
         conn,
         """
         INSERT INTO model_runs (model_id, status, triggered_by, trigger_kind,
-                                started_at, input_health)
-        VALUES (:mid, 'running', :by, 'manual', now(), CAST(:health AS jsonb))
+                                started_at, input_health, model_version)
+        VALUES (:mid, 'running', :by, 'manual', now(), CAST(:health AS jsonb), :ver)
         RETURNING id
         """,
         {"mid": str(model_id), "by": str(triggered_by),
-         "health": _json_or_null(input_health)},
+         "health": _json_or_null(input_health),
+         "ver": str(await current_version_id(conn, model_id) or "") or None},
     )
     assert row is not None
     return UUID(str(row["id"]))
@@ -451,12 +613,14 @@ async def open_queued_run(
     row = await fetch_one(
         conn,
         """
-        INSERT INTO model_runs (model_id, triggered_by, trigger_kind, input_health)
-        VALUES (:mid, :by, 'manual', CAST(:health AS jsonb))
+        INSERT INTO model_runs (model_id, triggered_by, trigger_kind, input_health,
+                                model_version)
+        VALUES (:mid, :by, 'manual', CAST(:health AS jsonb), :ver)
         RETURNING id
         """,
         {"mid": str(model_id), "by": str(triggered_by),
-         "health": _json_or_null(input_health)},
+         "health": _json_or_null(input_health),
+         "ver": str(await current_version_id(conn, model_id) or "") or None},
     )
     assert row is not None
     return UUID(str(row["id"]))
@@ -495,7 +659,8 @@ async def list_runs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, Any
         conn,
         """
         SELECT id, status, trigger_kind, queued_at, started_at, finished_at,
-               rows_produced, error_message, output_version, input_health
+               rows_produced, error_message, output_version, input_health,
+               model_version
           FROM model_runs
          WHERE model_id = :mid
          ORDER BY queued_at DESC

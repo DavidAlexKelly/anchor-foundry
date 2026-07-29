@@ -469,6 +469,23 @@ export interface ModelRun {
   output_version: string | null;
   /** Null when the run was not gated (the model's policy was 'ignore'). */
   input_health: RunInputHealth[] | null;
+  /** The definition this run executed (migration 0024). Null for runs that
+   *  predate it — unknown, not v1. */
+  model_version: string | null;
+}
+
+/** One entry in a model's definition history. Append-only: restoring an
+ *  earlier version writes a new one rather than rewinding. */
+export interface ModelVersion {
+  id: string;
+  model_id: string;
+  version_number: number;
+  code: string;
+  inputs: { dataset_id: string; input_alias: string }[];
+  /** Set when this version was created by restoring an earlier one. */
+  restored_from: number | null;
+  created_by_email: string | null;
+  created_at: string;
 }
 
 export interface ModelRunResult {

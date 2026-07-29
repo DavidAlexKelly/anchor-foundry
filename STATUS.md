@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3; Models 1–3, 7 — see §21–§31). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3; Models 1–3, 5, 7 — see §21–§32). Test counts below are from the last full regression run.
 
 ---
 
@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app - synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0023) + migration runner
+│   ├── db/              SQL migrations (0001–0024) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0023)
+### 1. Database schema (migrations 0001–0024)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -54,7 +54,7 @@ Upload (CSV/TSV/Parquet/JSON/JSONL → canonical Parquet via DuckDB), preview, *
 Full-snapshot sync of a source table into the datasets layer, creating or versioning a dataset each run, with a `sync_runs` history table. Wrong passwords, missing tables, and injection-shaped identifiers all fail cleanly rather than 500ing or leaking anything.
 
 ### 9. Models - tests included in the total below
-SQL transforms over one or more datasets, executed through the same DuckDB sandbox, writing a versioned output dataset. Run history is honest (failed runs show the real DB error; successful runs point at the exact dataset version they produced). **Lineage**: walks the dataset↔model graph in both directions and renders it as Mermaid, per spec — that is the single-node view; §28 adds the whole-project one beside it.
+SQL transforms over one or more datasets, executed through the same DuckDB sandbox, writing a versioned output dataset. Run history is honest (failed runs show the real DB error; successful runs point at the exact dataset version they produced — and, since §32, at the exact definition that produced it). **Lineage**: walks the dataset↔model graph in both directions and renders it as Mermaid, per spec — that is the single-node view; §28 adds the whole-project one beside it.
 
 ### 10. Objects / ontology - 19/19 tests (part of the 102 below)
 `ontology.py`'s service layer wired into routes (`routes/objects.py`): object types + typed properties and link types (workspace-scoped - the ontology is shared across every project in a workspace), object type sources (project-scoped dataset→type mapping, column-level validation against both the dataset's schema and the type's properties), and the auto-suggestion endpoint (infers a type name, properties, primary key, and title property from a dataset's schema). Delete cascades (type → its link types and sources) rely on the schema's `ON DELETE CASCADE`, matching how the rest of the hierarchy behaves. Role floors are conservative and flagged in the routes module docstring: workspace viewer reads everything; workspace editor+ creates/deletes types and link types (same floor already used for "who can create a project"); project editor+ creates/deletes dataset mappings; suggestion is viewer-level like dataset preview/query since it's read-only.
@@ -452,6 +452,28 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Testing.** `apps/api/tests/test_schema_policy.py` (8) driven through a model's output dataset, because that is the only way to produce a *second* version of a dataset through the public API — re-uploading under the same name is a 409 — and it is also the case that matters. Covers the permissive default, removal and retype refused, addition allowed, the refused version not rolling `current_version`, the run recorded `failed`, the permissive escape hatch and the new shape becoming the baseline afterwards, strict never blocking a first version, an unknown policy at 422, and a viewer refused. `apps/worker/tests/test_model_runs.py` (+1) covers the automated path and the batch isolation. Verified in a browser: set a model's output dataset to strict from the Columns tab, re-ran the model with a narrower query, and read back `columns removed: val - set this dataset's schema policy to permissive to allow it`, with the dataset still at v1.
 
 **Current totals: API 252/252** (243 + 9), **worker 49/49** (48 + 1), **control-plane 13/13** (untouched).
+
+---
+
+### 32. Model definition history (this session)
+
+`ROADMAP.md` Models item 5. The asymmetry it names has been in the schema since 0003 and got worse with every step this branch added: `model_runs.output_version` points at the exact dataset version each run produced, so run history is auditable against *data* — but nothing recorded the *code*. Editing a model overwrote its source in place, so "which query produced this number?" was unanswerable for any run older than the last edit. Since §27 a bad edit also propagates to every downstream dataset on the next worker pass, unapproved.
+
+**`model_versions`** (migration 0024): an append-only table of numbered snapshots, the same shape as dataset versioning, with the live `models.code` still holding the current one — nothing about the current-state read path changed. The migration backfills a v1 for every existing model, so "every model has at least one version" holds from that moment and no read path has to special-case an empty history.
+
+**Rollback appends, it does not rewind.** Restoring v2 writes a new v5 whose content equals v2's. History then records that somebody reverted, rather than erasing the thing being reverted from, and a run stamped with a version still resolves to exactly one piece of code — rewinding would make `model_runs.model_version` ambiguous the moment anyone rolled back twice. A test asserts the version being rolled back *from* survives the rollback.
+
+**A version snapshots the code and the inputs together.** Aliases are half the contract: restoring code that says `FROM orders` into a model whose inputs were since renamed would restore something that cannot run. The inputs are copied into jsonb rather than referenced through `model_inputs`, for the same reason §29 stores what the gate saw on the run — a history record must not change when the live state does. Restoring goes through the same input validation an ordinary edit does, so a set that was legal then and closes a dependency loop now (§30) is refused the same way.
+
+**Where the line is drawn.** Trigger mode, cron schedule, input health policy, name and description are explicitly *not* definition changes: they are how and when a model runs, not what it computes, and versioning them would fill the history with entries nobody would ever roll back to. Saving identical code is also not a change. `language` is immutable after creation, so it needs no version of its own. There is a test for each half of that boundary.
+
+**The run stamp is read at execution, not enqueue.** `model_runs.model_version` is set by the worker when it picks a run up, because the code that actually runs is the code read then — a model edited between enqueue and execution runs the new one, and the record has to say so. Runs that predate the migration are `NULL`: genuinely unknown, and pointing them at the backfilled v1 would claim knowledge the platform does not have.
+
+**Not built, deliberately:** a side-by-side diff. It needs either a dependency or a hand-rolled LCS, and the versions are stored, so it can be added later without a schema change. The history dialog expands any version's code instead.
+
+**Testing.** `apps/api/tests/test_model_versions.py` (9): the v1-on-creation invariant, appends on code and input edits, the four non-definition changes that must *not* append, identical code not appending, restore-appends-rather-than-rewinds, inputs restored with the code and the model still running afterwards, two runs carrying two different definitions, a missing version at 404, and the viewer/editor floors. `apps/worker/tests/test_model_runs.py` (+1) covers the edited-between-enqueue-and-execution case directly. Verified in a browser: opened History on a model with a bad second version, expanded v1's code, restored it, and watched v3 appear labelled "reverted to v1" with v2 still in the list — then ran the model and confirmed the new run is stamped v3.
+
+**Current totals: API 261/261** (252 + 9), **worker 50/50** (49 + 1), **control-plane 13/13** (untouched).
 
 ---
 

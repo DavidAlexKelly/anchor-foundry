@@ -528,6 +528,38 @@ def test_a_strict_output_dataset_fails_the_run_rather_than_the_batch(workspace: 
     assert version == 1, "the refused version must not have rolled current_version"
 
 
+def test_a_worker_run_stamps_the_definition_it_executed(workspace: dict) -> None:
+    """Migration 0024. Read at execution rather than enqueue time on purpose:
+    a model edited between the two runs the *new* code, and the run record
+    has to say which one it actually ran."""
+    mid = _create_model(workspace, language="sql", code="SELECT * FROM t")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        v1 = conn.execute(
+            """INSERT INTO model_versions (model_id, version_number, code)
+               VALUES (%s, 1, 'SELECT * FROM t') RETURNING id""",
+            (mid,),
+        ).fetchone()[0]
+    run_id = _queue_run(mid)
+
+    # Edited after the run was queued, before the worker picks it up.
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        v2 = conn.execute(
+            """INSERT INTO model_versions (model_id, version_number, code)
+               VALUES (%s, 2, 'SELECT id FROM t') RETURNING id""",
+            (mid,),
+        ).fetchone()[0]
+        conn.execute("UPDATE models SET code = 'SELECT id FROM t' WHERE id = %s", (mid,))
+
+    run_model_runs(_ctx())
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        status, stamped = conn.execute(
+            "SELECT status, model_version FROM model_runs WHERE id = %s", (run_id,)
+        ).fetchone()
+    assert status == "succeeded"
+    assert stamped == v2 and stamped != v1, "the version actually executed, not the queued one"
+
+
 def test_manual_trigger_model_is_not_auto_enqueued(workspace: dict) -> None:
     mid = _create_model(workspace, language="sql", code="SELECT * FROM t", trigger_mode="manual")
     run_model_runs(_ctx())

@@ -357,6 +357,15 @@ export const models = {
     ),
   remove: (wid: string, pid: string, mid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, { method: "DELETE" }),
+  versions: (wid: string, pid: string, mid: string) =>
+    request<import("./types").ModelVersion[]>(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/versions`,
+    ),
+  restoreVersion: (wid: string, pid: string, mid: string, versionNumber: number) =>
+    request<import("./types").Model>(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/versions/${versionNumber}/restore`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   /** The whole project as one graph — datasets and models together, already
    *  laid out by the API (see apps/api/src/services/pipeline.py). */
   pipeline: (wid: string, pid: string) =>

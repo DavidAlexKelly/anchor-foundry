@@ -355,9 +355,21 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                     executed += 1
                     continue
 
+                # Stamp the definition this run is about to execute
+                # (migration 0024). Read here rather than at enqueue time
+                # because the code that actually runs is the code read now -
+                # a model edited between enqueue and execution runs the new
+                # one, and the run record has to say so.
                 cur.execute(
-                    "UPDATE model_runs SET status = 'running', started_at = now() WHERE id = %s",
-                    (run_id,),
+                    """
+                    UPDATE model_runs
+                       SET status = 'running', started_at = now(),
+                           model_version = (SELECT id FROM model_versions
+                                             WHERE model_id = %s
+                                             ORDER BY version_number DESC LIMIT 1)
+                     WHERE id = %s
+                    """,
+                    (model_id, run_id),
                 )
                 cur.execute(
                     """

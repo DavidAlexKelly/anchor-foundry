@@ -112,9 +112,25 @@ class RunOut(BaseModel):
     rows_produced: int | None
     error_message: str | None
     output_version: UUID | None
+    # The definition this run executed (migration 0024). NULL for runs that
+    # predate it - unknown, not v1.
+    model_version: UUID | None = None
     # What the gate saw per input, captured at run time; NULL when the run
     # was not gated (migration 0022).
     input_health: list[dict[str, Any]] | None = None
+
+
+class ModelVersionOut(BaseModel):
+    id: UUID
+    model_id: UUID
+    version_number: int
+    code: str
+    inputs: list[dict[str, str]]
+    # Set when this version was made by restoring an earlier one, so the
+    # history reads "reverted to v2" rather than showing old code reappearing.
+    restored_from: int | None
+    created_by_email: str | None = None
+    created_at: datetime
 
 
 class RunResult(BaseModel):
@@ -124,6 +140,19 @@ class RunResult(BaseModel):
     error: str | None
     rows_produced: int
     output_dataset: dict[str, Any] | None
+
+
+def _version_out(row: dict[str, Any]) -> dict[str, Any]:
+    data = dict(row)
+    if isinstance(data.get("inputs"), str):
+        import json
+
+        data["inputs"] = json.loads(data["inputs"])
+    data["inputs"] = [
+        {"dataset_id": str(i["dataset_id"]), "input_alias": str(i["input_alias"])}
+        for i in (data.get("inputs") or [])
+    ]
+    return data
 
 
 async def _with_inputs(conn, row: dict[str, Any]) -> ModelOut:
@@ -202,6 +231,7 @@ async def update_model(
             trigger_mode=body.trigger_mode,
             cron_schedule=body.cron_schedule,
             input_health_policy=body.input_health_policy,
+            updated_by=access.auth.user_id,
         )
         await audit.record(
             conn,
@@ -384,6 +414,49 @@ async def run_model(
         rows_produced=rows_produced if ok else 0,
         output_dataset=output_dataset,
     )
+
+
+@router.get("/{model_id}/versions", response_model=list[ModelVersionOut])
+async def list_model_versions(
+    model_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[ModelVersionOut]:
+    """Every definition this model has had, newest first. Viewer level, like
+    run history - it exposes nothing a viewer cannot already read off the
+    model itself."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await model_service.list_versions(conn, access.project_id, model_id)
+    return [ModelVersionOut(**_version_out(r)) for r in rows]
+
+
+@router.post("/{model_id}/versions/{version_number}/restore", response_model=ModelOut)
+async def restore_model_version(
+    model_id: UUID,
+    version_number: int,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ModelOut:
+    """Put the model's code and inputs back to an earlier version. Recorded
+    as a new version rather than a rewind - see services/models.py."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await model_service.restore_version(
+            conn, access.project_id, model_id, version_number,
+            restored_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="model.restore_version",
+            resource_type="model",
+            resource_id=model_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"restored_from": version_number},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        return await _with_inputs(conn, row)
 
 
 @router.get("/{model_id}/runs", response_model=list[RunOut])
