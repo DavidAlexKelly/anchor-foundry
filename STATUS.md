@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–2; Models 1 — see §21–§27). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–2; Models 1–2 — see §21–§28). Test counts below are from the last full regression run.
 
 ---
 
@@ -54,7 +54,7 @@ Upload (CSV/TSV/Parquet/JSON/JSONL → canonical Parquet via DuckDB), preview, *
 Full-snapshot sync of a source table into the datasets layer, creating or versioning a dataset each run, with a `sync_runs` history table. Wrong passwords, missing tables, and injection-shaped identifiers all fail cleanly rather than 500ing or leaking anything.
 
 ### 9. Models - tests included in the total below
-SQL transforms over one or more datasets, executed through the same DuckDB sandbox, writing a versioned output dataset. Run history is honest (failed runs show the real DB error; successful runs point at the exact dataset version they produced). **Lineage**: walks the dataset↔model graph in both directions and renders it as Mermaid, per spec.
+SQL transforms over one or more datasets, executed through the same DuckDB sandbox, writing a versioned output dataset. Run history is honest (failed runs show the real DB error; successful runs point at the exact dataset version they produced). **Lineage**: walks the dataset↔model graph in both directions and renders it as Mermaid, per spec — that is the single-node view; §28 adds the whole-project one beside it.
 
 ### 10. Objects / ontology - 19/19 tests (part of the 102 below)
 `ontology.py`'s service layer wired into routes (`routes/objects.py`): object types + typed properties and link types (workspace-scoped - the ontology is shared across every project in a workspace), object type sources (project-scoped dataset→type mapping, column-level validation against both the dataset's schema and the type's properties), and the auto-suggestion endpoint (infers a type name, properties, primary key, and title property from a dataset's schema). Delete cascades (type → its link types and sources) rely on the schema's `ON DELETE CASCADE`, matching how the rest of the hierarchy behaves. Role floors are conservative and flagged in the routes module docstring: workspace viewer reads everything; workspace editor+ creates/deletes types and link types (same floor already used for "who can create a project"); project editor+ creates/deletes dataset mappings; suggestion is viewer-level like dataset preview/query since it's read-only.
@@ -372,6 +372,28 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Testing.** `apps/worker/tests/test_model_runs.py` (+5) against real Postgres and real Parquet: firing on a new version, not re-firing without one then re-firing when one lands, the self-loop guard, coalescing while a run is in flight, and a genuine two-model chain asserting B fires on the pass *after* A's run commits and that A does not re-fire on its own output. `apps/api/tests/test_models.py` (+1) covers the no-inputs refusal (including that the rejected PATCH rolls back), setting mode and inputs in one request, and the watermark reset. Verified end to end in a browser: switched two chained models to "When inputs change", then ran four worker passes — both caught up on pass 1, B ran again on pass 2 for the version A's pass-1 run produced, pass 3 was quiet, and a manual run of A pulled B along on pass 4.
 
 **Current totals: API 231/231** (230 + 1), **worker 42/42** (37 + 5), **control-plane 13/13** (untouched).
+
+---
+
+### 28. The pipeline graph (this session)
+
+`ROADMAP.md` Models item 2 — which that document calls "the single biggest visible Foundry-parity win in this pillar", and the item three other roadmap entries were deferring a real graph problem to. It follows §27 directly: upstream triggers made pipelines possible, and this is the first thing in the product that can *show* one.
+
+**A different question from lineage, so a different endpoint.** `lineage_for_dataset` walks outward from one node and renders Mermaid — the right tool for "what touches this dataset". `GET .../pipeline` answers "what does this whole project look like", every dataset and model at once with each model's last-run state on it. Adding a flag to the walk would have made one function answer two questions badly.
+
+**The layout is computed on the server, and that is the load-bearing decision.** Each node comes back with a `layer` (longest-path layering via Kahn's algorithm) and a `position` within it, so the browser lays a DAG out with arithmetic and SVG beziers instead of a graph-layout library. The roadmap said to "build it on the same graph-rendering choice as Datasets item 5"; the choice turned out to be **no library at all**. Two reasons, in order of weight: the graph logic then lives somewhere it can be tested against real rows in pytest rather than only by driving a browser, and a real dependency stays out of the web app for graphs that are project-sized. A test asserts the property the frontend actually relies on — *every* edge points from a lower layer to a higher one — rather than checking specific coordinates.
+
+**Cycle detection, which migration 0021 explicitly deferred here.** Layering and cycle detection are the same traversal: whatever still has unsatisfied inputs when Kahn's queue drains cannot be ordered. Those nodes are grouped by reachability (so two independent loops report as two cycles, not one blob), given a layer past their placed inputs so they still draw somewhere sensible instead of vanishing, and returned in `cycles`. The page draws them in the danger colour with an "in a cycle" label and a banner naming the actual consequence: a model in a loop set to run on new input data re-triggers itself indefinitely. **Detecting is not preventing** — the platform still lets a cycle be *created*, because refusing an edit is a separate decision about what an existing model edit is allowed to do. That is now Models item 7 rather than something smuggled in here.
+
+**Nothing is computed that isn't already stored.** Dataset health (§26) is read from the cached column only, never evaluated: this is one request for a whole project, and computing expectations per dataset would turn a page load into a DuckDB pass per node. A dataset nobody has opened reports `null` health rather than a number bought at that price. There is a test for both halves — absent before anything evaluates it, present after.
+
+**Frontend.** A project-level `Pipeline` page, in the sidebar beside Overview rather than in the resource list (both are whole-project views, and the pipeline has no count of its own). Nodes are colour-keyed on the left edge by last-run status for models and health for datasets, with drag-to-pan, zoom controls, and click-to-select revealing a detail bar with a jump through to that resource's own page. Edges highlight when either end is selected — the cheapest way to read "what feeds this" on a dense graph.
+
+**Testing.** `apps/api/tests/test_pipeline.py` (6) in its own project, deliberately: the endpoint returns *everything* in a project, so sharing a fixture with tests that create models would make the assertions depend on test order. Covers the layering invariant, the fields the view renders, lazily-cached health appearing only once something has evaluated it, a real cycle built through the API (feed the second model's output back into the first) asserting the exact membership, the empty project, and outsider access. Verified in a browser: built a four-node chain plus a never-run model, checked all five edges drew, selected a node and read its detail bar, exercised zoom, then closed the loop and watched the cycle banner and red nodes appear.
+
+**One thing the screenshots make obvious and this does not fix:** a model's output dataset is named after the model, so a chain reads "Double → Double". That is existing behaviour from the models layer, not the graph's doing, and renaming outputs is a product decision for the Models pillar rather than a change to make while drawing them.
+
+**Current totals: API 237/237** (231 + 6), **worker 42/42**, **control-plane 13/13** (both untouched).
 
 ---
 

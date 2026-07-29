@@ -342,6 +342,10 @@ export const models = {
     ),
   remove: (wid: string, pid: string, mid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, { method: "DELETE" }),
+  /** The whole project as one graph — datasets and models together, already
+   *  laid out by the API (see apps/api/src/services/pipeline.py). */
+  pipeline: (wid: string, pid: string) =>
+    request<import("./types").PipelineGraph>(`/workspaces/${wid}/projects/${pid}/pipeline`),
 };
 
 export interface PropertyInput {

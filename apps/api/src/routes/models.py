@@ -27,10 +27,18 @@ from ..services import audit
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import models as model_service
+from ..services import pipeline as pipeline_service
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/models",
+    tags=["models"],
+)
+# The pipeline graph spans datasets and models, so it hangs off the project
+# rather than either resource - the same shape objects.py/actions.py already
+# use for their project-scoped routes.
+project_router = APIRouter(
+    prefix="/workspaces/{workspace_id}/projects/{project_id}",
     tags=["models"],
 )
 
@@ -343,3 +351,50 @@ async def run_history(
         await model_service.get(conn, access.project_id, model_id)
         rows = await model_service.list_runs(conn, model_id)
     return [RunOut(**r) for r in rows]
+
+
+# ---- pipeline graph (ROADMAP Models item 2) ---------------------------------
+class GraphNode(BaseModel):
+    id: str                       # "dataset:<uuid>" / "model:<uuid>"
+    kind: str                     # 'dataset' | 'model'
+    resource_id: UUID
+    name: str
+    layer: int                    # distance downstream; every edge points right
+    position: int                 # index within the layer, name-ordered
+    in_cycle: bool
+    slug: str | None = None
+    origin: str | None = None
+    row_count: int | None = None
+    current_version: int | None = None
+    health_status: str | None = None
+    language: str | None = None
+    trigger_mode: str | None = None
+    last_run_status: str | None = None
+    last_run_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class GraphEdge(BaseModel):
+    from_: str = Field(alias="from")
+    to: str
+    label: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class PipelineGraph(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+    cycles: list[list[str]]
+    layer_count: int
+
+
+@project_router.get("/pipeline", response_model=PipelineGraph)
+async def pipeline_graph(
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> PipelineGraph:
+    """Every dataset and model in the project as one laid-out graph. Viewer
+    level, like the other read surfaces - it exposes nothing a viewer can't
+    already list one resource at a time."""
+    async with user_connection(access.auth.user_id) as conn:
+        return PipelineGraph(**await pipeline_service.project_graph(conn, access.project_id))

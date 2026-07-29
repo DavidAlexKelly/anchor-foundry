@@ -403,6 +403,46 @@ export interface Model {
   updated_at: string;
 }
 
+/** One node in a project's pipeline graph. Dataset-only and model-only
+ *  fields are both nullable rather than split into a union, so the view can
+ *  map over `nodes` without narrowing on every access. */
+export interface PipelineNode {
+  id: string;                 // "dataset:<uuid>" | "model:<uuid>"
+  kind: "dataset" | "model";
+  resource_id: string;
+  name: string;
+  /** Distance downstream; every edge points from a lower layer to a higher one. */
+  layer: number;
+  /** Index within the layer, name-ordered and stable across requests. */
+  position: number;
+  in_cycle: boolean;
+  slug: string | null;
+  origin: string | null;
+  row_count: number | null;
+  current_version: number | null;
+  health_status: string | null;
+  language: string | null;
+  trigger_mode: string | null;
+  last_run_status: string | null;
+  last_run_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PipelineEdge {
+  from: string;
+  to: string;
+  /** The model's input alias, on dataset → model edges only. */
+  label: string | null;
+}
+
+export interface PipelineGraph {
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
+  /** Node ids grouped per cycle; empty when the graph is a clean DAG. */
+  cycles: string[][];
+  layer_count: number;
+}
+
 export interface ModelRun {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";

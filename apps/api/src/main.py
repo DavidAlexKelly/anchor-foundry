@@ -121,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(connection_routes.router, prefix=prefix)
     app.include_router(dataset_routes.router, prefix=prefix)
     app.include_router(model_routes.router, prefix=prefix)
+    app.include_router(model_routes.project_router, prefix=prefix)
     app.include_router(object_routes.router, prefix=prefix)
     app.include_router(object_routes.project_router, prefix=prefix)
     app.include_router(action_routes.router, prefix=prefix)
