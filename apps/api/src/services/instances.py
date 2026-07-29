@@ -246,3 +246,49 @@ async def search(
         {k: v for k, v in params.items() if k not in ("limit", "offset")},
     )
     return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0
+
+
+async def find_by_property(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    property_name: str | None,
+    key: str,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Exact-equality lookup, Postgres edition: the far end of a link
+    traversal (roadmap Objects item 3). ``property_name=None`` means the
+    primary key. ``key`` is already the text form (instance_store.join_key).
+
+    ``jsonb_extract_path_text`` rather than ``properties ->> :prop``: the
+    function form takes the property name as an ordinary bind parameter, so a
+    property named by the user is never concatenated into SQL. The comparison
+    is text-to-text, matching what join_key promises.
+    """
+    if property_name is None:
+        predicate = "i.primary_key = :key"
+        params: dict[str, Any] = {"key": key}
+    else:
+        predicate = "jsonb_extract_path_text(i.properties, :prop) = :key"
+        params = {"prop": property_name, "key": key}
+    params.update({"tid": str(object_type_id)})
+
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
+          FROM object_instances i
+         WHERE i.object_type_id = :tid AND {predicate}
+         ORDER BY i.primary_key
+         LIMIT :limit OFFSET :offset
+        """,
+        {**params, "limit": max(1, min(limit, INSTANCE_PAGE_SIZE)), "offset": max(0, offset)},
+    )
+    total_row = await fetch_one(
+        conn,
+        f"SELECT count(*) AS n FROM object_instances i "
+        f"WHERE i.object_type_id = :tid AND {predicate}",
+        params,
+    )
+    return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0

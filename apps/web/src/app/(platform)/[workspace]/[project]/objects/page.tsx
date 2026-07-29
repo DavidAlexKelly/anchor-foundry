@@ -12,16 +12,18 @@ import {
   type PropertyInput,
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
+import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type {
-  ActionType,
-  Dataset,
-  LinkCardinality,
-  LinkType,
-  ObjectTypeSource,
-  ObjectTypeSummary,
-  ObjectTypeSuggestion,
-  PropertyDataType,
+import {
+  PRIMARY_KEY_REF,
+  type ActionType,
+  type Dataset,
+  type LinkCardinality,
+  type LinkType,
+  type ObjectTypeSource,
+  type ObjectTypeSummary,
+  type ObjectTypeSuggestion,
+  type PropertyDataType,
 } from "@/lib/types";
 
 const PROPERTY_TYPES: PropertyDataType[] = [
@@ -333,6 +335,49 @@ function SuggestDialog({
 }
 
 // ---- link types -------------------------------------------------------------
+/** Picks the property one end of a link joins on. The primary key is offered
+ * first because it is what the far end of a foreign key nearly always is, and
+ * it is not one of the type's properties, so nothing else would list it. */
+function JoinPropertyField({
+  label,
+  workspaceId,
+  typeId,
+  value,
+  onChange,
+}: {
+  label: string;
+  workspaceId: string;
+  typeId: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId),
+    enabled: !!typeId,
+  });
+  return (
+    <Field label={label}>
+      <select value={value} onChange={(e) => onChange(e.target.value)} disabled={!typeId}>
+        <option value="">Not set</option>
+        <option value={PRIMARY_KEY_REF}>Primary key</option>
+        {(type.data?.properties ?? []).map((p) => (
+          <option key={p.api_name} value={p.api_name}>
+            {p.display_name || p.api_name}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
+function joinLabel(property: string): string {
+  return property === PRIMARY_KEY_REF ? "primary key" : property;
+}
+
+const JOIN_HINT =
+  "Instances are linked by matching these two values - a foreign key, in the data the objects were synced from. Leave unset to define the relationship without making it traversable yet.";
+
 function LinkTypeDialog({
   workspaceId,
   types,
@@ -346,6 +391,8 @@ function LinkTypeDialog({
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [cardinality, setCardinality] = useState<LinkCardinality>("one_to_many");
+  const [fromProperty, setFromProperty] = useState("");
+  const [toProperty, setToProperty] = useState("");
   const queryClient = useQueryClient();
 
   const create = useMutation({
@@ -356,12 +403,18 @@ function LinkTypeDialog({
         from_type_id: fromId,
         to_type_id: toId,
         cardinality,
+        from_property: fromProperty || null,
+        to_property: toProperty || null,
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
       onClose();
     },
   });
+
+  // Both ends or neither: half a join cannot answer a question, and the API
+  // refuses it, so the form does too rather than sending it to be rejected.
+  const halfJoin = !fromProperty !== !toProperty;
 
   return (
     <Dialog open title="New link type" onClose={onClose}>
@@ -370,13 +423,21 @@ function LinkTypeDialog({
           <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={200} autoFocus />
         </Field>
         <Field label="From">
-          <select value={fromId} onChange={(e) => setFromId(e.target.value)} required>
+          <select
+            value={fromId}
+            onChange={(e) => { setFromId(e.target.value); setFromProperty(""); }}
+            required
+          >
             <option value="">Choose a type…</option>
             {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
           </select>
         </Field>
         <Field label="To">
-          <select value={toId} onChange={(e) => setToId(e.target.value)} required>
+          <select
+            value={toId}
+            onChange={(e) => { setToId(e.target.value); setToProperty(""); }}
+            required
+          >
             <option value="">Choose a type…</option>
             {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
           </select>
@@ -386,6 +447,24 @@ function LinkTypeDialog({
             {CARDINALITIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
+        <JoinPropertyField
+          label="Join on (from)"
+          workspaceId={workspaceId}
+          typeId={fromId}
+          value={fromProperty}
+          onChange={setFromProperty}
+        />
+        <JoinPropertyField
+          label="Join on (to)"
+          workspaceId={workspaceId}
+          typeId={toId}
+          value={toProperty}
+          onChange={setToProperty}
+        />
+        <p className="login-note" style={{ marginTop: 0 }}>{JOIN_HINT}</p>
+        {halfJoin && (
+          <div className="form-error">Set the property on both ends, or on neither.</div>
+        )}
         {create.isError && (
           <div className="form-error">
             {create.error instanceof ApiError ? create.error.message : "Couldn't create the link type."}
@@ -393,8 +472,77 @@ function LinkTypeDialog({
         )}
         <div className="form-actions">
           <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn" disabled={create.isPending || !displayName.trim() || !fromId || !toId}>
+          <button type="submit" className="btn" disabled={create.isPending || !displayName.trim() || !fromId || !toId || halfJoin}>
             {create.isPending ? "Creating…" : "Create link type"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+/** Maps (or clears) the join on a link type that already exists - the upgrade
+ * path for every link defined before joins existed. */
+function LinkJoinDialog({
+  workspaceId,
+  link,
+  onClose,
+}: {
+  workspaceId: string;
+  link: LinkType;
+  onClose: () => void;
+}) {
+  const [fromProperty, setFromProperty] = useState(link.from_property ?? "");
+  const [toProperty, setToProperty] = useState(link.to_property ?? "");
+  const queryClient = useQueryClient();
+
+  const save = useMutation({
+    mutationFn: () =>
+      objApi.setLinkJoin(workspaceId, link.id, {
+        from_property: fromProperty || null,
+        to_property: toProperty || null,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["link-types", workspaceId] });
+      await queryClient.invalidateQueries({ queryKey: ["instance-links"] });
+      onClose();
+    },
+  });
+
+  const halfJoin = !fromProperty !== !toProperty;
+
+  return (
+    <Dialog open title={`Join - ${link.display_name}`} onClose={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+        <p className="login-note" style={{ marginTop: 0 }}>
+          {link.from_display_name} → {link.to_display_name}. {JOIN_HINT}
+        </p>
+        <JoinPropertyField
+          label={`Join on (${link.from_display_name})`}
+          workspaceId={workspaceId}
+          typeId={link.from_object_type_id}
+          value={fromProperty}
+          onChange={setFromProperty}
+        />
+        <JoinPropertyField
+          label={`Join on (${link.to_display_name})`}
+          workspaceId={workspaceId}
+          typeId={link.to_object_type_id}
+          value={toProperty}
+          onChange={setToProperty}
+        />
+        {halfJoin && (
+          <div className="form-error">Set the property on both ends, or on neither.</div>
+        )}
+        {save.isError && (
+          <div className="form-error">
+            {save.error instanceof ApiError ? save.error.message : "Couldn't save the join."}
+          </div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn" disabled={save.isPending || halfJoin}>
+            {save.isPending ? "Saving…" : "Save join"}
           </button>
         </div>
       </form>
@@ -791,11 +939,16 @@ function SourceRow({
 
 function ObjectExplorer({
   workspaceId,
+  workspaceSlug,
+  projectSlug,
   types,
 }: {
   workspaceId: string;
+  workspaceSlug: string;
+  projectSlug: string;
   types: { id: string; display_name: string }[];
 }) {
+  const [exploring, setExploring] = useState<LinkStop | null>(null);
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [typeId, setTypeId] = useState("");
@@ -887,6 +1040,7 @@ function ObjectExplorer({
                     <th key={c}>{c}</th>
                   ))}
                   <th>Updated</th>
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -904,6 +1058,21 @@ function ObjectExplorer({
                       </td>
                     ))}
                     <td className="slug">{new Date(i.updated_at).toLocaleString()}</td>
+                    <td>
+                      <button
+                        className="btn quiet"
+                        style={{ padding: "3px 9px", fontSize: 12 }}
+                        onClick={() =>
+                          setExploring({
+                            typeId: i.object_type_id,
+                            typeName: i.object_type_display_name,
+                            instance: i,
+                          })
+                        }
+                      >
+                        Explore
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -930,6 +1099,16 @@ function ObjectExplorer({
           </div>
         </>
       )}
+
+      {exploring && (
+        <LinkExplorerDialog
+          workspaceId={workspaceId}
+          workspaceSlug={workspaceSlug}
+          projectSlug={projectSlug}
+          start={exploring}
+          onClose={() => setExploring(null)}
+        />
+      )}
     </>
   );
 }
@@ -941,6 +1120,7 @@ export default function ObjectsPage() {
   const [creatingType, setCreatingType] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [creatingLink, setCreatingLink] = useState(false);
+  const [joining, setJoining] = useState<LinkType | null>(null);
   const [creatingSource, setCreatingSource] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
   const queryClient = useQueryClient();
@@ -1070,7 +1250,12 @@ export default function ObjectsPage() {
             </tbody>
           </table>
 
-          <ObjectExplorer workspaceId={workspace!.id} types={types.data} />
+          <ObjectExplorer
+            workspaceId={workspace!.id}
+            workspaceSlug={params.workspace}
+            projectSlug={params.project}
+            types={types.data}
+          />
 
           <div className="page-head" style={{ marginTop: 32 }}>
             <div><h2 style={{ fontSize: 15, margin: 0 }}>Link types</h2></div>
@@ -1083,24 +1268,40 @@ export default function ObjectsPage() {
           )}
           {linkTypes.data && linkTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>
-              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th>Joins on</th><th aria-label="Actions" /></tr></thead>
               <tbody>
                 {linkTypes.data.map((lt: LinkType) => (
                   <tr key={lt.id}>
                     <td><strong>{lt.display_name}</strong></td>
                     <td>{lt.from_display_name} → {lt.to_display_name}</td>
                     <td className="count">{lt.cardinality}</td>
+                    <td className="slug">
+                      {lt.from_property
+                        ? `${joinLabel(lt.from_property)} = ${joinLabel(lt.to_property!)}`
+                        : "not traversable"}
+                    </td>
                     <td>
-                      {canEditOntology && (
-                        <button
-                          className="btn danger"
-                          style={{ padding: "3px 9px", fontSize: 12 }}
-                          disabled={removeLink.isPending}
-                          onClick={() => removeLink.mutate(lt.id)}
-                        >
-                          Delete
-                        </button>
-                      )}
+                      <div className="row-actions">
+                        {canEditOntology && (
+                          <button
+                            className="btn quiet"
+                            style={{ padding: "3px 9px", fontSize: 12 }}
+                            onClick={() => setJoining(lt)}
+                          >
+                            {lt.from_property ? "Edit join" : "Set join"}
+                          </button>
+                        )}
+                        {canEditOntology && (
+                          <button
+                            className="btn danger"
+                            style={{ padding: "3px 9px", fontSize: 12 }}
+                            disabled={removeLink.isPending}
+                            onClick={() => removeLink.mutate(lt.id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1187,6 +1388,9 @@ export default function ObjectsPage() {
       )}
       {creatingLink && workspace && types.data && (
         <LinkTypeDialog workspaceId={workspace.id} types={types.data} onClose={() => setCreatingLink(false)} />
+      )}
+      {joining && workspace && (
+        <LinkJoinDialog workspaceId={workspace.id} link={joining} onClose={() => setJoining(null)} />
       )}
       {creatingSource && workspace && project && types.data && (
         <SourceDialog

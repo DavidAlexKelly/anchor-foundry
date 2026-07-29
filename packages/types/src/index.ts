@@ -577,6 +577,38 @@ export interface LinkType {
   to_object_type_id: string;
   to_display_name: string;
   created_at: string;
+  /**
+   * The properties whose values are compared to derive instance-level links
+   * (db 0027). Null as a pair when the link type is defined but not
+   * traversable. `"$primary_key"` refers to the instance's primary key
+   * rather than one of its properties.
+   */
+  from_property: string | null;
+  to_property: string | null;
+}
+
+/** Reserved join reference: the instance's primary key, not a property. */
+export const PRIMARY_KEY_REF = "$primary_key";
+
+/**
+ * One link traversed from a single instance: which relationship, which way it
+ * runs, and a first page of what is on the far side.
+ */
+export interface LinkedInstances {
+  link_type_id: string;
+  api_name: string;
+  display_name: string;
+  cardinality: LinkCardinality;
+  /** "outbound" when the instance's type is the link's from end. */
+  direction: "outbound" | "inbound";
+  far_type_id: string;
+  far_type_display_name: string;
+  near_property: string;
+  far_property: string;
+  /** The value read off this instance and matched against far_property. */
+  matched_value: unknown;
+  total: number;
+  items: ObjectInstance[];
 }
 
 export interface ObjectTypeSource {

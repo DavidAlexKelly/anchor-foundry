@@ -215,22 +215,137 @@ async def delete_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) 
 
 
 # ---- link types -------------------------------------------------------------
-async def list_link_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:
-    rows = await fetch_all(
-        conn,
-        """
+# Reserved reference to an instance's primary key rather than one of its
+# mapped properties (db 0027). Needed because the far end of a foreign key is
+# nearly always the referenced row's key, and the primary key is a field on
+# the instance, not an entry in its properties JSON. The '$' prefix cannot
+# collide with a property api_name (_PROP_API_RE requires a leading lowercase
+# letter), so a property can never be shadowed by the sentinel.
+PRIMARY_KEY_REF = "$primary_key"
+
+
+async def _validate_join_property(
+    conn: AsyncConnection, type_id: UUID, value: str, *, end: str
+) -> None:
+    """A join property must be the primary-key sentinel or a property the type
+    actually declares. Checked here rather than left to produce zero matches
+    at traversal time: "this link finds nothing" and "this link names a
+    property that does not exist" look identical in the UI, and only one of
+    them is the user's data being wrong."""
+    if value == PRIMARY_KEY_REF:
+        return
+    if not _PROP_API_RE.match(value):
+        raise ValueError(f"invalid {end} property {value!r}")
+    known = {str(p["api_name"]) for p in await list_properties(conn, type_id)}
+    if value not in known:
+        raise ValueError(
+            f"{end} property {value!r} is not a property of that object type "
+            f"(known: {', '.join(sorted(known)) or 'none'}, or {PRIMARY_KEY_REF!r})"
+        )
+
+
+def _normalise_join(
+    from_property: str | None, to_property: str | None
+) -> tuple[str | None, str | None]:
+    """Empty strings arrive from HTML selects that mean "not set"; treat them
+    as unset rather than letting them fail the column's shape CHECK."""
+    a = (from_property or "").strip() or None
+    b = (to_property or "").strip() or None
+    if (a is None) != (b is None):
+        raise ValueError(
+            "a link's join needs a property on both ends - half a join is not a "
+            "weaker join, it is an unanswerable question"
+        )
+    return a, b
+
+
+_LINK_SELECT = """
         SELECT lt.id, lt.api_name, lt.display_name, lt.cardinality, lt.created_at,
+               lt.from_property, lt.to_property,
                lt.from_object_type_id, f.display_name AS from_display_name,
                lt.to_object_type_id, t.display_name AS to_display_name
           FROM link_types lt
           JOIN object_types f ON f.id = lt.from_object_type_id
           JOIN object_types t ON t.id = lt.to_object_type_id
-         WHERE lt.workspace_id = :wid
-         ORDER BY lt.display_name
-        """,
+"""
+
+
+async def list_link_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:
+    rows = await fetch_all(
+        conn,
+        _LINK_SELECT + " WHERE lt.workspace_id = :wid ORDER BY lt.display_name",
         {"wid": str(workspace_id)},
     )
     return [dict(r) for r in rows]
+
+
+async def get_link_type(
+    conn: AsyncConnection, workspace_id: UUID, link_id: UUID
+) -> dict[str, Any]:
+    row = await fetch_one(
+        conn,
+        _LINK_SELECT + " WHERE lt.id = :lid AND lt.workspace_id = :wid",
+        {"lid": str(link_id), "wid": str(workspace_id)},
+    )
+    if row is None:
+        raise NotFoundError("link type")
+    return dict(row)
+
+
+async def links_for_type(
+    conn: AsyncConnection, workspace_id: UUID, type_id: UUID
+) -> list[dict[str, Any]]:
+    """Every traversable link type touching this object type, from that type's
+    point of view.
+
+    A link type is returned once per end it occupies, with ``direction`` and
+    the pair reordered so the caller never has to work out which side it is
+    on: ``near_property`` is the property to read off the instance in hand,
+    ``far_property`` is the one to match against on the other type. A
+    self-link (both ends the same type) is returned **twice** on purpose -
+    outbound and inbound are genuinely different questions when a Person
+    links to a Person by manager: one is "my manager", the other is "my
+    reports".
+
+    Only mapped links come back (db 0027: the pair is both-or-neither, so
+    ``from_property IS NOT NULL`` is the whole test). A link type without a
+    join is still a valid ontology statement; it just cannot answer an
+    instance-level question yet.
+    """
+    await get_type(conn, workspace_id, type_id)  # 404 if invisible
+    rows = await fetch_all(
+        conn,
+        _LINK_SELECT
+        + """
+         WHERE lt.workspace_id = :wid
+           AND lt.from_property IS NOT NULL
+           AND (lt.from_object_type_id = :tid OR lt.to_object_type_id = :tid)
+         ORDER BY lt.display_name
+        """,
+        {"wid": str(workspace_id), "tid": str(type_id)},
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        link = dict(row)
+        if str(link["from_object_type_id"]) == str(type_id):
+            out.append({
+                **link,
+                "direction": "outbound",
+                "near_property": link["from_property"],
+                "far_property": link["to_property"],
+                "far_type_id": link["to_object_type_id"],
+                "far_type_display_name": link["to_display_name"],
+            })
+        if str(link["to_object_type_id"]) == str(type_id):
+            out.append({
+                **link,
+                "direction": "inbound",
+                "near_property": link["to_property"],
+                "far_property": link["from_property"],
+                "far_type_id": link["from_object_type_id"],
+                "far_type_display_name": link["from_display_name"],
+            })
+    return out
 
 
 async def create_link_type(
@@ -243,6 +358,8 @@ async def create_link_type(
     to_type_id: UUID,
     cardinality: str,
     created_by: UUID,
+    from_property: str | None = None,
+    to_property: str | None = None,
 ) -> dict[str, Any]:
     if not _PROP_API_RE.match(api_name):
         raise ValueError(f"invalid link api_name {api_name!r}")
@@ -251,6 +368,11 @@ async def create_link_type(
     # Both endpoints must be this workspace's types (404 shape otherwise).
     await get_type(conn, workspace_id, from_type_id)
     await get_type(conn, workspace_id, to_type_id)
+    from_property, to_property = _normalise_join(from_property, to_property)
+    if from_property is not None:
+        await _validate_join_property(conn, from_type_id, from_property, end="from")
+        assert to_property is not None
+        await _validate_join_property(conn, to_type_id, to_property, end="to")
     existing = await fetch_one(
         conn,
         "SELECT 1 AS x FROM link_types WHERE workspace_id=:wid AND api_name=:api",
@@ -263,10 +385,12 @@ async def create_link_type(
         """
         INSERT INTO link_types (workspace_id, api_name, display_name,
                                 from_object_type_id, to_object_type_id,
-                                cardinality, created_by)
-        VALUES (:wid, :api, :name, :from, :to, CAST(:card AS link_cardinality), :by)
+                                cardinality, created_by, from_property, to_property)
+        VALUES (:wid, :api, :name, :from, :to, CAST(:card AS link_cardinality), :by,
+                :fprop, :tprop)
         RETURNING id, api_name, display_name, from_object_type_id,
-                  to_object_type_id, cardinality, created_at
+                  to_object_type_id, cardinality, created_at,
+                  from_property, to_property
         """,
         {
             "wid": str(workspace_id),
@@ -276,10 +400,52 @@ async def create_link_type(
             "to": str(to_type_id),
             "card": cardinality,
             "by": str(created_by),
+            "fprop": from_property,
+            "tprop": to_property,
         },
     )
     assert row is not None
     return dict(row)
+
+
+async def set_link_join(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    link_id: UUID,
+    *,
+    from_property: str | None,
+    to_property: str | None,
+) -> dict[str, Any]:
+    """Map (or unmap) the properties a link joins on, in place.
+
+    Only the join is mutable. Changing an endpoint or the cardinality would
+    make it a different relationship wearing the same name - delete and
+    recreate for that. The join, by contrast, is the one part that is a
+    statement about *how the data expresses* the relationship rather than
+    about the ontology, and it has to be editable: every link type defined
+    before db 0027 exists without one, and delete-and-recreate as the only
+    route to adding it would break every reference to a link people already
+    built their ontology around.
+    """
+    link = await get_link_type(conn, workspace_id, link_id)
+    from_property, to_property = _normalise_join(from_property, to_property)
+    if from_property is not None:
+        await _validate_join_property(
+            conn, UUID(str(link["from_object_type_id"])), from_property, end="from"
+        )
+        assert to_property is not None
+        await _validate_join_property(
+            conn, UUID(str(link["to_object_type_id"])), to_property, end="to"
+        )
+    await conn.execute(
+        text(
+            "UPDATE link_types SET from_property = :fprop, to_property = :tprop "
+            "WHERE id = :lid AND workspace_id = :wid"
+        ),
+        {"fprop": from_property, "tprop": to_property,
+         "lid": str(link_id), "wid": str(workspace_id)},
+    )
+    return await get_link_type(conn, workspace_id, link_id)
 
 
 async def delete_link_type(conn: AsyncConnection, workspace_id: UUID, link_id: UUID) -> None:

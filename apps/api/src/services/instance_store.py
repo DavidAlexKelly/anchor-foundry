@@ -104,6 +104,39 @@ class InstanceStoreGateway(Protocol):
         offset: int,
     ) -> tuple[list[dict[str, Any]], int]: ...
 
+    async def find_by_property(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        property_name: str | None,
+        value: Any,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]: ...
+
+
+def join_key(value: Any) -> str | None:
+    """The text form of a join value, shared by both stores so a link
+    traverses to the same set whichever one is configured.
+
+    Links join on the *text* of a value, not on a typed comparison. That is a
+    deliberate narrowing, and it is the honest one: the two sides of a link
+    are two independently-mapped datasets, so a department code can perfectly
+    well arrive as an integer on one side and a string on the other, and a
+    type-strict join would silently find nothing in exactly the case the
+    feature exists for. The cost is that 1 and 1.0 are different keys - which
+    is also true of the upstream data they were read from.
+
+    None means "no key": a null property points at nothing, so the traversal
+    is empty rather than matching every instance whose property is also null.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"  # not Python's "True"
+    return str(value)
+
 
 def _index_name(search_prefix: str) -> str:
     # search_prefix already ends in "-" (db 0002: f"{slug}-{short_id}-");
@@ -162,13 +195,36 @@ class OpenSearchInstanceStore:
             index=index,
             body={
                 "mappings": {
+                    # Declared rather than left to dynamic mapping, because
+                    # link traversal (roadmap Objects item 3) needs exact
+                    # equality on an arbitrary property, and that needs a
+                    # keyword subfield to exist. Dynamic mapping would give
+                    # one by default - with ignore_above 256, which silently
+                    # stops indexing the keyword for longer values, so a
+                    # long join key would traverse to nothing for reasons
+                    # invisible from the outside. Stating the template makes
+                    # the guarantee ours instead of the cluster default's.
+                    "dynamic_templates": [
+                        {
+                            "property_strings": {
+                                "path_match": "properties.*",
+                                "match_mapping_type": "string",
+                                "mapping": {
+                                    "type": "text",  # keeps explorer search working
+                                    "fields": {
+                                        "keyword": {"type": "keyword", "ignore_above": 8192}
+                                    },
+                                },
+                            }
+                        }
+                    ],
                     "properties": {
                         "object_type_id": {"type": "keyword"},
                         "source_id": {"type": "keyword"},
                         "primary_key": {"type": "keyword"},
                         "properties": {"type": "object", "enabled": True},
                         "updated_at": {"type": "date"},
-                    }
+                    },
                 }
             },
         )
@@ -353,6 +409,73 @@ class OpenSearchInstanceStore:
         ]
         return rows, int(resp["hits"]["total"]["value"])
 
+    async def find_by_property(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        property_name: str | None,
+        value: Any,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Exact-equality lookup: the far end of a link traversal (roadmap
+        Objects item 3). ``property_name=None`` means the instance's primary
+        key rather than one of its properties.
+
+        Not `search()` with a query string: that is `phrase_prefix` over every
+        field, which would match a department called "Engineering West" when
+        asked for "Engineering" and return the wrong objects with a straight
+        face. A link is an equality, so it gets an equality.
+        """
+        key = join_key(value)
+        if key is None:
+            return [], 0
+        limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
+        offset = max(0, offset)
+
+        if property_name is None:
+            # primary_key is mapped keyword, so one exact term is the whole test.
+            should: list[dict[str, Any]] = [{"term": {"primary_key": key}}]
+        else:
+            field = f"properties.{property_name}"
+            # Two clauses because the property's mapping depends on what the
+            # first document put there: strings land on text + .keyword (the
+            # dynamic template above), numbers and booleans land on long /
+            # double / boolean with no subfield. Querying both and requiring
+            # one costs nothing - a term on a field that does not exist
+            # matches nothing rather than erroring - and avoids having to
+            # trust the object type's *declared* data_type, which describes
+            # the ontology, not what the mapper actually wrote.
+            should = [
+                {"term": {f"{field}.keyword": key}},
+                {"term": {field: value}},
+            ]
+        body = {
+            "query": {
+                "bool": {
+                    "filter": [{"term": {"object_type_id": str(object_type_id)}}],
+                    "should": should,
+                    "minimum_should_match": 1,
+                }
+            },
+            "sort": [{"primary_key": "asc"}],
+            "from": offset,
+            "size": limit,
+        }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        rows = [
+            {
+                "id": h["_id"],
+                "object_type_id": h["_source"]["object_type_id"],
+                "primary_key": h["_source"]["primary_key"],
+                "properties": h["_source"]["properties"],
+                "updated_at": h["_source"]["updated_at"],
+            }
+            for h in resp["hits"]["hits"]
+        ]
+        return rows, int(resp["hits"]["total"]["value"])
+
     async def close(self) -> None:
         await self._client.close()
 
@@ -487,6 +610,30 @@ class PostgresInstanceStore:
         return await instances_service.search(
             self._conn, workspace_id=workspace_id, query=query,
             object_type_ids=object_type_ids, limit=limit, offset=offset,
+        )
+
+    async def find_by_property(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        property_name: str | None,
+        value: Any,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        from . import instances as instances_service
+
+        key = join_key(value)
+        if key is None:
+            return [], 0
+        return await instances_service.find_by_property(
+            self._conn,
+            object_type_id=object_type_id,
+            property_name=property_name,
+            key=key,
+            limit=limit,
+            offset=offset,
         )
 
     async def update_properties(

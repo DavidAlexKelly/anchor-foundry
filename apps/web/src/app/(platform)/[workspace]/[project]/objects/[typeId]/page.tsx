@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { actions as actionApi, ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
+import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { ActionType, ObjectInstance } from "@/lib/types";
 
@@ -101,6 +102,7 @@ export default function ObjectInstancesPage() {
   const { project } = useProjectBySlug(workspace?.id, params.project);
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<ObjectInstance | null>(null);
+  const [exploring, setExploring] = useState<LinkStop | null>(null);
 
   const type = useQuery({
     queryKey: ["object-type", params.typeId],
@@ -165,7 +167,7 @@ export default function ObjectInstancesPage() {
                     <th key={p.api_name}>{p.display_name || p.api_name}</th>
                   ))}
                   <th>Updated</th>
-                  {canEdit && <th aria-label="Actions" />}
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -181,17 +183,32 @@ export default function ObjectInstancesPage() {
                       </td>
                     ))}
                     <td className="count">{new Date(instance.updated_at).toLocaleString()}</td>
-                    {canEdit && (
-                      <td>
+                    <td>
+                      <div className="row-actions">
                         <button
                           className="btn quiet"
                           style={{ padding: "3px 9px", fontSize: 12 }}
-                          onClick={() => setEditing(instance)}
+                          onClick={() =>
+                            setExploring({
+                              typeId: params.typeId,
+                              typeName: type.data?.display_name ?? "Object",
+                              instance,
+                            })
+                          }
                         >
-                          Edit
+                          Explore
                         </button>
-                      </td>
-                    )}
+                        {canEdit && (
+                          <button
+                            className="btn quiet"
+                            style={{ padding: "3px 9px", fontSize: 12 }}
+                            onClick={() => setEditing(instance)}
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -219,6 +236,16 @@ export default function ObjectInstancesPage() {
             </button>
           </div>
         </>
+      )}
+
+      {exploring && workspace && (
+        <LinkExplorerDialog
+          workspaceId={workspace.id}
+          workspaceSlug={params.workspace}
+          projectSlug={params.project}
+          start={exploring}
+          onClose={() => setExploring(null)}
+        />
       )}
 
       {editing && workspace && project && actionTypes.data && (

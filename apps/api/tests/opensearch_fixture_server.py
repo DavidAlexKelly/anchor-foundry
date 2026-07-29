@@ -22,7 +22,8 @@ Endpoints:
   PUT    /{index}                 indices.create
   POST   /_bulk                   update + doc_as_upsert only
   POST   /{index}/_delete_by_query
-  POST   /{index}/_search       term/terms/range/multi_match, sorted+paged
+  POST   /{index}/_search       term/terms/range/multi_match in filter/must/
+                                should (+minimum_should_match), sorted+paged
   GET    /{index}/_doc/{id}
   POST   /{index}/_update/{id}
   POST   /__reset                 test helper: forget every index
@@ -38,13 +39,39 @@ from urllib.parse import urlparse
 INDICES: dict[str, dict[str, dict]] = {}
 
 
+MISSING = object()
+
+
+def _resolve(source: dict, field: str):
+    """Field paths as OpenSearch writes them: dotted into the document, with a
+    trailing ``.keyword`` naming a subfield of the same value.
+
+    The fixture treats ``properties.dept.keyword`` and ``properties.dept`` as
+    the same thing, because it has no analyzers and so no way to tell text
+    from keyword semantics apart. That means it cannot prove the ``.keyword``
+    subfield exists in a real mapping - only that the gateway asks about the
+    right field. The mapping itself is asserted by the index template in
+    instance_store._ensure_index, not here.
+    """
+    if field.endswith(".keyword"):
+        field = field[: -len(".keyword")]
+    current: object = source
+    for part in field.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return MISSING
+        current = current[part]
+    return current
+
+
 def _match(source: dict, clause: dict) -> bool:
     if "term" in clause:
         field, value = next(iter(clause["term"].items()))
-        return str(source.get(field)) == str(value)
+        found = _resolve(source, field)
+        return found is not MISSING and str(found) == str(value)
     if "terms" in clause:
         field, values = next(iter(clause["terms"].items()))
-        return str(source.get(field)) in {str(v) for v in values}
+        found = _resolve(source, field)
+        return found is not MISSING and str(found) in {str(v) for v in values}
     if "multi_match" in clause:
         # Substring over every property value plus the primary key. Real
         # OpenSearch tokenises and ranks; the fixture only has to decide
@@ -77,12 +104,31 @@ def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
     if not query or "match_all" in query:
         return docs
     if "bool" in query:
-        clauses = list(query["bool"].get("filter", [])) + list(query["bool"].get("must", []))
+        bool_query = query["bool"]
+        clauses = list(bool_query.get("filter", [])) + list(bool_query.get("must", []))
+        should = list(bool_query.get("should", []))
+        # minimum_should_match is honoured rather than assumed: the gateway's
+        # link traversal sends two should-clauses expecting *either* to
+        # qualify, and a fixture that quietly required both would pass the
+        # wrong query.
+        minimum = int(bool_query.get("minimum_should_match", 0))
+        if should and minimum:
+            def enough(source: dict) -> bool:
+                return sum(1 for c in should if _match(source, c)) >= minimum
+        elif should:
+            def enough(source: dict) -> bool:
+                return True
+        else:
+            def enough(source: dict) -> bool:
+                return True
     else:
         clauses = [query]
+
+        def enough(source: dict) -> bool:
+            return True
     if not clauses:
-        return docs
-    return [(i, s) for i, s in docs if all(_match(s, c) for c in clauses)]
+        return [(i, s) for i, s in docs if enough(s)]
+    return [(i, s) for i, s in docs if all(_match(s, c) for c in clauses) and enough(s)]
 
 
 class Handler(BaseHTTPRequestHandler):

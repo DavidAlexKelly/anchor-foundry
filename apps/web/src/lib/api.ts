@@ -409,6 +409,10 @@ export interface LinkTypeCreateInput {
   from_type_id: string;
   to_type_id: string;
   cardinality: import("./types").LinkCardinality;
+  /** Both or neither; "$primary_key" for the instance key. Omit for an
+   * ontology-only link type that is not traversable yet. */
+  from_property?: string | null;
+  to_property?: string | null;
 }
 
 export interface SourceCreateInput {
@@ -451,6 +455,15 @@ export const objects = {
     request<import("./types").LinkType>(`/workspaces/${wid}/link-types`, {
       method: "POST",
       body: JSON.stringify(input),
+    }),
+  setLinkJoin: (
+    wid: string,
+    linkId: string,
+    join: { from_property: string | null; to_property: string | null },
+  ) =>
+    request<import("./types").LinkType>(`/workspaces/${wid}/link-types/${linkId}`, {
+      method: "PATCH",
+      body: JSON.stringify(join),
     }),
   removeLinkType: (wid: string, linkId: string) =>
     request<void>(`/workspaces/${wid}/link-types/${linkId}`, { method: "DELETE" }),
@@ -498,6 +511,10 @@ export const objects = {
   getInstance: (wid: string, typeId: string, instanceId: string) =>
     request<import("./types").ObjectInstance>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}`,
+    ),
+  instanceLinks: (wid: string, typeId: string, instanceId: string) =>
+    request<import("./types").LinkedInstances[]>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/links`,
     ),
 };
 

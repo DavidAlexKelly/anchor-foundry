@@ -122,6 +122,16 @@ class LinkTypeOut(BaseModel):
     to_object_type_id: UUID
     to_display_name: str
     created_at: datetime
+    # NULL as a pair when the link type has no join mapped, in which case it
+    # is a valid ontology statement that cannot yet be traversed (db 0027).
+    from_property: str | None = None
+    to_property: str | None = None
+
+
+# Either a property api_name or the reserved '$primary_key' (db 0027). Empty
+# string is accepted and normalised to "unset" in the service, because that is
+# what an unselected HTML <select> sends.
+_JOIN_PROPERTY = r"^([a-z][a-z0-9_]{0,99}|\$primary_key)?$"
 
 
 class LinkTypeCreate(BaseModel):
@@ -130,6 +140,16 @@ class LinkTypeCreate(BaseModel):
     from_type_id: UUID
     to_type_id: UUID
     cardinality: str = Field(pattern="^(one_to_one|one_to_many|many_to_many)$")
+    from_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+    to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+
+
+class LinkJoinUpdate(BaseModel):
+    """Only the join is patchable - see ontology.set_link_join for why an
+    endpoint or cardinality change is a different link type, not an edit."""
+
+    from_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+    to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
 
 
 class SourceOut(BaseModel):
@@ -414,6 +434,8 @@ async def create_link_type(
             to_type_id=body.to_type_id,
             cardinality=body.cardinality,
             created_by=access.auth.user_id,
+            from_property=body.from_property,
+            to_property=body.to_property,
         )
         from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
         to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
@@ -434,6 +456,139 @@ async def create_link_type(
         from_display_name=from_type["display_name"],
         to_display_name=to_type["display_name"],
     )
+
+
+@router.patch("/link-types/{link_id}", response_model=LinkTypeOut)
+async def update_link_join(
+    link_id: UUID,
+    body: LinkJoinUpdate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> LinkTypeOut:
+    """Map the properties a link joins on, so it becomes traversable (roadmap
+    Objects item 3), or clear them back to a definition-only link type."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ontology_service.set_link_join(
+            conn,
+            access.workspace_id,
+            link_id,
+            from_property=body.from_property,
+            to_property=body.to_property,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="link_type.update_join",
+            resource_type="link_type",
+            resource_id=link_id,
+            workspace_id=access.workspace_id,
+            metadata={"from_property": row["from_property"], "to_property": row["to_property"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return LinkTypeOut(**row)
+
+
+# ---- link traversal ----------------------------------------------------------
+class LinkedInstances(BaseModel):
+    """One link, from the point of view of the instance in hand: what the
+    relationship is called, which way it runs, and a first page of the
+    instances on the far side."""
+
+    link_type_id: UUID
+    api_name: str
+    display_name: str
+    cardinality: str
+    direction: str  # "outbound" (this type is the from end) | "inbound"
+    far_type_id: UUID
+    far_type_display_name: str
+    near_property: str
+    far_property: str
+    matched_value: Any | None
+    total: int
+    items: list[InstanceOut]
+
+
+LINK_PREVIEW_LIMIT = 10
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/links",
+    response_model=list[LinkedInstances],
+)
+async def instance_links(
+    type_id: UUID,
+    instance_id: UUID,
+    limit: int = Query(default=LINK_PREVIEW_LIMIT, ge=1, le=50),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[LinkedInstances]:
+    """Traverse every mapped link from one instance (roadmap Objects item 3).
+
+    All of an instance's links in one response rather than one request per
+    link: the point of the panel is "what is this object connected to", and
+    that question is not answerable a link at a time - the client would have
+    to fetch the link types, work out which end it is on, and fan out, which
+    is exactly the reasoning that belongs here.
+
+    Each group carries a `total` and a first page, not the whole far side. A
+    one_to_many link can traverse to thousands of instances, and the panel
+    that shows them is a preview with a count, so paging every group to
+    exhaustion would be work nobody asked for. Follow-up paging goes through
+    the ordinary instance list for the far type.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        # Type visibility first, so an object type in a workspace this caller
+        # cannot see 404s on the type rather than on the instance - the
+        # instance lookup would also miss, but for the wrong reason.
+        links = await ontology_service.links_for_type(conn, access.workspace_id, type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        instance = await store.get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
+        )
+        if instance is None:
+            raise NotFoundError("object instance")
+        properties = _jsonb(instance["properties"])
+
+        groups: list[LinkedInstances] = []
+        for link in links:
+            near = str(link["near_property"])
+            far = str(link["far_property"])
+            value = (
+                instance["primary_key"]
+                if near == ontology_service.PRIMARY_KEY_REF
+                else properties.get(near)
+            )
+            rows, total = await store.find_by_property(
+                search_prefix=prefix,
+                object_type_id=UUID(str(link["far_type_id"])),
+                property_name=None if far == ontology_service.PRIMARY_KEY_REF else far,
+                value=value,
+                limit=limit,
+                offset=0,
+            )
+            groups.append(LinkedInstances(
+                link_type_id=UUID(str(link["id"])),
+                api_name=str(link["api_name"]),
+                display_name=str(link["display_name"]),
+                cardinality=str(link["cardinality"]),
+                direction=str(link["direction"]),
+                far_type_id=UUID(str(link["far_type_id"])),
+                far_type_display_name=str(link["far_type_display_name"]),
+                near_property=near,
+                far_property=far,
+                matched_value=value,
+                total=total,
+                items=[
+                    InstanceOut(**{
+                        "id": r["id"], "primary_key": r["primary_key"],
+                        "properties": _jsonb(r["properties"]), "updated_at": r["updated_at"],
+                    })
+                    for r in rows
+                ],
+            ))
+    return groups
 
 
 @router.delete(
