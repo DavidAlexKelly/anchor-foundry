@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -18,6 +19,7 @@ from starlette.requests import Request as StarletteRequest
 
 from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
+from .lib.errors import BreakingChangeError
 from .services.connectors import ConnectorConfigError
 from .services.dataset_engine import DatasetEngineError
 from .services.datasets import SCHEMA_POLICY_SQLSTATE
@@ -134,6 +136,25 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=422,
             content={"detail": detail if not hint else f"{detail} - {hint}"},
+        )
+
+    @app.exception_handler(BreakingChangeError)
+    async def breaking_change_error(
+        request: StarletteRequest, exc: BreakingChangeError
+    ) -> JSONResponse:
+        """A 409 that carries its reasons as data (roadmap Objects item 5).
+
+        `detail` stays a plain string, so every existing client that reads
+        `detail` still gets a usable sentence; `impacts` is an additional
+        top-level key holding the same information as a list, because a
+        warning listing four affected consumers is a list in the UI and
+        parsing it back out of prose would be absurd.
+        """
+        # jsonable_encoder, not the raw list: the impacts carry consumer UUIDs
+        # straight off the row, which json.dumps refuses.
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=jsonable_encoder({"detail": exc.detail, "impacts": exc.impacts}),
         )
 
     @app.exception_handler(ValueError)

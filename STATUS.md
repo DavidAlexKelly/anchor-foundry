@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–3 — see §21–§37). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–3, 5 — see §21–§38). Test counts below are from the last full regression run.
 
 ---
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0027)
+### 1. Database schema (migrations 0001–0028)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -590,6 +590,36 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 
 ---
 
+### 38. Ontology change history — and the edit it records (this session)
+
+`ROADMAP.md` Objects item 5, which said changing an object type has "no audit/version trail today". Understated in exactly the way item 3 was: **there was no way to change one at all.** `create_type` and `delete_type` were the whole surface, and delete cascades — a type's properties, dataset mappings, link types, actions and every materialised instance go with it (0003, 0012, 0013). So the only route to "rename a property" was to destroy the ontology around it and rebuild by hand. Versioning a change nobody can make is not a feature, so this shipped as a pair: the edit, and the history that records it.
+
+**Nothing downstream raises when a property disappears. That is the whole argument.** Each consumer degrades quietly, in its own way, and the three ways are worth knowing because they are why a warning had to be a refusal:
+
+  * a **dataset mapping** keeps writing the property on every sync — `instances.extract_rows` works from `column_mappings` alone and never consults the type — while the browse UI iterates the type's *declared* properties. The data keeps arriving and stops being visible. Nothing errors.
+  * an **action**'s value check is `_validate_value(property_types.get(prop, "string"), value)`, so a removed integer property silently starts accepting any string.
+  * a **link join** whose property is gone traverses to nothing, forever, and the panel reports "nothing matches" — indistinguishable from data that genuinely has no matches (§37).
+
+There is no exception anywhere on any of those paths. A logged warning would be a warning nobody sees, so `update_type` **refuses** a breaking change and requires `acknowledge_breaking` to proceed — a 409 (`BreakingChangeError`) carrying the impacts as data next to the message, since a list of four affected consumers is a list in the UI and parsing it back out of prose would be absurd.
+
+**One deviation from the item's list of consumers.** It named "a Model, a Canvas app, a mapped dataset". Models do not reference object properties at all — they read datasets — and a Canvas widget references a dataset or an *action*, not a property, so the action check already covers every reachable case. Checking three consumer kinds (mapping, action, link join) rather than five is not a gap; the other two have nothing to check. The link join is a consumer the item could not have known about, since §37 created it in the same session.
+
+**A retyped link join is reported but not blocking**, and the reason is a fact about §37 rather than a judgement call: the join compares the *text* form of both values (`instance_store.join_key`), so an integer that becomes a string still matches exactly what it matched before. Everything else — any removal, and a retype a mapping or an action depends on — blocks. One crisp rule with one exception that follows from how the feature actually works.
+
+**A rename is reported as a removal plus an addition.** Properties are matched by api_name, and nothing in the schema distinguishes "renamed" from "deleted one and added another"; every consumer naming the old api_name breaks either way. Offering rename-with-migration would mean rewriting mappings, action lists, link joins *and* stored instance keys across a store this code cannot reach — a much larger feature, and one that must not be implied by a text field.
+
+**The edit is a whole-definition replacement, not granular operations.** The form already holds the whole definition, so an `add_property`/`drop_property` API would make the client compute a diff the service must recompute anyway; and impact is a property of the *whole* change — dropping `a` while adding `b` is one edit a reviewer should see together, not two warnings arriving in sequence with the type briefly invalid in between. `api_name` is not a parameter at all: 0003 calls it the stable machine name used by exports, and no in-product warning reaches an external consumer holding it.
+
+**Two schema details, both instances of a rule this branch keeps re-deriving.** The snapshot stores the title property's **api_name, not its id**, because an edit deletes and re-inserts property rows — a stored `title_property_id` would dangle precisely when the history was needed. And restore **appends** rather than rewinding, so history stays a true record including the fact that somebody reverted. A restore also goes through the same impact check as any other edit, deliberately: reverting to a definition from before a property existed removes that property *now*, from consumers built since. "It used to be like this" is not evidence that going back is safe.
+
+**The warning is live, not a confirmation step.** `POST .../object-types/{id}/impact` dry-runs a proposed definition at viewer level, and the edit dialog re-queries it as the properties change — keyed on a signature of just the api_names and types, so editing a display name asks the server nothing. The warning is therefore on screen while there is still a decision to make, and Save stays disabled behind an explicit "I understand" tick. The PATCH recomputes the analysis itself rather than trusting that the preview was called. The property editor moved to `components/object-type-editor.tsx` and is now shared by the create and edit dialogs — one renderer, following §33's precedent rather than adding a fifth mirror to the list in the rough edges below.
+
+**Testing.** `apps/api/tests/test_ontology_history.py` (14 tests): version 1 written at create with the title property named rather than pointed at; an edit appending a version while leaving `api_name` and older versions untouched; property order following the order sent; a removal refused with the mapping named, *and* nothing changed and no version written by the refused call; the impact endpoint previewing the same answer without side effects; acknowledgement pushing it through with `acknowledged_breaking` in the audit row; mappings, actions and link joins all named in one refusal; a retyped link join reported but allowed; a rename reported as a removal; restore appending with `restored_from` set; a restore refused because of a consumer built *after* the version being restored; unknown version 404; and the role/tenancy floors. Verified in a browser end to end: adding a property with no warning, removing a mapped one and reading the two named consumers, Save disabled until acknowledged, restoring v1 to bring the property back, and a restore of v3 refused with an override offered.
+
+**Current totals: API 308/308** (294 + 14), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
 ## What's not started
 
 - **Code** (repo browser) — not started
@@ -597,6 +627,7 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
 - **Object instance sync gained scheduling, still full-snapshot by design** — §16 added a cron schedule and a 2M-row worker cap, but §14's cursor-based incremental mode is deliberately connection-sync-only: an object-type-source's input dataset is a wholesale-replaced snapshot with no cursor to hold, so full-snapshot mark-and-sweep is the correct approach here, not a gap (see §16 for the reasoning)
 - **The OpenSearch instance store has never run against a real cluster** — §35 wired it in and tests it over real HTTP against a fixture implementing the REST subset it uses, which proves its requests and parsing but not that OpenSearch agrees (no analyzers, no mapping enforcement, no refresh semantics in a fixture). A deployment reaching for it is the last verification step; until one has, `OPENSEARCH_ENDPOINT` unset leaves every environment on the Postgres store, which is fully tested. **§37 raised what this gap can cost**: link traversal depends on the index's *mapping* — a `keyword` subfield must exist on string properties for an equality query to match — and mapping is precisely what a fixture with no analyzers cannot check; the fixture treats `properties.x` and `properties.x.keyword` as the same value and says so in its own docstring. The mapping is declared explicitly in `_ensure_index` rather than inherited from dynamic defaults, so the guarantee is ours rather than the cluster default's, but verifying it is still the first real cluster's job — and "links traverse to nothing on OpenSearch while working on Postgres" is the shape that failure would take
+- **Object type edits do not clean up the instances they orphan** — §38 lets a property be removed; a stored instance keeps a `properties` key the type no longer declares until the next sync rewrites the row without it. Deliberate: the browse UI reads the type's declared properties so an undeclared key simply does not render, and deleting data across a store the API may not own (instances can live in OpenSearch, §35) would be a destructive side effect of an administrative edit. Worth knowing if you query the instance store directly and find keys the ontology has never heard of
 - **Links through a join object are not supported** — §37's traversal is a single property-to-property equality, so a many-to-many relationship expressed as A → join table → B cannot be described as one link type. `many_to_many` cardinality still works when both sides hold a shared key; what is missing is the two-hop case, which needs a third object type in the middle and is a different data model, not an extra parameter. Nor are computed join keys (`upper(a) = trim(b)`) — a derived join column belongs in the dataset feeding the type, where the model layer can already produce it
 - **Write-through to external connection sources** — Actions write back to this platform's own dataset copy only (see §12); connectors don't support write operations yet
 - **Control-plane and CI/build pipeline** — no Dockerfile exists for `apps/control-plane` yet, and nothing in the repo actually invokes `docker build`/`cdk deploy` automatically (no CI workflow, no build script) — §17's deploy was run entirely by hand from a local machine, not through any pipeline

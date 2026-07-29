@@ -286,6 +286,157 @@ async def get_object_type(
         return await _type_detail(conn, access.workspace_id, type_id)
 
 
+class ObjectTypeUpdate(BaseModel):
+    """The whole definition, not a patch — see `ontology.update_type` for why.
+    `api_name` is absent because it is immutable (db 0003 calls it the stable
+    machine name used by exports)."""
+
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    icon: str = Field(default="cube", max_length=64)
+    colour: str = Field(default="#2f6f4f", max_length=32)
+    properties: list[PropertyIn] = Field(min_length=1, max_length=100)
+    title_property: str | None = Field(default=None, max_length=100)
+    # Required to push through a change that would break an existing mapping,
+    # action or link join. Default false so a client that never asks about
+    # impact cannot silently break something.
+    acknowledge_breaking: bool = False
+
+
+class ImpactOut(BaseModel):
+    property: str
+    change: str  # "removed" | "retyped"
+    consumer_kind: str  # "dataset_mapping" | "action" | "link"
+    consumer_id: UUID
+    consumer_name: str
+    detail: str
+    blocking: bool
+
+
+class ObjectTypeVersionOut(BaseModel):
+    id: UUID
+    version_number: int
+    display_name: str
+    description: str
+    icon: str
+    colour: str
+    properties: list[dict[str, Any]]
+    title_property: str | None
+    restored_from: int | None
+    created_at: datetime
+    created_by_email: str | None
+
+
+@router.post("/object-types/{type_id}/impact", response_model=list[ImpactOut])
+async def object_type_impact(
+    type_id: UUID,
+    body: ObjectTypeUpdate,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ImpactOut]:
+    """Dry-run an edit: what would this change break? (roadmap Objects item 5)
+
+    A POST because it takes a proposed definition, and read-only despite that
+    — hence the viewer floor. Separate from the PATCH so the UI can warn
+    *before* asking for confirmation; the PATCH re-computes the same analysis
+    itself rather than trusting that this was called.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        impacts = await ontology_service.type_impact(
+            conn, access.workspace_id, type_id, [p.model_dump() for p in body.properties]
+        )
+    return [ImpactOut(**i) for i in impacts]
+
+
+@router.patch("/object-types/{type_id}", response_model=ObjectTypeDetail)
+async def update_object_type(
+    type_id: UUID,
+    body: ObjectTypeUpdate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectTypeDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.update_type(
+            conn,
+            workspace_id=access.workspace_id,
+            type_id=type_id,
+            display_name=body.display_name,
+            description=body.description,
+            icon=body.icon,
+            colour=body.colour,
+            properties=[p.model_dump() for p in body.properties],
+            title_property=body.title_property,
+            updated_by=access.auth.user_id,
+            acknowledge_breaking=body.acknowledge_breaking,
+        )
+        detail = await _type_detail(conn, access.workspace_id, type_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.update",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"properties": len(body.properties),
+                      "acknowledged_breaking": body.acknowledge_breaking},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return detail
+
+
+@router.get("/object-types/{type_id}/versions", response_model=list[ObjectTypeVersionOut])
+async def list_object_type_versions(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ObjectTypeVersionOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await ontology_service.list_type_versions(conn, access.workspace_id, type_id)
+    return [
+        ObjectTypeVersionOut(**{**r, "properties": _jsonb(r["properties"]) or []})
+        for r in rows
+    ]
+
+
+class RestoreVersionIn(BaseModel):
+    acknowledge_breaking: bool = False
+
+
+@router.post("/object-types/{type_id}/versions/{version_number}/restore",
+             response_model=ObjectTypeDetail)
+async def restore_object_type_version(
+    type_id: UUID,
+    version_number: int,
+    body: RestoreVersionIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectTypeDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.restore_type_version(
+            conn,
+            workspace_id=access.workspace_id,
+            type_id=type_id,
+            version_number=version_number,
+            updated_by=access.auth.user_id,
+            acknowledge_breaking=body.acknowledge_breaking,
+        )
+        detail = await _type_detail(conn, access.workspace_id, type_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.restore_version",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"restored_from": version_number,
+                      "acknowledged_breaking": body.acknowledge_breaking},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return detail
+
+
 @router.delete(
     "/object-types/{type_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
 )

@@ -9,7 +9,11 @@ import type {
 } from "./types";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** The parsed error body, when there was one. Some refusals carry their
+   * reasons as data alongside the message — an object-type edit blocked by
+   * existing consumers lists them under `impacts` (db 0028) — and a caller
+   * that wants to render a list rather than a sentence needs the original. */
+  constructor(public status: number, message: string, public body?: unknown) {
     super(message);
   }
 }
@@ -33,13 +37,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     let detail = res.statusText;
+    let body: unknown;
     try {
-      const body: { detail?: string } = await res.json();
-      if (typeof body.detail === "string") detail = body.detail;
+      body = await res.json();
+      const parsed = body as { detail?: string };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
     } catch {
       /* non-JSON error body - keep statusText */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, body);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -403,6 +409,19 @@ export interface ObjectTypeCreateInput {
   title_property?: string | null;
 }
 
+/** The whole definition, not a patch — `api_name` is immutable, so it is
+ * absent rather than optional. */
+export interface ObjectTypeUpdateInput {
+  display_name: string;
+  description?: string;
+  icon?: string;
+  colour?: string;
+  properties: PropertyInput[];
+  title_property?: string | null;
+  /** Required to push through a change that breaks an existing consumer. */
+  acknowledge_breaking?: boolean;
+}
+
 export interface LinkTypeCreateInput {
   api_name: string;
   display_name: string;
@@ -447,6 +466,28 @@ export const objects = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  updateType: (wid: string, typeId: string, input: ObjectTypeUpdateInput) =>
+    request<import("./types").ObjectTypeDetail>(`/workspaces/${wid}/object-types/${typeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  /** Dry-run an edit: which mappings, actions and link joins it would break. */
+  typeImpact: (wid: string, typeId: string, input: ObjectTypeUpdateInput) =>
+    request<import("./types").ObjectTypeImpact[]>(
+      `/workspaces/${wid}/object-types/${typeId}/impact`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  listTypeVersions: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeVersion[]>(
+      `/workspaces/${wid}/object-types/${typeId}/versions`,
+    ),
+  restoreTypeVersion: (
+    wid: string, typeId: string, versionNumber: number, acknowledgeBreaking = false,
+  ) =>
+    request<import("./types").ObjectTypeDetail>(
+      `/workspaces/${wid}/object-types/${typeId}/versions/${versionNumber}/restore`,
+      { method: "POST", body: JSON.stringify({ acknowledge_breaking: acknowledgeBreaking }) },
+    ),
   removeType: (wid: string, typeId: string) =>
     request<void>(`/workspaces/${wid}/object-types/${typeId}`, { method: "DELETE" }),
   listLinkTypes: (wid: string) =>

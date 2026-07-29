@@ -567,6 +567,47 @@ export interface ObjectTypeDetail {
   updated_at: string;
 }
 
+/**
+ * One consumer a proposed object-type change would disturb (db 0028).
+ * `blocking` changes are refused unless explicitly acknowledged; the rest are
+ * advisory (a retyped link join still traverses, since the join compares the
+ * text form of both values).
+ */
+export interface ObjectTypeImpact {
+  property: string;
+  change: "removed" | "retyped";
+  consumer_kind: "dataset_mapping" | "action" | "link";
+  consumer_id: string;
+  consumer_name: string;
+  detail: string;
+  blocking: boolean;
+}
+
+/** An append-only snapshot of an object type's definition (db 0028). */
+export interface ObjectTypeVersion {
+  id: string;
+  version_number: number;
+  display_name: string;
+  description: string;
+  icon: string;
+  colour: string;
+  /** The properties as declared at the time — a snapshot, not live rows. */
+  properties: {
+    api_name: string;
+    display_name: string;
+    data_type: PropertyDataType;
+    required: boolean;
+    description: string;
+    sort_order: number;
+  }[];
+  /** The title property's api_name; property ids do not survive an edit. */
+  title_property: string | null;
+  /** Set when this version was created by restoring an earlier one. */
+  restored_from: number | null;
+  created_at: string;
+  created_by_email: string | null;
+}
+
 export interface LinkType {
   id: string;
   api_name: string;

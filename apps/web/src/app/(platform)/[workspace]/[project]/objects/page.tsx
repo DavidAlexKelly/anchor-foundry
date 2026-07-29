@@ -13,6 +13,11 @@ import {
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
+import {
+  EditObjectTypeDialog,
+  PropertyRows,
+  TitlePropertyField,
+} from "@/components/object-type-editor";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import {
   PRIMARY_KEY_REF,
@@ -23,12 +28,8 @@ import {
   type ObjectTypeSource,
   type ObjectTypeSummary,
   type ObjectTypeSuggestion,
-  type PropertyDataType,
 } from "@/lib/types";
 
-const PROPERTY_TYPES: PropertyDataType[] = [
-  "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
-];
 const CARDINALITIES: LinkCardinality[] = ["one_to_one", "one_to_many", "many_to_many"];
 
 function toApiName(display: string, typeCase: boolean): string {
@@ -106,78 +107,13 @@ function ObjectTypeDialog({
           />
         </Field>
         <Field label="Properties" hint="Typed fields on this object">
-          <div>
-            {properties.map((prop, index) => (
-              <div key={index} className="row-actions" style={{ marginBottom: 6 }}>
-                <input
-                  type="text"
-                  placeholder="property_name"
-                  style={{
-                    fontFamily: "var(--font-mono)", fontSize: 12.5,
-                    padding: "4px 8px", border: "1px solid var(--line-strong)",
-                    borderRadius: "var(--radius)", width: 160,
-                  }}
-                  value={prop.api_name}
-                  onChange={(e) => {
-                    const next = [...properties];
-                    next[index] = { ...prop, api_name: toApiName(e.target.value, false) };
-                    setProperties(next);
-                  }}
-                />
-                <select
-                  value={prop.data_type}
-                  onChange={(e) => {
-                    const next = [...properties];
-                    next[index] = { ...prop, data_type: e.target.value as PropertyDataType };
-                    setProperties(next);
-                  }}
-                >
-                  {PROPERTY_TYPES.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-                <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={!!prop.required}
-                    onChange={(e) => {
-                      const next = [...properties];
-                      next[index] = { ...prop, required: e.target.checked };
-                      setProperties(next);
-                    }}
-                  />
-                  required
-                </label>
-                <button
-                  type="button"
-                  className="btn danger"
-                  style={{ padding: "3px 9px", fontSize: 12 }}
-                  onClick={() => setProperties(properties.filter((_, i) => i !== index))}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              className="btn quiet"
-              style={{ padding: "4px 10px", fontSize: 12.5 }}
-              onClick={() =>
-                setProperties([...properties, { api_name: "", data_type: "string", required: false }])
-              }
-            >
-              Add property
-            </button>
-          </div>
+          <PropertyRows properties={properties} onChange={setProperties} />
         </Field>
-        <Field label="Title property" hint="Shown as the object's name - optional">
-          <select value={titleProperty} onChange={(e) => setTitleProperty(e.target.value)}>
-            <option value="">None</option>
-            {properties.filter((p) => p.api_name).map((p) => (
-              <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
-            ))}
-          </select>
-        </Field>
+        <TitlePropertyField
+          properties={properties}
+          value={titleProperty}
+          onChange={setTitleProperty}
+        />
         {create.isError && (
           <div className="form-error">
             {create.error instanceof ApiError && create.error.status === 409
@@ -1121,6 +1057,9 @@ export default function ObjectsPage() {
   const [suggesting, setSuggesting] = useState(false);
   const [creatingLink, setCreatingLink] = useState(false);
   const [joining, setJoining] = useState<LinkType | null>(null);
+  // The id, not the row: the edit dialog needs the full definition (properties
+  // and the title property), which the summary list does not carry.
+  const [editingType, setEditingType] = useState<string | null>(null);
   const [creatingSource, setCreatingSource] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
   const queryClient = useQueryClient();
@@ -1144,6 +1083,11 @@ export default function ObjectsPage() {
     queryKey: ["action-types", workspace?.id],
     queryFn: () => actionApi.listTypes(workspace!.id),
     enabled: !!workspace,
+  });
+  const editingDetail = useQuery({
+    queryKey: ["object-type", editingType],
+    queryFn: () => objApi.getType(workspace!.id, editingType!),
+    enabled: !!workspace && !!editingType,
   });
 
   const removeType = useMutation({
@@ -1229,6 +1173,15 @@ export default function ObjectsPage() {
                       >
                         Browse
                       </Link>
+                      {canEditOntology && (
+                        <button
+                          className="btn quiet"
+                          style={{ padding: "3px 9px", fontSize: 12 }}
+                          onClick={() => setEditingType(t.id)}
+                        >
+                          Edit
+                        </button>
+                      )}
                       {canEditOntology && (
                         <button
                           className="btn danger"
@@ -1391,6 +1344,13 @@ export default function ObjectsPage() {
       )}
       {joining && workspace && (
         <LinkJoinDialog workspaceId={workspace.id} link={joining} onClose={() => setJoining(null)} />
+      )}
+      {editingType && workspace && editingDetail.data && (
+        <EditObjectTypeDialog
+          workspaceId={workspace.id}
+          type={editingDetail.data}
+          onClose={() => setEditingType(null)}
+        />
       )}
       {creatingSource && workspace && project && types.data && (
         <SourceDialog
