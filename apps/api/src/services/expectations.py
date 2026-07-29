@@ -199,6 +199,18 @@ async def store_health(
     )
 
 
+def failing_summary(health: dict[str, Any]) -> list[str]:
+    """One short line per rule that actually failed, for a caller that has to
+    explain a health verdict in a sentence (a blocked model run, migration
+    0022). `error`-status rules are left out: a rule that could not be
+    evaluated has not proven the data bad."""
+    return [
+        f"{r.get('column_name')}: {r.get('message') or r.get('rule_type')}"
+        for r in health.get("results", [])
+        if r.get("status") == "fail"
+    ]
+
+
 def evaluate(parquet_path: str, rules: list[dict[str, Any]]) -> dict[str, Any]:
     """Run the rules and shape the stored/returned health object. Synchronous;
     callers run it in a worker thread."""

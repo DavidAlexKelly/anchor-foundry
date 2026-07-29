@@ -74,6 +74,9 @@ class ModelOut(BaseModel):
     # Newest input version an upstream-triggered model has reacted to; NULL
     # until it fires once. Surfaced so the UI can say what it is waiting on.
     upstream_watermark: datetime | None = None
+    # 'ignore' | 'warn' | 'block' - what a run does when an input dataset's
+    # data-quality health is 'fail' (migration 0022).
+    input_health_policy: str = "ignore"
     last_run_status: str | None = None
     last_run_at: datetime | None = None
     inputs: list[ModelInputOut] = []
@@ -96,6 +99,7 @@ class ModelUpdate(BaseModel):
     inputs: list[ModelInputIn] | None = Field(default=None, max_length=20)
     trigger_mode: str | None = Field(default=None, pattern="^(manual|cron|upstream)$")
     cron_schedule: str | None = Field(default=None, max_length=100)
+    input_health_policy: str | None = Field(default=None, pattern="^(ignore|warn|block)$")
 
 
 class RunOut(BaseModel):
@@ -108,6 +112,9 @@ class RunOut(BaseModel):
     rows_produced: int | None
     error_message: str | None
     output_version: UUID | None
+    # What the gate saw per input, captured at run time; NULL when the run
+    # was not gated (migration 0022).
+    input_health: list[dict[str, Any]] | None = None
 
 
 class RunResult(BaseModel):
@@ -194,6 +201,7 @@ async def update_model(
             inputs=[i.model_dump() for i in body.inputs] if body.inputs is not None else None,
             trigger_mode=body.trigger_mode,
             cron_schedule=body.cron_schedule,
+            input_health_policy=body.input_health_policy,
         )
         await audit.record(
             conn,
@@ -206,7 +214,8 @@ async def update_model(
             project_id=access.project_id,
             metadata={"code_changed": body.code is not None,
                       "inputs_changed": body.inputs is not None,
-                      "trigger_mode": body.trigger_mode},
+                      "trigger_mode": body.trigger_mode,
+                      "input_health_policy": body.input_health_policy},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -250,11 +259,46 @@ async def run_model(
         if not inputs:
             raise DatasetEngineError("add at least one input dataset before running")
 
+        # The gate runs before either path (migration 0022). It comes before
+        # the Python branch on purpose: a queued run that will be blocked
+        # should be refused here, where the caller is watching, rather than
+        # in the worker a poll cycle later.
+        policy = str(model["input_health_policy"])
+        seen, refusal = await model_service.check_input_health(
+            conn, storage,
+            project_id=access.project_id, model_id=model_id, policy=policy,
+        )
+        if refusal is not None:
+            run_id = await model_service.open_run(conn, model_id, access.auth.user_id, seen)
+            await model_service.close_run(
+                conn, run_id, ok=False, rows_produced=None,
+                output_version_id=None, error=refusal,
+            )
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="model.run",
+                resource_type="model",
+                resource_id=model_id,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                metadata={"status": "blocked", "policy": policy},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            return RunResult(
+                run_id=run_id, status="failed", ok=False, error=refusal,
+                rows_produced=0, output_dataset=None,
+            )
+
         if model["language"] == "python":
             # Needs a real process boundary DuckDB can't give it - leave the
             # run queued for the worker's scheduled_model_runs job and return
             # immediately rather than blocking on its poll cycle.
-            run_id = await model_service.open_queued_run(conn, model_id, access.auth.user_id)
+            run_id = await model_service.open_queued_run(
+                conn, model_id, access.auth.user_id, seen
+            )
             await audit.record(
                 conn,
                 organisation_id=access.auth.organisation_id,
@@ -282,7 +326,7 @@ async def run_model(
                 storage.local_path, str(ds_row["s3_location"])
             )
             input_paths[str(item["input_alias"])] = path
-        run_id = await model_service.open_run(conn, model_id, access.auth.user_id)
+        run_id = await model_service.open_run(conn, model_id, access.auth.user_id, seen)
 
     ok, error, rows_produced = True, None, 0
     output_dataset: dict[str, Any] | None = None

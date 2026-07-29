@@ -396,6 +396,8 @@ export interface Model {
   next_run_at: string | null;
   /** Newest input dataset version an upstream-triggered model has reacted to. */
   upstream_watermark: string | null;
+  /** What a run does when an input dataset's health is 'fail' (migration 0022). */
+  input_health_policy: "ignore" | "warn" | "block";
   last_run_status: string | null;
   last_run_at: string | null;
   inputs: ModelInput[];
@@ -443,6 +445,15 @@ export interface PipelineGraph {
   layer_count: number;
 }
 
+/** Per-input dataset health as a gated run saw it, captured at run time. */
+export interface RunInputHealth {
+  dataset_id: string;
+  name: string;
+  version: number;
+  status: string;
+  failing: string[];
+}
+
 export interface ModelRun {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -453,6 +464,8 @@ export interface ModelRun {
   rows_produced: number | null;
   error_message: string | null;
   output_version: string | null;
+  /** Null when the run was not gated (the model's policy was 'ignore'). */
+  input_health: RunInputHealth[] | null;
 }
 
 export interface ModelRunResult {

@@ -50,7 +50,7 @@ from .storage import StorageGateway
 _COLUMNS = """
     id, project_id, name, description, language, code, output_dataset_id,
     trigger_mode, cron_schedule, next_run_at, upstream_watermark,
-    created_by, created_at, updated_at
+    input_health_policy, created_by, created_at, updated_at
 """
 
 
@@ -185,6 +185,7 @@ async def update(
     inputs: list[dict[str, Any]] | None,
     trigger_mode: str | None = None,
     cron_schedule: str | None = None,
+    input_health_policy: str | None = None,
 ) -> dict[str, Any]:
     await get(conn, project_id, model_id)
     if trigger_mode == "cron":
@@ -214,14 +215,16 @@ async def update(
                -- switching away should not leave a stale watermark that
                -- silently swallows the first version after switching back.
                upstream_watermark = CASE WHEN :trigger IS NOT NULL THEN NULL
-                                         ELSE upstream_watermark END
+                                         ELSE upstream_watermark END,
+               input_health_policy = COALESCE(
+                   CAST(:health_policy AS model_health_policy), input_health_policy)
          WHERE id = :mid
         RETURNING {_COLUMNS}
         """,
         {
             "name": name, "descr": description, "code": code,
             "trigger": trigger_mode, "cron": cron_schedule, "next_run_at": next_run_at,
-            "mid": str(model_id),
+            "health_policy": input_health_policy, "mid": str(model_id),
         },
     )
     assert row is not None
@@ -247,9 +250,89 @@ async def delete(conn: AsyncConnection, project_id: UUID, model_id: UUID) -> Non
     # someone may depend on. models.output_dataset_id FK is SET NULL.
 
 
+# ---- input health gating (migration 0022) -----------------------------------
+async def check_input_health(
+    conn: AsyncConnection,
+    storage: StorageGateway,
+    *,
+    project_id: UUID,
+    model_id: UUID,
+    policy: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Evaluate every input dataset's health and decide whether the run may
+    proceed. Returns (what the gate saw, refusal message or None).
+
+    The gate is the "reader" migration 0020 said expectations were missing:
+    it computes health when nothing has cached it, so `block` is enforced
+    against data nobody has opened - the automated case that most needs it.
+    That is also its cost: one DuckDB pass per input the first time each
+    version is seen.
+
+    `ignore` short-circuits before any of that, so an ungated model pays
+    nothing.
+    """
+    import anyio
+
+    from . import expectations
+
+    if policy == "ignore":
+        return [], None
+
+    seen: list[dict[str, Any]] = []
+    for item in await list_inputs(conn, model_id):
+        dataset_id = UUID(str(item["dataset_id"]))
+        ds_row = await ds_service.get(conn, project_id, dataset_id)
+        version = int(ds_row["current_version"])
+        health = await expectations.cached_health(conn, dataset_id, version)
+        if health is None:
+            rules = await expectations.list_rules(conn, project_id, dataset_id)
+            path = await anyio.to_thread.run_sync(
+                storage.local_path, str(ds_row["s3_location"])
+            )
+            health = await anyio.to_thread.run_sync(
+                expectations.evaluate, path, [dict(r) for r in rules]
+            )
+            await expectations.store_health(conn, dataset_id, version, health)
+        seen.append({
+            "dataset_id": str(dataset_id),
+            "name": str(ds_row["name"]),
+            "version": version,
+            "status": str(health.get("status", "none")),
+            "failing": expectations.failing_summary(health),
+        })
+
+    return seen, gate_message(seen, policy)
+
+
+def gate_message(seen: list[dict[str, Any]], policy: str) -> str | None:
+    """The refusal, or None if the run may proceed. Only `fail` gates - see
+    migration 0022 on why `warn` and `none` do not."""
+    if policy != "block":
+        return None
+    bad = [s for s in seen if s["status"] == "fail"]
+    if not bad:
+        return None
+    detail = "; ".join(f"{s['name']} ({', '.join(s['failing']) or 'failed its checks'})" for s in bad)
+    return (
+        f"blocked: {len(bad)} input dataset(s) failed their data quality checks - {detail}"
+    )
+
+
 # ---- runs -------------------------------------------------------------------
+def _json_or_null(value: list[dict[str, Any]] | None) -> str | None:
+    """An empty gate result is stored as NULL, not `[]`: migration 0022 reads
+    NULL as "this run was not gated", and a model with no inputs under a
+    `warn` policy has nothing to say either way."""
+    import json
+
+    return json.dumps(value) if value else None
+
+
 async def open_run(
-    conn: AsyncConnection, model_id: UUID, triggered_by: UUID
+    conn: AsyncConnection,
+    model_id: UUID,
+    triggered_by: UUID,
+    input_health: list[dict[str, Any]] | None = None,
 ) -> UUID:
     """SQL runs only - the route executes the transform immediately after
     this call, so 'running'/started_at=now() is accurate the instant it's
@@ -258,29 +341,35 @@ async def open_run(
     row = await fetch_one(
         conn,
         """
-        INSERT INTO model_runs (model_id, status, triggered_by, trigger_kind, started_at)
-        VALUES (:mid, 'running', :by, 'manual', now())
+        INSERT INTO model_runs (model_id, status, triggered_by, trigger_kind,
+                                started_at, input_health)
+        VALUES (:mid, 'running', :by, 'manual', now(), CAST(:health AS jsonb))
         RETURNING id
         """,
-        {"mid": str(model_id), "by": str(triggered_by)},
+        {"mid": str(model_id), "by": str(triggered_by),
+         "health": _json_or_null(input_health)},
     )
     assert row is not None
     return UUID(str(row["id"]))
 
 
 async def open_queued_run(
-    conn: AsyncConnection, model_id: UUID, triggered_by: UUID
+    conn: AsyncConnection,
+    model_id: UUID,
+    triggered_by: UUID,
+    input_health: list[dict[str, Any]] | None = None,
 ) -> UUID:
     """Python runs: left at the table's default status='queued' with no
     started_at - that only gets set when the worker actually starts it."""
     row = await fetch_one(
         conn,
         """
-        INSERT INTO model_runs (model_id, triggered_by, trigger_kind)
-        VALUES (:mid, :by, 'manual')
+        INSERT INTO model_runs (model_id, triggered_by, trigger_kind, input_health)
+        VALUES (:mid, :by, 'manual', CAST(:health AS jsonb))
         RETURNING id
         """,
-        {"mid": str(model_id), "by": str(triggered_by)},
+        {"mid": str(model_id), "by": str(triggered_by),
+         "health": _json_or_null(input_health)},
     )
     assert row is not None
     return UUID(str(row["id"]))
@@ -319,7 +408,7 @@ async def list_runs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, Any
         conn,
         """
         SELECT id, status, trigger_kind, queued_at, started_at, finished_at,
-               rows_produced, error_message, output_version
+               rows_produced, error_message, output_version, input_health
           FROM model_runs
          WHERE model_id = :mid
          ORDER BY queued_at DESC

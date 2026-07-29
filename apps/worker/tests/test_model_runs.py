@@ -339,6 +339,158 @@ def test_upstream_chain_runs_the_downstream_model_next_pass(workspace: dict) -> 
     assert _runs(a) == [("succeeded", "upstream")], "A must not re-fire on its own output"
 
 
+def _set_policy(model_id: uuid.UUID, policy: str) -> None:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE models SET input_health_policy = %s WHERE id = %s", (policy, model_id)
+        )
+
+
+def _add_not_null_rule(workspace: dict, column: str) -> None:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO dataset_expectations (dataset_id, rule_type, column_name, severity)
+               VALUES (%s, 'not_null', %s, 'error')""",
+            (workspace["input_dataset_id"], column),
+        )
+
+
+@pytest.fixture()
+def failing_input(workspace: dict, storage_root: str):
+    """Rewrite the fixture's input Parquet with a null in `val`, and assert
+    a not-null rule on it, so the dataset's health is genuinely `fail`."""
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        key = conn.execute(
+            "SELECT s3_location FROM datasets WHERE id = %s",
+            (workspace["input_dataset_id"],),
+        ).fetchone()[0]
+    path = os.path.join(storage_root, key)
+    duckdb.connect().execute(
+        f"COPY (SELECT * FROM (VALUES (1,10),(2,NULL)) t(id,val)) TO '{path}' (FORMAT parquet)"
+    )
+    _add_not_null_rule(workspace, "val")
+    return workspace
+
+
+def test_worker_and_api_agree_on_the_rule_types(workspace: dict) -> None:
+    """The evaluator is mirrored into the worker (see its dataset_engine
+    docstring). A rule the API can store but the worker cannot evaluate would
+    make a gated run silently disagree with the dataset's own health badge."""
+    # Read the literal out of the API's source rather than importing it: the
+    # two apps have separate virtualenvs by design, and this assertion should
+    # fail on real drift, not on the API growing a dependency the worker
+    # doesn't install.
+    import ast
+
+    api_engine_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "api", "src", "services", "dataset_engine.py",
+    )
+    with open(api_engine_path) as handle:
+        tree = ast.parse(handle.read())
+    api_rule_types = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "RULE_TYPES" for t in node.targets)
+    )
+
+    from anchor_worker import dataset_engine as worker_engine
+
+    assert worker_engine.RULE_TYPES == api_rule_types
+
+
+def test_block_policy_refuses_a_run_on_failing_input(failing_input: dict) -> None:
+    mid = _create_model(failing_input, language="sql", code="SELECT * FROM t")
+    _set_policy(mid, "block")
+    run_id = _queue_run(mid)
+
+    run_model_runs(_ctx())
+
+    status, error, rows, output_version = _run_row(run_id)
+    assert status == "failed", (status, error)
+    assert "blocked" in error and "val" in error
+    assert rows is None and output_version is None
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        health, started = conn.execute(
+            "SELECT input_health, started_at FROM model_runs WHERE id = %s", (run_id,)
+        ).fetchone()
+    assert health[0]["status"] == "fail"
+    assert health[0]["failing"] == ["val: 1 null value(s)"]
+    assert started is not None, "a blocked run still records when it was decided"
+
+
+def test_the_gate_evaluates_health_nothing_has_cached(failing_input: dict) -> None:
+    """Migration 0020 said expectations lacked a reader to trigger
+    computation on the automated path; this is that reader."""
+    def cached():
+        with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+            return conn.execute(
+                """SELECT v.expectation_results FROM dataset_versions v
+                    JOIN datasets d ON d.id = v.dataset_id
+                   WHERE d.id = %s AND v.version_number = d.current_version""",
+                (failing_input["input_dataset_id"],),
+            ).fetchone()
+
+    _add_version(failing_input["input_dataset_id"], 1)
+    assert cached()[0] is None
+
+    mid = _create_model(failing_input, language="sql", code="SELECT * FROM t")
+    _set_policy(mid, "block")
+    _queue_run(mid)
+    run_model_runs(_ctx())
+
+    assert cached()[0] is not None, "the gate must compute health, not only read it"
+
+
+def test_warn_policy_runs_anyway_and_records_what_it_saw(failing_input: dict) -> None:
+    mid = _create_model(failing_input, language="sql", code="SELECT * FROM t")
+    _set_policy(mid, "warn")
+    run_id = _queue_run(mid)
+
+    run_model_runs(_ctx())
+
+    status, error, rows, _ = _run_row(run_id)
+    assert status == "succeeded", (status, error)
+    assert rows == 2
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        health = conn.execute(
+            "SELECT input_health FROM model_runs WHERE id = %s", (run_id,)
+        ).fetchone()[0]
+    assert health[0]["status"] == "fail", "warn records the same evidence block would"
+
+
+def test_block_does_not_stop_an_upstream_chain_from_settling(failing_input: dict) -> None:
+    """A blocked run must still be a finished run: if it stayed queued the
+    coalescing guard in 0021 would wedge the model forever."""
+    mid = _create_model(
+        failing_input, language="sql", code="SELECT * FROM t", trigger_mode="upstream"
+    )
+    _set_policy(mid, "block")
+    _add_version(failing_input["input_dataset_id"], 1)
+
+    run_model_runs(_ctx())
+    first = _runs(mid)
+    assert [r[0] for r in first] == ["failed"]
+
+    run_model_runs(_ctx())
+    assert _runs(mid) == first, "nothing new upstream, so no retry storm"
+
+
+def test_ignore_is_the_default_and_costs_nothing(failing_input: dict) -> None:
+    mid = _create_model(failing_input, language="sql", code="SELECT * FROM t")
+    run_id = _queue_run(mid)
+    run_model_runs(_ctx())
+    status, error, _, _ = _run_row(run_id)
+    assert status == "succeeded", (status, error)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        health = conn.execute(
+            "SELECT input_health FROM model_runs WHERE id = %s", (run_id,)
+        ).fetchone()[0]
+    assert health is None
+
+
 def test_manual_trigger_model_is_not_auto_enqueued(workspace: dict) -> None:
     mid = _create_model(workspace, language="sql", code="SELECT * FROM t", trigger_mode="manual")
     run_model_runs(_ctx())

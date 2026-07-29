@@ -72,6 +72,9 @@ function ModelDialog({
     existing?.trigger_mode ?? "manual",
   );
   const [cronSchedule, setCronSchedule] = useState(existing?.cron_schedule ?? "0 * * * *");
+  const [healthPolicy, setHealthPolicy] = useState<"ignore" | "warn" | "block">(
+    existing?.input_health_policy ?? "ignore",
+  );
   const queryClient = useQueryClient();
 
   const availableDatasets = useQuery({
@@ -88,6 +91,7 @@ function ModelDialog({
             inputs,
             trigger_mode: triggerMode,
             cron_schedule: triggerMode === "cron" ? cronSchedule : null,
+            input_health_policy: healthPolicy,
           })
         : modelApi.create(workspaceId, projectId, { name, language, code, inputs }),
     onSuccess: async () => {
@@ -255,6 +259,23 @@ function ModelDialog({
             </div>
           </Field>
         )}
+        {existing && (
+          <Field
+            label="Input data quality"
+            hint="Checks come from each input dataset's Checks tab; only a failing check counts"
+          >
+            <select
+              value={healthPolicy}
+              onChange={(e) =>
+                setHealthPolicy(e.target.value as "ignore" | "warn" | "block")
+              }
+            >
+              <option value="ignore">Run regardless</option>
+              <option value="warn">Run, but record failing checks</option>
+              <option value="block">Don&apos;t run if an input failed its checks</option>
+            </select>
+          </Field>
+        )}
         {save.isError && (
           <div className="form-error">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the model."}
@@ -339,9 +360,21 @@ function ModelRow({
       </td>
       <td>
         <RunBadge model={model} />
+        {result && !result.ok && result.error?.startsWith("blocked:") && (
+          <div className="slug" style={{ color: "var(--danger)" }}>
+            input data quality
+          </div>
+        )}
       </td>
       <td>
         <ScheduleSummary model={model} />
+        {model.input_health_policy !== "ignore" && (
+          <div className="slug" title="Migration 0022: only a failing check gates a run">
+            {model.input_health_policy === "block"
+              ? "blocks on failing input"
+              : "warns on failing input"}
+          </div>
+        )}
       </td>
       <td>
         {canEdit && (

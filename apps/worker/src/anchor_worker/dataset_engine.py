@@ -220,3 +220,184 @@ def merge_incremental(
         return schema, row_count
     finally:
         con.close()
+
+
+# ---- data quality expectations (migration 0020/0022) ------------------------
+# An exact mirror of apps/api's services/dataset_engine.py evaluator, for the
+# same reason as everything else in this file: api and worker are separately
+# deployed images with no shared package. The worker needs it because
+# migration 0022's input-health gate has to hold on *every* path a model run
+# can start from - and the automated ones (cron, upstream triggers, queued
+# Python) all start here. A gate that only held on the interactive API path
+# would be the same silently-does-nothing promise 0021 existed to remove.
+#
+# tests/test_model_runs.py asserts RULE_TYPES is identical on both sides, the
+# same parity check test_mysql_sync_configs.py makes for the connector
+# registry. Any rule added to the API's evaluator must be added here too.
+
+RULE_TYPES = ("not_null", "unique", "value_in_range", "regex_match", "column_exists")
+
+
+def evaluate_expectations(
+    parquet_path: str, rules: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Check each rule against a version's data (migration 0020).
+
+    Returns one result per rule, in the order given, each with a status of
+    `pass`, `fail`, or `error`. `error` is distinct from `fail` on purpose: a
+    rule that cannot be evaluated (its column is gone, its regex is invalid)
+    has not proven the data bad, and reporting that as a data failure would
+    send someone looking in the wrong place.
+
+    One rule failing never stops the others - a dataset's health is the whole
+    picture, and the first broken rule is the least useful place to stop.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(
+                f"CREATE VIEW src AS SELECT * FROM read_parquet('{parquet_path}')"
+            )
+            columns = {str(row[0]) for row in con.execute("DESCRIBE src").fetchall()}
+            total = int(con.execute("SELECT count(*) FROM src").fetchone()[0])
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+
+        results: list[dict[str, Any]] = []
+        for rule in rules:
+            results.append(_evaluate_one(con, rule, columns, total))
+        return results
+    finally:
+        con.close()
+
+
+def _evaluate_one(
+    con: "duckdb.DuckDBPyConnection",
+    rule: dict[str, Any],
+    columns: set[str],
+    total: int,
+) -> dict[str, Any]:
+    rule_type = str(rule.get("rule_type"))
+    column = str(rule.get("column_name") or "")
+    config = rule.get("config") or {}
+    if isinstance(config, str):
+        import json
+
+        try:
+            config = json.loads(config)
+        except ValueError:
+            config = {}
+
+    base = {
+        "expectation_id": str(rule.get("id")) if rule.get("id") is not None else None,
+        "rule_type": rule_type,
+        "column_name": column,
+        "severity": str(rule.get("severity") or "error"),
+        "failing_rows": 0,
+        "rows_checked": total,
+    }
+
+    if rule_type == "column_exists":
+        present = column in columns
+        return {
+            **base,
+            "status": "pass" if present else "fail",
+            "message": None if present else f"column '{column}' is missing",
+        }
+
+    # Every other rule needs the column to be there to mean anything. Missing
+    # is an `error`, not a `fail`: add a column_exists rule to assert presence.
+    if column not in columns:
+        return {
+            **base,
+            "status": "error",
+            "message": f"column '{column}' is not in this version",
+        }
+
+    quoted = '"' + column.replace('"', '""') + '"'
+    try:
+        if rule_type == "not_null":
+            failing = _scalar(con, f"SELECT count(*) FROM src WHERE {quoted} IS NULL")
+            message = f"{failing} null value(s)" if failing else None
+        elif rule_type == "unique":
+            # Rows beyond the first occurrence of each value - nulls excluded,
+            # since SQL uniqueness does not constrain them.
+            failing = _scalar(
+                con,
+                f"SELECT count({quoted}) - count(DISTINCT {quoted}) FROM src",
+            )
+            message = f"{failing} duplicate value(s)" if failing else None
+        elif rule_type == "value_in_range":
+            minimum, maximum = config.get("min"), config.get("max")
+            if minimum is None and maximum is None:
+                return {
+                    **base,
+                    "status": "error",
+                    "message": "value_in_range needs a min, a max, or both",
+                }
+            clauses = []
+            if minimum is not None:
+                clauses.append(f"{quoted} < {_number(minimum)}")
+            if maximum is not None:
+                clauses.append(f"{quoted} > {_number(maximum)}")
+            predicate = " OR ".join(clauses)
+            failing = _scalar(
+                con,
+                f"SELECT count(*) FROM src WHERE {quoted} IS NOT NULL AND ({predicate})",
+            )
+            message = f"{failing} value(s) outside the range" if failing else None
+        elif rule_type == "regex_match":
+            pattern = config.get("pattern")
+            if not isinstance(pattern, str) or not pattern:
+                return {**base, "status": "error", "message": "regex_match needs a pattern"}
+            escaped = pattern.replace("'", "''")
+            failing = _scalar(
+                con,
+                f"SELECT count(*) FROM src WHERE {quoted} IS NOT NULL "
+                f"AND NOT regexp_matches(CAST({quoted} AS VARCHAR), '{escaped}')",
+            )
+            message = f"{failing} value(s) do not match" if failing else None
+        else:
+            return {**base, "status": "error", "message": f"unknown rule type '{rule_type}'"}
+    except duckdb.Error as exc:
+        # A rule that cannot run against this column's type (a range check on
+        # text, a bad regex) is the rule's problem, not the data's.
+        return {**base, "status": "error", "message": _clean(exc)}
+
+    return {
+        **base,
+        "failing_rows": failing,
+        "status": "pass" if failing == 0 else "fail",
+        "message": message,
+    }
+
+
+def _scalar(con: "duckdb.DuckDBPyConnection", sql: str) -> int:
+    row = con.execute(sql).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def _number(value: Any) -> str:
+    """A numeric literal for a range bound. Anything non-numeric is refused
+    rather than interpolated - this is the one place rule config reaches SQL."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DatasetEngineError("range bounds must be numbers")
+    return repr(float(value))
+
+
+def overall_status(results: list[dict[str, Any]]) -> str:
+    """A dataset's health from its rule results.
+
+    `fail` if any error-severity rule failed, `warn` if only warn-severity
+    ones did or a rule could not be evaluated, `pass` otherwise, and `none`
+    when there are no rules - which is different from passing, and shows
+    differently.
+    """
+    if not results:
+        return "none"
+    statuses = {(r.get("status"), r.get("severity")) for r in results}
+    if any(status == "fail" and severity == "error" for status, severity in statuses):
+        return "fail"
+    if any(status in ("fail", "error") for status, _ in statuses):
+        return "warn"
+    return "pass"

@@ -216,6 +216,75 @@ def _enqueue_due_upstream_models(context: OpExecutionContext, platform_db: Platf
     return enqueued
 
 
+def _check_input_health(cur, storage, model_id) -> tuple[list[dict], str | None]:
+    """The worker's half of migration 0022's gate. Mirrors the API's
+    services/models.py `check_input_health`: cached health per input dataset
+    version, computed and cached if absent, so `block` is enforced against
+    data nobody has opened. Returns (what the gate saw, refusal or None).
+
+    Only reached when the model's policy is not 'ignore', so an ungated run
+    pays nothing for this existing."""
+    cur.execute(
+        """
+        SELECT d.id, d.name, d.current_version, d.s3_location,
+               (SELECT v.expectation_results FROM dataset_versions v
+                 WHERE v.dataset_id = d.id AND v.version_number = d.current_version)
+          FROM model_inputs mi
+          JOIN datasets d ON d.id = mi.dataset_id
+         WHERE mi.model_id = %s
+         ORDER BY mi.input_alias
+        """,
+        (model_id,),
+    )
+    seen: list[dict] = []
+    for dataset_id, name, version, location, cached in cur.fetchall():
+        health = cached if isinstance(cached, dict) else None
+        if health is None:
+            cur.execute(
+                """SELECT id, rule_type, column_name, config, severity
+                     FROM dataset_expectations WHERE dataset_id = %s
+                    ORDER BY column_name, rule_type""",
+                (dataset_id,),
+            )
+            rules = [
+                {"id": r[0], "rule_type": r[1], "column_name": r[2],
+                 "config": r[3], "severity": r[4]}
+                for r in cur.fetchall()
+            ]
+            results = engine.evaluate_expectations(storage.local_path(location), rules)
+            health = {
+                "status": engine.overall_status(results),
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "results": results,
+            }
+            cur.execute(
+                "UPDATE dataset_versions SET expectation_results = %s "
+                "WHERE dataset_id = %s AND version_number = %s",
+                (json.dumps(health), dataset_id, version),
+            )
+        seen.append({
+            "dataset_id": str(dataset_id),
+            "name": name,
+            "version": version,
+            "status": health.get("status", "none"),
+            "failing": [
+                f"{r.get('column_name')}: {r.get('message') or r.get('rule_type')}"
+                for r in health.get("results", [])
+                if r.get("status") == "fail"
+            ],
+        })
+
+    bad = [s for s in seen if s["status"] == "fail"]
+    if not bad:
+        return seen, None
+    detail = "; ".join(
+        f"{s['name']} ({', '.join(s['failing']) or 'failed its checks'})" for s in bad
+    )
+    return seen, (
+        f"blocked: {len(bad)} input dataset(s) failed their data quality checks - {detail}"
+    )
+
+
 def _execute_queued_model_runs(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
     storage = gateway_from_env()
     with platform_db.connect() as conn:
@@ -230,7 +299,7 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                 cur.execute(
                     """
                     SELECT mr.status, mr.model_id, m.project_id, m.language, m.code,
-                           m.name, m.output_dataset_id
+                           m.name, m.output_dataset_id, m.input_health_policy
                       FROM model_runs mr
                       JOIN models m ON m.id = mr.model_id
                      WHERE mr.id = %s
@@ -240,7 +309,44 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                 row = cur.fetchone()
                 if row is None or row[0] != "queued":
                     continue  # already handled or gone - re-verified
-                (_, model_id, project_id, language, code, model_name, output_dataset_id) = row
+                (_, model_id, project_id, language, code, model_name,
+                 output_dataset_id, health_policy) = row
+
+                # Gate before anything is marked running (migration 0022), so
+                # a blocked run never shows a started_at for work that never
+                # started. Evaluation failures are the gate's problem, not the
+                # data's: they are recorded and the run proceeds ungated
+                # rather than a broken rule stopping a pipeline.
+                gate_seen, refusal = [], None
+                if health_policy != "ignore":
+                    try:
+                        gate_seen, refusal = _check_input_health(cur, storage, model_id)
+                    except (engine.DatasetEngineError, FileNotFoundError) as exc:
+                        context.log.warning(
+                            "input health check failed for model %s: %s", model_id, exc
+                        )
+                    if health_policy != "block":
+                        refusal = None  # 'warn' records what it saw and runs anyway
+                if gate_seen:
+                    cur.execute(
+                        "UPDATE model_runs SET input_health = %s WHERE id = %s",
+                        (json.dumps(gate_seen), run_id),
+                    )
+                if refusal is not None:
+                    cur.execute(
+                        """
+                        UPDATE model_runs
+                           SET status = 'failed', started_at = now(), finished_at = now(),
+                               error_message = %s
+                         WHERE id = %s
+                        """,
+                        (refusal, run_id),
+                    )
+                    conn.commit()
+                    context.log.info("model run %s: %s", run_id, refusal)
+                    executed += 1
+                    continue
+
                 cur.execute(
                     "UPDATE model_runs SET status = 'running', started_at = now() WHERE id = %s",
                     (run_id,),

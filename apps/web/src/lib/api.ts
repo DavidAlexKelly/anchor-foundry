@@ -325,6 +325,7 @@ export const models = {
       inputs?: { dataset_id: string; input_alias: string }[];
       trigger_mode?: "manual" | "cron" | "upstream";
       cron_schedule?: string | null;
+      input_health_policy?: "ignore" | "warn" | "block";
     },
   ) =>
     request<import("./types").Model>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, {
