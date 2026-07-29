@@ -473,3 +473,124 @@ def test_backfill_moves_postgres_instances_and_keeps_the_audit_trail(
         assert r.json()["total"] == 2, "backfill is idempotent"
     finally:
         instance_store.configure_instance_store(None)
+
+
+# ---- the Object Explorer (roadmap Objects item 2) ---------------------------
+def _explore(client: TestClient, fx: Fixture, **params) -> dict:
+    r = client.get(
+        f"/api/workspaces/{fx.workspace}/object-instances",
+        headers=hdr(fx.viewer_sub), params=params,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _second_type(client: TestClient, fx: Fixture, mapped: dict) -> dict:
+    """A second mapped type, so "across every object type at once" has more
+    than one type to be across. A plain helper rather than a fixture: the
+    parametrised test below has to build it *after* choosing a store."""
+    tag = uuid.uuid4().hex[:6]
+    parts = b"code,label\nX1,Widget\nX2,Gadget\n"
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"Parts {tag}"},
+        files={"file": ("parts.csv", io.BytesIO(parts), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"part_{tag}", "display_name": f"Part {tag}",
+              "properties": [{"api_name": "label", "data_type": "string"}]},
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset,
+              "primary_key_column": "code", "column_mappings": {"label": "label"}},
+    )
+    assert r.status_code == 201, r.text
+    for sid in (mapped["source_id"], r.json()["id"]):
+        assert client.post(
+            f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+            f"/object-type-sources/{sid}/sync",
+            headers=hdr(fx.editor_sub),
+        ).status_code == 200
+    # A value shared with nothing else, to search for without colliding with
+    # instances other tests left in this workspace.
+    return {"people": mapped["type_id"], "parts": type_id, "tag": tag}
+
+
+@pytest.mark.parametrize("store_name", ["postgres", "opensearch"])
+def test_the_explorer_searches_every_type_at_once(
+    client: TestClient, fx: Fixture, mapped: dict, opensearch: str, store_name: str,
+) -> None:
+    """The same assertions against both stores - the Explorer is the read the
+    cutover was for, and it has to work on the fallback too.
+
+    Assertions are scoped to the types this test creates rather than to
+    workspace totals: the Explorer is workspace-wide by design, so it also
+    sees whatever else lives in the fixture workspace, and asserting a global
+    count would be asserting test isolation the feature does not promise.
+    """
+    reset(opensearch)
+    gateway = None
+    if store_name == "opensearch":
+        gateway = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+        instance_store.configure_instance_store(gateway)
+    try:
+        types = _second_type(client, fx, mapped)
+
+        # Both types appear in one unfiltered result set, each row saying
+        # which it is - the whole point of a cross-type view.
+        found: dict[str, str] = {}
+        offset = 0
+        while offset < 500:
+            page = _explore(client, fx, limit=50, offset=offset)
+            for item in page["items"]:
+                found[item["id"]] = item["object_type_id"]
+            offset += 50
+            if offset >= page["total"]:
+                break
+        assert types["people"] in found.values()
+        assert types["parts"] in found.values()
+
+        # Search by a property value, across types.
+        ada = _explore(client, fx, q="Ada", type_id=types["people"])
+        assert ada["total"] == 1, ada
+        assert ada["items"][0]["properties"]["full_name"] == "Ada"
+        assert ada["items"][0]["object_type_display_name"].startswith("Person")
+
+        widget = _explore(client, fx, q="Widget")
+        assert widget["total"] == 1, widget
+        assert widget["items"][0]["object_type_id"] == types["parts"]
+        assert widget["items"][0]["object_type_api_name"] == f"part_{types['tag']}"
+
+        # Filter by type, with and without a query.
+        parts = _explore(client, fx, type_id=types["parts"])
+        assert parts["total"] == 2
+        assert {i["properties"]["label"] for i in parts["items"]} == {"Widget", "Gadget"}
+
+        assert _explore(client, fx, q="Ada", type_id=types["parts"])["total"] == 0, (
+            "the query and the type filter are ANDed"
+        )
+        assert _explore(client, fx, q=f"nothing-matches-{types['tag']}")["total"] == 0
+    finally:
+        instance_store.configure_instance_store(None)
+
+
+def test_the_explorer_pages_and_refuses_an_outsider(
+    client: TestClient, fx: Fixture, mapped: dict
+) -> None:
+    types = _second_type(client, fx, mapped)
+    first = _explore(client, fx, type_id=types["parts"], limit=1, offset=0)
+    second = _explore(client, fx, type_id=types["parts"], limit=1, offset=1)
+    assert first["total"] == second["total"] == 2
+    assert first["items"][0]["id"] != second["items"][0]["id"]
+
+    r = client.get(
+        f"/api/workspaces/{fx.workspace}/object-instances", headers=hdr(fx.outsider_sub)
+    )
+    assert r.status_code == 404

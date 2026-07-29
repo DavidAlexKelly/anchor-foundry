@@ -93,6 +93,17 @@ class InstanceStoreGateway(Protocol):
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str, properties: dict[str, Any]
     ) -> None: ...
 
+    async def search(
+        self,
+        *,
+        search_prefix: str,
+        workspace_id: UUID,
+        query: str | None,
+        object_type_ids: list[UUID] | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]: ...
+
 
 def _index_name(search_prefix: str) -> str:
     # search_prefix already ends in "-" (db 0002: f"{slug}-{short_id}-");
@@ -287,6 +298,61 @@ class OpenSearchInstanceStore:
             refresh=True,
         )
 
+    async def search(
+        self,
+        *,
+        search_prefix: str,
+        workspace_id: UUID,
+        query: str | None,
+        object_type_ids: list[UUID] | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Workspace-wide instance search (roadmap Objects item 2) - the read
+        the cutover was for. `workspace_id` is accepted and unused here: the
+        index *is* the workspace, so scoping is structural. It exists for the
+        Postgres store, which has no index to lean on."""
+        limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
+        offset = max(0, offset)
+        if offset + limit > MAX_RESULT_WINDOW:
+            raise ValueError(
+                f"pagination past {MAX_RESULT_WINDOW:,} rows needs search_after, not offset - "
+                "not implemented here"
+            )
+        clauses: dict[str, Any] = {}
+        if object_type_ids:
+            clauses["filter"] = [
+                {"terms": {"object_type_id": [str(t) for t in object_type_ids]}}
+            ]
+        if query:
+            # phrase_prefix so a half-typed value still matches, across every
+            # property plus the primary key - "search by any property value".
+            clauses["must"] = [{
+                "multi_match": {
+                    "query": query,
+                    "fields": ["properties.*", "primary_key"],
+                    "type": "phrase_prefix",
+                }
+            }]
+        body: dict[str, Any] = {
+            "query": {"bool": clauses} if clauses else {"match_all": {}},
+            "sort": [{"updated_at": "desc"}],
+            "from": offset,
+            "size": limit,
+        }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        rows = [
+            {
+                "id": h["_id"],
+                "object_type_id": h["_source"]["object_type_id"],
+                "primary_key": h["_source"]["primary_key"],
+                "properties": h["_source"]["properties"],
+                "updated_at": h["_source"]["updated_at"],
+            }
+            for h in resp["hits"]["hits"]
+        ]
+        return rows, int(resp["hits"]["total"]["value"])
+
     async def close(self) -> None:
         await self._client.close()
 
@@ -405,6 +471,23 @@ class PostgresInstanceStore:
             )
         except NotFoundError:
             return None
+
+    async def search(
+        self,
+        *,
+        search_prefix: str,
+        workspace_id: UUID,
+        query: str | None,
+        object_type_ids: list[UUID] | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        from . import instances as instances_service
+
+        return await instances_service.search(
+            self._conn, workspace_id=workspace_id, query=query,
+            object_type_ids=object_type_ids, limit=limit, offset=offset,
+        )
 
     async def update_properties(
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str,

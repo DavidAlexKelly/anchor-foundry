@@ -505,6 +505,26 @@ export interface ModelRunResult {
   output_dataset: { id: string; name: string; slug: string; current_version: number } | null;
 }
 
+/** One row of the workspace-wide Object Explorer: an instance plus the type
+ *  it belongs to, since a cross-type result set is meaningless without
+ *  saying what each row is. */
+export interface ExplorerInstance {
+  id: string;
+  primary_key: string;
+  properties: Record<string, unknown>;
+  updated_at: string;
+  object_type_id: string;
+  object_type_api_name: string;
+  object_type_display_name: string;
+}
+
+export interface ExplorerPage {
+  items: ExplorerInstance[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // ---- objects (ontology) -----------------------------------------------------
 export type PropertyDataType =
   | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint" | "json";

@@ -328,6 +328,66 @@ async def get_instance(
     return InstanceOut(**{**row, "properties": _jsonb(row["properties"])})
 
 
+class ExplorerInstanceOut(InstanceOut):
+    """An instance plus the type it belongs to - a workspace-wide result set
+    is meaningless without saying what each row *is*."""
+
+    object_type_id: UUID
+    object_type_api_name: str
+    object_type_display_name: str
+
+
+class ExplorerPage(BaseModel):
+    items: list[ExplorerInstanceOut]
+    total: int
+    limit: int
+    offset: int
+
+
+@router.get("/object-instances", response_model=ExplorerPage)
+async def explore_instances(
+    q: str | None = Query(default=None, max_length=200),
+    type_id: list[UUID] | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ExplorerPage:
+    """Search and browse every instance in the workspace at once (roadmap
+    Objects item 2), across types rather than within one.
+
+    Workspace-scoped like the ontology it searches: object types are
+    workspace-wide, so an explorer that stopped at a project boundary would
+    show a partial ontology and call it the whole one.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        rows, total = await instance_store.store_for(conn).search(
+            search_prefix=prefix,
+            workspace_id=access.workspace_id,
+            query=q,
+            object_type_ids=type_id,
+            limit=limit,
+            offset=offset,
+        )
+        # Type names come from Postgres whichever store held the instances -
+        # the ontology definition never moved.
+        types = {
+            str(t["id"]): t
+            for t in await ontology_service.list_types(conn, access.workspace_id)
+        }
+    items = []
+    for row in rows:
+        meta = types.get(str(row["object_type_id"]))
+        if meta is None:
+            continue  # type deleted since the instance was indexed
+        items.append(ExplorerInstanceOut(
+            **{**row, "properties": _jsonb(row["properties"])},
+            object_type_api_name=str(meta["api_name"]),
+            object_type_display_name=str(meta["display_name"]),
+        ))
+    return ExplorerPage(items=items, total=total, limit=limit, offset=offset)
+
+
 # ---- link types (workspace-scoped) ------------------------------------------
 @router.get("/link-types", response_model=list[LinkTypeOut])
 async def list_link_types(

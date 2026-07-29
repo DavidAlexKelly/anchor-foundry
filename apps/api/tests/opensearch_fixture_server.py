@@ -22,7 +22,7 @@ Endpoints:
   PUT    /{index}                 indices.create
   POST   /_bulk                   update + doc_as_upsert only
   POST   /{index}/_delete_by_query
-  POST   /{index}/_search
+  POST   /{index}/_search       term/terms/range/multi_match, sorted+paged
   GET    /{index}/_doc/{id}
   POST   /{index}/_update/{id}
   POST   /__reset                 test helper: forget every index
@@ -42,6 +42,25 @@ def _match(source: dict, clause: dict) -> bool:
     if "term" in clause:
         field, value = next(iter(clause["term"].items()))
         return str(source.get(field)) == str(value)
+    if "terms" in clause:
+        field, values = next(iter(clause["terms"].items()))
+        return str(source.get(field)) in {str(v) for v in values}
+    if "multi_match" in clause:
+        # Substring over every property value plus the primary key. Real
+        # OpenSearch tokenises and ranks; the fixture only has to decide
+        # whether the gateway asked the right question of the right fields.
+        spec = clause["multi_match"]
+        needle = str(spec["query"]).lower()
+        haystack = []
+        for field in spec["fields"]:
+            if field.endswith(".*"):
+                nested = source.get(field[:-2]) or {}
+                haystack.extend(str(v) for v in nested.values())
+            else:
+                haystack.append(str(source.get(field, "")))
+        return any(needle in value.lower() for value in haystack)
+    if "match_all" in clause:
+        return True
     if "range" in clause:
         field, bounds = next(iter(clause["range"].items()))
         current = str(source.get(field, ""))
@@ -55,9 +74,14 @@ def _match(source: dict, clause: dict) -> bool:
 
 def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
     docs = list(INDICES.get(index, {}).items())
-    if not query:
+    if not query or "match_all" in query:
         return docs
-    clauses = query["bool"]["filter"] if "bool" in query else [query]
+    if "bool" in query:
+        clauses = list(query["bool"].get("filter", [])) + list(query["bool"].get("must", []))
+    else:
+        clauses = [query]
+    if not clauses:
+        return docs
     return [(i, s) for i, s in docs if all(_match(s, c) for c in clauses)]
 
 

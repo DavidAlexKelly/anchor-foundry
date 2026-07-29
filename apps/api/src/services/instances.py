@@ -189,3 +189,60 @@ async def update_properties(
         ),
         {"props": json.dumps(properties), "iid": str(instance_id)},
     )
+
+
+async def search(
+    conn: AsyncConnection,
+    *,
+    workspace_id: UUID,
+    query: str | None,
+    object_type_ids: list[UUID] | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Workspace-wide instance search, Postgres edition (roadmap Objects
+    item 2).
+
+    **This is substring matching over the properties JSON, not search.** No
+    tokenisation, no relevance, no prefix handling beyond what LIKE gives -
+    "ada" finds "Ada Lovelace" and also finds a department called "Adaptive".
+    That is the honest capability of the fallback store, and it is precisely
+    why the roadmap sequenced the Object Explorer after the OpenSearch
+    cutover: this path exists so the feature works in local dev and on a
+    deployment that has not moved yet, not because Postgres is a search
+    engine.
+    """
+    limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
+    offset = max(0, offset)
+    where = ["t.workspace_id = :wid"]
+    params: dict[str, Any] = {"wid": str(workspace_id), "limit": limit, "offset": offset}
+    if object_type_ids:
+        where.append("i.object_type_id = ANY(CAST(:types AS uuid[]))")
+        params["types"] = [str(t) for t in object_type_ids]
+    if query:
+        where.append("(i.properties::text ILIKE :q OR i.primary_key ILIKE :q)")
+        params["q"] = f"%{query}%"
+    predicate = " AND ".join(where)
+
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
+          FROM object_instances i
+          JOIN object_types t ON t.id = i.object_type_id
+         WHERE {predicate}
+         ORDER BY i.updated_at DESC
+         LIMIT :limit OFFSET :offset
+        """,
+        params,
+    )
+    total_row = await fetch_one(
+        conn,
+        f"""
+        SELECT count(*) AS n FROM object_instances i
+          JOIN object_types t ON t.id = i.object_type_id
+         WHERE {predicate}
+        """,
+        {k: v for k, v in params.items() if k not in ("limit", "offset")},
+    )
+    return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0

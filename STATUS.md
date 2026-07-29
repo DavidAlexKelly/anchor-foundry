@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1 — see §21–§35). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–2 — see §21–§36). Test counts below are from the last full regression run.
 
 ---
 
@@ -543,6 +543,24 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Testing.** `apps/api/tests/test_instance_store.py` (9): idempotent upsert, stale-instance removal not touching a sibling source, reads scoped by object type (a doc under another type is invisible), paging and newest-first ordering plus the `search_after` refusal past the result window, property merge and a missing instance refused, index-per-workspace isolation — then the cutover itself: the whole instance API on the OpenSearch store with nothing landing in Postgres, a 404 still a 404, and the backfill moving data across, remapping `action_runs.instance_id`, and running twice without duplicating.
 
 **Current totals: API 279/279** (270 + 9), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
+### 36. The Object Explorer (this session)
+
+`ROADMAP.md` Objects item 2, sequenced directly after §35 because it is the read the cutover was for. `GET .../object-instances?q=&type_id=` searches every instance in a workspace at once; the objects page gains an **Explore instances** panel over it.
+
+**Like lineage in §33, this is also "surface it at all".** The per-type instance endpoints have existed since §10 and nothing in the web app called them either — a user could not see a single object instance in the product by any route. The Explorer is the first place instances appear.
+
+**Workspace-scoped, not project-scoped.** Object types are workspace-wide, so an explorer that stopped at a project boundary would show a partial ontology and present it as the whole one. It lives on the project's Objects page because that is where the ontology is administered, but it reads across the workspace, and the tests assert against the types they create rather than workspace totals *because* of that — a global count would be asserting test isolation the feature deliberately does not promise.
+
+**`search()` is on the Protocol, so the Postgres store implements it too — honestly.** It is `ILIKE` over the properties JSON: no tokenisation, no relevance, no prefix semantics, and "ada" matches a department called "Adaptive". That is the real capability of the fallback, it is written into `services/instances.py` in those words rather than left to be discovered, and it is exactly why the roadmap sequenced this item after the cutover. The OpenSearch implementation uses `multi_match` with `phrase_prefix` across `properties.*` and `primary_key`, so a half-typed value still matches.
+
+**Each row says what it is.** A cross-type result set is meaningless otherwise, so the response carries the type's id, api_name and display_name — resolved from Postgres, which still owns the ontology definition whichever store held the instances. A row whose type has been deleted since indexing is dropped rather than rendered as an orphan. The table shows the *union* of property names across the page (capped at six), not the intersection: a column only some rows have is still worth seeing.
+
+**Testing.** `apps/api/tests/test_instance_store.py` (+3, parametrised over both stores for the search case): both types present in one unfiltered result each labelled with its type, search by a property value across types, filter by type, query and filter ANDed, no matches, paging, and an outsider refused. Verified in a browser: two object types synced in one workspace, both appearing in one table with their own columns; searching `Widget` narrowed to the Part row; the type filter narrowed to the two Person rows.
+
+**Current totals: API 282/282** (279 + 3), **worker 50/50**, **control-plane 13/13** (both untouched).
 
 ---
 

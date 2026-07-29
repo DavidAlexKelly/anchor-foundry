@@ -419,6 +419,21 @@ export interface SourceCreateInput {
 }
 
 export const objects = {
+  /** Workspace-wide instance search across every object type at once. */
+  explore: (
+    wid: string,
+    input: { q?: string; typeIds?: string[]; limit?: number; offset?: number },
+  ) => {
+    const search = new URLSearchParams();
+    if (input.q) search.set("q", input.q);
+    for (const t of input.typeIds ?? []) search.append("type_id", t);
+    if (input.limit) search.set("limit", String(input.limit));
+    if (input.offset) search.set("offset", String(input.offset));
+    const qs = search.toString();
+    return request<import("./types").ExplorerPage>(
+      `/workspaces/${wid}/object-instances${qs ? `?${qs}` : ""}`,
+    );
+  },
   listTypes: (wid: string) =>
     request<import("./types").ObjectTypeSummary[]>(`/workspaces/${wid}/object-types`),
   getType: (wid: string, typeId: string) =>
