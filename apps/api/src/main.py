@@ -21,6 +21,7 @@ from .lib.db import dispose_engine, get_engine
 from .services.connectors import ConnectorConfigError
 from .services.dataset_engine import DatasetEngineError
 from .services.datasets import SCHEMA_POLICY_SQLSTATE
+from .services import instance_store
 from .services.orgs import Boto3CognitoGateway
 from .services.secrets import Boto3SecretsGateway
 from .services.storage import S3StorageGateway, StorageKeyError
@@ -60,6 +61,12 @@ def _wire_production_gateways() -> None:
     bootstrap_routes.configure_cognito_gateway(
         Boto3CognitoGateway(settings.cognito_user_pool_id, region)
     )
+    # Roadmap Objects item 1: installs the OpenSearch instance store when the
+    # deployment has one, leaving every other environment on the Postgres
+    # fallback. gateway_from_env() returns None when OPENSEARCH_ENDPOINT /
+    # OPENSEARCH_SECRET_ARN are unset, and configure_instance_store(None) is
+    # exactly "keep using Postgres".
+    instance_store.configure_instance_store(instance_store.gateway_from_env())
 
 
 @asynccontextmanager

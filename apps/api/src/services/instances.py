@@ -1,19 +1,14 @@
 """Object instance materialisation and browsing (spec: "object instances are
 stored and indexed in OpenSearch").
 
-Architecturally significant, flagged for review: this slice stores instances
-in Postgres (object_instances, migration 0012) rather than OpenSearch. That
-is not a drop-in gateway swap like storage (S3 vs local disk) or secrets
-(Secrets Manager vs in-memory) - Postgres RLS gives free, per-row workspace
-isolation that a search index does not enforce on its own. The production
-OpenSearch-backed store now exists (services/instance_store.py:
-OpenSearchInstanceStore, index-per-workspace via the same search_prefix
-isolation anchor S3/pg_schema already use, object_type_id filtered within
-it) but is not wired in here yet - the cutover replaces the Postgres-
-connection-shaped functions below with calls through that gateway, which is
-deliberately left as its own follow-up so it can be reviewed independently;
-see that module's docstring for the full design and why it isn't a one-line
-swap.
+This module is now the *SQL layer* rather than the store: the functions
+below still own every statement against object_instances (migration 0012),
+but callers reach them through services/instance_store.py's
+``PostgresInstanceStore``, which implements the same Protocol as the
+OpenSearch-backed store. Routes ask ``store_for(conn)`` which one they have
+and never find out. Postgres remains the fallback and the local-dev default
+- RLS gives free per-row workspace isolation that a search index cannot,
+which is why this path is kept rather than deleted at cutover.
 
 Sync (project-scoped, triggered per object_type_source): reads the mapped
 dataset's current Parquet file through the same DuckDB path datasets/models
@@ -38,6 +33,20 @@ from .dataset_engine import DatasetEngineError, json_safe
 
 MAX_INSTANCE_SYNC_ROWS = 20_000  # flag: worker/OpenSearch bulk path beyond this
 INSTANCE_PAGE_SIZE = 50
+
+
+async def workspace_search_prefix(conn: AsyncConnection, workspace_id: UUID) -> str:
+    """The workspace's immutable search namespace (db 0002), which the
+    OpenSearch store uses as its index name. Resolved by the caller and
+    handed to the store, the same way s3_prefix is for storage - the store
+    never looks up workspaces itself."""
+    row = await fetch_one(
+        conn, "SELECT search_prefix FROM workspaces WHERE id = :wid",
+        {"wid": str(workspace_id)},
+    )
+    if row is None:
+        raise NotFoundError("workspace")
+    return str(row["search_prefix"])
 
 
 def _quote_source_column(name: str) -> str:

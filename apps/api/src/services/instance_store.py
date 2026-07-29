@@ -28,22 +28,32 @@ gateway, same as it already does for every other service call - this
 module trusts its caller completely and enforces no permissions of its
 own, only the index-per-workspace + object_type_id scoping described above.
 
-Not wired into routes/objects.py in this build: cutting over means
-services/instances.py's Postgres-connection-shaped functions (which take
-the request's already-open, RLS-scoped ``AsyncConnection``) get replaced by
-calls through this gateway instead - a service-layer change, not a
-route-layer one, as already promised. That cutover is left for a follow-up
-so the swap can be reviewed on its own; the gateway itself is complete and
-production-shaped. Like Boto3SecretsGateway/S3StorageGateway, it is not
-unit-tested against a real cluster in this build - no OpenSearch instance
-is available in this dev/test environment, and there is no equivalent of
-moto for OpenSearch here.
+Wired in as of roadmap Objects item 1. ``PostgresInstanceStore`` below
+implements the same Protocol over the request's connection, ``store_for()``
+picks between them, and ``routes/objects.py``/``routes/actions.py`` go
+through that seam - so the Postgres path stays as the fallback and the
+local-dev default rather than being deleted the day the new store is
+switched on. ``backfill()`` moves an existing workspace across.
+
+Testing, stated precisely: ``tests/test_instance_store.py`` drives this
+class over real HTTP through the real ``opensearchpy`` client against
+``tests/opensearch_fixture_server.py``, which implements the REST subset
+used here. That proves the requests this gateway forms and the responses it
+parses are right. It does **not** prove a real cluster agrees - there are no
+analyzers, no mapping enforcement and no refresh semantics in a fixture, and
+no OpenSearch is available in this environment to check against. Treat the
+first deployment against a real domain as the remaining verification step.
 """
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, Protocol
+from uuid import UUID, uuid5
+
+from ..lib.db import fetch_all
+
+if TYPE_CHECKING:  # avoids importing SQLAlchemy for the OpenSearch-only path
+    from sqlalchemy.ext.asyncio import AsyncConnection
 
 INSTANCE_PAGE_SIZE = 50
 # OpenSearch's default index.max_result_window - from/size pagination past
@@ -91,11 +101,23 @@ def _index_name(search_prefix: str) -> str:
     return f"{search_prefix}object-instances"
 
 
+# Namespace for deterministic instance ids. Fixed forever: changing it would
+# renumber every instance in every deployment.
+INSTANCE_NAMESPACE = UUID("6f6b6a2e-0f1a-4f2b-9c3d-1a2b3c4d5e6f")
+
+
 def _doc_id(source_id: UUID, primary_key: str) -> str:
-    """Deterministic, not random - re-syncing the same source row upserts
-    the same document instead of leaking a duplicate, and needs no
-    round-trip to look up "does this instance already exist" first."""
-    return f"{source_id}:{primary_key}"
+    """Deterministic, not random - re-syncing the same source row upserts the
+    same document instead of leaking a duplicate, and needs no round-trip to
+    ask "does this instance already exist" first.
+
+    A **uuid5**, not the raw "source:key" string, so an instance id has the
+    same shape whichever store is behind it: the API's InstanceOut.id is a
+    UUID and `action_runs.instance_id` is a uuid column, and a cutover that
+    changed the type of a public identifier would be a breaking API change
+    dressed up as an infrastructure one.
+    """
+    return str(uuid5(INSTANCE_NAMESPACE, f"{source_id}:{primary_key}"))
 
 
 class OpenSearchInstanceStore:
@@ -106,13 +128,19 @@ class OpenSearchInstanceStore:
     from an env var directly."""
 
     def __init__(self, endpoint: str, username: str, password: str) -> None:
-        from opensearchpy import AsyncOpenSearch  # deferred: not installed in local dev
+        from opensearchpy import AsyncOpenSearch
 
+        # The endpoint's scheme decides TLS rather than a hardcoded True: a
+        # deployed domain is always https so production is unchanged, and a
+        # plain-http endpoint is what lets the fixture server in
+        # tests/opensearch_fixture_server.py exercise this class over a real
+        # socket instead of leaving it untested.
+        secure = endpoint.startswith("https")
         self._client = AsyncOpenSearch(
             hosts=[endpoint],
             http_auth=(username, password),
-            use_ssl=True,
-            verify_certs=True,
+            use_ssl=secure,
+            verify_certs=secure,
         )
 
     async def _ensure_index(self, index: str) -> None:
@@ -263,6 +291,29 @@ class OpenSearchInstanceStore:
         await self._client.close()
 
 
+_configured: "InstanceStoreGateway | None" = None
+
+
+def configure_instance_store(gateway: "InstanceStoreGateway | None") -> None:
+    """Install the process-wide store, or clear it back to Postgres. Called
+    from main.py's production wiring and from tests; same shape as
+    routes/datasets.py's `configure_storage_gateway`."""
+    global _configured
+    _configured = gateway
+
+
+def store_for(conn: "AsyncConnection") -> "InstanceStoreGateway":
+    """The one place that decides which store a request talks to.
+
+    Returns the configured gateway when there is one, otherwise a
+    `PostgresInstanceStore` over this request's connection. Selection is by
+    configuration rather than a per-request flag on purpose: a deployment
+    reads its instances out of exactly one place, and "some requests see the
+    new store" is a bug surface, not a feature.
+    """
+    return _configured if _configured is not None else PostgresInstanceStore(conn)
+
+
 def gateway_from_env() -> InstanceStoreGateway | None:
     """None means "no OpenSearch configured" - callers fall back to the
     Postgres-backed services/instances.py path, matching how
@@ -282,3 +333,168 @@ def gateway_from_env() -> InstanceStoreGateway | None:
     client = boto3.client("secretsmanager")
     secret = json.loads(client.get_secret_value(SecretId=secret_arn)["SecretString"])
     return OpenSearchInstanceStore(endpoint, secret["username"], secret["password"])
+
+
+class PostgresInstanceStore:
+    """The Postgres-backed store, behind the same Protocol as the OpenSearch
+    one (roadmap Objects item 1).
+
+    This is the seam §14 said the cutover needed and deliberately left out:
+    with both backends behind one interface, `routes/objects.py` stops caring
+    which is configured, and the Postgres path can stay in place as the
+    fallback and the local-dev default instead of being deleted on the same
+    day the new one is switched on.
+
+    It holds the request's already-open, RLS-scoped connection, which is
+    exactly why this could not be a stateless module-level gateway like
+    StorageGateway: workspace isolation on `object_instances` comes from RLS
+    keyed to that connection's `app.user_id`. `search_prefix` is accepted and
+    ignored - Postgres scopes by RLS and object_type_id, and the parameter
+    exists for the store that needs it.
+    """
+
+    def __init__(self, conn: "AsyncConnection") -> None:  # noqa: F821
+        self._conn = conn
+
+    async def upsert_instances(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        source_id: UUID,
+        rows: list[tuple[str, dict[str, Any]]],
+        synced_at: datetime,
+    ) -> int:
+        from . import instances as instances_service
+
+        return await instances_service.upsert_instances(
+            self._conn,
+            object_type_id=object_type_id,
+            source_id=source_id,
+            rows=rows,
+            synced_at=synced_at,
+        )
+
+    async def delete_stale_instances(
+        self, *, search_prefix: str, source_id: UUID, synced_before: datetime
+    ) -> int:
+        from . import instances as instances_service
+
+        return await instances_service.delete_stale_instances(
+            self._conn, source_id=source_id, synced_before=synced_before
+        )
+
+    async def list_for_type(
+        self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
+    ) -> tuple[list[dict[str, Any]], int]:
+        from . import instances as instances_service
+
+        return await instances_service.list_for_type(
+            self._conn, object_type_id, limit=limit, offset=offset
+        )
+
+    async def get_instance(
+        self, *, search_prefix: str, object_type_id: UUID, instance_id: str
+    ) -> dict[str, Any] | None:
+        from ..lib.errors import NotFoundError
+        from . import instances as instances_service
+
+        try:
+            return await instances_service.get(
+                self._conn, object_type_id, UUID(str(instance_id))
+            )
+        except NotFoundError:
+            return None
+
+    async def update_properties(
+        self, *, search_prefix: str, object_type_id: UUID, instance_id: str,
+        properties: dict[str, Any],
+    ) -> None:
+        from . import instances as instances_service
+
+        existing = await self.get_instance(
+            search_prefix=search_prefix, object_type_id=object_type_id,
+            instance_id=instance_id,
+        )
+        if existing is None:
+            raise LookupError("object instance")
+        await instances_service.update_properties(
+            self._conn, UUID(str(instance_id)), properties
+        )
+
+
+async def backfill(
+    conn: "AsyncConnection",
+    gateway: "InstanceStoreGateway",
+    *,
+    workspace_id: UUID,
+    search_prefix: str,
+) -> dict[str, int]:
+    """Copy a workspace's Postgres instances into the configured store, and
+    re-point the audit trail at their new ids.
+
+    The cutover procedure this is built for, and why it needs no dual-write
+    machinery: **backfill, flip, backfill again**. Every document id is
+    derived from (source_id, primary_key), so a second pass rewrites exactly
+    the same documents - running it twice is not a duplicate, it is a
+    catch-up for anything written between the first pass and the flip. A
+    dual-write period would buy the same safety for considerably more moving
+    parts, and it is the thing that goes wrong quietly when one of the two
+    writes fails.
+
+    `action_runs.instance_id` is rewritten from the old random uuid to the
+    deterministic one. Without that the audit trail silently loses which
+    instance every historical write-back touched - the FK is ON DELETE SET
+    NULL, so it would degrade to null rather than fail loudly, which is the
+    worst of both.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT i.id, i.object_type_id, i.source_id, i.primary_key, i.properties,
+               i.updated_at
+          FROM object_instances i
+          JOIN object_types t ON t.id = i.object_type_id
+         WHERE t.workspace_id = :wid
+         ORDER BY i.object_type_id, i.source_id
+        """,
+        {"wid": str(workspace_id)},
+    )
+
+    import json as _json
+    from collections import defaultdict
+    from sqlalchemy import text as _sql
+
+    # One bulk call per (object_type, source): the gateway's upsert signature
+    # is per-source, and grouping keeps that one round trip per group rather
+    # than one per row.
+    grouped: dict[tuple[UUID, UUID], list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    newest: dict[tuple[UUID, UUID], datetime] = {}
+    remapped = 0
+    for row in rows:
+        properties = row["properties"]
+        if isinstance(properties, str):
+            properties = _json.loads(properties)
+        key = (UUID(str(row["object_type_id"])), UUID(str(row["source_id"])))
+        grouped[key].append((str(row["primary_key"]), properties))
+        newest[key] = max(newest.get(key, row["updated_at"]), row["updated_at"])
+
+        new_id = _doc_id(UUID(str(row["source_id"])), str(row["primary_key"]))
+        if new_id != str(row["id"]):
+            result = await conn.execute(
+                _sql("UPDATE action_runs SET instance_id = CAST(:new AS uuid) "
+                     "WHERE instance_id = CAST(:old AS uuid)"),
+                {"new": new_id, "old": str(row["id"])},
+            )
+            remapped += result.rowcount or 0
+
+    copied = 0
+    for (object_type_id, source_id), group in grouped.items():
+        copied += await gateway.upsert_instances(
+            search_prefix=search_prefix,
+            object_type_id=object_type_id,
+            source_id=source_id,
+            rows=group,
+            synced_at=newest[(object_type_id, source_id)],
+        )
+    return {"instances": copied, "sources": len(grouped), "action_runs_remapped": remapped}

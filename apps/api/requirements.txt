@@ -13,4 +13,8 @@ pytz==2024.1
 python-multipart==0.0.9
 boto3==1.34.144
 croniter==2.0.5
-opensearch-py==2.7.1
+# The [async] extra pulls aiohttp, which AsyncOpenSearch needs - without it
+# `from opensearchpy import AsyncOpenSearch` raises ImportError, which is how
+# services/instance_store.py would have failed the first time a deployment
+# actually used it (found by roadmap Objects item 1's cutover tests).
+opensearch-py[async]==2.7.1

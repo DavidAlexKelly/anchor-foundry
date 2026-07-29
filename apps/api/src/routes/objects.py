@@ -33,6 +33,8 @@ from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import datasets as dataset_service
+from ..lib.errors import NotFoundError
+from ..services import instance_store
 from ..services import instances as instances_service
 from ..services import ontology as ontology_service
 from ..services.dataset_engine import DatasetEngineError
@@ -297,8 +299,9 @@ async def list_instances(
 ) -> InstancePage:
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)  # 404 if invisible
-        rows, total = await instances_service.list_for_type(
-            conn, type_id, limit=limit, offset=offset
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        rows, total = await instance_store.store_for(conn).list_for_type(
+            search_prefix=prefix, object_type_id=type_id, limit=limit, offset=offset
         )
     return InstancePage(
         items=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
@@ -316,7 +319,12 @@ async def get_instance(
 ) -> InstanceOut:
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.get_type(conn, access.workspace_id, type_id)
-        row = await instances_service.get(conn, type_id, instance_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        row = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
+        )
+    if row is None:
+        raise NotFoundError("object instance")
     return InstanceOut(**{**row, "properties": _jsonb(row["properties"])})
 
 
@@ -503,15 +511,17 @@ async def sync_source(
 
     if ok:
         async with user_connection(access.auth.user_id) as conn:
-            upserted = await instances_service.upsert_instances(
-                conn,
+            prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+            store = instance_store.store_for(conn)
+            upserted = await store.upsert_instances(
+                search_prefix=prefix,
                 object_type_id=UUID(str(source["object_type_id"])),
                 source_id=source_id,
                 rows=rows,
                 synced_at=synced_at,
             )
-            removed = await instances_service.delete_stale_instances(
-                conn, source_id=source_id, synced_before=synced_at
+            removed = await store.delete_stale_instances(
+                search_prefix=prefix, source_id=source_id, synced_before=synced_at
             )
 
     async with user_connection(access.auth.user_id) as conn:
