@@ -234,6 +234,60 @@ def test_a_pre_existing_cycle_is_reported_rather_than_hidden(
     assert graph(client, fx)["cycles"] == []
 
 
+def test_focus_narrows_the_graph_to_one_node_s_lineage(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """Roadmap Datasets item 5. Lineage is the connected component around a
+    node, computed by the same endpoint the whole-project view uses."""
+    # An unrelated dataset in the same project must not appear.
+    r = client.post(
+        f"{base(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Unrelated {fx.tag}"},
+        files={"file": ("rows.csv", io.BytesIO(ROWS), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+
+    whole = graph(client, fx)
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=dataset:{chain['a_out']}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    focused = r.json()
+
+    assert len(focused["nodes"]) < len(whole["nodes"])
+    assert {n["name"] for n in focused["nodes"]} == {
+        chain["source_name"], chain["a_name"], chain["b_name"],
+    }, [n["name"] for n in focused["nodes"]]
+
+    # Both directions: what produced it and what reads it.
+    ids = {n["id"] for n in focused["nodes"]}
+    assert f"model:{chain['a']}" in ids and f"model:{chain['b']}" in ids
+    assert f"dataset:{chain['source']}" in ids
+
+    marked = [n for n in focused["nodes"] if n["is_focus"]]
+    assert [n["id"] for n in marked] == [f"dataset:{chain['a_out']}"]
+    assert all(not n["is_focus"] for n in whole["nodes"])
+
+    # It is still a laid-out graph, not just a filtered list.
+    layers = {n["id"]: n["layer"] for n in focused["nodes"]}
+    for e in focused["edges"]:
+        assert layers[e["to"]] > layers[e["from"]], e
+
+
+def test_a_bad_or_unknown_focus_is_refused(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    import uuid as _uuid
+
+    r = client.get(f"{base(fx)}/pipeline?focus=nonsense", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 422
+
+    r = client.get(
+        f"{base(fx)}/pipeline?focus=dataset:{_uuid.uuid4()}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 404, "a node outside this project is not lineage to show"
+
+
 def test_an_empty_project_is_an_empty_graph(client: TestClient, fx: Fixture) -> None:
     r = client.post(
         f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.owner_sub),

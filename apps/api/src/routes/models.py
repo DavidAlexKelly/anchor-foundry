@@ -12,6 +12,7 @@ worker jobs isn't built here.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from datetime import datetime
 from typing import Any
@@ -479,6 +480,9 @@ class GraphNode(BaseModel):
     layer: int                    # distance downstream; every edge points right
     position: int                 # index within the layer, name-ordered
     in_cycle: bool
+    # True on the node a lineage view was centred on; always false for the
+    # whole-project graph.
+    is_focus: bool = False
     slug: str | None = None
     origin: str | None = None
     row_count: int | None = None
@@ -508,10 +512,22 @@ class PipelineGraph(BaseModel):
 
 @project_router.get("/pipeline", response_model=PipelineGraph)
 async def pipeline_graph(
+    focus: str | None = None,
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> PipelineGraph:
     """Every dataset and model in the project as one laid-out graph. Viewer
     level, like the other read surfaces - it exposes nothing a viewer can't
-    already list one resource at a time."""
+    already list one resource at a time.
+
+    `focus` ("dataset:<uuid>" or "model:<uuid>") narrows the result to that
+    node's connected component, which is what the lineage view asks for -
+    one endpoint rather than two, since a project graph and a lineage graph
+    are the same question from different entry points."""
+    if focus is not None and not re.fullmatch(
+        r"(dataset|model):[0-9a-fA-F-]{36}", focus
+    ):
+        raise ValueError("focus must be 'dataset:<uuid>' or 'model:<uuid>'")
     async with user_connection(access.auth.user_id) as conn:
-        return PipelineGraph(**await pipeline_service.project_graph(conn, access.project_id))
+        return PipelineGraph(
+            **await pipeline_service.project_graph(conn, access.project_id, focus=focus)
+        )

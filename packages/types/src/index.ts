@@ -421,6 +421,9 @@ export interface PipelineNode {
   /** Index within the layer, name-ordered and stable across requests. */
   position: number;
   in_cycle: boolean;
+  /** True on the node a lineage view was centred on; always false for the
+   *  whole-project graph. */
+  is_focus: boolean;
   slug: string | null;
   origin: string | null;
   row_count: number | null;

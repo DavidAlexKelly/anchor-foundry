@@ -45,10 +45,22 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all
+from ..lib.errors import NotFoundError
 
 
-async def project_graph(conn: AsyncConnection, project_id: UUID) -> dict[str, Any]:
-    """Every dataset and model in the project as one directed graph."""
+async def project_graph(
+    conn: AsyncConnection, project_id: UUID, *, focus: str | None = None
+) -> dict[str, Any]:
+    """Every dataset and model in the project as one directed graph.
+
+    With `focus` (a node id like "dataset:<uuid>"), the result is narrowed to
+    the connected component containing that node - which is exactly what
+    lineage means: everything that feeds it, everything it feeds, and nothing
+    else. Roadmap Datasets item 5 asked for the lineage view to reuse "the
+    same graph-rendering approach" as the project view; reusing the same
+    *endpoint* is the stronger version of that, since the two really are one
+    question asked from two entry points.
+    """
     datasets = await fetch_all(
         conn,
         """
@@ -141,6 +153,14 @@ async def project_graph(conn: AsyncConnection, project_id: UUID) -> dict[str, An
             if src in known and dst in known:
                 edges.append({"from": src, "to": dst, "label": None})
 
+    if focus is not None:
+        if focus not in known:
+            raise NotFoundError("node")
+        component = _connected_component(known, edges, focus)
+        nodes = [n for n in nodes if n["id"] in component]
+        edges = [e for e in edges if e["from"] in component and e["to"] in component]
+        known = component
+
     layers, cycles = _layer(known, edges)
     for node in nodes:
         node["layer"] = layers[node["id"]]
@@ -153,12 +173,36 @@ async def project_graph(conn: AsyncConnection, project_id: UUID) -> dict[str, An
         node["position"] = len(by_layer[node["layer"]])
         by_layer[node["layer"]].append(node)
 
+    for node in nodes:
+        node["is_focus"] = node["id"] == focus
+
     return {
         "nodes": sorted(nodes, key=lambda n: (n["layer"], n["position"])),
         "edges": edges,
         "cycles": cycles,
         "layer_count": (max(layers.values()) + 1) if layers else 0,
     }
+
+
+def _connected_component(node_ids: set[str], edges: list[dict[str, Any]], start: str) -> set[str]:
+    """Every node reachable from `start` ignoring edge direction. Undirected
+    on purpose: a dataset's lineage is both what produced it and what reads
+    it, and a sibling model reading the same input is part of the same story
+    - it is what someone tracing an outage needs to see."""
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for e in edges:
+        adjacency[e["from"]].add(e["to"])
+        adjacency[e["to"]].add(e["from"])
+
+    seen: set[str] = set()
+    frontier = [start]
+    while frontier:
+        current = frontier.pop()
+        if current in seen or current not in node_ids:
+            continue
+        seen.add(current)
+        frontier.extend(adjacency[current] - seen)
+    return seen
 
 
 def _health_status(results: Any) -> str | None:

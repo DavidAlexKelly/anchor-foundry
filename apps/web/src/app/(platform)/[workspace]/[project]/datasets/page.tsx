@@ -1,10 +1,11 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
-import { ApiError, datasets as dsApi, downloadFile } from "@/lib/api";
+import { ApiError, datasets as dsApi, downloadFile, models as modelApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
+import { PipelineGraphView } from "@/components/pipeline-graph";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { Dataset, DatasetHealth, TabularResult } from "@/lib/types";
 
@@ -449,6 +450,56 @@ function ProfilePanel({
   );
 }
 
+function LineageDialog({
+  workspaceId,
+  projectId,
+  dataset,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  dataset: Dataset;
+  onClose: () => void;
+}) {
+  const params = useParams<{ workspace: string; project: string }>();
+  const router = useRouter();
+  const graph = useQuery({
+    // Lineage is the project graph narrowed to this dataset's connected
+    // component - one endpoint, because they are the same question.
+    queryKey: ["lineage", dataset.id],
+    queryFn: () => modelApi.pipeline(workspaceId, projectId, `dataset:${dataset.id}`),
+  });
+
+  return (
+    <Dialog open wide title={`${dataset.name} — lineage`} onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        Everything that feeds this dataset and everything it feeds. The outlined
+        node is this one.
+      </p>
+      {graph.isPending && <div className="state">Loading lineage…</div>}
+      {graph.isError && <div className="state error">Couldn&apos;t load lineage.</div>}
+      {graph.data && (
+        <PipelineGraphView
+          graph={graph.data}
+          maxHeight={380}
+          // Only models need navigating to - a dataset node is reachable
+          // from the list this dialog was opened over.
+          onOpen={(node) => {
+            if (node.kind === "model") {
+              router.push(`/${params.workspace}/${params.project}/models`);
+            }
+          }}
+        />
+      )}
+      <div className="form-actions">
+        <button className="btn quiet" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
 function SchemaPolicyControl({
   workspaceId,
   projectId,
@@ -647,6 +698,7 @@ function DatasetRow({
   canEdit: boolean;
 }) {
   const [exploring, setExploring] = useState(false);
+  const [showLineage, setShowLineage] = useState(false);
   const queryClient = useQueryClient();
   const remove = useMutation({
     mutationFn: () => dsApi.remove(workspaceId, projectId, dataset.id),
@@ -677,6 +729,13 @@ function DatasetRow({
           >
             Explore
           </button>
+          <button
+            className="btn quiet"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            onClick={() => setShowLineage(true)}
+          >
+            Lineage
+          </button>
           {canEdit && (
             <button
               className="btn danger"
@@ -692,6 +751,14 @@ function DatasetRow({
             </button>
           )}
         </div>
+        {showLineage && (
+          <LineageDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            dataset={dataset}
+            onClose={() => setShowLineage(false)}
+          />
+        )}
         {exploring && (
           <ExploreDialog
             workspaceId={workspaceId}

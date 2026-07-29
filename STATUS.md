@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3; Models 1–3, 5, 7 — see §21–§32). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5; Models 1–3, 5, 7 — see §21–§33). Test counts below are from the last full regression run.
 
 ---
 
@@ -54,7 +54,7 @@ Upload (CSV/TSV/Parquet/JSON/JSONL → canonical Parquet via DuckDB), preview, *
 Full-snapshot sync of a source table into the datasets layer, creating or versioning a dataset each run, with a `sync_runs` history table. Wrong passwords, missing tables, and injection-shaped identifiers all fail cleanly rather than 500ing or leaking anything.
 
 ### 9. Models - tests included in the total below
-SQL transforms over one or more datasets, executed through the same DuckDB sandbox, writing a versioned output dataset. Run history is honest (failed runs show the real DB error; successful runs point at the exact dataset version they produced — and, since §32, at the exact definition that produced it). **Lineage**: walks the dataset↔model graph in both directions and renders it as Mermaid, per spec — that is the single-node view; §28 adds the whole-project one beside it.
+SQL transforms over one or more datasets, executed through the same DuckDB sandbox, writing a versioned output dataset. Run history is honest (failed runs show the real DB error; successful runs point at the exact dataset version they produced — and, since §32, at the exact definition that produced it). **Lineage**: walks the dataset↔model graph in both directions and renders it as Mermaid, per spec — that is the text export; §28 adds the whole-project graph and §33 the interactive single-node view built on it.
 
 ### 10. Objects / ontology - 19/19 tests (part of the 102 below)
 `ontology.py`'s service layer wired into routes (`routes/objects.py`): object types + typed properties and link types (workspace-scoped - the ontology is shared across every project in a workspace), object type sources (project-scoped dataset→type mapping, column-level validation against both the dataset's schema and the type's properties), and the auto-suggestion endpoint (infers a type name, properties, primary key, and title property from a dataset's schema). Delete cascades (type → its link types and sources) rely on the schema's `ON DELETE CASCADE`, matching how the rest of the hierarchy behaves. Role floors are conservative and flagged in the routes module docstring: workspace viewer reads everything; workspace editor+ creates/deletes types and link types (same floor already used for "who can create a project"); project editor+ creates/deletes dataset mappings; suggestion is viewer-level like dataset preview/query since it's read-only.
@@ -474,6 +474,26 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Testing.** `apps/api/tests/test_model_versions.py` (9): the v1-on-creation invariant, appends on code and input edits, the four non-definition changes that must *not* append, identical code not appending, restore-appends-rather-than-rewinds, inputs restored with the code and the model still running afterwards, two runs carrying two different definitions, a missing version at 404, and the viewer/editor floors. `apps/worker/tests/test_model_runs.py` (+1) covers the edited-between-enqueue-and-execution case directly. Verified in a browser: opened History on a model with a bad second version, expanded v1's code, restored it, and watched v3 appear labelled "reverted to v1" with v2 still in the list — then ran the model and confirmed the new run is stamped v3.
 
 **Current totals: API 261/261** (252 + 9), **worker 50/50** (49 + 1), **control-plane 13/13** (untouched).
+
+---
+
+### 33. Interactive lineage (this session)
+
+`ROADMAP.md` Datasets item 5, the half of §28's graph work that was left. Two things turned out to be true that the item only half-anticipated.
+
+**It was as much "surface lineage at all" as "make it interactive".** The Mermaid lineage endpoint has existed and been tested since §9 — and nothing in the frontend had ever called it. A user could not see lineage in the product by any route. So this is the feature's first appearance, not a re-skin.
+
+**Reusing the endpoint beat reusing the renderer.** The item asked lineage to reuse "whatever graph-rendering approach Models item 2's pipeline DAG view settles on". `GET .../pipeline` now takes `focus=dataset:<id>` (or `model:<id>`) and returns that node's connected component, layered by the same code, marked with `is_focus`. One endpoint, one response shape, and `components/pipeline-graph.tsx` — extracted from the Pipeline page — renders both. There is no second graph implementation to keep in step, which is the failure mode STATUS's rough edges already tracks four instances of.
+
+**The component walk is undirected, deliberately.** A dataset's lineage is both what produced it and what reads it, and a sibling model reading the same input belongs in the same picture — it is exactly what someone tracing "why is this number wrong" needs to see. A directed walk would answer a narrower question than the word lineage promises.
+
+**The Mermaid endpoint stays.** The spec calls for lineage "exportable as JSON or Mermaid", and the walk is still the right tool for a text export; the graph endpoint answers a different question with a different shape.
+
+**Testing.** `apps/api/tests/test_pipeline.py` (+2): the focused graph excludes an unrelated dataset in the same project, includes both directions, marks exactly one focus node (and marks none on the unfocused view), stays a properly layered graph rather than a filtered list, and refuses a malformed focus (422) or one naming a node outside the project (404). Verified in a browser: the project-wide page still draws all four edges after the renderer was extracted, then opened Lineage on a model-output dataset and confirmed the unrelated dataset is absent, the focus node is outlined, and zoom and click-to-detail work inside the dialog.
+
+**A stale-server slip worth recording**: the first browser run "failed" because the dev API server had been started before the `focus` parameter existed, and FastAPI silently ignores unknown query params — so it returned the whole graph and the assertion fired correctly against genuinely wrong data. The pytest run was green throughout. Restarting the dev server is part of verifying an API change in the browser.
+
+**Current totals: API 263/263** (261 + 2), **worker 50/50**, **control-plane 13/13** (both untouched).
 
 ---
 
