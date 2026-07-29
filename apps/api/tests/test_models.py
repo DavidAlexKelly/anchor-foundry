@@ -152,6 +152,55 @@ def test_cron_schedule_sets_next_run_at(client: TestClient, fx: Fixture, model_i
     assert body["next_run_at"] is None
 
 
+def test_upstream_trigger_needs_inputs_and_resets_the_watermark(
+    client: TestClient, fx: Fixture, input_datasets: dict[str, str]
+) -> None:
+    ids = list(input_datasets.values())
+    r = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Upstream {fx.tag}", "code": "SELECT * FROM orders",
+              "inputs": [{"dataset_id": ids[0], "input_alias": "orders"}]},
+    )
+    assert r.status_code == 201, r.text
+    mid = r.json()["id"]
+
+    r = client.patch(
+        f"{mbase(fx)}/{mid}", headers=hdr(fx.editor_sub), json={"trigger_mode": "upstream"}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["trigger_mode"] == "upstream"
+    assert body["cron_schedule"] is None and body["next_run_at"] is None
+    # NULL watermark = "-infinity" (migration 0021): it fires on the next
+    # worker pass rather than waiting for a version that arrives after the
+    # switch.
+    assert body["upstream_watermark"] is None
+
+    # A model with nothing to watch would never fire - refused, not stored.
+    r = client.post(
+        mbase(fx), headers=hdr(fx.editor_sub),
+        json={"name": f"Orphan {fx.tag}", "code": "SELECT 1"},
+    )
+    assert r.status_code == 201, r.text
+    orphan = r.json()["id"]
+    r = client.patch(
+        f"{mbase(fx)}/{orphan}", headers=hdr(fx.editor_sub), json={"trigger_mode": "upstream"}
+    )
+    assert r.status_code == 422, r.text
+    assert "input dataset" in r.json()["detail"].lower()
+    r = client.get(f"{mbase(fx)}/{orphan}", headers=hdr(fx.viewer_sub))
+    assert r.json()["trigger_mode"] == "manual", "the rejected PATCH must roll back"
+
+    # Setting the mode and the inputs in one PATCH is allowed.
+    r = client.patch(
+        f"{mbase(fx)}/{orphan}", headers=hdr(fx.editor_sub),
+        json={"trigger_mode": "upstream",
+              "inputs": [{"dataset_id": ids[0], "input_alias": "orders"}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["trigger_mode"] == "upstream"
+
+
 def test_viewer_cannot_create_or_run(client: TestClient, fx: Fixture, model_id: str) -> None:
     r = client.post(mbase(fx), headers=hdr(fx.viewer_sub), json={"name": "Nope"})
     assert r.status_code == 403

@@ -63,6 +63,9 @@ class ModelOut(BaseModel):
     trigger_mode: str
     cron_schedule: str | None = None
     next_run_at: datetime | None = None
+    # Newest input version an upstream-triggered model has reacted to; NULL
+    # until it fires once. Surfaced so the UI can say what it is waiting on.
+    upstream_watermark: datetime | None = None
     last_run_status: str | None = None
     last_run_at: datetime | None = None
     inputs: list[ModelInputOut] = []

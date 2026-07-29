@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7 and Datasets 1–2 — see §21–§26). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–2; Models 1 — see §21–§27). Test counts below are from the last full regression run.
 
 ---
 
@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app - synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0020) + migration runner
+│   ├── db/              SQL migrations (0001–0021) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0020)
+### 1. Database schema (migrations 0001–0021)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -76,7 +76,7 @@ Next.js 14 App Router, full route tree per the spec's §18 (login via Cognito PK
 
 **Python model transforms**: models gained a `language` column (`sql`/`python`, set at creation, immutable after - the two languages have different input contracts). SQL still runs synchronously inline through the existing DuckDB sandbox; a Python run is left `queued` for the worker and the API returns immediately (`RunResult.status: "queued" | "succeeded" | "failed"`), since a real process boundary is not something DuckDB can give a Python transform. The worker (`apps/worker/src/anchor_worker/python_sandbox.py`) executes user code as a **subprocess** - explicitly documented as process-level isolation, not a hard multi-tenant security boundary - with `RLIMIT_CPU`/`RLIMIT_AS`, a wall-clock timeout, a stripped env, and an isolated cwd/HOME, so a script can't read the caller's filesystem by relative path. Inputs load as named pandas DataFrames; the contract is a variable named `output`. Real production hardening (gVisor/Firecracker/network-denied container) is flagged as out of scope for this build.
 
-**Cron scheduling**: models gained `trigger_mode` (`manual`/`cron`/`upstream`) and `cron_schedule`; setting cron computes `next_run_at` via `croniter` (a `NULL` value means "due immediately" - a deliberate, simple bootstrap rule). The worker discovers due cron models and queued runs the same way it discovers orphaned schemas (db 0010): a `SECURITY DEFINER` function enumerates candidates across every workspace (RLS-blind, since a workspace-scoped connection can't discover work in workspaces it doesn't already know about), then the worker opens one `rls_worker_for_workspace`-scoped connection per candidate to re-verify and act - the discovery bypass is never trusted for the mutation itself.
+**Cron scheduling**: models gained `trigger_mode` (`manual`/`cron`/`upstream`) and `cron_schedule`; setting cron computes `next_run_at` via `croniter` (a `NULL` value means "due immediately" - a deliberate, simple bootstrap rule). The worker discovers due cron models and queued runs the same way it discovers orphaned schemas (db 0010): a `SECURITY DEFINER` function enumerates candidates across every workspace (RLS-blind, since a workspace-scoped connection can't discover work in workspaces it doesn't already know about), then the worker opens one `rls_worker_for_workspace`-scoped connection per candidate to re-verify and act - the discovery bypass is never trusted for the mutation itself. (`upstream` was accepted here but fired nothing until §27, which reuses this exact machinery with a different due-ness test.)
 
 **Scheduled/incremental sync**: rather than a new table, the existing `connections` row (which already carried `sync_mode`/`sync_schedule` since db 0003) gained the columns a schedule needs to be self-contained: `sync_source_schema/table`, `sync_dataset_name/id`, `sync_primary_key_column`, `sync_cursor_column`, `sync_last_cursor_value`, `sync_next_run_at` (db 0014) - one connection carries at most one managed scheduled/incremental target, flagged as a day-one limitation. Incremental mode pulls only rows past the stored cursor (`psycopg.sql`-composed, never string-interpolated) and upserts them into the existing dataset by primary key (anti-join + union in DuckDB) rather than replacing it wholesale; full mode still replaces the dataset each run. New API endpoints (`GET/PUT/DELETE .../scheduled-sync`, `POST .../scheduled-sync/run`) let a connection's schedule be viewed, set, cleared (target survives, only the cron stops), and run on demand - "run now" executes the identical steps the worker's cron firing does. **A real bug found and fixed along the way**: a scheduled incremental sync that finds zero new rows since the last cursor (the ordinary steady state between source writes) produced an empty CSV, which gave DuckDB nothing to infer column types from - it defaulted every column to VARCHAR and then failed comparing against the existing (correctly-typed) dataset in the merge's primary-key anti-join. Fixed in both the worker and the API by skipping the merge entirely when nothing is new, rather than writing a needless version. A second bug: the worker's per-connection try/except only caught `DatasetEngineError`/`LookupError`, so an ordinary driver error (missing table, bad credentials, a missing local Parquet file) on one connection crashed the whole batch instead of being recorded as that connection's failed run - now caught and isolated per connection, matching the API's own `snapshot_source_table` error translation.
 
@@ -351,12 +351,35 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 
 ---
 
+### 27. Upstream model triggers — pipelines (this session)
+
+`ROADMAP.md` Models item 1, which that document calls "the single most-referenced missing piece across the existing 'not started' notes." It was also the platform's most visible broken promise: `trigger_mode` has accepted `upstream` since migration 0003, the PATCH route validated it, and the shared TypeScript contract listed it — and a model set to it **silently never ran**. This is the change that turns isolated transforms into pipelines: one model's output dataset version is the next model's input version, so A feeds B feeds C without anybody scheduling anything.
+
+**Due-ness is a watermark, not a queue.** `models.upstream_watermark` (migration 0021) records the newest input `dataset_versions.created_at` a model has already reacted to; `list_due_upstream_models()` returns models with an input version newer than it. That makes 'upstream' the same machine as 'cron' — a timestamp column the worker polls and advances after acting — rather than a second mechanism. The two alternatives are argued in the migration: a trigger on `dataset_versions` INSERT would be exact but puts scheduling policy where it cannot be retried or rate-limited, and would enqueue runs inside a transaction that might still roll back; an outbox table is the right answer at scale but is a second thing to poll, drain and garbage-collect for no behavioural gain at this size.
+
+**A self-loop guard is required, and the roadmap didn't anticipate it.** A model whose output dataset is also one of its inputs is legal today, and would re-trigger itself on its own output forever, one run per poll pass, with no way to stop it short of editing the model. Versions carrying `produced_by_kind = 'model'` and this model's id are excluded from its own due-ness test.
+
+**What is documented rather than solved.** Two models feeding each other (A→B→A) still oscillate: each run legitimately produces a version the other watches. Detecting that needs the whole dependency graph, not one model's inputs, so it belongs with the DAG view (Models item 2) where the graph is actually materialised — half-solving it here with a hop counter would be a worse answer that looks like a fix. Likewise, a chain settles **one poll pass per link**: the downstream model's input version only exists once the upstream run has committed, which is after discovery ran. Resolving a whole chain in one pass needs topological order — again item 2.
+
+**Coalescing, so a slow model can't build a backlog.** A model with a run already `queued` or `running` is not re-enqueued. Ten versions landing between two passes produce one run, not ten. The watermark only advances when a run is actually enqueued, so a version arriving mid-run still triggers the next one rather than being swallowed.
+
+**A three-valued-logic bug caught by the first test run.** The self-loop guard was first written `NOT (produced_by_kind = 'model' AND produced_by_id = m.id)`. Those columns are nullable — an uploaded version leaves both `NULL` — and `NOT (NULL = 'model')` is `NULL`, not `TRUE`, so the predicate filtered out **every uploaded version**: the guard silently broke the common case in exactly the way the feature exists to fix. Now `IS NOT DISTINCT FROM` on both sides, in the migration and in the worker's watermark query, with the reasoning written at the SQL.
+
+**The API refuses an upstream model with no inputs** (422, rolled back). A model with nothing to watch can never fire — the same silent no-op this section exists to remove — so it is refused rather than stored. Changing the trigger mode at all clears the watermark: switching *to* upstream should fire once promptly (`NULL` means `-infinity`, matching §14's convention that a `NULL next_run_at` is due now), and switching *away* must not leave a stale watermark that swallows the first version after switching back.
+
+**Frontend.** The models table's `Schedule` column is now `Trigger`, and upstream models read `on new input data` with either `due now` or `since <the watermark>` — the same shape the cron rows use for `next:`. The edit dialog's trigger dropdown gains "When inputs change", with the hint explaining the chaining, and Save is disabled for an upstream model with no inputs so the 422 is pre-empted rather than demonstrated.
+
+**Testing.** `apps/worker/tests/test_model_runs.py` (+5) against real Postgres and real Parquet: firing on a new version, not re-firing without one then re-firing when one lands, the self-loop guard, coalescing while a run is in flight, and a genuine two-model chain asserting B fires on the pass *after* A's run commits and that A does not re-fire on its own output. `apps/api/tests/test_models.py` (+1) covers the no-inputs refusal (including that the rejected PATCH rolls back), setting mode and inputs in one request, and the watermark reset. Verified end to end in a browser: switched two chained models to "When inputs change", then ran four worker passes — both caught up on pass 1, B ran again on pass 2 for the version A's pass-1 run produced, pass 3 was quiet, and a manual run of A pulled B along on pass 4.
+
+**Current totals: API 231/231** (230 + 1), **worker 42/42** (37 + 5), **control-plane 13/13** (untouched).
+
+---
+
 ## What's not started
 
 - **Code** (repo browser) — not started
 - **Canvas widget palette is deliberately small day one** (see §15): Container, Text, Dataset table, Action form. No chart/visualization widget yet (spec's "BI" half of "app/BI builder"), no cross-widget interactivity (e.g. a table row selection filtering another widget), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all straightforward additions to the same resolver/widget pattern, just not built yet
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
-- **Upstream model trigger mode** — `trigger_mode` accepts `upstream` at the schema/validation level (models §14) but nothing fires a model when its input dataset changes yet; only `manual` and `cron` actually run something
 - **Object instance sync gained scheduling, still full-snapshot by design** — §16 added a cron schedule and a 2M-row worker cap, but §14's cursor-based incremental mode is deliberately connection-sync-only: an object-type-source's input dataset is a wholesale-replaced snapshot with no cursor to hold, so full-snapshot mark-and-sweep is the correct approach here, not a gap (see §16 for the reasoning)
 - **Production OpenSearch instance store — gateway implemented, not wired in** — §14 adds a real, complete `OpenSearchInstanceStore` (index-per-workspace via `search_prefix`, explicit `object_type_id` filtering) but `routes/objects.py`/`services/instances.py` still call the Postgres-backed functions directly; cutting over is the remaining step, deliberately left as its own follow-up (see §14 for why it isn't a one-line swap)
 - **Write-through to external connection sources** — Actions write back to this platform's own dataset copy only (see §12); connectors don't support write operations yet

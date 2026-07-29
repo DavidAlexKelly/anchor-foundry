@@ -1,14 +1,20 @@
 """Model run execution (spec: cron-triggered models, and the "isolated
 worker runtime" Python transforms need).
 
-Two ops, run in sequence:
+Three steps, run in sequence:
   1. enqueue_due_cron_models - for every cron model due to fire, creates a
      queued model_runs row and advances the model's next_run_at to the next
      occurrence (croniter; this is the only place in the platform that
      parses cron expressions after the fact - the API only computes an
      initial guess when a schedule is first set).
-  2. execute_queued_model_runs - for every queued run, whatever put it there
-     (a cron firing above, or the API leaving a Python run 'queued' since it
+  2. enqueue_due_upstream_models - for every trigger_mode='upstream' model
+     whose input datasets have gained a version since it last reacted,
+     creates a queued model_runs row and advances the model's
+     upstream_watermark. This is what turns isolated transforms into
+     pipelines: a model's output dataset version is an input version to
+     whatever reads it.
+  3. execute_queued_model_runs - for every queued run, whatever put it there
+     (a firing above, or the API leaving a Python run 'queued' since it
      never executes those inline), runs the transform and records the
      result: SQL through the same sandboxed-DuckDB path the API uses
      in-process; Python through python_sandbox's subprocess isolation.
@@ -159,6 +165,57 @@ def _enqueue_due_cron_models(context: OpExecutionContext, platform_db: PlatformD
     return enqueued
 
 
+def _enqueue_due_upstream_models(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
+    """Enqueue models whose inputs have gained a version since they last
+    reacted (migration 0021). The same discover-then-verify shape as cron,
+    with one extra step: the watermark the run advances to is recomputed
+    inside the scoped transaction rather than carried over from discovery,
+    so it can never be set past a version this pass didn't actually see."""
+    with platform_db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT model_id, workspace_id FROM list_due_upstream_models()")
+            candidates = cur.fetchall()
+
+    enqueued = 0
+    for model_id, workspace_id in candidates:
+        with platform_db.connect_scoped_to(workspace_id) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT trigger_mode FROM models WHERE id = %s", (model_id,))
+                row = cur.fetchone()
+                if row is None or row[0] != "upstream":
+                    continue  # changed since discovery - re-verified, matches cron's pattern
+                # Newest input version this model has not yet reacted to,
+                # ignoring versions it produced itself (the self-loop guard
+                # 0021 documents). NULL means the versions vanished between
+                # discovery and now - nothing to react to.
+                cur.execute(
+                    """
+                    SELECT max(dv.created_at)
+                      FROM model_inputs mi
+                      JOIN dataset_versions dv ON dv.dataset_id = mi.dataset_id
+                     WHERE mi.model_id = %s
+                       AND NOT (dv.produced_by_kind IS NOT DISTINCT FROM 'model'
+                                AND dv.produced_by_id IS NOT DISTINCT FROM %s)
+                    """,
+                    (model_id, model_id),
+                )
+                watermark = cur.fetchone()[0]
+                if watermark is None:
+                    continue
+                cur.execute(
+                    "INSERT INTO model_runs (model_id, trigger_kind) VALUES (%s, 'upstream')",
+                    (model_id,),
+                )
+                cur.execute(
+                    "UPDATE models SET upstream_watermark = %s WHERE id = %s",
+                    (watermark, model_id),
+                )
+            conn.commit()
+        enqueued += 1
+    context.log.info("enqueued %d upstream model run(s)", enqueued)
+    return enqueued
+
+
 def _execute_queued_model_runs(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
     storage = gateway_from_env()
     with platform_db.connect() as conn:
@@ -254,13 +311,21 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
 
 @op
 def run_model_runs(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
-    """Enqueues due cron models, then executes every queued run (however it
-    got there - a cron firing above, or the API leaving a Python run
-    'queued' since it never executes those inline). One op, not two: the
-    second step must always see the first's inserts in the same poll pass,
-    and Dagster op-to-op data passing isn't needed for that - just calling
-    both in sequence is simpler and equally correct."""
+    """Enqueues due cron and upstream models, then executes every queued run
+    (however it got there - a firing above, or the API leaving a Python run
+    'queued' since it never executes those inline). One op, not three: the
+    execution step must always see the enqueue steps' inserts in the same
+    poll pass, and Dagster op-to-op data passing isn't needed for that -
+    just calling them in sequence is simpler and equally correct.
+
+    A downstream model reacts one poll pass after the model feeding it
+    finishes, not within the same pass: its input version only exists once
+    the producing run has committed, which happens after discovery ran. A
+    three-step chain therefore takes three passes to settle. Flagged for
+    review - resolving a whole chain in one pass needs the dependency graph
+    (topological order), which lives with the DAG work, not here."""
     _enqueue_due_cron_models(context, platform_db)
+    _enqueue_due_upstream_models(context, platform_db)
     return _execute_queued_model_runs(context, platform_db)
 
 

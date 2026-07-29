@@ -394,6 +394,8 @@ export interface Model {
   trigger_mode: "manual" | "cron" | "upstream";
   cron_schedule: string | null;
   next_run_at: string | null;
+  /** Newest input dataset version an upstream-triggered model has reacted to. */
+  upstream_watermark: string | null;
   last_run_status: string | null;
   last_run_at: string | null;
   inputs: ModelInput[];

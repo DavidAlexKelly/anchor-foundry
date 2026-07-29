@@ -13,10 +13,13 @@ Scope, each deviation flagged:
   * trigger_mode='cron': the API only computes an initial next_run_at guess
     (lib/cron.py) when the schedule is set or changed; the worker
     recomputes it after every firing, since it's the process that actually
-    observes "this just fired." trigger_mode='upstream' and the cancel
-    endpoint remain out of scope - a synchronous SQL run has no meaningful
-    cancel, and 'upstream' triggers belong with a real dependency graph,
-    neither built here.
+    observes "this just fired." trigger_mode='upstream' is the same shape
+    with a different due-ness test - the worker polls
+    models.upstream_watermark against the model's input dataset versions
+    (migration 0021); the API only clears the watermark when the trigger
+    mode changes, so switching a model to 'upstream' fires it once and then
+    reacts to genuinely new data. The cancel endpoint remains out of scope:
+    a synchronous SQL run has no meaningful cancel.
   * Run logs live in error_message/rows_produced; log_s3_key is written by
     the worker runtime for long runs.
 
@@ -46,7 +49,8 @@ from .storage import StorageGateway
 
 _COLUMNS = """
     id, project_id, name, description, language, code, output_dataset_id,
-    trigger_mode, cron_schedule, next_run_at, created_by, created_at, updated_at
+    trigger_mode, cron_schedule, next_run_at, upstream_watermark,
+    created_by, created_at, updated_at
 """
 
 
@@ -203,7 +207,14 @@ async def update(
                                     WHEN :trigger IS NOT NULL THEN NULL
                                     ELSE cron_schedule END,
                next_run_at = CASE WHEN :trigger IS NOT NULL THEN :next_run_at
-                                  ELSE next_run_at END
+                                  ELSE next_run_at END,
+               -- Changing the trigger mode at all resets the upstream
+               -- watermark: switching to 'upstream' should fire once
+               -- promptly (0021's NULL = '-infinity' convention), and
+               -- switching away should not leave a stale watermark that
+               -- silently swallows the first version after switching back.
+               upstream_watermark = CASE WHEN :trigger IS NOT NULL THEN NULL
+                                         ELSE upstream_watermark END
          WHERE id = :mid
         RETURNING {_COLUMNS}
         """,
@@ -216,6 +227,14 @@ async def update(
     assert row is not None
     if inputs is not None:
         await _validate_and_set_inputs(conn, model_id, project_id, inputs)
+    if row["trigger_mode"] == "upstream" and not await list_inputs(conn, model_id):
+        # Checked after the input replacement above, so a single PATCH may set
+        # the mode and the inputs together. An upstream model with no inputs
+        # has nothing to watch and would never fire - the exact silent
+        # no-op 0021 exists to remove, so it is refused rather than stored.
+        raise ValueError(
+            "trigger_mode 'upstream' needs at least one input dataset to watch"
+        )
     return dict(row)
 
 

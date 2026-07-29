@@ -26,6 +26,21 @@ function RunBadge({ model }: { model: Model }) {
 }
 
 function ScheduleSummary({ model }: { model: Model }) {
+  if (model.trigger_mode === "upstream") {
+    // The watermark is the newest input version already reacted to; until
+    // it's set the model has never fired, which is the same "due now" the
+    // cron branch shows for a NULL next_run_at.
+    const since = model.upstream_watermark
+      ? `since ${new Date(model.upstream_watermark).toLocaleString()}`
+      : "due now";
+    const names = model.inputs.map((i) => i.dataset_name).join(", ");
+    return (
+      <span title={names ? `Watching ${names}` : undefined}>
+        <span className="chip">on new input data</span>
+        <div className="slug">{since}</div>
+      </span>
+    );
+  }
   if (model.trigger_mode !== "cron") return <span className="count">manual</span>;
   const next = model.next_run_at ? new Date(model.next_run_at).toLocaleString() : "due now";
   return (
@@ -53,8 +68,8 @@ function ModelDialog({
   const [inputs, setInputs] = useState<{ dataset_id: string; input_alias: string }[]>(
     existing?.inputs.map((i) => ({ dataset_id: i.dataset_id, input_alias: i.input_alias })) ?? [],
   );
-  const [triggerMode, setTriggerMode] = useState<"manual" | "cron">(
-    existing?.trigger_mode === "cron" ? "cron" : "manual",
+  const [triggerMode, setTriggerMode] = useState<"manual" | "cron" | "upstream">(
+    existing?.trigger_mode ?? "manual",
   );
   const [cronSchedule, setCronSchedule] = useState(existing?.cron_schedule ?? "0 * * * *");
   const queryClient = useQueryClient();
@@ -208,14 +223,24 @@ function ModelDialog({
           />
         </Field>
         {existing && (
-          <Field label="Schedule" hint="Cron runs are queued for the background worker, same as Python">
+          <Field
+            label="Trigger"
+            hint={
+              triggerMode === "upstream"
+                ? "Runs when any input dataset gains a new version — chain models by pointing one at another's output"
+                : "Scheduled and upstream runs are queued for the background worker, same as Python"
+            }
+          >
             <div className="row-actions">
               <select
                 value={triggerMode}
-                onChange={(e) => setTriggerMode(e.target.value as "manual" | "cron")}
+                onChange={(e) =>
+                  setTriggerMode(e.target.value as "manual" | "cron" | "upstream")
+                }
               >
                 <option value="manual">Manual only</option>
                 <option value="cron">On a schedule</option>
+                <option value="upstream">When inputs change</option>
               </select>
               {triggerMode === "cron" && (
                 <input
@@ -242,7 +267,14 @@ function ModelDialog({
           <button
             type="submit"
             className="btn"
-            disabled={save.isPending || !name.trim() || !code.trim()}
+            disabled={
+              save.isPending ||
+              !name.trim() ||
+              !code.trim() ||
+              // An upstream model with nothing to watch would never fire;
+              // the API refuses it with a 422, this just says so sooner.
+              (triggerMode === "upstream" && !inputs.some((i) => i.dataset_id))
+            }
           >
             {save.isPending ? "Saving…" : existing ? "Save changes" : "Create model"}
           </button>
@@ -408,7 +440,7 @@ export default function ModelsPage() {
             <tr>
               <th>Model</th>
               <th>Last run</th>
-              <th>Schedule</th>
+              <th>Trigger</th>
               <th aria-label="Actions" />
             </tr>
           </thead>

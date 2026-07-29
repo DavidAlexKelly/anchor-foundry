@@ -189,6 +189,156 @@ def test_cron_model_is_enqueued_and_rescheduled(workspace: dict) -> None:
     assert next_run_at is not None and next_run_at > past
 
 
+def _add_version(dataset_id, version_number: int, *, produced_by=None) -> None:
+    """Record a dataset version. The `workspace` fixture creates its input
+    dataset without one (nothing read dataset_versions before upstream
+    triggers existed), so upstream tests add them explicitly."""
+    kind, pid = ("model", produced_by) if produced_by else (None, None)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO dataset_versions (dataset_id, version_number, produced_by_kind,
+                                             produced_by_id)
+               VALUES (%s,%s,%s,%s)""",
+            (dataset_id, version_number, kind, pid),
+        )
+
+
+def _runs(model_id: uuid.UUID) -> list[tuple]:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return conn.execute(
+            "SELECT status, trigger_kind FROM model_runs WHERE model_id=%s ORDER BY queued_at",
+            (model_id,),
+        ).fetchall()
+
+
+def _watermark(model_id: uuid.UUID):
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return conn.execute(
+            "SELECT upstream_watermark FROM models WHERE id=%s", (model_id,)
+        ).fetchone()[0]
+
+
+def test_upstream_model_fires_on_a_new_input_version(workspace: dict) -> None:
+    mid = _create_model(
+        workspace, language="sql", code="SELECT * FROM t", trigger_mode="upstream"
+    )
+    assert _watermark(mid) is None
+    _add_version(workspace["input_dataset_id"], 1)
+
+    run_model_runs(_ctx())
+
+    runs = _runs(mid)
+    assert [r[1] for r in runs] == ["upstream"]
+    assert runs[0][0] == "succeeded"
+    assert _watermark(mid) is not None
+
+
+def test_upstream_model_does_not_refire_without_a_new_version(workspace: dict) -> None:
+    mid = _create_model(
+        workspace, language="sql", code="SELECT * FROM t", trigger_mode="upstream"
+    )
+    _add_version(workspace["input_dataset_id"], 1)
+    run_model_runs(_ctx())
+    first_watermark = _watermark(mid)
+    assert len(_runs(mid)) == 1
+
+    # Nothing new upstream - two further poll passes must be no-ops.
+    run_model_runs(_ctx())
+    run_model_runs(_ctx())
+    assert len(_runs(mid)) == 1
+    assert _watermark(mid) == first_watermark
+
+    # A second version lands: exactly one more run, watermark advances.
+    _add_version(workspace["input_dataset_id"], 2)
+    run_model_runs(_ctx())
+    runs = _runs(mid)
+    assert len(runs) == 2 and runs[1][1] == "upstream"
+    assert _watermark(mid) > first_watermark
+
+
+def test_upstream_model_ignores_versions_it_produced_itself(workspace: dict) -> None:
+    """A model whose output dataset is also one of its inputs is legal, and
+    would re-trigger itself forever without 0021's self-loop guard."""
+    mid = _create_model(
+        workspace, language="sql", code="SELECT * FROM t", trigger_mode="upstream"
+    )
+    _add_version(workspace["input_dataset_id"], 1, produced_by=mid)
+
+    run_model_runs(_ctx())
+
+    assert _runs(mid) == []
+    assert _watermark(mid) is None
+
+
+def test_upstream_model_is_not_enqueued_while_a_run_is_in_flight(workspace: dict) -> None:
+    """Coalescing: versions landing while a run is queued produce one run,
+    not a backlog. The run here is left 'running' so the execute step skips
+    it, isolating the enqueue decision."""
+    mid = _create_model(
+        workspace, language="sql", code="SELECT * FROM t", trigger_mode="upstream"
+    )
+    _add_version(workspace["input_dataset_id"], 1)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO model_runs (model_id, trigger_kind, status, started_at)
+               VALUES (%s,'manual','running',now())""",
+            (mid,),
+        )
+
+    run_model_runs(_ctx())
+
+    assert [r[1] for r in _runs(mid)] == ["manual"]
+    assert _watermark(mid) is None  # still due once the in-flight run clears
+
+
+def test_upstream_chain_runs_the_downstream_model_next_pass(workspace: dict) -> None:
+    """The point of the feature: one model's output version is another
+    model's input version. Model A reads the uploaded dataset, B reads A's
+    output. B fires on the pass *after* A's run commits - the one-pass lag
+    run_model_runs documents."""
+    a = _create_model(
+        workspace, language="sql", code="SELECT id, val * 2 AS doubled FROM t",
+        trigger_mode="upstream",
+    )
+    # Pre-create A's output dataset so B can point at it before A has ever
+    # run; A's first run versions it rather than creating it.
+    out = uuid.uuid4()
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO datasets (id, project_id, workspace_id, name, slug, origin,
+                                     s3_location, table_schema, row_count, current_version,
+                                     created_by)
+               VALUES (%s,%s,%s,%s,%s,'model_output','',
+                       '[]'::jsonb,0,0,%s)""",
+            (out, workspace["project_id"], workspace["workspace_id"],
+             f"A out {workspace['tag']}", f"a-out-{workspace['tag']}", workspace["user_id"]),
+        )
+        conn.execute("UPDATE models SET output_dataset_id=%s WHERE id=%s", (out, a))
+        b = uuid.uuid4()
+        conn.execute(
+            """INSERT INTO models (id, project_id, name, language, code, trigger_mode, created_by)
+               VALUES (%s,%s,%s,'sql','SELECT sum(doubled) AS total FROM t','upstream',%s)""",
+            (b, workspace["project_id"], f"B {workspace['tag']}", workspace["user_id"]),
+        )
+        conn.execute(
+            "INSERT INTO model_inputs (model_id, dataset_id, input_alias) VALUES (%s,%s,'t')",
+            (b, out),
+        )
+
+    _add_version(workspace["input_dataset_id"], 1)
+
+    run_model_runs(_ctx())          # pass 1: A fires; B's input gains a version
+    assert [r[1] for r in _runs(a)] == ["upstream"]
+    assert _runs(a)[0][0] == "succeeded"
+    assert _runs(b) == [], "B's input version only exists after A's run committed"
+
+    run_model_runs(_ctx())          # pass 2: B sees it
+    b_runs = _runs(b)
+    assert [r[1] for r in b_runs] == ["upstream"]
+    assert b_runs[0][0] == "succeeded", b_runs
+    assert _runs(a) == [("succeeded", "upstream")], "A must not re-fire on its own output"
+
+
 def test_manual_trigger_model_is_not_auto_enqueued(workspace: dict) -> None:
     mid = _create_model(workspace, language="sql", code="SELECT * FROM t", trigger_mode="manual")
     run_model_runs(_ctx())
