@@ -26,6 +26,7 @@ import tempfile
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import psycopg
 from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
@@ -130,14 +131,22 @@ def _record_synced_dataset(
             (parquet_key, schema_json, row_count, version, str(dataset_id)),
         )
 
-    cur.execute(
-        """
-        INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
-                                      table_schema, row_count, produced_by_kind, produced_by_id)
-        VALUES (%s, %s, %s, %s, %s, 'sync', %s)
-        """,
-        (str(dataset_id), version, parquet_key, schema_json, row_count, str(connection_id)),
-    )
+    # The dataset's schema policy (migration 0023) is enforced by a trigger
+    # here, so a refusal arrives as a database error rather than a check this
+    # code made; translated so per-connection isolation records it as this
+    # connection's failed run instead of crashing the whole batch.
+    try:
+        cur.execute(
+            """
+            INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
+                                          table_schema, row_count, produced_by_kind,
+                                          produced_by_id)
+            VALUES (%s, %s, %s, %s, %s, 'sync', %s)
+            """,
+            (str(dataset_id), version, parquet_key, schema_json, row_count, str(connection_id)),
+        )
+    except psycopg.Error as exc:
+        raise (engine.schema_policy_error(exc) or exc) from exc
     return dataset_id, schema_changes
 
 

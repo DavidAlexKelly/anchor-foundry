@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
-from .dataset_engine import ColumnSchema
+from .dataset_engine import ColumnSchema, DatasetEngineError
 from .storage import StorageGateway
 
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$")
@@ -52,8 +52,34 @@ def storage_prefix(ws_s3_prefix: str, dataset_id: UUID) -> str:
 _COLUMNS = """
     id, project_id, workspace_id, name, slug, description, origin,
     connection_id, s3_location, table_schema, row_count, current_version,
-    created_by, created_at, updated_at
+    schema_policy, created_by, created_at, updated_at
 """
+
+# Migration 0023 enforces the schema policy in a BEFORE INSERT trigger on
+# dataset_versions - the one place all seven writers across both codebases go
+# through - and raises with this SQLSTATE so the refusal can be told apart
+# from every other constraint on the table. main.py translates it to a 422.
+SCHEMA_POLICY_SQLSTATE = "AF001"
+
+
+def schema_policy_error(exc: Exception) -> "DatasetEngineError | None":
+    """The user-safe error for a schema-policy refusal, or None if this
+    database error is something else and must not be swallowed.
+
+    Callers that own a record which must be closed truthfully - a model run,
+    a sync run - translate the refusal here so it lands in their existing
+    `except DatasetEngineError` and the run is written `failed` with the
+    reason. Callers with no such record (upload) leave it alone: main.py's
+    handler turns it straight into a 422, which is the whole answer there.
+    Mirrored in apps/worker's dataset_engine.py.
+    """
+    original = getattr(exc, "orig", exc)
+    if getattr(original, "sqlstate", None) != SCHEMA_POLICY_SQLSTATE:
+        return None
+    diag = getattr(original, "diag", None)
+    message = getattr(diag, "message_primary", None) or str(original).splitlines()[0]
+    hint = getattr(diag, "message_hint", None)
+    return DatasetEngineError(message if not hint else f"{message} - {hint}")
 
 
 async def list_for_project(conn: AsyncConnection, project_id: UUID) -> list[dict[str, Any]]:
@@ -162,6 +188,7 @@ async def update(
     *,
     name: str | None,
     description: str | None,
+    schema_policy: str | None = None,
 ) -> dict[str, Any]:
     await get(conn, project_id, dataset_id)  # 404 shape before update
     row = await fetch_one(
@@ -169,11 +196,14 @@ async def update(
         f"""
         UPDATE datasets
            SET name = COALESCE(:name, name),
-               description = COALESCE(:descr, description)
+               description = COALESCE(:descr, description),
+               schema_policy = COALESCE(
+                   CAST(:policy AS dataset_schema_policy), schema_policy)
          WHERE id = :did
         RETURNING {_COLUMNS}
         """,
-        {"name": name, "descr": description, "did": str(dataset_id)},
+        {"name": name, "descr": description, "policy": schema_policy,
+         "did": str(dataset_id)},
     )
     assert row is not None
     return row

@@ -61,6 +61,9 @@ class DatasetOut(BaseModel):
     table_schema: list[dict[str, str]]
     row_count: int
     current_version: int
+    # 'permissive' | 'strict' - whether a new version may remove or retype an
+    # existing column (migration 0023). Adding columns is allowed under both.
+    schema_policy: str = "permissive"
     created_at: datetime
     updated_at: datetime
 
@@ -68,6 +71,7 @@ class DatasetOut(BaseModel):
 class DatasetUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    schema_policy: str | None = Field(default=None, pattern="^(permissive|strict)$")
 
 
 class QueryRequest(BaseModel):
@@ -274,7 +278,8 @@ async def update_dataset(
 ) -> DatasetOut:
     async with user_connection(access.auth.user_id) as conn:
         row = await ds_service.update(
-            conn, access.project_id, dataset_id, name=body.name, description=body.description
+            conn, access.project_id, dataset_id, name=body.name,
+            description=body.description, schema_policy=body.schema_policy,
         )
         await audit.record(
             conn,

@@ -38,6 +38,7 @@ import tempfile
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import psycopg
 from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
@@ -120,15 +121,22 @@ def _record_output(
             (parquet_key, schema_json, row_count, version, str(dataset_id)),
         )
 
-    cur.execute(
-        """
-        INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
-                                      table_schema, row_count, produced_by_kind, produced_by_id)
-        VALUES (%s, %s, %s, %s, %s, 'model', %s)
-        RETURNING id
-        """,
-        (str(dataset_id), version, parquet_key, schema_json, row_count, str(model_id)),
-    )
+    # The output dataset's schema policy (migration 0023) is enforced by a
+    # trigger here; translated so the run is recorded as failed with the
+    # reason rather than the exception escaping the per-run isolation.
+    try:
+        cur.execute(
+            """
+            INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
+                                          table_schema, row_count, produced_by_kind,
+                                          produced_by_id)
+            VALUES (%s, %s, %s, %s, %s, 'model', %s)
+            RETURNING id
+            """,
+            (str(dataset_id), version, parquet_key, schema_json, row_count, str(model_id)),
+        )
+    except psycopg.Error as exc:
+        raise (engine.schema_policy_error(exc) or exc) from exc
     version_id = cur.fetchone()[0]
     return dataset_id, version_id
 

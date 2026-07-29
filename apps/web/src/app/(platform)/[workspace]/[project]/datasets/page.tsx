@@ -449,6 +449,63 @@ function ProfilePanel({
   );
 }
 
+function SchemaPolicyControl({
+  workspaceId,
+  projectId,
+  dataset,
+  canEdit,
+}: {
+  workspaceId: string;
+  projectId: string;
+  dataset: Dataset;
+  canEdit: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const save = useMutation({
+    mutationFn: (policy: "permissive" | "strict") =>
+      dsApi.update(workspaceId, projectId, dataset.id, { schema_policy: policy }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["datasets", projectId] }),
+  });
+  const policy = save.data?.schema_policy ?? dataset.schema_policy;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        flexWrap: "wrap",
+        padding: "8px 0 12px",
+        borderBottom: "1px solid var(--line)",
+        marginBottom: 12,
+      }}
+    >
+      <strong style={{ fontSize: 12.5 }}>Schema changes</strong>
+      {canEdit ? (
+        <select
+          value={policy}
+          disabled={save.isPending}
+          onChange={(e) => save.mutate(e.target.value as "permissive" | "strict")}
+        >
+          <option value="permissive">Allow any change</option>
+          <option value="strict">Refuse removing or retyping a column</option>
+        </select>
+      ) : (
+        <span className="chip">{policy}</span>
+      )}
+      <span className="slug">
+        New columns are always allowed; strict blocks the changes that break
+        anything reading this dataset.
+      </span>
+      {save.isError && (
+        <div className="form-error" style={{ width: "100%" }}>
+          {save.error instanceof ApiError ? save.error.message : "Couldn't save."}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExploreDialog({
   workspaceId,
   projectId,
@@ -524,11 +581,21 @@ function ExploreDialog({
           {shown && <ResultGrid result={shown} />}
         </>
       ) : tab === "columns" ? (
-        <ProfilePanel
-          workspaceId={workspaceId}
-          projectId={projectId}
-          dataset={dataset}
-        />
+        <>
+          {/* Shape lives with the columns, the same way the Checks tab owns
+              values. */}
+          <SchemaPolicyControl
+            workspaceId={workspaceId}
+            projectId={projectId}
+            dataset={dataset}
+            canEdit={canEdit}
+          />
+          <ProfilePanel
+            workspaceId={workspaceId}
+            projectId={projectId}
+            dataset={dataset}
+          />
+        </>
       ) : (
         <ChecksPanel
           workspaceId={workspaceId}

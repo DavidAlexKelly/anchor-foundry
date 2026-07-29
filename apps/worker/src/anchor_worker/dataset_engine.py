@@ -47,6 +47,26 @@ class ColumnSchema:
         return {"name": self.name, "data_type": self.data_type}
 
 
+# Migration 0023 enforces a dataset's schema policy in a BEFORE INSERT
+# trigger on dataset_versions and raises with this SQLSTATE. The worker has
+# to translate it into a DatasetEngineError so the per-run/per-connection
+# isolation records it as that item's failure instead of crashing the batch -
+# the same bug STATUS §16 fixed for StorageKeyError. Kept in step with
+# apps/api's services/datasets.py, which names the same constant.
+SCHEMA_POLICY_SQLSTATE = "AF001"
+
+
+def schema_policy_error(exc: Exception) -> "DatasetEngineError | None":
+    """The user-safe error for a schema-policy refusal, or None if this
+    database error is something else and must not be swallowed."""
+    if getattr(exc, "sqlstate", None) != SCHEMA_POLICY_SQLSTATE:
+        return None
+    diag = getattr(exc, "diag", None)
+    message = getattr(diag, "message_primary", None) or str(exc).splitlines()[0]
+    hint = getattr(diag, "message_hint", None)
+    return DatasetEngineError(message if not hint else f"{message} - {hint}")
+
+
 def _clean(exc: duckdb.Error) -> str:
     text = str(exc).strip()
     first = text.splitlines()[0] if text else "query failed"

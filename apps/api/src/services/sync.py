@@ -58,6 +58,20 @@ class SyncError(RuntimeError):
     """User-safe sync failure."""
 
 
+async def _insert_version(conn: AsyncConnection, sql: str, params: dict[str, Any]) -> Any:
+    """Append a dataset_versions row, translating migration 0023's schema
+    policy refusal into a DatasetEngineError. The callers here own a run
+    record that has to be closed truthfully, so the refusal must land in
+    their existing failure handling rather than escaping as a database error
+    - see services/datasets.py `schema_policy_error`."""
+    from sqlalchemy.exc import DBAPIError
+
+    try:
+        return await fetch_one(conn, sql, params)
+    except DBAPIError as exc:
+        raise (ds_service.schema_policy_error(exc) or exc) from exc
+
+
 def _stored_schema(value: Any) -> list[dict[str, str]] | None:
     """A dataset's `table_schema` jsonb as a list. The driver hands jsonb back
     already decoded on some paths and as a string on others, so normalise
@@ -264,7 +278,7 @@ async def run_full_sync(
         assert row is not None
         created = False
 
-    await fetch_one(
+    await _insert_version(
         conn,
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
@@ -449,7 +463,7 @@ async def run_incremental_sync(
         assert row is not None
         created = False
 
-    await fetch_one(
+    await _insert_version(
         conn,
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,

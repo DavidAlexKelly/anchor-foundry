@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from fastapi.responses import JSONResponse
 from starlette.requests import Request as StarletteRequest
@@ -19,6 +20,7 @@ from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
 from .services.connectors import ConnectorConfigError
 from .services.dataset_engine import DatasetEngineError
+from .services.datasets import SCHEMA_POLICY_SQLSTATE
 from .services.orgs import Boto3CognitoGateway
 from .services.secrets import Boto3SecretsGateway
 from .services.storage import S3StorageGateway, StorageKeyError
@@ -106,6 +108,26 @@ def create_app() -> FastAPI:
     @app.exception_handler(StorageKeyError)
     async def storage_key_error(request: StarletteRequest, exc: StorageKeyError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(DBAPIError)
+    async def database_constraint_error(
+        request: StarletteRequest, exc: DBAPIError
+    ) -> JSONResponse:
+        """Migration 0023 enforces a dataset's schema policy in a trigger, so
+        the refusal arrives here as a database error rather than from a
+        service. It carries its own SQLSTATE precisely so it can be told
+        apart from every other constraint on the table; anything else is a
+        genuine server fault and is re-raised to the 500 handler unchanged."""
+        original = getattr(exc, "orig", None)
+        if getattr(original, "sqlstate", None) != SCHEMA_POLICY_SQLSTATE:
+            raise exc
+        diag = getattr(original, "diag", None)
+        detail = getattr(diag, "message_primary", None) or str(original).splitlines()[0]
+        hint = getattr(diag, "message_hint", None)
+        return JSONResponse(
+            status_code=422,
+            content={"detail": detail if not hint else f"{detail} - {hint}"},
+        )
 
     @app.exception_handler(ValueError)
     async def service_value_error(request: StarletteRequest, exc: ValueError) -> JSONResponse:

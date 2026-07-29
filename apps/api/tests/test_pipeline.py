@@ -158,18 +158,59 @@ def test_health_appears_once_something_has_evaluated_it(
     assert node(graph(client, fx), chain["source_name"], "dataset")["health_status"] == "pass"
 
 
-def test_a_cycle_is_reported_rather_than_hidden(
+def test_closing_a_loop_is_refused_at_save_time(
     client: TestClient, fx: Fixture, chain: dict[str, str]
 ) -> None:
-    """Migration 0021 defers cycle detection to this item: two models feeding
-    each other oscillate forever under upstream triggers, and nothing in the
-    product could see it. Close the loop by feeding B's output back into A."""
+    """Roadmap Models item 7. B reads A's output, so feeding B's output back
+    into A would make A depend on itself two hops away - which migration
+    0021's self-loop guard cannot see, and which re-fires forever under
+    upstream triggers."""
     r = client.patch(
         f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.editor_sub),
         json={"inputs": [{"dataset_id": chain["source"], "input_alias": "raw"},
                          {"dataset_id": chain["b_out"], "input_alias": "loop"}]},
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 422, r.text
+    assert "dependency loop" in r.json()["detail"]
+
+    # Refused, not half-applied.
+    r = client.get(f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.viewer_sub))
+    assert [i["input_alias"] for i in r.json()["inputs"]] == ["raw"]
+    assert graph(client, fx)["cycles"] == []
+
+    # A model reading its own output directly is the same refusal.
+    r = client.patch(
+        f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.editor_sub),
+        json={"inputs": [{"dataset_id": chain["a_out"], "input_alias": "self_ref"}]},
+    )
+    assert r.status_code == 422 and "dependency loop" in r.json()["detail"]
+
+    # A sibling reading the same output is not a loop and must still be
+    # allowed - the walk is directional, not "anything already in the graph".
+    r = client.post(
+        f"{base(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"Sibling {fx.tag}", "code": "SELECT count(*) AS n FROM d",
+              "inputs": [{"dataset_id": chain["a_out"], "input_alias": "d"}]},
+    )
+    assert r.status_code == 201, r.text
+    client.delete(f"{base(fx)}/models/{r.json()['id']}", headers=hdr(fx.editor_sub))
+
+
+def test_a_pre_existing_cycle_is_reported_rather_than_hidden(
+    client: TestClient, fx: Fixture, chain: dict[str, str]
+) -> None:
+    """Cycles created before the save-time check existed are grandfathered
+    (services/models.py `_refuse_cycles`), so the graph still has to report
+    one. Written straight to the database, which is the only way to get one
+    now - and exactly the state an older deployment can be in."""
+    import psycopg
+    from test_api import ADMIN_DSN
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO model_inputs (model_id, dataset_id, input_alias) VALUES (%s,%s,'loop')",
+            (chain["a"], chain["b_out"]),
+        )
     try:
         g = graph(client, fx)
         assert len(g["cycles"]) == 1, g["cycles"]
@@ -183,10 +224,14 @@ def test_a_cycle_is_reported_rather_than_hidden(
         assert node(g, chain["source_name"], "dataset")["in_cycle"] is False
         assert all(n["layer"] >= 0 for n in g["nodes"])
     finally:
-        client.patch(
+        # Editing your way *out* of a grandfathered cycle must be allowed -
+        # the check validates the proposed set, not the current one.
+        r = client.patch(
             f"{base(fx)}/models/{chain['a']}", headers=hdr(fx.editor_sub),
             json={"inputs": [{"dataset_id": chain["source"], "input_alias": "raw"}]},
         )
+        assert r.status_code == 200, r.text
+    assert graph(client, fx)["cycles"] == []
 
 
 def test_an_empty_project_is_an_empty_graph(client: TestClient, fx: Fixture) -> None:

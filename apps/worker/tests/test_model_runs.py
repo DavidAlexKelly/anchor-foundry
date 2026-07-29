@@ -491,6 +491,43 @@ def test_ignore_is_the_default_and_costs_nothing(failing_input: dict) -> None:
     assert health is None
 
 
+def test_a_strict_output_dataset_fails_the_run_rather_than_the_batch(workspace: dict) -> None:
+    """Migration 0023 enforces the schema policy in a trigger, so the refusal
+    reaches the worker as a psycopg error rather than a check this code made.
+    Untranslated it would escape the per-run isolation and take down the whole
+    poll pass - the same bug STATUS §16 fixed for StorageKeyError."""
+    mid = _create_model(workspace, language="sql", code="SELECT id, val FROM t")
+    _queue_run(mid)
+    run_model_runs(_ctx())   # creates the output dataset at version 1
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        out = conn.execute(
+            "SELECT output_dataset_id FROM models WHERE id = %s", (mid,)
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE datasets SET schema_policy = 'strict' WHERE id = %s", (out,)
+        )
+        conn.execute("UPDATE models SET code = %s WHERE id = %s", ("SELECT id FROM t", mid))
+
+    # A second, unrelated model in the same pass must still run: the refusal
+    # is this run's failure, not the batch's.
+    other = _create_model(workspace, language="sql", code="SELECT * FROM t")
+    bad_run, good_run = _queue_run(mid), _queue_run(other)
+
+    run_model_runs(_ctx())
+
+    status, error, _, _ = _run_row(bad_run)
+    assert status == "failed", (status, error)
+    assert "columns removed: val" in error and "permissive" in error
+    assert _run_row(good_run)[0] == "succeeded"
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        version = conn.execute(
+            "SELECT current_version FROM datasets WHERE id = %s", (out,)
+        ).fetchone()[0]
+    assert version == 1, "the refused version must not have rolled current_version"
+
+
 def test_manual_trigger_model_is_not_auto_enqueued(workspace: dict) -> None:
     mid = _create_model(workspace, language="sql", code="SELECT * FROM t", trigger_mode="manual")
     run_model_runs(_ctx())

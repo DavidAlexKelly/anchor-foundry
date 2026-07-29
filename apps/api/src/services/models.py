@@ -94,6 +94,92 @@ async def list_inputs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, A
     )
 
 
+async def _insert_version(conn: AsyncConnection, sql: str, params: dict[str, Any]) -> Any:
+    """Append a dataset_versions row, translating migration 0023's schema
+    policy refusal into a DatasetEngineError. The callers here own a run
+    record that has to be closed truthfully, so the refusal must land in
+    their existing failure handling rather than escaping as a database error
+    - see services/datasets.py `schema_policy_error`."""
+    from sqlalchemy.exc import DBAPIError
+
+    try:
+        return await fetch_one(conn, sql, params)
+    except DBAPIError as exc:
+        raise (ds_service.schema_policy_error(exc) or exc) from exc
+
+
+async def _refuse_cycles(
+    conn: AsyncConnection,
+    model_id: UUID,
+    project_id: UUID,
+    inputs: list[dict[str, Any]],
+) -> None:
+    """Refuse an input set that would make the model depend on its own output
+    (roadmap Models item 7).
+
+    The pipeline graph already *reports* cycles (services/pipeline.py); this
+    is the other half. A cycle matters beyond being confusing: a model in one
+    with trigger_mode='upstream' re-fires on every worker pass forever, since
+    each run produces a version the loop is watching. Migration 0021's
+    self-loop guard only covers a model reading its own output directly - it
+    cannot see A -> B -> A, because it only ever looks at one model's inputs.
+
+    Checked at edit time, and only here, because that is the only moment a
+    cycle can appear. A model's output dataset is created by its first run
+    and nothing points at a brand-new dataset yet, so running a model can
+    never close a loop that saving it did not.
+
+    **Existing cycles are grandfathered**, deliberately: this validates the
+    proposed input set, so a loop created before this existed keeps working
+    until someone edits one of its models, at which point the edit is refused
+    until they break it. Force-breaking on next edit would mean silently
+    deleting an input somebody configured on purpose; the Pipeline page names
+    the loop instead, which is a better place to be told.
+    """
+    row = await fetch_one(
+        conn,
+        "SELECT output_dataset_id FROM models WHERE id = :mid",
+        {"mid": str(model_id)},
+    )
+    output_dataset_id = None if row is None else row["output_dataset_id"]
+    if output_dataset_id is None:
+        return  # nothing downstream of a model that has never produced anything
+
+    # Every dataset reachable downstream of this model's output. UNION, not
+    # UNION ALL: a pre-existing cycle elsewhere in the project would
+    # otherwise make this walk run forever.
+    reachable = await fetch_all(
+        conn,
+        """
+        WITH RECURSIVE downstream AS (
+            SELECT CAST(:out AS uuid) AS dataset_id
+            UNION
+            SELECT m.output_dataset_id
+              FROM downstream d
+              JOIN model_inputs mi ON mi.dataset_id = d.dataset_id
+              JOIN models m ON m.id = mi.model_id
+             WHERE m.output_dataset_id IS NOT NULL
+               AND m.project_id = :pid
+        )
+        SELECT d.dataset_id, ds.name
+          FROM downstream d JOIN datasets ds ON ds.id = d.dataset_id
+        """,
+        {"out": str(output_dataset_id), "pid": str(project_id)},
+    )
+    downstream = {str(r["dataset_id"]): str(r["name"]) for r in reachable}
+
+    offending = [
+        downstream[str(item["dataset_id"])]
+        for item in inputs
+        if str(item["dataset_id"]) in downstream
+    ]
+    if offending:
+        raise ValueError(
+            f"this would create a dependency loop: {', '.join(sorted(set(offending)))} "
+            "is produced downstream of this model, so it cannot also be an input"
+        )
+
+
 async def _validate_and_set_inputs(
     conn: AsyncConnection,
     model_id: UUID,
@@ -116,6 +202,7 @@ async def _validate_and_set_inputs(
         )
         if ds is None:
             raise NotFoundError("input dataset")
+    await _refuse_cycles(conn, model_id, project_id, inputs)
     from sqlalchemy import text
 
     await conn.execute(
@@ -516,7 +603,7 @@ async def record_output(
         )
         assert row is not None
 
-    version_row = await fetch_one(
+    version_row = await _insert_version(
         conn,
         """
         INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,

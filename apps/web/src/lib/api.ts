@@ -174,6 +174,20 @@ export const datasets = {
     }
     return (await res.json()) as import("./types").Dataset;
   },
+  update: (
+    wid: string,
+    pid: string,
+    did: string,
+    input: {
+      name?: string;
+      description?: string;
+      schema_policy?: "permissive" | "strict";
+    },
+  ) =>
+    request<import("./types").Dataset>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
   preview: (wid: string, pid: string, did: string) =>
     request<import("./types").TabularResult>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview`,

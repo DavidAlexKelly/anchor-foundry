@@ -226,6 +226,9 @@ export interface Dataset {
   table_schema: { name: string; data_type: string }[];
   row_count: number;
   current_version: number;
+  /** Whether a new version may remove or retype an existing column
+   *  (migration 0023). Adding columns is allowed under both. */
+  schema_policy: "permissive" | "strict";
   created_at: string;
   updated_at: string;
 }

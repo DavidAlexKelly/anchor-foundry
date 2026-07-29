@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–2; Models 1–3 — see §21–§29). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3; Models 1–3, 7 — see §21–§31). Test counts below are from the last full regression run.
 
 ---
 
@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app - synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0022) + migration runner
+│   ├── db/              SQL migrations (0001–0023) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0022)
+### 1. Database schema (migrations 0001–0023)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -420,6 +420,38 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Testing.** `apps/api/tests/test_models.py` (+6) and `apps/worker/tests/test_model_runs.py` (+6), both against real uploaded data with a genuine null in a not-null column rather than a mocked verdict. Between them they cover all three modes on both paths, the compute-if-absent behaviour asserted directly against `dataset_versions.expectation_results`, passing input not blocking, an unknown policy refused at 422, the blocked-run-still-settles case, and the API/worker rule-type parity. Verified in a browser: ran the model ungated on bad data (it succeeded, no evidence recorded), switched to blocking through the dialog, and watched the same run refuse with `Dirty source (id: 1 null value(s))`.
 
 **Current totals: API 243/243** (237 + 6), **worker 48/48** (42 + 6), **control-plane 13/13** (untouched).
+
+---
+
+### 30. Refusing a dependency loop (this session)
+
+`ROADMAP.md` Models item 7 — an item that only exists because §28 created it. The pipeline graph reports cycles; the platform still let you make one. That is not just untidy: a model in a loop with `trigger_mode='upstream'` re-fires on every worker pass forever, because each run produces a version the loop is watching, and migration 0021's self-loop guard cannot see it (it only ever looks at one model's own inputs, so A → B → A is invisible to it).
+
+**Where and when.** `_validate_and_set_inputs`, via a recursive walk over every dataset downstream of the model's own output; a proposed input that appears in that set is a 422 on the form. `UNION`, not `UNION ALL`, so a pre-existing loop elsewhere in the project cannot make the walk run forever. Checked at edit time and *only* there, because that is the only moment a cycle can appear: a model's output dataset is created by its first run and nothing points at a brand-new dataset yet, so running a model can never close a loop that saving it did not.
+
+**Existing cycles are grandfathered**, which is the question the roadmap item left open. The check validates the *proposed* input set, so a loop created before this existed keeps working until somebody edits one of its models — at which point the edit is refused until they break it, and editing your way *out* is always allowed. Force-breaking on next edit would mean silently deleting an input someone configured on purpose; the Pipeline page naming the loop is a better place to be told. There is a test that writes a cycle straight to the database (the only way to get one now, and exactly the state an older deployment can be in) and asserts the graph still reports it.
+
+**Testing.** `apps/api/tests/test_pipeline.py` (+1, and the old cycle test rewritten): the two-hop loop refused, the direct self-reference refused, the *sibling* case still allowed — a second model reading the same output is not a loop, and a check that said otherwise would be a walk in the wrong direction — plus the grandfathered case and editing out of it.
+
+---
+
+### 31. Dataset schema policy (this session)
+
+`ROADMAP.md` Datasets item 3. §26 and §29 are about bad *values*; this is bad *shape*. A column disappearing or changing type breaks every downstream model, object mapping and canvas widget reading it, and today it lands silently and is discovered three layers away at runtime.
+
+**`datasets.schema_policy`** (migration 0023): `permissive` (default) or `strict`. The default matches §29's reasoning exactly — nothing should silently start failing pipelines the day a migration applies. The roadmap's suggestion that strict be the default *for anything with a downstream dependency* is deliberately not implemented: "has a downstream model" is a property that changes without the dataset's owner doing anything, so it would make a policy that turns itself on.
+
+**Adding a column is allowed under strict, and that is the design.** Taking "must match the previous version's schema" literally would reject the most common and most harmless drift there is — a source gaining a field — and a policy people have to keep switching off is a policy nobody leaves on. What breaks a downstream reader is a column going away or changing type; those are what strict refuses. **Any retype is breaking, including widening ones**: `int → bigint` is safe and `text → int` is not, but deciding which is which means encoding a type lattice per source dialect, and being subtly wrong there is worse than being bluntly right, because a false negative silently breaks the exact thing this protects. The escape hatch is deliberate and auditable — switch to permissive, let the version land, switch back — and the refusal message says so.
+
+**Enforced in a trigger, which reverses migration 0021's argument and is worth being explicit about.** 0021 argued against putting logic in a database trigger, and that still holds for what it was about: enqueueing model runs is *scheduling policy*, which needs to be retried and rate-limited in application code. This is a different kind of thing — an integrity constraint on a table, the same tool 0003's `enforce_dataset_workspace()` already uses. The deciding factor is the alternative: **seven** writers across two independently deployed codebases insert into `dataset_versions`, so an application-layer check holds only until somebody forgets, and the eighth writer inherits nothing. In the trigger it holds for every writer that exists and every one that doesn't yet.
+
+**The cost of that choice, paid honestly.** A refusal arrives as a database error rather than a check the code made, so it has to be translated. It carries its own SQLSTATE (`AF001`) precisely so it can be told apart from every other constraint on the table. Callers that own a record which must be closed truthfully — a model run, a sync run — translate it into `DatasetEngineError` so it lands in their existing failure handling and the run is written `failed` with the reason rather than left `running`. Callers with no such record (upload) leave it alone: `main.py`'s handler turns it straight into a 422, which is the whole answer there. The worker translates it in both its version-writing sites for the same reason STATUS §16 had to catch `StorageKeyError` — an untranslated error escapes the per-item isolation and takes down the whole poll pass, and there is a test asserting a second, unrelated model still runs in a pass where one was refused.
+
+**Frontend.** The schema policy sits in the dataset Explore dialog's **Columns** tab — shape belongs with the columns, the same way the Checks tab owns values — as a two-option selector spelled out in product terms ("Refuse removing or retyping a column"), with the "new columns are always allowed" rule stated next to it rather than left to be discovered.
+
+**Testing.** `apps/api/tests/test_schema_policy.py` (8) driven through a model's output dataset, because that is the only way to produce a *second* version of a dataset through the public API — re-uploading under the same name is a 409 — and it is also the case that matters. Covers the permissive default, removal and retype refused, addition allowed, the refused version not rolling `current_version`, the run recorded `failed`, the permissive escape hatch and the new shape becoming the baseline afterwards, strict never blocking a first version, an unknown policy at 422, and a viewer refused. `apps/worker/tests/test_model_runs.py` (+1) covers the automated path and the batch isolation. Verified in a browser: set a model's output dataset to strict from the Columns tab, re-ran the model with a narrower query, and read back `columns removed: val - set this dataset's schema policy to permissive to allow it`, with the dataset still at v1.
+
+**Current totals: API 252/252** (243 + 9), **worker 49/49** (48 + 1), **control-plane 13/13** (untouched).
 
 ---
 
