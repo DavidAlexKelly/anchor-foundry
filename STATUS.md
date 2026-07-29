@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7 — the Connections pillar is now built out as far as it can go without a product decision; see §21–§24). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7 and Datasets 1 — see §21–§25). Test counts below are from the last full regression run.
 
 ---
 
@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app - synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0018) + migration runner
+│   ├── db/              SQL migrations (0001–0019) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0018)
+### 1. Database schema (migrations 0001–0019)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -304,6 +304,28 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 **Frontend.** REST is the first connector with a boolean config field, which the schema-driven wizard was rendering as a text box — a boolean typed as "true" is a wrong answer waiting to happen. Booleans now render as a checkbox, alongside §21's enum dropdowns.
 
 **Current totals: API 208/208** (187 + 21), **worker 37/37** (32 + 5), **control-plane 13/13** (untouched).
+
+---
+
+### 25. Column-level profiling (this session)
+
+`ROADMAP.md` Datasets item 1 — the first work in that pillar, and the item it flags as the highest-value, lowest-effort addition in the whole section.
+
+**What it answers.** Preview is a hundred rows in a grid: it tells you what a row looks like and nothing else. A profile answers what someone unfamiliar with the data actually wants to know — how complete is this column, how many distinct values does it hold, what range does it span. `dataset_versions.column_profile` (migration 0019) stores, per column: type, null count and rate, distinct count, and min/max.
+
+**Lazy, not eager — the one design decision worth arguing.** The roadmap said "computed once per dataset version and cached alongside it", which this satisfies, but the obvious reading (compute at version-creation time) would mean adding a DuckDB aggregate pass to *every* path that creates a version — upload, both sync paths, both model paths, action write-back — to produce something nobody may ever open. Computing on first request instead means one call site, no write-path cost, and the same guarantee: a version's data is immutable (a new version is a new row), so a profile is correct forever once written and never needs invalidating. Two readers racing to compute the same profile write identical bytes, so last-writer-wins is harmless rather than something to lock against. A test asserts the value is `NULL` until first asked for, present afterwards, and keyed per version rather than per dataset.
+
+**Small correctness details that each needed deciding:**
+- **min/max are text.** One JSON array holds every column's statistics, and those columns have different types. Nothing computes against these — it is display metadata.
+- **Types with no ordering get `NULL` min/max rather than failing the profile.** A JSON source produces list and struct columns routinely (the REST connector in §24 makes that ordinary), and `min()` over a list either errors or answers uselessly. Those columns still get a null rate and a distinct count, which are the useful numbers for them anyway.
+- **An empty dataset does not divide by zero.** Zero rows means a zero null rate, not a crash.
+- **One query, not one per column.** Every column's aggregates are projected into a single `SELECT` so DuckDB scans the Parquet once however wide the table is.
+
+**Frontend.** The dataset Explore dialog gains a **Rows / Columns** toggle. Rows is the existing SQL grid, untouched. Columns is the profile: an entirely-null column renders its rate in the error colour, and a column whose distinct count equals the row count is chipped `unique` — the two facts you actually scan a profile for. Profiling is fetched separately from preview so an aggregate pass never delays the grid.
+
+**Testing.** `apps/api/tests/test_column_profile.py` (8) against a real uploaded file with a deliberately awkward shape — a complete key, a column with one gap, a mostly-empty column, a constant, and text. Covers the statistics, the empty-dataset case, the unorderable-type case (via a real Parquet with a list column), the lazy-compute-then-cache behaviour asserted against the database, per-version cache keying, and viewer/outsider access. Verified in a browser end to end: uploaded a file, opened Columns, and read back `75% (3)` nulls on the mostly-empty column and the `unique` chip on the key.
+
+**Current totals: API 216/216** (208 + 8), **worker 37/37**, **control-plane 13/13** (both untouched).
 
 ---
 

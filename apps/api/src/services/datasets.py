@@ -17,6 +17,7 @@ import re
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import text as _text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
@@ -195,6 +196,58 @@ async def delete(
     # leaves recoverable files, and the worker's cleanup patterns extend to
     # dataset prefixes in a later milestone.
     storage.delete_prefix(prefix)
+
+
+async def get_cached_profile(
+    conn: AsyncConnection, dataset_id: UUID, version_number: int
+) -> list[dict[str, Any]] | None:
+    """The stored profile for a version, or None when it has not been computed
+    yet (migration 0019)."""
+    row = await fetch_one(
+        conn,
+        """
+        SELECT column_profile
+          FROM dataset_versions
+         WHERE dataset_id = :did AND version_number = :version
+        """,
+        {"did": str(dataset_id), "version": version_number},
+    )
+    if row is None or row["column_profile"] is None:
+        return None
+    value = row["column_profile"]
+    if isinstance(value, str):
+        import json
+
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, list) else None
+
+
+async def store_profile(
+    conn: AsyncConnection,
+    dataset_id: UUID,
+    version_number: int,
+    profile: list[dict[str, Any]],
+) -> None:
+    """Cache a computed profile. A version's data is immutable, so this is
+    written once and never invalidated - and two concurrent readers racing to
+    compute the same profile would write the same bytes, so the last writer
+    winning is harmless rather than something to lock against."""
+    import json
+
+    await conn.execute(
+        _text(
+            "UPDATE dataset_versions SET column_profile = CAST(:profile AS jsonb) "
+            "WHERE dataset_id = :did AND version_number = :version"
+        ),
+        {
+            "profile": json.dumps(profile),
+            "did": str(dataset_id),
+            "version": version_number,
+        },
+    )
 
 
 async def list_versions(

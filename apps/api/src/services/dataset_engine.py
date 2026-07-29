@@ -164,6 +164,88 @@ def describe_file(src_path: str, extension: str) -> list[ColumnSchema]:
         con.close()
 
 
+def profile_columns(parquet_path: str) -> list[dict[str, Any]]:
+    """Per-column statistics for a dataset version (migration 0019).
+
+    One pass over the file computing every column's aggregates at once, rather
+    than a query per column: DuckDB reads the Parquet once and the whole thing
+    stays a single scan even on a wide table.
+
+    min/max come back as text because the result has to hold whatever each
+    column's type is in one JSON array, and this is display metadata - nothing
+    computes against it. Types DuckDB cannot order (structs, lists, maps -
+    ordinary in a JSON source) get NULL min/max rather than failing the whole
+    profile; the null rate and distinct count are still meaningful for them.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(
+                f"CREATE VIEW src AS SELECT * FROM read_parquet('{parquet_path}')"
+            )
+            described = con.execute("DESCRIBE src").fetchall()
+            total = int(con.execute("SELECT count(*) FROM src").fetchone()[0])
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+
+        if not described:
+            return []
+
+        selects: list[str] = []
+        for name, data_type, *_ in described:
+            quoted = '"' + str(name).replace('"', '""') + '"'
+            selects.append(f"count({quoted})")
+            selects.append(f"count(DISTINCT {quoted})")
+            if _is_orderable(str(data_type)):
+                selects.append(f"CAST(min({quoted}) AS VARCHAR)")
+                selects.append(f"CAST(max({quoted}) AS VARCHAR)")
+            else:
+                # Kept in the projection so the row stays a fixed 4-per-column
+                # stride and the unpacking below doesn't need to branch.
+                selects.append("NULL")
+                selects.append("NULL")
+
+        try:
+            row = con.execute(f"SELECT {', '.join(selects)} FROM src").fetchone()
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+
+        profile: list[dict[str, Any]] = []
+        for index, (name, data_type, *_) in enumerate(described):
+            non_null, distinct, minimum, maximum = row[index * 4 : index * 4 + 4]
+            non_null = int(non_null or 0)
+            null_count = total - non_null
+            profile.append(
+                {
+                    "name": str(name),
+                    "data_type": str(data_type),
+                    "null_count": null_count,
+                    # Rounded rather than raw: this is rendered as a percentage
+                    # and a full float would put 17 digits on screen.
+                    "null_rate": round(null_count / total, 6) if total else 0.0,
+                    "distinct_count": int(distinct or 0),
+                    "min": None if minimum is None else str(minimum),
+                    "max": None if maximum is None else str(maximum),
+                }
+            )
+        return profile
+    finally:
+        con.close()
+
+
+def _is_orderable(data_type: str) -> bool:
+    """Whether min()/max() mean anything for this DuckDB type. Nested types
+    (STRUCT, LIST/[], MAP, UNION) either error or produce something useless."""
+    upper = data_type.upper()
+    return not (
+        upper.endswith("[]")
+        or upper.startswith("STRUCT")
+        or upper.startswith("MAP")
+        or upper.startswith("UNION")
+        or upper == "JSON"
+    )
+
+
 def preview(parquet_path: str, limit: int = PREVIEW_ROWS) -> TabularResult:
     limit = max(1, min(limit, MAX_RESULT_ROWS))
     con = duckdb.connect()

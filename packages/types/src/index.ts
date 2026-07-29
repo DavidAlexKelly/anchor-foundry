@@ -230,6 +230,27 @@ export interface Dataset {
   updated_at: string;
 }
 
+/** Per-column statistics for a dataset version (migration 0019). Computed on
+ * first request and cached - a version's data is immutable. min/max are text
+ * because one array holds every column's type; null for types with no
+ * meaningful ordering (lists, structs). */
+export interface ColumnProfile {
+  name: string;
+  data_type: string;
+  null_count: number;
+  null_rate: number;
+  distinct_count: number;
+  min: string | null;
+  max: string | null;
+}
+
+export interface DatasetProfile {
+  dataset_id: string;
+  version_number: number;
+  row_count: number;
+  columns: ColumnProfile[];
+}
+
 export interface TabularResult {
   columns: { name: string; data_type: string }[];
   rows: unknown[][];

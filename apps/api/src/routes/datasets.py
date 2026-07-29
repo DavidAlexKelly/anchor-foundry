@@ -90,6 +90,25 @@ class VersionOut(BaseModel):
     created_at: datetime
 
 
+class ColumnProfileOut(BaseModel):
+    name: str
+    data_type: str
+    null_count: int
+    null_rate: float
+    distinct_count: int
+    # Text because one array holds every column's type, and nothing computes
+    # against these - null for types DuckDB cannot order (structs, lists).
+    min: str | None
+    max: str | None
+
+
+class DatasetProfileOut(BaseModel):
+    dataset_id: UUID
+    version_number: int
+    row_count: int
+    columns: list[ColumnProfileOut]
+
+
 def _out(row: dict[str, Any]) -> DatasetOut:
     data = dict(row)
     data.pop("s3_location", None)  # storage keys are internal plumbing
@@ -276,6 +295,37 @@ async def preview_dataset(
     path, _ = await _parquet_path(access, dataset_id)
     result = await anyio.to_thread.run_sync(engine.preview, path)
     return _tabular(result)
+
+
+@router.get("/{dataset_id}/profile", response_model=DatasetProfileOut)
+async def profile_dataset(
+    dataset_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> DatasetProfileOut:
+    """Per-column statistics for the dataset's current version.
+
+    Computed on first request and cached on the version row (migration 0019):
+    a version's data never changes, so the answer is valid forever once
+    written. Viewer-level like preview and query - this is a read of data the
+    caller can already see, just aggregated.
+    """
+    path, row = await _parquet_path(access, dataset_id)
+    version_number = int(row["current_version"])
+
+    async with user_connection(access.auth.user_id) as conn:
+        cached = await ds_service.get_cached_profile(conn, dataset_id, version_number)
+
+    if cached is None:
+        cached = await anyio.to_thread.run_sync(engine.profile_columns, path)
+        async with user_connection(access.auth.user_id) as conn:
+            await ds_service.store_profile(conn, dataset_id, version_number, cached)
+
+    return DatasetProfileOut(
+        dataset_id=dataset_id,
+        version_number=version_number,
+        row_count=int(row["row_count"]),
+        columns=[ColumnProfileOut(**column) for column in cached],
+    )
 
 
 @router.post("/{dataset_id}/query", response_model=TabularOut)

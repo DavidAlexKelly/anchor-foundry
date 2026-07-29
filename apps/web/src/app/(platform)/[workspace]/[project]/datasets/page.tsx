@@ -127,6 +127,90 @@ function UploadDialog({ workspaceId, projectId }: { workspaceId: string; project
   );
 }
 
+/** Column statistics for the current version - the "what am I actually
+ * looking at" half of exploring a dataset, next to the row grid's "what does
+ * a row look like". Fetched separately from preview so the grid is not held
+ * up by an aggregate pass over the file. */
+function ProfilePanel({
+  workspaceId,
+  projectId,
+  dataset,
+}: {
+  workspaceId: string;
+  projectId: string;
+  dataset: Dataset;
+}) {
+  const profile = useQuery({
+    queryKey: ["profile", dataset.id, dataset.current_version],
+    queryFn: () => dsApi.profile(workspaceId, projectId, dataset.id),
+    retry: false,
+  });
+
+  if (profile.isPending) return <div className="state">Profiling columns…</div>;
+  if (profile.isError) {
+    return (
+      <div className="form-error">
+        {profile.error instanceof ApiError
+          ? profile.error.message
+          : "Couldn't profile this dataset."}
+      </div>
+    );
+  }
+  if (!profile.data) return null;
+
+  const rows = profile.data.row_count;
+  return (
+    <div style={{ maxHeight: 340, overflowY: "auto" }}>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>Type</th>
+            <th>Nulls</th>
+            <th>Distinct</th>
+            <th>Min</th>
+            <th>Max</th>
+          </tr>
+        </thead>
+        <tbody>
+          {profile.data.columns.map((column) => {
+            const percent = Math.round(column.null_rate * 1000) / 10;
+            return (
+              <tr key={column.name}>
+                <td>
+                  <strong>{column.name}</strong>
+                </td>
+                <td className="count">{column.data_type}</td>
+                <td>
+                  {column.null_count === 0 ? (
+                    <span className="count">none</span>
+                  ) : (
+                    // An entirely empty column is the thing worth noticing.
+                    <span className={percent === 100 ? "status-error" : undefined}>
+                      {percent}%{" "}
+                      <span className="count">({column.null_count.toLocaleString()})</span>
+                    </span>
+                  )}
+                </td>
+                <td>
+                  {column.distinct_count.toLocaleString()}
+                  {rows > 0 && column.distinct_count === rows && (
+                    <span className="chip" style={{ marginLeft: 6 }}>
+                      unique
+                    </span>
+                  )}
+                </td>
+                <td className="count">{column.min ?? "—"}</td>
+                <td className="count">{column.max ?? "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ExploreDialog({
   workspaceId,
   projectId,
@@ -138,6 +222,7 @@ function ExploreDialog({
   dataset: Dataset;
   onClose: () => void;
 }) {
+  const [tab, setTab] = useState<"rows" | "columns">("rows");
   const [sql, setSql] = useState(`SELECT * FROM dataset LIMIT 20`);
   const preview = useQuery({
     queryKey: ["preview", dataset.id],
@@ -156,25 +241,49 @@ function ExploreDialog({
         {dataset.row_count.toLocaleString()} rows · query it as the table{" "}
         <code style={{ fontFamily: "var(--font-mono)" }}>dataset</code>
       </p>
-      <textarea
-        className="sql-box"
-        value={sql}
-        onChange={(e) => setSql(e.target.value)}
-        spellCheck={false}
-        aria-label="SQL query"
-      />
-      <div className="form-actions" style={{ marginTop: 8, marginBottom: 12 }}>
-        <button className="btn" onClick={() => run.mutate()} disabled={run.isPending}>
-          {run.isPending ? "Running…" : "Run query"}
+      <div className="form-actions" style={{ marginBottom: 10, justifyContent: "flex-start" }}>
+        <button
+          className={tab === "rows" ? "btn" : "btn quiet"}
+          onClick={() => setTab("rows")}
+        >
+          Rows
+        </button>
+        <button
+          className={tab === "columns" ? "btn" : "btn quiet"}
+          onClick={() => setTab("columns")}
+        >
+          Columns
         </button>
       </div>
-      {run.isError && (
-        <div className="form-error" style={{ marginBottom: 10 }}>
-          {run.error instanceof ApiError ? run.error.message : "Query failed."}
-        </div>
+      {tab === "rows" ? (
+        <>
+          <textarea
+            className="sql-box"
+            value={sql}
+            onChange={(e) => setSql(e.target.value)}
+            spellCheck={false}
+            aria-label="SQL query"
+          />
+          <div className="form-actions" style={{ marginTop: 8, marginBottom: 12 }}>
+            <button className="btn" onClick={() => run.mutate()} disabled={run.isPending}>
+              {run.isPending ? "Running…" : "Run query"}
+            </button>
+          </div>
+          {run.isError && (
+            <div className="form-error" style={{ marginBottom: 10 }}>
+              {run.error instanceof ApiError ? run.error.message : "Query failed."}
+            </div>
+          )}
+          {preview.isPending && !shown && <div className="state">Loading preview…</div>}
+          {shown && <ResultGrid result={shown} />}
+        </>
+      ) : (
+        <ProfilePanel
+          workspaceId={workspaceId}
+          projectId={projectId}
+          dataset={dataset}
+        />
       )}
-      {preview.isPending && !shown && <div className="state">Loading preview…</div>}
-      {shown && <ResultGrid result={shown} />}
       <div className="form-actions">
         <button
           className="btn quiet"

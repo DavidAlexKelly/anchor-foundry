@@ -178,6 +178,10 @@ export const datasets = {
     request<import("./types").TabularResult>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview`,
     ),
+  profile: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetProfile>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile`,
+    ),
   query: (wid: string, pid: string, did: string, sql: string) =>
     request<import("./types").TabularResult>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/query`,
