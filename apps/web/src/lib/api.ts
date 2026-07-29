@@ -188,6 +188,16 @@ export const datasets = {
       `/workspaces/${wid}/projects/${pid}/datasets/${did}`,
       { method: "PATCH", body: JSON.stringify(input) },
     ),
+  fork: (
+    wid: string,
+    pid: string,
+    did: string,
+    input: { name: string; version_number?: number },
+  ) =>
+    request<import("./types").Dataset>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/fork`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   preview: (wid: string, pid: string, did: string) =>
     request<import("./types").TabularResult>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview`,

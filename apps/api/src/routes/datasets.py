@@ -64,6 +64,10 @@ class DatasetOut(BaseModel):
     # 'permissive' | 'strict' - whether a new version may remove or retype an
     # existing column (migration 0023). Adding columns is allowed under both.
     schema_policy: str = "permissive"
+    # Where a forked dataset came from (migration 0025). Provenance only -
+    # a fork never recomputes, so this is not a pipeline-graph edge.
+    forked_from_dataset_id: UUID | None = None
+    forked_from_version: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -291,6 +295,51 @@ async def update_dataset(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata=body.model_dump(exclude_none=True),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _out(row)
+
+
+class DatasetFork(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    # Defaults to the source's current version - forking "as it is now" is
+    # the common case.
+    version_number: int | None = Field(default=None, ge=1)
+
+
+@router.post("/{dataset_id}/fork", response_model=DatasetOut,
+             status_code=status.HTTP_201_CREATED)
+async def fork_dataset(
+    dataset_id: UUID,
+    body: DatasetFork,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> DatasetOut:
+    """Copy a version into a new, independent dataset to experiment against.
+    Editor level: it creates a resource, and reading one you can already read
+    is not the operative permission."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await ds_service.fork(
+            conn,
+            _storage,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            dataset_id=dataset_id,
+            name=body.name,
+            version_number=body.version_number,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.fork",
+            resource_type="dataset",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"source": str(dataset_id), "version": row["forked_from_version"]},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )

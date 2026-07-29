@@ -450,6 +450,91 @@ function ProfilePanel({
   );
 }
 
+function ForkDialog({
+  workspaceId,
+  projectId,
+  dataset,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  dataset: Dataset;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(`${dataset.name} copy`);
+  const [version, setVersion] = useState(String(dataset.current_version));
+  const queryClient = useQueryClient();
+
+  const fork = useMutation({
+    mutationFn: () =>
+      dsApi.fork(workspaceId, projectId, dataset.id, {
+        name,
+        version_number: Number(version),
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["datasets", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["project", workspaceId] });
+      onClose();
+    },
+  });
+
+  return (
+    <Dialog open title={`Fork ${dataset.name}`} onClose={onClose}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          fork.mutate();
+        }}
+      >
+        <p className="login-note" style={{ marginTop: 0 }}>
+          A fork is an independent copy to experiment against — its own
+          versions, its own schema policy, and its own data. Changing one never
+          changes the other.
+        </p>
+        <Field label="New dataset name">
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            maxLength={200}
+          />
+        </Field>
+        <Field
+          label="Version to copy"
+          hint={`This dataset has ${dataset.current_version} version${
+            dataset.current_version === 1 ? "" : "s"
+          }; earlier ones are still there to go back to`}
+        >
+          <select value={version} onChange={(e) => setVersion(e.target.value)}>
+            {Array.from({ length: dataset.current_version }, (_, i) => i + 1)
+              .reverse()
+              .map((v) => (
+                <option key={v} value={v}>
+                  v{v}
+                  {v === dataset.current_version ? " (current)" : ""}
+                </option>
+              ))}
+          </select>
+        </Field>
+        {fork.isError && (
+          <div className="form-error">
+            {fork.error instanceof ApiError ? fork.error.message : "Couldn't fork."}
+          </div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn" disabled={fork.isPending || !name.trim()}>
+            {fork.isPending ? "Forking…" : "Create fork"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 function LineageDialog({
   workspaceId,
   projectId,
@@ -699,6 +784,7 @@ function DatasetRow({
 }) {
   const [exploring, setExploring] = useState(false);
   const [showLineage, setShowLineage] = useState(false);
+  const [forking, setForking] = useState(false);
   const queryClient = useQueryClient();
   const remove = useMutation({
     mutationFn: () => dsApi.remove(workspaceId, projectId, dataset.id),
@@ -719,6 +805,9 @@ function DatasetRow({
       <td className="count">{dataset.row_count.toLocaleString()}</td>
       <td>
         <span className="count">{dataset.origin}</span>
+        {dataset.forked_from_version !== null && (
+          <div className="slug">from v{dataset.forked_from_version}</div>
+        )}
       </td>
       <td>
         <div className="row-actions">
@@ -738,6 +827,15 @@ function DatasetRow({
           </button>
           {canEdit && (
             <button
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setForking(true)}
+            >
+              Fork
+            </button>
+          )}
+          {canEdit && (
+            <button
               className="btn danger"
               style={{ padding: "3px 9px", fontSize: 12 }}
               disabled={remove.isPending}
@@ -751,6 +849,14 @@ function DatasetRow({
             </button>
           )}
         </div>
+        {forking && (
+          <ForkDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            dataset={dataset}
+            onClose={() => setForking(false)}
+          />
+        )}
         {showLineage && (
           <LineageDialog
             workspaceId={workspaceId}

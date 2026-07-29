@@ -212,7 +212,7 @@ export interface DiscoveredTable {
 }
 
 // ---- datasets (Layer 1.5) ---------------------------------------------------
-export type DatasetOrigin = "upload" | "sync" | "model_output";
+export type DatasetOrigin = "upload" | "sync" | "model_output" | "fork";
 
 export interface Dataset {
   id: string;
@@ -229,6 +229,11 @@ export interface Dataset {
   /** Whether a new version may remove or retype an existing column
    *  (migration 0023). Adding columns is allowed under both. */
   schema_policy: "permissive" | "strict";
+  /** Where a forked dataset came from (migration 0025). Provenance only —
+   *  a fork never recomputes, so it is not a pipeline-graph edge, and the
+   *  id is a historical record that survives the source being deleted. */
+  forked_from_dataset_id: string | null;
+  forked_from_version: number | null;
   created_at: string;
   updated_at: string;
 }

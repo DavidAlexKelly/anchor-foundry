@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5; Models 1–3, 5, 7 — see §21–§33). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7 — see §21–§34). Test counts below are from the last full regression run.
 
 ---
 
@@ -17,7 +17,7 @@ platform/
 │   └── web/             Next.js 14 frontend shell
 ├── infra/cdk/          AWS CDK app - synths the full customer stack (87 resources)
 ├── packages/
-│   ├── db/              SQL migrations (0001–0024) + migration runner
+│   ├── db/              SQL migrations (0001–0025) + migration runner
 │   └── types/           Shared TypeScript types (API contract, hand-kept in sync)
 ```
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0024)
+### 1. Database schema (migrations 0001–0025)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -497,6 +497,31 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 
 ---
 
+### 34. Dataset forking (this session)
+
+`ROADMAP.md` Datasets item 6, and the last item in that pillar that was not waiting on a decision. `POST .../datasets/{id}/fork` copies one version into a new dataset with `origin = 'fork'` (migration 0025) and provenance columns saying exactly what was copied.
+
+**It got more useful than it looked when it was written.** §29's run gating and §31's strict schema policy are both things you want switched on in production — and both mean you now need somewhere *else* to try the change that would trip them. Forking is that somewhere.
+
+**Deliberately still the small version.** Nothing here knows how to merge a fork back. The item itself warns that real branch/merge semantics are the large lift, and deciding what a merge means for tabular data is a design question, not an extra endpoint. It stays unbuilt until real usage shows forking is not enough.
+
+**Three decisions worth carrying forward:**
+- **The bytes are copied, not shared.** "New, independent dataset" is the requirement, and pointing two datasets at one storage key would make deleting the original silently empty the fork — delete removes the dataset's whole prefix. There is a test that deletes the source and then queries the fork.
+- **The quality rules travel; their results do not.** Forking is for trying a change and seeing whether it still holds up against the same standard, so arriving with no standard would defeat it — but a result is computed per version and the fork's v1 is new. Tested both ways, including that deleting the source's rule leaves the fork's copy alone.
+- **A fork starts permissive** whatever the source's schema policy was. Inheriting `strict` would make the thing you forked *in order to experiment with* refuse the experiment.
+
+**`origin = 'fork'` rather than reusing `'upload'`.** A fork did not come from a file somebody uploaded, and labelling it as though it did would make the origin column lie in the one place a user looks to answer "where did this come from". One enum value against every future reader's confusion.
+
+**A real bug the tests caught, and the fix that came out of it.** `forked_from_dataset_id` was first written as a foreign key with `ON DELETE SET NULL`, which nulls only that column and leaves `forked_from_version` behind — violating the both-or-neither CHECK the moment the source was deleted, which is precisely the case this feature promises to survive. The fix was to drop the foreign key entirely: this is a *historical statement* ("copied from dataset X at version 2") and it does not stop being true when X is gone. That is the same reasoning §29 uses for `input_health` and §32 for the input snapshot, and `dataset_versions.produced_by_id` already sets the precedent for a deliberately non-referential id in this schema.
+
+**Provenance is not a pipeline-graph edge.** §28's graph answers "what recomputes when this changes", and a fork never recomputes — drawing an edge would assert a live dependency that does not exist. The dataset row shows `from v1` instead.
+
+**Testing.** `apps/api/tests/test_dataset_forks.py` (7): the copy is real data rather than a pointer, the fork survives its source's deletion with provenance intact, forking a *named* version recovers a shape the source has since dropped, rules travel but results and later rule deletions do not, a fork starts permissive from a strict source, name clash at 409 and missing version at 404, and the role floors. Verified in a browser: forked a model output at v1 while its current version was v2, confirmed the picker offers both, and read back a fork carrying the column the source had already dropped — then deleted the source and queried the fork.
+
+**Current totals: API 270/270** (263 + 7), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
 ## What's not started
 
 - **Code** (repo browser) — not started
@@ -510,6 +535,8 @@ Verified in a real browser (Playwright/Chromium against the dev API + dev Postgr
 ---
 
 ## Known rough edges worth knowing about
+
+- **A migration that adds an enum value cannot be cleanly re-applied after editing** - Postgres has no way to drop an enum label, so the usual "reset an already-applied migration" recipe (drop what it created, delete its `schema_migrations` row, re-run) leaves the label behind and the re-run fails with `enum label "x" already exists`. Hit while fixing 0025 mid-session. `ADD VALUE IF NOT EXISTS` makes the file idempotent and is now used there; any future migration adding an enum value should do the same, because the alternative on a shared dev database is recreating the type and everything that references it.
 
 - The local dev Postgres instance (this sandbox only) needs manual restarting periodically - not a real issue, just a sandbox quirk, documented in the restart command used throughout this session.
 - `apps/api/requirements.txt` was missing `duckdb`, `pytz` (DuckDB's own timestamp dependency), and `python-multipart` (needed by FastAPI for file-upload endpoints) - all three are genuine runtime dependencies of code that already existed, not new to this session's work, and the gap would have surfaced as a broken Docker image. Fixed in this session; a `requirements-dev.txt` was added alongside it for the test-only extras (`pytest`, `httpx`).
