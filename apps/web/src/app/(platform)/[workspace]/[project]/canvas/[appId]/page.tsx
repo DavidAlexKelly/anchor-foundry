@@ -7,7 +7,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { ApiError, api, canvas as canvasApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
-import { CanvasEnvProvider } from "@/components/canvas/context";
+import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
@@ -181,7 +181,11 @@ function CanvasEnvBridge({
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
   return (
     <CanvasEnvProvider value={{ workspaceId, projectId, mode: enabled ? "edit" : "run" }}>
-      {children}
+      {/* Parameter state lives inside the env provider and outside the editor
+          tree, so a filter set in Preview survives switching back to Edit -
+          the alternative resets every filter each time the mode flips, which
+          makes a filter impossible to actually try out. */}
+      <CanvasParameterProvider>{children}</CanvasParameterProvider>
     </CanvasEnvProvider>
   );
 }

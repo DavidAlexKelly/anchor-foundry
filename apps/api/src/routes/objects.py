@@ -20,12 +20,14 @@ else that only reads the ontology.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..lib.cron import next_run_after
@@ -60,7 +62,7 @@ class PropertyIn(BaseModel):
     api_name: str = Field(min_length=1, max_length=100)
     display_name: str | None = Field(default=None, max_length=200)
     data_type: str = Field(
-        pattern="^(string|integer|float|boolean|date|timestamp|geopoint|json)$"
+        pattern="^(string|integer|float|boolean|date|timestamp|geopoint|json|attachment)$"
     )
     required: bool = False
     description: str = Field(default="", max_length=1000)
@@ -519,6 +521,8 @@ class ExplorerPage(BaseModel):
 async def explore_instances(
     q: str | None = Query(default=None, max_length=200),
     type_id: list[UUID] | None = Query(default=None),
+    property: str | None = Query(default=None, max_length=100),
+    value: str | None = Query(default=None, max_length=500),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
@@ -529,17 +533,58 @@ async def explore_instances(
     Workspace-scoped like the ontology it searches: object types are
     workspace-wide, so an explorer that stopped at a project boundary would
     show a partial ontology and call it the whole one.
+
+    **`property`+`value` is an exact match, and is a different question from
+    `q`** (roadmap Canvas item 3, which needed it). `q` is substring/prefix
+    matching across every property at once - the right behaviour for a search
+    box, and the wrong one for a dropdown, where picking the region "North"
+    must not also return a customer called "Northwind". The store Protocol has
+    had `find_by_property` since roadmap Objects item 3; this exposes it.
+
+    It requires **exactly one** `type_id`, because a property api_name only
+    means anything within a type - "status" on an Order and "status" on a
+    Shipment are unrelated columns that happen to share a name, and matching
+    across both would silently union two different questions.
     """
+    if (property is None) != (value is None):
+        raise ValueError("filtering by a property needs both 'property' and 'value'")
+    if property is not None and (not type_id or len(type_id) != 1):
+        raise ValueError(
+            "filtering by a property needs exactly one type_id - a property "
+            "name only means something within a type"
+        )
+
     async with user_connection(access.auth.user_id) as conn:
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        rows, total = await instance_store.store_for(conn).search(
-            search_prefix=prefix,
-            workspace_id=access.workspace_id,
-            query=q,
-            object_type_ids=type_id,
-            limit=limit,
-            offset=offset,
-        )
+        store = instance_store.store_for(conn)
+        if property is not None:
+            assert type_id is not None
+            await ontology_service.get_type(conn, access.workspace_id, type_id[0])
+            rows, total = await store.find_by_property(
+                search_prefix=prefix,
+                object_type_id=type_id[0],
+                # The primary key is a field on the instance, not one of its
+                # properties - same reserved reference link joins use (db 0027).
+                property_name=(
+                    None if property == ontology_service.PRIMARY_KEY_REF else property
+                ),
+                value=value,
+                limit=limit,
+                offset=offset,
+            )
+            # find_by_property is the link-traversal read and returns rows
+            # without the type id (its caller always knew it); the explorer's
+            # response says what each row is, so fill it back in.
+            rows = [{**row, "object_type_id": str(type_id[0])} for row in rows]
+        else:
+            rows, total = await store.search(
+                search_prefix=prefix,
+                workspace_id=access.workspace_id,
+                query=q,
+                object_type_ids=type_id,
+                limit=limit,
+                offset=offset,
+            )
         # Type names come from Postgres whichever store held the instances -
         # the ontology definition never moved.
         types = {
@@ -557,6 +602,123 @@ async def explore_instances(
             object_type_display_name=str(meta["display_name"]),
         ))
     return ExplorerPage(items=items, total=total, limit=limit, offset=offset)
+
+
+# ---- attachments (roadmap Objects item 4) -----------------------------------
+# A conservative cap. Attachments are documents and images hanging off an
+# object, not datasets - the dataset upload path (50 MB) is the route for
+# anything that is actually data, and a limit that quietly allowed a 2 GB
+# video through an in-memory read would be a denial of service, not a
+# feature.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
+class AttachmentOut(BaseModel):
+    """Exactly the object that becomes an `attachment` property's value.
+
+    A storage key, not a URL: a permanent URL would be a public read of
+    private bytes, and a presigned one would expire inside a value that
+    claims to be stable. The key is exchanged for bytes by the download route
+    below, which runs the caller's permission check first - the only point at
+    which "may this person see this file" can honestly be answered.
+    """
+
+    key: str
+    filename: str
+    content_type: str
+    size: int
+
+
+@router.post("/attachments", response_model=AttachmentOut,
+             status_code=status.HTTP_201_CREATED)
+async def upload_attachment(
+    request: Request,
+    file: UploadFile = File(...),
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> AttachmentOut:
+    """Store a file and return the reference to put in a property value.
+
+    Workspace-scoped rather than per-instance, and deliberately decoupled
+    from the write that uses it: the upload happens while a form is being
+    filled in, before anyone has decided which instance (or even which
+    property) it belongs to. The consequence is stated rather than hidden -
+    an upload that is never referenced leaves bytes in storage, which is the
+    same class of orphan as replacing an attachment (see migration 0029).
+    """
+    storage = _dataset_storage()
+    data = await file.read()
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise ValueError(
+            f"attachment exceeds the {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB limit"
+        )
+    if not data:
+        raise ValueError("attachment is empty")
+
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await dataset_service.workspace_s3_prefix(conn, access.workspace_id)
+    # Under the workspace's own s3_prefix, like every other byte this
+    # platform stores (§16's isolation anchor), with a random component so
+    # two uploads of the same filename cannot collide or overwrite.
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename or "file")[:120]
+    key = f"{prefix}attachments/{uuid4()}/{safe_name}"
+    await anyio.to_thread.run_sync(storage.put, key, data)
+
+    async with user_connection(access.auth.user_id) as conn:
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="attachment.upload",
+            resource_type="attachment",
+            resource_id=None,
+            workspace_id=access.workspace_id,
+            metadata={"filename": safe_name, "size": len(data)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return AttachmentOut(
+        key=key,
+        filename=safe_name,
+        content_type=file.content_type or "application/octet-stream",
+        size=len(data),
+    )
+
+
+@router.get("/attachments/download", response_class=Response)
+async def download_attachment(
+    key: str = Query(..., max_length=1024),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> Response:
+    """Exchange a storage key for its bytes, having checked the caller may.
+
+    **The key is checked against the workspace's own prefix**, not trusted.
+    An attachment value is a plain string inside a JSON blob, so a caller can
+    put any key they like in it; without this check, a workspace editor could
+    store `<other-workspace-prefix>/datasets/.../data.parquet` as an
+    "attachment" and read another tenant's data through this route. The
+    prefix comparison is the isolation boundary here, exactly as the index
+    name is for OpenSearch (§35).
+
+    Content-Disposition is always `attachment` and the content type is always
+    a generic octet-stream: the type recorded at upload is what the uploader
+    *claimed*, nothing has sniffed the bytes, and serving user-supplied
+    content inline with a user-supplied type is how a stored XSS happens.
+    """
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await dataset_service.workspace_s3_prefix(conn, access.workspace_id)
+    if not key.startswith(f"{prefix}attachments/"):
+        raise NotFoundError("attachment")
+    try:
+        data = await anyio.to_thread.run_sync(storage.read, key)
+    except Exception as exc:  # StorageKeyError and friends
+        raise NotFoundError("attachment") from exc
+    filename = key.rsplit("/", 1)[-1]
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---- link types (workspace-scoped) ------------------------------------------
@@ -872,7 +1034,19 @@ async def sync_source(
             str(source["primary_key_column"]),
             _jsonb(source["column_mappings"]),
         )
-    except DatasetEngineError as exc:
+        # The declared types are applied here rather than inside extract_rows,
+        # so the reader stays a reader (roadmap Objects item 4). A value that
+        # cannot be coerced fails the sync loudly rather than arriving as a
+        # silently missing field.
+        async with user_connection(access.auth.user_id) as conn:
+            property_types = {
+                str(p["api_name"]): str(p["data_type"])
+                for p in await ontology_service.list_properties(
+                    conn, UUID(str(source["object_type_id"]))
+                )
+            }
+        rows = ontology_service.coerce_rows(rows, property_types)
+    except (DatasetEngineError, ontology_service.PropertyValueError) as exc:
         ok, error = False, str(exc)
 
     if ok:

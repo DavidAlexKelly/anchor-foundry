@@ -33,33 +33,37 @@ from ..lib.errors import ConflictError, NotFoundError
 _API_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
 
-def _validate_value(data_type: str, value: Any) -> None:
-    if value is None:
-        return
-    if data_type == "integer" and not isinstance(value, int):
-        raise ValueError(f"expected an integer, got {value!r}")
-    if data_type == "float" and not isinstance(value, (int, float)):
-        raise ValueError(f"expected a number, got {value!r}")
-    if data_type == "boolean" and not isinstance(value, bool):
-        raise ValueError(f"expected a boolean, got {value!r}")
-    if data_type == "string" and not isinstance(value, str):
-        raise ValueError(f"expected a string, got {value!r}")
-
-
 def validate_submitted_values(
     values: dict[str, Any],
     *,
     editable_properties: list[str],
     property_types: dict[str, str],
     mapped_properties: set[str],
-) -> None:
+) -> dict[str, Any]:
     """A submitted value is only writable if it's (a) on the action type's
     editable list, (b) type-consistent with the property's declared type,
     and (c) actually mapped to a dataset column on this instance's source -
-    properties the source never populated have no write-back target."""
+    properties the source never populated have no write-back target.
+
+    Returns the values *normalised* (roadmap Objects item 4): the type check
+    is `ontology.coerce_property_value`, shared with the sync path, so a
+    geopoint submitted as "51.5,-0.12" is stored in the same shape as one
+    that arrived from a Parquet struct. Type checking used to live here as a
+    local four-branch function that silently accepted anything for date,
+    timestamp, geopoint and json - a `geopoint` property took the string
+    "banana" without complaint.
+
+    An unknown property still defaults to "string" rather than raising: the
+    caller resolved these names from the type moments ago, so a miss means
+    the type changed underneath (§38 makes that possible), and refusing the
+    *write* is a worse answer than checking it loosely.
+    """
+    from . import ontology as ontology_service
+
     if not values:
         raise ValueError("submit at least one value to write")
     editable = set(editable_properties)
+    coerced: dict[str, Any] = {}
     for prop, value in values.items():
         if prop not in editable:
             raise ValueError(f"{prop!r} is not editable by this action")
@@ -67,7 +71,10 @@ def validate_submitted_values(
             raise ValueError(
                 f"{prop!r} has no dataset column mapped on this instance's source"
             )
-        _validate_value(property_types.get(prop, "string"), value)
+        coerced[prop] = ontology_service.coerce_property_value(
+            property_types.get(prop, "string"), value
+        )
+    return coerced
 
 
 # ---- action types (workspace-scoped) ----------------------------------------

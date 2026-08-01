@@ -31,6 +31,7 @@ from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
 from .. import dataset_engine as engine
+from .. import property_values
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env
 
@@ -71,6 +72,21 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
         try:
             local_path = storage.local_path(s3_location)
             rows = engine.extract_instance_rows(local_path, primary_key_column, column_mappings)
+            # The declared property types are applied here, exactly as the
+            # API's inline sync does (roadmap Objects item 4). Without this a
+            # geopoint synced by the worker would be whatever the column
+            # held while one synced interactively was a {lat, lon} object -
+            # the same source producing two shapes depending on who ran it.
+            with platform_db.connect_scoped_to(workspace_id) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT api_name, data_type FROM object_type_properties "
+                        "WHERE object_type_id = %s",
+                        (str(object_type_id),),
+                    )
+                    property_types = {name: str(dtype) for name, dtype in cur.fetchall()}
+                conn.commit()
+            rows = property_values.coerce_rows(rows, property_types)
 
             with platform_db.connect_scoped_to(workspace_id) as conn:
                 with conn.cursor() as cur:
@@ -92,7 +108,8 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
                     )
                     removed = cur.rowcount
                 conn.commit()
-        except (engine.DatasetEngineError, LookupError, OSError, StorageKeyError) as exc:
+        except (engine.DatasetEngineError, LookupError, OSError, StorageKeyError,
+                property_values.PropertyValueError) as exc:
             ok, error = False, str(exc)
 
         with platform_db.connect_scoped_to(workspace_id) as conn:

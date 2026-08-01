@@ -224,7 +224,9 @@ async def execute_action(
         properties = await ontology_service.list_properties(conn, object_type_id)
         property_types = {p["api_name"]: p["data_type"] for p in properties}
         column_mappings: dict[str, str] = _parse_json(source["column_mappings"])
-        actions_service.validate_submitted_values(
+        # Normalised, not just checked: a geopoint submitted as "51.5,-0.12"
+        # is stored in the same shape as one that arrived from a sync.
+        values = actions_service.validate_submitted_values(
             body.values,
             editable_properties=_parse_json(action_type["editable_properties"]),
             property_types=property_types,
@@ -236,14 +238,21 @@ async def execute_action(
             instance_id=body.instance_id,
             dataset_id=UUID(str(source["dataset_id"])),
             requested_by=access.auth.user_id,
-            submitted_values=body.values,
+            submitted_values=values,
         )
 
     ok, error = True, None
     dataset_version: int | None = None
     try:
         reverse_map = {prop: col for col, prop in column_mappings.items()}
-        column_updates = {reverse_map[prop]: value for prop, value in body.values.items()}
+        # The dataset copy gets the flat form - a Parquet column is a scalar
+        # and a geopoint is not (ontology.column_value).
+        column_updates = {
+            reverse_map[prop]: ontology_service.column_value(
+                property_types.get(prop, "string"), value
+            )
+            for prop, value in values.items()
+        }
         local_path = await anyio.to_thread.run_sync(
             storage.local_path, str(source["s3_location"])
         )
@@ -277,7 +286,7 @@ async def execute_action(
                 search_prefix=prefix,
                 object_type_id=UUID(str(action_type["object_type_id"])),
                 instance_id=str(body.instance_id),
-                properties=body.values,
+                properties=values,
             )
     except DatasetEngineError as exc:
         ok, error = False, str(exc)

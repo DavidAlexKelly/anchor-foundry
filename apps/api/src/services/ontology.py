@@ -24,8 +24,21 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
+# Re-exported so callers keep saying ontology.coerce_property_value; the
+# definitions live in their own module because the worker needs a verbatim
+# copy of them (see that module's docstring).
+from .property_values import (  # noqa: F401
+    ATTACHMENT_FIELDS,
+    PropertyValueError,
+    coerce_property_value,
+    coerce_rows,
+    column_value,
+)
 
-PROPERTY_TYPES = {"string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json"}
+PROPERTY_TYPES = {
+    "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
+    "json", "attachment",
+}
 CARDINALITIES = {"one_to_one", "one_to_many", "many_to_many"}
 
 _TYPE_API_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,99}$")
