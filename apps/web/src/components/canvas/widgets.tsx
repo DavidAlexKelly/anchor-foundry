@@ -11,7 +11,8 @@ import { useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { actions as actionApi, datasets as dsApi, objects as objApi } from "@/lib/api";
-import { useCanvasEnv } from "./context";
+import { useCanvasEnv, useCanvasParameter, useCanvasParameters } from "./context";
+import { distinctValuesQuery, filteredQuery, type FilterOperator } from "./filter-sql";
 
 function connectDragDrop(node: HTMLElement | null, connect: (el: HTMLElement) => HTMLElement, drag: (el: HTMLElement) => HTMLElement) {
   if (node) connect(drag(node));
@@ -118,43 +119,253 @@ CanvasText.craft = {
   related: { settings: TextSettings },
 };
 
-// ---- Dataset table --------------------------------------------------------------
-export function CanvasDatasetTable({ datasetId = null }: { datasetId?: string | null }) {
+// ---- Parameter (filter control) --------------------------------------------
+/**
+ * Sets a named value other widgets read (ROADMAP Canvas item 1). This is the
+ * foundation the roadmap asks for before charts: a widget that *publishes*
+ * state, rather than one more widget that only consumes data.
+ *
+ * A dropdown's options come from a dataset column's distinct values rather
+ * than a list typed by the builder. A hand-typed list is a copy of the data
+ * that goes stale the first time a new value appears - the same argument that
+ * made object links derived rather than stored (§37).
+ */
+export function CanvasParameterControl({
+  name = "",
+  label = "Filter",
+  control = "select",
+  datasetId = null,
+  column = null,
+}: {
+  name?: string;
+  label?: string;
+  control?: "select" | "text";
+  datasetId?: string | null;
+  column?: string | null;
+}) {
   const {
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, projectId } = useCanvasEnv();
-  const preview = useQuery({
-    queryKey: ["canvas-widget-preview", datasetId],
-    queryFn: () => dsApi.preview(workspaceId, projectId, datasetId!),
-    enabled: !!datasetId,
+  const { values, set } = useCanvasParameters();
+  const current = name ? values[name] : undefined;
+
+  const options = useQuery({
+    queryKey: ["canvas-parameter-options", datasetId, column],
+    queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, distinctValuesQuery(column!)),
+    enabled: control === "select" && !!datasetId && !!column,
   });
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!name && (
+        <p className="canvas-widget-empty">
+          Filter - give it a parameter name in Settings, then point a table at it
+        </p>
+      )}
+      {name && (
+        <label className="field" style={{ maxWidth: 320 }}>
+          <span className="field-label">{label}</span>
+          {control === "select" ? (
+            <select
+              aria-label={label}
+              value={current === undefined || current === null ? "" : String(current)}
+              onChange={(e) => set(name, e.target.value || null)}
+            >
+              {/* "All" is the default, and it is the empty value: a filter
+                  that starts filtered looks like an app with no data. */}
+              <option value="">All</option>
+              {options.data?.rows.map((row, i) => (
+                <option key={i} value={String(row[0])}>
+                  {String(row[0])}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="search"
+              aria-label={label}
+              value={current === undefined || current === null ? "" : String(current)}
+              onChange={(e) => set(name, e.target.value || null)}
+              placeholder="Type to filter…"
+            />
+          )}
+          {control === "select" && !column && (
+            <span className="field-hint">Pick a dataset column in Settings to fill this list</span>
+          )}
+        </label>
+      )}
+    </div>
+  );
+}
+
+function ParameterSettings() {
+  const { workspaceId, projectId } = useCanvasEnv();
+  const {
+    name,
+    label,
+    control,
+    datasetId,
+    column,
+    actions: { setProp },
+  } = useNode((node) => ({
+    name: node.data.props.name,
+    label: node.data.props.label,
+    control: node.data.props.control,
+    datasetId: node.data.props.datasetId,
+    column: node.data.props.column,
+  }));
+  const list = useQuery({
+    queryKey: ["datasets", projectId],
+    queryFn: () => dsApi.list(workspaceId, projectId),
+  });
+  const dataset = list.data?.find((d) => d.id === datasetId);
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Parameter name</span>
+        <input
+          type="text"
+          value={name || ""}
+          placeholder="region"
+          onChange={(e) => setProp((p: { name: string }) => (p.name = e.target.value))}
+        />
+        <span className="field-hint">Tables reference this name to filter by it</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Control</span>
+        <select
+          value={control || "select"}
+          onChange={(e) => setProp((p: { control: string }) => (p.control = e.target.value))}
+        >
+          <option value="select">Dropdown</option>
+          <option value="text">Search box</option>
+        </select>
+      </label>
+      {control !== "text" && (
+        <>
+          <label className="field">
+            <span className="field-label">Options from dataset</span>
+            <select
+              value={datasetId || ""}
+              onChange={(e) =>
+                setProp((p: { datasetId: string | null; column: string | null }) => {
+                  p.datasetId = e.target.value || null;
+                  p.column = null;  // a column name means nothing against another dataset
+                })
+              }
+            >
+              <option value="">Choose…</option>
+              {list.data?.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Column</span>
+            <select
+              value={column || ""}
+              disabled={!dataset}
+              onChange={(e) => setProp((p: { column: string | null }) => (p.column = e.target.value || null))}
+            >
+              <option value="">Choose…</option>
+              {dataset?.table_schema.map((c) => (
+                <option key={c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
+    </>
+  );
+}
+
+CanvasParameterControl.craft = {
+  displayName: "Filter",
+  props: { name: "", label: "Filter", control: "select", datasetId: null, column: null },
+  related: { settings: ParameterSettings },
+};
+
+// ---- Dataset table --------------------------------------------------------------
+export function CanvasDatasetTable({
+  datasetId = null,
+  filterColumn = null,
+  filterParameter = null,
+  filterOperator = "equals",
+}: {
+  datasetId?: string | null;
+  filterColumn?: string | null;
+  filterParameter?: string | null;
+  filterOperator?: FilterOperator;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, projectId } = useCanvasEnv();
+  const parameterValue = useCanvasParameter(filterParameter);
+  const sql = filteredQuery(filterColumn, filterOperator, parameterValue);
+
+  // Two queries rather than one with a branch inside: they have different
+  // cache keys and different lifetimes - the unfiltered preview is shared
+  // with every other widget on the same dataset, the filtered one is keyed to
+  // a value that changes as the viewer types.
+  const preview = useQuery({
+    queryKey: ["canvas-widget-preview", datasetId],
+    queryFn: () => dsApi.preview(workspaceId, projectId, datasetId!),
+    enabled: !!datasetId && sql === null,
+  });
+  const filtered = useQuery({
+    queryKey: ["canvas-widget-filtered", datasetId, sql],
+    queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, sql!),
+    enabled: !!datasetId && sql !== null,
+  });
+  const active = sql === null ? preview : filtered;
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {!datasetId && <p className="canvas-widget-empty">Table - pick a dataset in Settings</p>}
-      {datasetId && preview.isPending && <p className="canvas-widget-empty">Loading…</p>}
-      {preview.data && (
-        <div className="data-grid">
-          <table>
-            <thead>
-              <tr>
-                {preview.data.columns.map((c) => (
-                  <th key={c.name}>{c.name}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {preview.data.rows.slice(0, 25).map((row, i) => (
-                <tr key={i}>
-                  {row.map((v, j) => (
-                    <td key={j}>{v === null ? "" : String(v)}</td>
+      {datasetId && active.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {active.isError && (
+        <p className="canvas-widget-empty">Couldn&apos;t load rows for this filter.</p>
+      )}
+      {active.data && (
+        <>
+          {sql !== null && (
+            <p className="canvas-widget-empty">
+              Filtered by {filterParameter}: {String(parameterValue)} — {active.data.rows.length} row
+              {active.data.rows.length === 1 ? "" : "s"}
+            </p>
+          )}
+          <div className="data-grid">
+            <table>
+              <thead>
+                <tr>
+                  {active.data.columns.map((c) => (
+                    <th key={c.name}>{c.name}</th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {active.data.rows.slice(0, 25).map((row, i) => (
+                  <tr key={i}>
+                    {row.map((v, j) => (
+                      <td key={j}>{v === null ? "" : String(v)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -164,33 +375,89 @@ function DatasetTableSettings() {
   const { workspaceId, projectId } = useCanvasEnv();
   const {
     datasetId,
+    filterColumn,
+    filterParameter,
+    filterOperator,
     actions: { setProp },
-  } = useNode((node) => ({ datasetId: node.data.props.datasetId }));
+  } = useNode((node) => ({
+    datasetId: node.data.props.datasetId,
+    filterColumn: node.data.props.filterColumn,
+    filterParameter: node.data.props.filterParameter,
+    filterOperator: node.data.props.filterOperator,
+  }));
   const list = useQuery({
     queryKey: ["datasets", projectId],
     queryFn: () => dsApi.list(workspaceId, projectId),
   });
+  const dataset = list.data?.find((d) => d.id === datasetId);
   return (
-    <label className="field">
-      <span className="field-label">Dataset</span>
-      <select
-        value={datasetId || ""}
-        onChange={(e) => setProp((p: { datasetId: string | null }) => (p.datasetId = e.target.value || null))}
-      >
-        <option value="">Choose…</option>
-        {list.data?.map((d) => (
-          <option key={d.id} value={d.id}>
-            {d.name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <>
+      <label className="field">
+        <span className="field-label">Dataset</span>
+        <select
+          value={datasetId || ""}
+          onChange={(e) =>
+            setProp((p: { datasetId: string | null; filterColumn: string | null }) => {
+              p.datasetId = e.target.value || null;
+              p.filterColumn = null;
+            })
+          }
+        >
+          <option value="">Choose…</option>
+          {list.data?.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Filter column</span>
+        <select
+          value={filterColumn || ""}
+          disabled={!dataset}
+          onChange={(e) => setProp((p: { filterColumn: string | null }) => (p.filterColumn = e.target.value || null))}
+        >
+          <option value="">No filter</option>
+          {dataset?.table_schema.map((c) => (
+            <option key={c.name} value={c.name}>{c.name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Filter parameter</span>
+        <input
+          type="text"
+          value={filterParameter || ""}
+          placeholder="region"
+          onChange={(e) =>
+            setProp((p: { filterParameter: string | null }) => (p.filterParameter = e.target.value || null))
+          }
+        />
+        <span className="field-hint">The name set on a Filter widget</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Match</span>
+        <select
+          value={filterOperator || "equals"}
+          onChange={(e) => setProp((p: { filterOperator: string }) => (p.filterOperator = e.target.value))}
+        >
+          <option value="equals">Exactly equals</option>
+          <option value="contains">Contains</option>
+        </select>
+      </label>
+    </>
   );
 }
 
 CanvasDatasetTable.craft = {
   displayName: "Dataset table",
-  props: { datasetId: null },
+  props: {
+    datasetId: null,
+    filterColumn: null,
+    filterParameter: null,
+    filterOperator: "equals",
+  },
   related: { settings: DatasetTableSettings },
 };
 
@@ -308,6 +575,7 @@ CanvasActionForm.craft = {
 export const CANVAS_RESOLVER = {
   CanvasContainer,
   CanvasText,
+  CanvasParameterControl,
   CanvasDatasetTable,
   CanvasActionForm,
 };
@@ -315,6 +583,7 @@ export const CANVAS_RESOLVER = {
 export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: string }[] = [
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
+  { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
 ];
