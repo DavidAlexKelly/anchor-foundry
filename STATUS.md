@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–3 — see §21–§42). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4 — see §21–§43). Test counts below are from the last full regression run.
 
 ---
 
@@ -718,10 +718,37 @@ Rows from this path get `object_type_id` filled back in before they are returned
 
 ---
 
+### 43. A map, with its basemap in the bundle (this session)
+
+`ROADMAP.md` Canvas item 4, unblocked by §39's geopoint type — which deliberately left the tile-source question to this item rather than smuggling it into a table cell.
+
+**The decision the item was waiting for: no tiles.** Every mapping library defaults to raster tiles from a third-party host, and that default is wrong for this product specifically. Anchor deploys into the customer's own AWS account, often into a VPC with no egress; a tile layer makes the **viewer's browser** call out to somebody else's server on every pan, and each of those requests carries the viewport — which, on a map of the customer's own sites, vehicles or incidents, approximates where their data is. So the basemap is Natural Earth's 1:110m country outlines (public domain), simplified to one ~60 KB SVG path that ships in the bundle: no outbound request, works air-gapped, and nobody is asked to accept that trade without being told. `scripts/make-basemap.py` regenerates it, so the data is reproducible rather than a blob somebody pasted in once.
+
+**What that costs is stated on screen, not buried.** There is no street-level detail and there never will be from this file, so the map says "country outlines only, no detail at this zoom" below three degrees of span rather than letting an empty background read as "nothing here". For the same reason the *fitted* view has a ten-degree floor: fitting tightly around three sites in one city would open on a view where the outline is a meaningless polygon. A deployment that genuinely needs detailed tiles wants a **configurable tile URL** pointing at a host the customer chose — named here as the extension point rather than half-built.
+
+**No mapping library either**, for a sharper version of §41's argument: a mapping library's reason to exist *is* tile handling, and with tiles gone what remains is an affine transform, a drag handler and a grid clustering pass. That is `map.tsx`. Configurable tile sources are the moment to reach for a library instead of growing one.
+
+**Both halves of the platform feed it, through one parser.** `toLatLon` accepts `{lat, lon}`, `"lat,lon"` and `[lat, lon]` — the accepted shapes of the API's `_coerce_geopoint` — because §39 established that a geopoint property synced back to a dataset column *is* `"lat,lon"`. A widget that understood the ontology's shape but not the dataset's would fail against the very datasets its objects came from. Object mode reads §42's explorer path (and so inherits its exact-property filtering); dataset mode reads a location column or a latitude/longitude pair through the existing query endpoint.
+
+**What it refuses to do quietly**, which is most of the design:
+
+  * **An unreadable location is counted, never dropped** — "3 placed, 1 without a usable location". A map that silently plots the rows it liked is a map of an answer nobody asked for.
+  * **Out-of-range coordinates are rejected, not clamped.** The usual cause is lon/lat sent the other way round, and clamping turns that into a pin at the edge of the world drawn with total confidence.
+  * **Points panned off the edge are counted too**, because "no pins here" and "you have scrolled away from your data" look identical otherwise. `Fit to data` undoes it.
+  * **Rows beyond the limit are reported.** Object mode is capped by the explorer endpoint's own 200-row page, and says "of N matching" rather than raising a platform-wide bound to suit one widget.
+
+**Two browser-only bugs, both in the same place.** Craft.js makes the block around each widget a native HTML5 drag source, and `dragstart` fires on *that* element, not on the SVG under the pointer — so no handler inside the map could see it, and once a native drag begins the browser stops sending `mousemove` entirely. The symptom was a map that panned by exactly one frame and then froze, with the SVG transform proving it had moved. Panning now listens on the window and suppresses `dragstart` at the document while a pan is in progress. Neither would have shown up in a unit test; both were found by dragging the thing.
+
+**Testing.** `test_canvas_filters.py` grew to 18 with the map's SQL shapes: a single `"lat,lon"` column coming back intact, a lat/lon pair as three columns (arity is how the widget knows which it asked for), rows with no location surviving the query so they can be counted, an out-of-range coordinate reaching the client for the parser to refuse, and a map and a table filtering identically. Verified in a browser: two maps in one app — one from an object type with a geopoint property, one from a dataset's lat/lon pair — pins clustering into a labelled bubble, the null-location object and the swapped-coordinate row both reported, the filter parameter narrowing the object map while the unbound one stays put, and panning away producing "all of them outside the view".
+
+**Current totals: API 351/351** (345 + 6), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
 ## What's not started
 
 - **Code** (repo browser) — not started
-- **Canvas widget palette** (see §15, §40, §41, §42): Container, Text, Filter, Dataset table, Object table, Chart, Action form. No map widget yet (§39's geopoint unblocked it — it needs a tile-source decision, since a map is an outbound request from a page showing customer data), no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all additions to the same resolver/widget pattern, just not built yet
+- **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all additions to the same resolver/widget pattern, just not built yet
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
 - **Object instance sync gained scheduling, still full-snapshot by design** — §16 added a cron schedule and a 2M-row worker cap, but §14's cursor-based incremental mode is deliberately connection-sync-only: an object-type-source's input dataset is a wholesale-replaced snapshot with no cursor to hold, so full-snapshot mark-and-sweep is the correct approach here, not a gap (see §16 for the reasoning)
 - **The OpenSearch instance store has never run against a real cluster** — §35 wired it in and tests it over real HTTP against a fixture implementing the REST subset it uses, which proves its requests and parsing but not that OpenSearch agrees (no analyzers, no mapping enforcement, no refresh semantics in a fixture). A deployment reaching for it is the last verification step; until one has, `OPENSEARCH_ENDPOINT` unset leaves every environment on the Postgres store, which is fully tested. **§37 raised what this gap can cost**: link traversal depends on the index's *mapping* — a `keyword` subfield must exist on string properties for an equality query to match — and mapping is precisely what a fixture with no analyzers cannot check; the fixture treats `properties.x` and `properties.x.keyword` as the same value and says so in its own docstring. The mapping is declared explicitly in `_ensure_index` rather than inherited from dynamic defaults, so the guarantee is ours rather than the cluster default's, but verifying it is still the first real cluster's job — and "links traverse to nothing on OpenSearch while working on Postgres" is the shape that failure would take

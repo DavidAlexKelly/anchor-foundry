@@ -78,6 +78,47 @@ export function filterPredicate(
     : `CAST(${col} AS VARCHAR) = ${sqlLiteral(text)}`;
 }
 
+/**
+ * The rows behind a map bound to a dataset (ROADMAP Canvas item 4).
+ *
+ * Two column shapes, because both exist in real data and one of them is the
+ * platform's own: a geopoint property synced back to a dataset writes
+ * `"lat,lon"` into a single column, while data arriving from anywhere else
+ * usually carries separate latitude and longitude columns. The returned rows
+ * are `[label, point]` or `[label, lat, lon]` — the arity tells the widget
+ * which shape it asked for, and `toLatLon` in `map.tsx` reads both.
+ *
+ * Rows with no location are **not** filtered out here. They cost a row of the
+ * limit, and that is the price of being able to say "40 placed, 3 without a
+ * usable location" instead of quietly showing 40 and calling it the answer.
+ */
+export function mapQuery(options: {
+  locationColumn?: string | null;
+  latColumn?: string | null;
+  lonColumn?: string | null;
+  labelColumn?: string | null;
+  filterColumn?: string | null;
+  filterOperator?: FilterOperator;
+  filterValue?: unknown;
+  limit?: number;
+}): string | null {
+  const { locationColumn, latColumn, lonColumn, labelColumn } = options;
+  const usesPair = !!latColumn && !!lonColumn;
+  if (!usesPair && !locationColumn) return null;
+
+  const label = labelColumn ? sqlIdentifier(labelColumn) : "NULL";
+  const columns = usesPair
+    ? `${label} AS label, ${sqlIdentifier(latColumn!)} AS lat, ${sqlIdentifier(lonColumn!)} AS lon`
+    : `${label} AS label, CAST(${sqlIdentifier(locationColumn!)} AS VARCHAR) AS point`;
+  const where = filterPredicate(
+    options.filterColumn,
+    options.filterOperator ?? "equals",
+    options.filterValue,
+  );
+  const clause = where ? ` WHERE ${where}` : "";
+  return `SELECT ${columns} FROM dataset${clause} LIMIT ${options.limit ?? 500}`;
+}
+
 /** Distinct values of a column, for a dropdown's options. Capped: a dropdown
  * with 50,000 entries is not a dropdown, and the cap being visible here is
  * better than a widget that silently takes a minute to open. */

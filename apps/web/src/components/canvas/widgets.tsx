@@ -16,11 +16,13 @@ import {
   chartQuery,
   distinctValuesQuery,
   filteredQuery,
+  mapQuery,
   type Aggregate,
   type ChartKind,
   type FilterOperator,
 } from "./filter-sql";
 import { Chart, toPoints } from "./charts";
+import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyValue } from "@/components/property-value";
 
 function connectDragDrop(node: HTMLElement | null, connect: (el: HTMLElement) => HTMLElement, drag: (el: HTMLElement) => HTMLElement) {
@@ -697,6 +699,439 @@ CanvasObjectTable.craft = {
   related: { settings: ObjectTableSettings },
 };
 
+// ---- Map (ROADMAP Canvas item 4) --------------------------------------------
+/**
+ * Pins on a map, from either half of the platform: an object type's geopoint
+ * property, or a dataset's location column(s). Both paths end in the same
+ * `toLatLon`, because the platform writes a geopoint back to a dataset column
+ * as "lat,lon" - a widget that understood the ontology's shape but not the
+ * dataset's would fail against the very datasets its objects came from.
+ *
+ * Rows whose location cannot be read are counted and reported rather than
+ * dropped: "3 without a usable location" is a fact about the data, and it is
+ * the fact somebody needs in order to go and fix it.
+ */
+export function CanvasMap({
+  source = "objects",
+  objectTypeId = null,
+  locationProperty = null,
+  labelProperty = null,
+  datasetId = null,
+  locationColumn = null,
+  latColumn = null,
+  lonColumn = null,
+  labelColumn = null,
+  filterProperty = null,
+  filterColumn = null,
+  filterOperator = "equals",
+  filterParameter = null,
+  searchParameter = null,
+  limit = 500,
+}: {
+  source?: "objects" | "dataset";
+  objectTypeId?: string | null;
+  locationProperty?: string | null;
+  labelProperty?: string | null;
+  datasetId?: string | null;
+  locationColumn?: string | null;
+  latColumn?: string | null;
+  lonColumn?: string | null;
+  labelColumn?: string | null;
+  filterProperty?: string | null;
+  filterColumn?: string | null;
+  filterOperator?: FilterOperator;
+  filterParameter?: string | null;
+  searchParameter?: string | null;
+  limit?: number;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, projectId } = useCanvasEnv();
+  const filterValue = useCanvasParameter(filterParameter);
+  const searchValue = useCanvasParameter(searchParameter);
+
+  const usesProperty = !!filterProperty && filterValue !== undefined && filterValue !== null
+    && filterValue !== "";
+  // The explorer endpoint's own page cap. Asking for more is a 422, and
+  // raising that bound platform-wide to suit one widget would be the wrong
+  // way round - the map reports what it could not fetch instead.
+  const objectLimit = Math.min(limit, 200);
+  const objectPage = useQuery({
+    queryKey: [
+      "canvas-map-objects", objectTypeId, locationProperty,
+      usesProperty ? filterProperty : null, usesProperty ? String(filterValue) : null,
+      searchValue ?? null, objectLimit,
+    ],
+    queryFn: () =>
+      objApi.explore(workspaceId, {
+        typeIds: [objectTypeId!],
+        ...(usesProperty
+          ? { property: filterProperty!, value: String(filterValue) }
+          : { q: searchValue ? String(searchValue) : undefined }),
+        limit: objectLimit,
+      }),
+    enabled: source === "objects" && !!objectTypeId && !!locationProperty,
+  });
+
+  const sql = mapQuery({
+    locationColumn, latColumn, lonColumn, labelColumn,
+    filterColumn, filterOperator, filterValue, limit,
+  });
+  const datasetRows = useQuery({
+    queryKey: ["canvas-map-dataset", datasetId, sql],
+    queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, sql!),
+    enabled: source === "dataset" && !!datasetId && sql !== null,
+  });
+
+  const { points, unplaceable } = React.useMemo(() => {
+    const collected: MapPoint[] = [];
+    let bad = 0;
+    if (source === "objects") {
+      for (const instance of objectPage.data?.items ?? []) {
+        const at = toLatLon(instance.properties[locationProperty!]);
+        if (!at) {
+          bad += 1;
+          continue;
+        }
+        const label = labelProperty ? instance.properties[labelProperty] : null;
+        collected.push({
+          id: instance.id,
+          label: label === null || label === undefined ? instance.primary_key : String(label),
+          ...at,
+        });
+      }
+    } else {
+      const rows = datasetRows.data?.rows ?? [];
+      rows.forEach((row, index) => {
+        // Arity is the discriminator `mapQuery` set up: [label, point] for a
+        // single location column, [label, lat, lon] for a pair.
+        const at = row.length > 2 ? toLatLon([row[1], row[2]]) : toLatLon(row[1]);
+        if (!at) {
+          bad += 1;
+          return;
+        }
+        collected.push({
+          id: String(index),
+          label: row[0] === null || row[0] === undefined ? `Row ${index + 1}` : String(row[0]),
+          ...at,
+        });
+      });
+    }
+    return { points: collected, unplaceable: bad };
+  }, [source, objectPage.data, datasetRows.data, locationProperty, labelProperty]);
+
+  const needs =
+    source === "objects"
+      ? !objectTypeId ? "pick an object type in Settings"
+        : !locationProperty ? "pick the geopoint property to plot"
+        : null
+      : !datasetId ? "pick a dataset in Settings"
+        : sql === null ? "pick a location column, or a latitude and longitude pair"
+        : null;
+  const query = source === "objects" ? objectPage : datasetRows;
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {needs && <p className="canvas-widget-empty">Map — {needs}</p>}
+      {!needs && query.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {!needs && query.isError && (
+        <p className="canvas-widget-empty">
+          {query.error instanceof ApiError ? query.error.message : "Couldn't load these points."}
+        </p>
+      )}
+      {!needs && query.data && (
+        <MapCanvas
+          points={points}
+          unplaceable={unplaceable}
+          total={source === "objects" ? objectPage.data?.total : undefined}
+          atLimit={
+            source === "dataset" && (datasetRows.data?.rows.length ?? 0) >= (limit ?? 500)
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+function MapSettings() {
+  const { workspaceId, projectId } = useCanvasEnv();
+  const {
+    source, objectTypeId, locationProperty, labelProperty, datasetId,
+    locationColumn, latColumn, lonColumn, labelColumn,
+    filterProperty, filterColumn, filterOperator, filterParameter, searchParameter,
+    actions: { setProp },
+  } = useNode((node) => ({
+    source: node.data.props.source,
+    objectTypeId: node.data.props.objectTypeId,
+    locationProperty: node.data.props.locationProperty,
+    labelProperty: node.data.props.labelProperty,
+    datasetId: node.data.props.datasetId,
+    locationColumn: node.data.props.locationColumn,
+    latColumn: node.data.props.latColumn,
+    lonColumn: node.data.props.lonColumn,
+    labelColumn: node.data.props.labelColumn,
+    filterProperty: node.data.props.filterProperty,
+    filterColumn: node.data.props.filterColumn,
+    filterOperator: node.data.props.filterOperator,
+    filterParameter: node.data.props.filterParameter,
+    searchParameter: node.data.props.searchParameter,
+  }));
+  const types = useQuery({
+    queryKey: ["object-types", workspaceId],
+    queryFn: () => objApi.listTypes(workspaceId),
+    enabled: source === "objects",
+  });
+  const detail = useQuery({
+    queryKey: ["object-type", objectTypeId],
+    queryFn: () => objApi.getType(workspaceId, objectTypeId!),
+    enabled: source === "objects" && !!objectTypeId,
+  });
+  const datasetList = useQuery({
+    queryKey: ["datasets", workspaceId, projectId],
+    queryFn: () => dsApi.list(workspaceId, projectId),
+    enabled: source === "dataset",
+  });
+  const columns = (datasetList.data?.find((d) => d.id === datasetId)?.table_schema ?? [])
+    .map((c) => c.name);
+  // Only geopoint properties are offered: a map of a string property would
+  // plot nothing and say nothing about why.
+  const geopoints = (detail.data?.properties ?? []).filter((p) => p.data_type === "geopoint");
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Points from</span>
+        <select
+          value={source}
+          onChange={(e) => setProp((p: Record<string, unknown>) => (p.source = e.target.value))}
+        >
+          <option value="objects">An object type</option>
+          <option value="dataset">A dataset</option>
+        </select>
+      </label>
+      {source === "objects" ? (
+        <>
+          <label className="field">
+            <span className="field-label">Object type</span>
+            <select
+              value={objectTypeId || ""}
+              onChange={(e) =>
+                setProp((p: Record<string, unknown>) => {
+                  p.objectTypeId = e.target.value || null;
+                  p.locationProperty = null;
+                  p.labelProperty = null;
+                  p.filterProperty = null;
+                })
+              }
+            >
+              <option value="">Choose…</option>
+              {types.data?.map((t) => (
+                <option key={t.id} value={t.id}>{t.display_name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Location property</span>
+            <select
+              value={locationProperty || ""}
+              disabled={!objectTypeId}
+              onChange={(e) =>
+                setProp((p: { locationProperty: string | null }) => (p.locationProperty = e.target.value || null))
+              }
+            >
+              <option value="">Choose…</option>
+              {geopoints.map((p) => (
+                <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+              ))}
+            </select>
+            {objectTypeId && geopoints.length === 0 && (
+              <span className="field-hint">This type has no geopoint property</span>
+            )}
+          </label>
+          <label className="field">
+            <span className="field-label">Label property</span>
+            <select
+              value={labelProperty || ""}
+              disabled={!objectTypeId}
+              onChange={(e) =>
+                setProp((p: { labelProperty: string | null }) => (p.labelProperty = e.target.value || null))
+              }
+            >
+              <option value="">Primary key</option>
+              {detail.data?.properties.map((p) => (
+                <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Filter property</span>
+            <select
+              value={filterProperty || ""}
+              disabled={!objectTypeId}
+              onChange={(e) =>
+                setProp((p: { filterProperty: string | null }) => (p.filterProperty = e.target.value || null))
+              }
+            >
+              <option value="">No property filter</option>
+              <option value="$primary_key">Primary key</option>
+              {detail.data?.properties.map((p) => (
+                <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Search parameter</span>
+            <input
+              type="text"
+              value={searchParameter || ""}
+              placeholder="search"
+              onChange={(e) =>
+                setProp((p: { searchParameter: string | null }) => (p.searchParameter = e.target.value || null))
+              }
+            />
+          </label>
+        </>
+      ) : (
+        <>
+          <label className="field">
+            <span className="field-label">Dataset</span>
+            <select
+              value={datasetId || ""}
+              onChange={(e) =>
+                setProp((p: Record<string, unknown>) => {
+                  p.datasetId = e.target.value || null;
+                  p.locationColumn = null;
+                  p.latColumn = null;
+                  p.lonColumn = null;
+                  p.labelColumn = null;
+                  p.filterColumn = null;
+                })
+              }
+            >
+              <option value="">Choose…</option>
+              {datasetList.data?.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Location column</span>
+            <select
+              value={locationColumn || ""}
+              disabled={!datasetId}
+              onChange={(e) =>
+                setProp((p: { locationColumn: string | null }) => (p.locationColumn = e.target.value || null))
+              }
+            >
+              <option value="">None</option>
+              {columns.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <span className="field-hint">A &quot;lat,lon&quot; column — what a synced geopoint writes</span>
+          </label>
+          <label className="field">
+            <span className="field-label">Latitude column</span>
+            <select
+              value={latColumn || ""}
+              disabled={!datasetId}
+              onChange={(e) =>
+                setProp((p: { latColumn: string | null }) => (p.latColumn = e.target.value || null))
+              }
+            >
+              <option value="">None</option>
+              {columns.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Longitude column</span>
+            <select
+              value={lonColumn || ""}
+              disabled={!datasetId}
+              onChange={(e) =>
+                setProp((p: { lonColumn: string | null }) => (p.lonColumn = e.target.value || null))
+              }
+            >
+              <option value="">None</option>
+              {columns.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <span className="field-hint">A latitude/longitude pair wins over the column above</span>
+          </label>
+          <label className="field">
+            <span className="field-label">Label column</span>
+            <select
+              value={labelColumn || ""}
+              disabled={!datasetId}
+              onChange={(e) =>
+                setProp((p: { labelColumn: string | null }) => (p.labelColumn = e.target.value || null))
+              }
+            >
+              <option value="">Row number</option>
+              {columns.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Filter column</span>
+            <select
+              value={filterColumn || ""}
+              disabled={!datasetId}
+              onChange={(e) =>
+                setProp((p: { filterColumn: string | null }) => (p.filterColumn = e.target.value || null))
+              }
+            >
+              <option value="">No filter</option>
+              {columns.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Filter match</span>
+            <select
+              value={filterOperator || "equals"}
+              onChange={(e) =>
+                setProp((p: { filterOperator: FilterOperator }) => (p.filterOperator = e.target.value as FilterOperator))
+              }
+            >
+              <option value="equals">Equals</option>
+              <option value="contains">Contains</option>
+            </select>
+          </label>
+        </>
+      )}
+      <label className="field">
+        <span className="field-label">Filter parameter</span>
+        <input
+          type="text"
+          value={filterParameter || ""}
+          placeholder="region"
+          onChange={(e) =>
+            setProp((p: { filterParameter: string | null }) => (p.filterParameter = e.target.value || null))
+          }
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasMap.craft = {
+  displayName: "Map",
+  props: {
+    source: "objects", objectTypeId: null, locationProperty: null, labelProperty: null,
+    datasetId: null, locationColumn: null, latColumn: null, lonColumn: null, labelColumn: null,
+    filterProperty: null, filterColumn: null, filterOperator: "equals",
+    filterParameter: null, searchParameter: null, limit: 500,
+  },
+  related: { settings: MapSettings },
+};
+
 // ---- Chart (ROADMAP Canvas item 2) ------------------------------------------
 /**
  * The "BI" half of "app/BI builder". Bound to a dataset, aggregated by the
@@ -1039,6 +1474,7 @@ export const CANVAS_RESOLVER = {
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasChart,
+  CanvasMap,
   CanvasActionForm,
 };
 
@@ -1049,6 +1485,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
+  { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
   { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
 ];
 

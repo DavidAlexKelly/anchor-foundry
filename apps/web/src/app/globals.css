@@ -567,3 +567,13 @@ button { font: inherit; cursor: pointer; }
 /* ---- link explorer (Objects item 3) -------------------------------------- */
 .link-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
 .link-list .btn { width: 100%; justify-content: flex-start; }
+
+/* ---- canvas map (Canvas item 4) ------------------------------------------ */
+.canvas-map svg { border: 1px solid var(--line); border-radius: var(--radius); display: block; user-select: none; }
+.canvas-map-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.canvas-map-bar button {
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  border-radius: var(--radius); padding: 2px 9px; font-size: 12.5px; cursor: pointer;
+}
+.canvas-map-bar button:hover { border-color: var(--line-strong); }
+.canvas-map-note { color: var(--ink-soft); font-size: 12px; font-style: italic; }

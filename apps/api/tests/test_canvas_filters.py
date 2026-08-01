@@ -230,3 +230,104 @@ def test_a_scatter_query_keeps_individual_points(
                  'SELECT "order_id" AS label, "total" AS value FROM dataset '
                  'WHERE "order_id" IS NOT NULL AND "total" IS NOT NULL LIMIT 500')
     assert len(result["rows"]) == 4
+
+
+# ---- the map shapes map-sql produces (Canvas item 4) ------------------------
+# A "lat,lon" column (what a synced geopoint property writes back), a separate
+# latitude/longitude pair (what data from anywhere else looks like), a row
+# with no location at all, and one whose coordinates are the wrong way round.
+SITES = (
+    b"code,name,region,location,lat,lon\n"
+    b'S1,Depot,North,"51.5074,-0.1278",51.5074,-0.1278\n'
+    b'S2,Yard,South,"50.8225,-0.1372",50.8225,-0.1372\n'
+    b"S3,Unsited,North,,,\n"
+    b'S4,Swapped,South,"-0.1278,510.5",-0.1278,510.5\n'
+)
+
+
+@pytest.fixture(scope="module")
+def sites(client: TestClient, fx: Fixture) -> str:
+    r = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Sites {uuid.uuid4().hex[:6]}"},
+        files={"file": ("sites.csv", io.BytesIO(SITES), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_a_single_location_column_comes_back_as_text_for_the_client_to_parse(
+    client: TestClient, fx: Fixture, sites: str
+) -> None:
+    """The platform's own sync path writes a geopoint property back to a
+    dataset column as "lat,lon", so that is a shape the map has to read. The
+    CAST keeps the whole reference intact rather than letting the engine
+    decide what the column means."""
+    result = run(client, fx, sites,
+                 'SELECT "name" AS label, CAST("location" AS VARCHAR) AS point '
+                 'FROM dataset LIMIT 500')
+    rows = {row[0]: row[1] for row in result["rows"]}
+    assert rows["Depot"] == "51.5074,-0.1278"
+    assert len(result["rows"][0]) == 2
+
+
+def test_a_latitude_longitude_pair_comes_back_as_three_columns(
+    client: TestClient, fx: Fixture, sites: str
+) -> None:
+    """The arity is the discriminator: two columns means a single location
+    value to parse, three means a pair already split."""
+    result = run(client, fx, sites,
+                 'SELECT "name" AS label, "lat" AS lat, "lon" AS lon FROM dataset LIMIT 500')
+    assert len(result["rows"][0]) == 3
+    row = next(r for r in result["rows"] if r[0] == "Depot")
+    assert (row[1], row[2]) == (51.5074, -0.1278)
+
+
+def test_rows_with_no_location_are_returned_rather_than_filtered_out(
+    client: TestClient, fx: Fixture, sites: str
+) -> None:
+    """They cost a row of the limit, and that is the price of being able to
+    say "3 without a usable location" instead of quietly showing the rest and
+    calling it the answer."""
+    result = run(client, fx, sites,
+                 'SELECT "name" AS label, CAST("location" AS VARCHAR) AS point '
+                 'FROM dataset LIMIT 500')
+    assert len(result["rows"]) == 4
+    assert any(row[0] == "Unsited" and row[1] is None for row in result["rows"])
+
+
+def test_an_out_of_range_coordinate_survives_the_query_so_the_widget_can_refuse_it(
+    client: TestClient, fx: Fixture, sites: str
+) -> None:
+    """The engine has no opinion about what a longitude is - the range check
+    belongs to `toLatLon`, which rejects rather than clamps, because a pin
+    drawn at the edge of the world is a wrong answer stated confidently."""
+    result = run(client, fx, sites,
+                 'SELECT "name" AS label, "lat" AS lat, "lon" AS lon FROM dataset LIMIT 500')
+    row = next(r for r in result["rows"] if r[0] == "Swapped")
+    assert row[2] == 510.5
+
+
+def test_a_map_with_no_label_column_selects_a_null_label(
+    client: TestClient, fx: Fixture, sites: str
+) -> None:
+    """The widget falls back to a row number. Selecting NULL keeps the row
+    shape identical either way, so the parsing code has one path."""
+    result = run(client, fx, sites,
+                 'SELECT NULL AS label, CAST("location" AS VARCHAR) AS point FROM dataset LIMIT 500')
+    assert all(row[0] is None for row in result["rows"])
+    assert len(result["rows"]) == 4
+
+
+def test_a_map_and_a_table_filter_identically(
+    client: TestClient, fx: Fixture, sites: str
+) -> None:
+    """Same argument as the chart: two widgets on one parameter that disagree
+    about which rows are in scope is the bug a dashboard cannot afford."""
+    predicate = 'CAST("region" AS VARCHAR) = \'North\''
+    table = run(client, fx, sites, f"SELECT * FROM dataset WHERE {predicate} LIMIT 200")
+    points = run(client, fx, sites,
+                 f'SELECT "name" AS label, CAST("location" AS VARCHAR) AS point '
+                 f"FROM dataset WHERE {predicate} LIMIT 500")
+    assert len(table["rows"]) == len(points["rows"]) == 2
+    assert {row[0] for row in points["rows"]} == {"Depot", "Unsited"}
