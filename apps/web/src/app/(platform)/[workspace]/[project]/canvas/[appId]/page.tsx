@@ -48,8 +48,11 @@ function PublishDialog({
   return (
     <Dialog open title={`Publish ${app.name}`} onClose={onClose}>
       <p className="login-note" style={{ marginTop: 0 }}>
-        Private apps are visible only to this project. Publishing shares the current saved version
-        read-only with the rest of the workspace, or specific groups.
+        Private apps are visible only to this project. Publishing lists the app under the
+        workspace&apos;s Apps page, read-only, for everyone here or for specific groups.
+        It shares the layout, not access to the data: every widget still reads as whoever
+        is looking. Publishing is not a snapshot either - each save you make from here is
+        immediately what they see.
       </p>
       <Field label="Visibility">
         <select value={scope} onChange={(e) => setScope(e.target.value as CanvasPublishScope)}>

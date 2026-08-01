@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4 — see §21–§43). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6 — see §21–§44). Test counts below are from the last full regression run.
 
 ---
 
@@ -745,10 +745,29 @@ Rows from this path get `object_type_id` filled back in before they are returned
 
 ---
 
+### 44. Somewhere for a published app to lead (this session)
+
+`ROADMAP.md` Canvas item 6, which describes itself as polish: "the read API already exists — just needs a list page and a nav entry".
+
+**The list page was the easy half. Publishing had nowhere to lead.** The only route that rendered an app was the project editor, which resolves its project by slug and reads the project-scoped endpoint — so anybody without project membership, *the exact audience publishing exists for*, followed a link to an app published to them and got a 404. The workspace-wide read path has been in the API since §15 with nothing in the web app calling it. So this shipped as a pair: `/{workspace}/apps` (the gallery) and `/{workspace}/apps/{appId}` (the viewer), the latter rendering the definition with Craft's editor hard-disabled rather than merely chrome-hidden.
+
+**The gallery is workspace-scoped, not a project tab**, and that is the whole point of it: somebody who opens a dashboard every Monday does not know which project its author filed it in, and making them find the project first is asking them to learn the builder's filing system.
+
+**Publishing shares the layout, not access to the data**, and the new route is what makes that observable. Every widget in a published app still reads its dataset or object type *as whoever is looking* — an app must never become a way to launder access to data somebody was not given. For a project on inherited permissions (the default) every workspace member already has viewer access, so an app published to the workspace simply works; in a `permission_mode='custom'` project the widgets report what they could not read. `test_canvas.py` now pins that boundary directly — the same viewer who can read the published app gets 404 on that project's datasets, models and object sources — so nobody later "fixes" the empty widgets by widening the read path. The Publish dialog's copy was wrong about the other half too: it said "shares the current saved version", implying a pinned snapshot, when publishing is a visibility flag over the live definition. It now says so, and the browser check asserts it (reorder, save, and the published view follows).
+
+**Reordering got two buttons rather than only drag.** Craft.js already lets a placed widget be dragged, but native HTML5 drag-and-drop is the one canvas interaction automation cannot drive (an entry in the rough edges below since §15) — *and* it is the one a keyboard cannot do at all. Move up/move down in the settings panel is both testable and the only accessible way to reorder an app. One trap worth keeping: Craft's `move(id, parent, index)` inserts at an index in the parent's list *before* the node is removed from it, so moving down by one is `index + 2`; get it wrong and the widget silently stays put.
+
+**Testing.** `test_canvas.py` grew to 16 with the access-boundary test above. Verified in a browser: the workspace page's Apps link, the gallery listing a published app and *not* a private one in the same project, the published view rendering with live widget data and no palette or Save button, move down/move up reordering, and the new order surviving a save, a reload, and showing through to the published view.
+
+**Current totals: API 352/352** (351 + 1), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
 ## What's not started
 
 - **Code** (repo browser) — not started
-- **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all additions to the same resolver/widget pattern, just not built yet
+- **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), and no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet) — both additions to the same resolver/widget pattern, just not built yet. Reordering placed widgets is done (§44), by buttons as well as by drag
+- **Sharing an app outside the platform** (a public or token-scoped link) — `ROADMAP.md` Canvas item 7, explicitly a stretch: it needs an auth model for an unauthenticated or token-authenticated viewer, which is a bigger question than any widget. §44's viewer route is the in-platform half and stops at the workspace boundary
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
 - **Object instance sync gained scheduling, still full-snapshot by design** — §16 added a cron schedule and a 2M-row worker cap, but §14's cursor-based incremental mode is deliberately connection-sync-only: an object-type-source's input dataset is a wholesale-replaced snapshot with no cursor to hold, so full-snapshot mark-and-sweep is the correct approach here, not a gap (see §16 for the reasoning)
 - **The OpenSearch instance store has never run against a real cluster** — §35 wired it in and tests it over real HTTP against a fixture implementing the REST subset it uses, which proves its requests and parsing but not that OpenSearch agrees (no analyzers, no mapping enforcement, no refresh semantics in a fixture). A deployment reaching for it is the last verification step; until one has, `OPENSEARCH_ENDPOINT` unset leaves every environment on the Postgres store, which is fully tested. **§37 raised what this gap can cost**: link traversal depends on the index's *mapping* — a `keyword` subfield must exist on string properties for an equality query to match — and mapping is precisely what a fixture with no analyzers cannot check; the fixture treats `properties.x` and `properties.x.keyword` as the same value and says so in its own docstring. The mapping is declared explicitly in `_ensure_index` rather than inherited from dynamic defaults, so the guarantee is ours rather than the cluster default's, but verifying it is still the first real cluster's job — and "links traverse to nothing on OpenSearch while working on Postgres" is the shape that failure would take

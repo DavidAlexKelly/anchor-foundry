@@ -42,6 +42,12 @@ export default function WorkspacePage() {
           {workspace?.description && <p className="sub">{workspace.description}</p>}
         </div>
         <div className="row-actions">
+          {/* Apps are workspace-wide, not per-project: somebody who opens a
+              dashboard every Monday should not have to know which project its
+              author filed it in (ROADMAP Canvas item 6). */}
+          <Link className="btn quiet" href={`/${params.workspace}/apps`}>
+            Apps
+          </Link>
           <span className={`chip${workspace?.effective_role === "admin" ? " brass" : ""}`}>
             {workspace?.effective_role}
           </span>
