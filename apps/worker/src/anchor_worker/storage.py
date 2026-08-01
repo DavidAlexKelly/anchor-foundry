@@ -12,7 +12,13 @@ import shutil
 from pathlib import Path
 from typing import Protocol
 
-_KEY_RE = re.compile(r"^workspaces/[a-z0-9-]+/datasets/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$")
+# Kept in step with the API's copy (roadmap Objects item 4 widened it to
+# cover object attachments). The worker never reads an attachment today, but
+# a validator that is *narrower* than the writer's is how a key written by
+# one service becomes unreadable by the other.
+_KEY_RE = re.compile(
+    r"^workspaces/[a-z0-9-]+/(datasets|attachments)/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$"
+)
 
 
 class StorageKeyError(ValueError):

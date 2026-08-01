@@ -51,6 +51,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** A multipart POST. Deliberately not `request`: the browser has to set the
+ * multipart boundary itself, so this path must *not* send a Content-Type. */
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  const token = getToken();
+  const res = await fetch(`/api${path}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    let body: unknown;
+    try {
+      body = await res.json();
+      const parsed = body as { detail?: string };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+    } catch {
+      /* keep statusText */
+    }
+    throw new ApiError(res.status, detail, body);
+  }
+  return (await res.json()) as T;
+}
+
 export const api = {
   me: () => request<Me>("/auth/me"),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
@@ -158,27 +182,13 @@ export const connections = {
 export const datasets = {
   list: (wid: string, pid: string) =>
     request<import("./types").Dataset[]>(`/workspaces/${wid}/projects/${pid}/datasets`),
-  upload: async (wid: string, pid: string, input: { name: string; file: File }) => {
-    const token = getToken();
+  upload: (wid: string, pid: string, input: { name: string; file: File }) => {
     const form = new FormData();
     form.set("name", input.name);
     form.set("file", input.file);
-    const res = await fetch(`/api/workspaces/${wid}/projects/${pid}/datasets/upload`, {
-      method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: form,
-    });
-    if (!res.ok) {
-      let detail = res.statusText;
-      try {
-        const body: { detail?: unknown } = await res.json();
-        if (typeof body.detail === "string") detail = body.detail;
-      } catch {
-        /* keep statusText */
-      }
-      throw new ApiError(res.status, detail);
-    }
-    return (await res.json()) as import("./types").Dataset;
+    return requestForm<import("./types").Dataset>(
+      `/workspaces/${wid}/projects/${pid}/datasets/upload`, form,
+    );
   },
   update: (
     wid: string,
@@ -553,6 +563,16 @@ export const objects = {
     request<import("./types").ObjectInstance>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}`,
     ),
+  uploadAttachment: async (wid: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    // No Content-Type header: the browser must set the multipart boundary.
+    return requestForm<import("./types").AttachmentRef>(
+      `/workspaces/${wid}/attachments`, form,
+    );
+  },
+  attachmentUrl: (wid: string, key: string) =>
+    `/api/workspaces/${wid}/attachments/download?key=${encodeURIComponent(key)}`,
   instanceLinks: (wid: string, typeId: string, instanceId: string) =>
     request<import("./types").LinkedInstances[]>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/links`,

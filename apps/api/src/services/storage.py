@@ -17,7 +17,15 @@ import shutil
 from pathlib import Path
 from typing import Protocol
 
-_KEY_RE = re.compile(r"^workspaces/[a-z0-9-]+/datasets/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$")
+# Two shapes, both anchored to a workspace's own prefix (§16's isolation
+# anchor): dataset bytes, and object attachments (roadmap Objects item 4).
+# Widening this grammar is the only way to store a new *kind* of byte, which
+# is the point - a key that does not match one of these named shapes cannot
+# be written or read at all, so a fabricated key from a request body fails
+# here rather than reaching the bucket.
+_KEY_RE = re.compile(
+    r"^workspaces/[a-z0-9-]+/(datasets|attachments)/[0-9a-f-]{36}/[A-Za-z0-9._/-]+$"
+)
 
 
 class StorageKeyError(ValueError):

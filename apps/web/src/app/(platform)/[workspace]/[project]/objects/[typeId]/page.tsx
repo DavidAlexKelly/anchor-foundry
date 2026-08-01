@@ -7,8 +7,9 @@ import { useState } from "react";
 import { actions as actionApi, ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
+import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { ActionType, ObjectInstance } from "@/lib/types";
+import type { ActionType, ObjectInstance, PropertyDataType } from "@/lib/types";
 
 const PAGE_SIZE = 50;
 
@@ -17,21 +18,23 @@ function EditInstanceDialog({
   projectId,
   instance,
   actionTypes,
+  propertyTypes,
   onClose,
 }: {
   workspaceId: string;
   projectId: string;
   instance: ObjectInstance;
   actionTypes: ActionType[];
+  propertyTypes: Record<string, PropertyDataType>;
   onClose: () => void;
 }) {
   const [actionTypeId, setActionTypeId] = useState(actionTypes[0]?.id ?? "");
   const activeAction = actionTypes.find((a) => a.id === actionTypeId) ?? actionTypes[0];
-  const [values, setValues] = useState<Record<string, string>>(
+  // Values keep their real types now (roadmap Objects item 4): the API's
+  // check is strict, so sending "7" for an integer property is refused.
+  const [values, setValues] = useState<Record<string, unknown>>(
     Object.fromEntries(
-      (activeAction?.editable_properties ?? []).map((p) => [
-        p, instance.properties[p] == null ? "" : String(instance.properties[p]),
-      ]),
+      (activeAction?.editable_properties ?? []).map((p) => [p, instance.properties[p] ?? null]),
     ),
   );
   const queryClient = useQueryClient();
@@ -49,9 +52,7 @@ function EditInstanceDialog({
     const next = actionTypes.find((a) => a.id === id);
     setValues(
       Object.fromEntries(
-        (next?.editable_properties ?? []).map((p) => [
-          p, instance.properties[p] == null ? "" : String(instance.properties[p]),
-        ]),
+        (next?.editable_properties ?? []).map((p) => [p, instance.properties[p] ?? null]),
       ),
     );
   }
@@ -69,11 +70,13 @@ function EditInstanceDialog({
           </Field>
         )}
         {(activeAction?.editable_properties ?? []).map((p) => (
-          <Field key={p} label={p}>
-            <input
-              type="text"
-              value={values[p] ?? ""}
-              onChange={(e) => setValues({ ...values, [p]: e.target.value })}
+          <Field key={p} label={p} hint={propertyTypes[p]}>
+            <PropertyInput
+              workspaceId={workspaceId}
+              dataType={propertyTypes[p]}
+              value={values[p]}
+              onChange={(next) => setValues({ ...values, [p]: next })}
+              label={p}
             />
           </Field>
         ))}
@@ -176,10 +179,11 @@ export default function ObjectInstancesPage() {
                     <td className="slug">{instance.primary_key}</td>
                     {properties.map((p) => (
                       <td key={p.api_name}>
-                        {instance.properties[p.api_name] === null ||
-                        instance.properties[p.api_name] === undefined
-                          ? <span style={{ color: "var(--ink-soft)" }}>-</span>
-                          : String(instance.properties[p.api_name])}
+                        <PropertyValue
+                          workspaceId={workspace!.id}
+                          dataType={p.data_type}
+                          value={instance.properties[p.api_name]}
+                        />
                       </td>
                     ))}
                     <td className="count">{new Date(instance.updated_at).toLocaleString()}</td>
@@ -254,6 +258,9 @@ export default function ObjectInstancesPage() {
           projectId={project.id}
           instance={editing}
           actionTypes={actionTypes.data}
+          propertyTypes={Object.fromEntries(
+            properties.map((p) => [p.api_name, p.data_type]),
+          )}
           onClose={() => setEditing(null)}
         />
       )}

@@ -527,7 +527,25 @@ export interface ExplorerPage {
 
 // ---- objects (ontology) -----------------------------------------------------
 export type PropertyDataType =
-  | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint" | "json";
+  | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint"
+  | "json" | "attachment";
+
+/** A geopoint property's stored value (db 0029). Always lat,lon - see
+ * property_values.py for why that order and not GeoJSON's lon,lat. */
+export interface GeoPoint {
+  lat: number;
+  lon: number;
+}
+
+/** An attachment property's stored value: a reference into the storage
+ * gateway, exchanged for bytes by the download route, which checks the
+ * caller's access first. Never a URL - see migration 0029. */
+export interface AttachmentRef {
+  key: string;
+  filename: string;
+  content_type: string;
+  size: number;
+}
 export type LinkCardinality = "one_to_one" | "one_to_many" | "many_to_many";
 export type SourceSyncStatus = "never_synced" | "syncing" | "ok" | "error";
 
