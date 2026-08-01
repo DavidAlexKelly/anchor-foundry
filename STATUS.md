@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–2 — see §21–§41). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–3 — see §21–§42). Test counts below are from the last full regression run.
 
 ---
 
@@ -694,10 +694,34 @@ There is no exception anywhere on any of those paths. A logged warning would be 
 
 ---
 
+### 42. An object-bound table widget — canvas apps that read the ontology (this session)
+
+`ROADMAP.md` Canvas item 3. A widget bound to an **object type** rather than a raw dataset, reusing §36's Explorer query surface and reactive to §40's parameters.
+
+**The item's dependency was real but not sufficient.** It says to "reuse the query surface" of the Global Object Explorer, and that surface exists — but the Explorer only ever asked one question: `q`, a prefix search across every indexed property of every type. That is the right question for a search box and the wrong one for a **filter**. A dropdown bound to `name` that quietly matches `Depot North` when the builder chose `Depot` is not filtering, it is searching with a filter's UI, and the failure is invisible: the rows all look plausible. So the widget needed an exact read path first, which the store Protocol already had — `find_by_property`, added for §37's link traversal, where a link join is exactly "give me the instances whose property equals this value". `GET .../object-instances` now takes `property` + `value` and routes to it.
+
+**Three constraints came out of the endpoint rather than the widget:**
+
+  * **A property filter requires exactly one `type_id`,** and says so (422). A property api_name only means something *within* a type: `name` on `Site` and `name` on `Customer` are different properties that happen to share a spelling, and filtering "across types where name = X" would be a union of unrelated questions dressed as one query.
+  * **`property` and `value` are refused unless both are present.** A `property` with no `value` silently degrading to "unfiltered" is the same class of quiet wrongness the filter itself exists to avoid.
+  * **`$primary_key` is filterable** using §37's existing sentinel, mapping to `property_name=None` in the store — the primary key is not in the properties map, but it is the one field every instance certainly has.
+
+Rows from this path get `object_type_id` filled back in before they are returned, because §36's contract is that every row in an Explorer response says what it is, and the single-type read path knows the answer without asking the index for it.
+
+**The widget picks one question rather than blending two.** `filterParameter` (exact, one property) and `searchParameter` (prefix, all properties) are separate settings, and when both have values the exact filter wins — the endpoint's property filter is its own read path, not a refinement of `q`, and pretending otherwise would mean claiming an intersection the store was never asked for. The header states which is in force (`3 Sites where name = Depot`), so a viewer can see the question, not just the answer.
+
+**Values render through §39's `PropertyValue`.** A geopoint inside a canvas app reads as `51.5074, -0.1278` and an attachment as a download link, because the widget reuses the browse UI's renderer rather than stringifying — a canvas app is a *view* of the ontology, and a type that means something in one place and `[object Object]` in another does not mean anything.
+
+**Testing.** `test_property_types.py` grew to 25: the exact filter returning type metadata with the row, exact-vs-prefix (the same value that `q` matches as a prefix, `property` does not match as an exact), `$primary_key` filtering, and both refusals. Verified in a browser against three deliberately-overlapping objects (`Depot`, `Depot North`, `Yard`): the table listing all three with the geopoint rendered as coordinates, the dropdown narrowing to `Depot` alone, and the search box beside it matching both `Depot` and `Depot North` — which is the whole reason the two are separate controls.
+
+**Current totals: API 345/345** (341 + 4), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
 ## What's not started
 
 - **Code** (repo browser) — not started
-- **Canvas widget palette** (see §15, §40, §41): Container, Text, Filter, Dataset table, Chart, Action form. No object-bound browser widget yet (spec's "BI" half of "app/BI builder"), no cross-widget interactivity (e.g. a table row selection filtering another widget), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all straightforward additions to the same resolver/widget pattern, just not built yet
+- **Canvas widget palette** (see §15, §40, §41, §42): Container, Text, Filter, Dataset table, Object table, Chart, Action form. No map widget yet (§39's geopoint unblocked it — it needs a tile-source decision, since a map is an outbound request from a page showing customer data), no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all additions to the same resolver/widget pattern, just not built yet
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
 - **Object instance sync gained scheduling, still full-snapshot by design** — §16 added a cron schedule and a 2M-row worker cap, but §14's cursor-based incremental mode is deliberately connection-sync-only: an object-type-source's input dataset is a wholesale-replaced snapshot with no cursor to hold, so full-snapshot mark-and-sweep is the correct approach here, not a gap (see §16 for the reasoning)
 - **The OpenSearch instance store has never run against a real cluster** — §35 wired it in and tests it over real HTTP against a fixture implementing the REST subset it uses, which proves its requests and parsing but not that OpenSearch agrees (no analyzers, no mapping enforcement, no refresh semantics in a fixture). A deployment reaching for it is the last verification step; until one has, `OPENSEARCH_ENDPOINT` unset leaves every environment on the Postgres store, which is fully tested. **§37 raised what this gap can cost**: link traversal depends on the index's *mapping* — a `keyword` subfield must exist on string properties for an equality query to match — and mapping is precisely what a fixture with no analyzers cannot check; the fixture treats `properties.x` and `properties.x.keyword` as the same value and says so in its own docstring. The mapping is declared explicitly in `_ensure_index` rather than inherited from dynamic defaults, so the guarantee is ours rather than the cluster default's, but verifying it is still the first real cluster's job — and "links traverse to nothing on OpenSearch while working on Postgres" is the shape that failure would take

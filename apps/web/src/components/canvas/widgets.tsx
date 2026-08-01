@@ -21,6 +21,7 @@ import {
   type FilterOperator,
 } from "./filter-sql";
 import { Chart, toPoints } from "./charts";
+import { PropertyValue } from "@/components/property-value";
 
 function connectDragDrop(node: HTMLElement | null, connect: (el: HTMLElement) => HTMLElement, drag: (el: HTMLElement) => HTMLElement) {
   if (node) connect(drag(node));
@@ -469,6 +470,233 @@ CanvasDatasetTable.craft = {
   related: { settings: DatasetTableSettings },
 };
 
+// ---- Object table (ROADMAP Canvas item 3) -----------------------------------
+/**
+ * A table bound to an object *type* rather than a raw dataset - the pattern
+ * the roadmap argues real Workshop-style apps are built on, since an ontology
+ * object is the thing a business user recognises and a dataset row is not.
+ *
+ * It reuses the Explorer's query surface (Objects item 2) as the item asks,
+ * with one addition that item did not have: **exact property filtering**. `q`
+ * is substring/prefix matching across every property at once, which is right
+ * for a search box and wrong for a dropdown - picking the region "North" must
+ * not also return a customer called "Northwind". The store Protocol has had
+ * `find_by_property` since Objects item 3; this widget is what made it worth
+ * exposing on the endpoint.
+ *
+ * Values render through the same `PropertyValue` the Objects pages use, so a
+ * geopoint reads as coordinates and an attachment as a download link inside a
+ * canvas app too, rather than as `[object Object]`.
+ */
+export function CanvasObjectTable({
+  objectTypeId = null,
+  filterProperty = null,
+  filterParameter = null,
+  searchParameter = null,
+  pageSize = 25,
+}: {
+  objectTypeId?: string | null;
+  filterProperty?: string | null;
+  filterParameter?: string | null;
+  searchParameter?: string | null;
+  pageSize?: number;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const filterValue = useCanvasParameter(filterParameter);
+  const searchValue = useCanvasParameter(searchParameter);
+
+  const type = useQuery({
+    queryKey: ["object-type", objectTypeId],
+    queryFn: () => objApi.getType(workspaceId, objectTypeId!),
+    enabled: !!objectTypeId,
+  });
+
+  // An exact property filter and a free-text search are different questions,
+  // so the widget picks one rather than pretending to combine them: the
+  // endpoint's property filter is its own read path, not a refinement of `q`.
+  const useProperty = !!filterProperty && filterValue !== undefined && filterValue !== null
+    && filterValue !== "";
+  const page = useQuery({
+    queryKey: [
+      "canvas-object-table", objectTypeId, useProperty ? filterProperty : null,
+      useProperty ? String(filterValue) : null, searchValue ?? null, pageSize,
+    ],
+    queryFn: () =>
+      objApi.explore(workspaceId, {
+        typeIds: [objectTypeId!],
+        ...(useProperty
+          ? { property: filterProperty!, value: String(filterValue) }
+          : { q: searchValue ? String(searchValue) : undefined }),
+        limit: pageSize,
+      }),
+    enabled: !!objectTypeId,
+  });
+
+  const properties = type.data?.properties ?? [];
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectTypeId && (
+        <p className="canvas-widget-empty">Object table - pick an object type in Settings</p>
+      )}
+      {objectTypeId && page.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {page.isError && <p className="canvas-widget-empty">Couldn&apos;t load these objects.</p>}
+      {page.data && (
+        <>
+          <p className="canvas-widget-empty">
+            {page.data.total.toLocaleString()} {type.data?.display_name ?? "object"}
+            {page.data.total === 1 ? "" : "s"}
+            {useProperty ? ` where ${filterProperty} = ${String(filterValue)}` : ""}
+            {!useProperty && searchValue ? ` matching “${String(searchValue)}”` : ""}
+          </p>
+          <div className="data-grid">
+            <table>
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  {properties.map((p) => (
+                    <th key={p.api_name}>{p.display_name || p.api_name}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {page.data.items.map((instance) => (
+                  <tr key={instance.id}>
+                    <td>{instance.primary_key}</td>
+                    {properties.map((p) => (
+                      <td key={p.api_name}>
+                        <PropertyValue
+                          workspaceId={workspaceId}
+                          dataType={p.data_type}
+                          value={instance.properties[p.api_name]}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {page.data.total > page.data.items.length && (
+            <p className="canvas-widget-empty">
+              Showing the first {page.data.items.length} of {page.data.total.toLocaleString()}.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ObjectTableSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectTypeId, filterProperty, filterParameter, searchParameter, pageSize,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectTypeId: node.data.props.objectTypeId,
+    filterProperty: node.data.props.filterProperty,
+    filterParameter: node.data.props.filterParameter,
+    searchParameter: node.data.props.searchParameter,
+    pageSize: node.data.props.pageSize,
+  }));
+  const types = useQuery({
+    queryKey: ["object-types", workspaceId],
+    queryFn: () => objApi.listTypes(workspaceId),
+  });
+  const detail = useQuery({
+    queryKey: ["object-type", objectTypeId],
+    queryFn: () => objApi.getType(workspaceId, objectTypeId!),
+    enabled: !!objectTypeId,
+  });
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Object type</span>
+        <select
+          value={objectTypeId || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.objectTypeId = e.target.value || null;
+              p.filterProperty = null;  // property names are per-type
+            })
+          }
+        >
+          <option value="">Choose…</option>
+          {types.data?.map((t) => (
+            <option key={t.id} value={t.id}>{t.display_name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Filter property</span>
+        <select
+          value={filterProperty || ""}
+          disabled={!objectTypeId}
+          onChange={(e) =>
+            setProp((p: { filterProperty: string | null }) => (p.filterProperty = e.target.value || null))
+          }
+        >
+          <option value="">No property filter</option>
+          <option value="$primary_key">Primary key</option>
+          {detail.data?.properties.map((p) => (
+            <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+          ))}
+        </select>
+        <span className="field-hint">Exact match — for a dropdown</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Filter parameter</span>
+        <input
+          type="text"
+          value={filterParameter || ""}
+          placeholder="region"
+          onChange={(e) =>
+            setProp((p: { filterParameter: string | null }) => (p.filterParameter = e.target.value || null))
+          }
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Search parameter</span>
+        <input
+          type="text"
+          value={searchParameter || ""}
+          placeholder="search"
+          onChange={(e) =>
+            setProp((p: { searchParameter: string | null }) => (p.searchParameter = e.target.value || null))
+          }
+        />
+        <span className="field-hint">Substring across every property — for a search box</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Rows</span>
+        <input
+          type="number"
+          value={pageSize ?? 25}
+          min={1}
+          max={200}
+          onChange={(e) =>
+            setProp((p: { pageSize: number }) => (p.pageSize = Math.max(1, Math.min(200, Number(e.target.value) || 25))))
+          }
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasObjectTable.craft = {
+  displayName: "Object table",
+  props: {
+    objectTypeId: null, filterProperty: null, filterParameter: null,
+    searchParameter: null, pageSize: 25,
+  },
+  related: { settings: ObjectTableSettings },
+};
+
 // ---- Chart (ROADMAP Canvas item 2) ------------------------------------------
 /**
  * The "BI" half of "app/BI builder". Bound to a dataset, aggregated by the
@@ -809,6 +1037,7 @@ export const CANVAS_RESOLVER = {
   CanvasText,
   CanvasParameterControl,
   CanvasDatasetTable,
+  CanvasObjectTable,
   CanvasChart,
   CanvasActionForm,
 };
@@ -818,6 +1047,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
+  { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
 ];

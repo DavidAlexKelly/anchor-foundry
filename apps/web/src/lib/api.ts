@@ -455,11 +455,25 @@ export const objects = {
   /** Workspace-wide instance search across every object type at once. */
   explore: (
     wid: string,
-    input: { q?: string; typeIds?: string[]; limit?: number; offset?: number },
+    input: {
+      q?: string;
+      typeIds?: string[];
+      /** Exact match on one property — a different question from `q`, which
+       * is substring/prefix across every property at once. Needs exactly one
+       * typeId, since a property name only means something within a type. */
+      property?: string;
+      value?: string;
+      limit?: number;
+      offset?: number;
+    },
   ) => {
     const search = new URLSearchParams();
     if (input.q) search.set("q", input.q);
     for (const t of input.typeIds ?? []) search.append("type_id", t);
+    if (input.property && input.value !== undefined) {
+      search.set("property", input.property);
+      search.set("value", input.value);
+    }
     if (input.limit) search.set("limit", String(input.limit));
     if (input.offset) search.set("offset", String(input.offset));
     const qs = search.toString();

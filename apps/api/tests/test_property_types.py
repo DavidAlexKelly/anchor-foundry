@@ -393,3 +393,80 @@ def test_the_api_and_worker_copies_of_property_values_are_identical() -> None:
             "the API and worker copies of property_values.py have drifted - "
             "a geopoint would sync differently depending on who ran it"
         )
+
+
+# ---- exact property filtering on the explorer (Canvas item 3) ---------------
+def test_the_explorer_can_filter_on_an_exact_property_value(
+    client: TestClient, fx: Fixture, site_type: dict
+) -> None:
+    """`q` is substring/prefix across every property - right for a search box,
+    wrong for a dropdown. Canvas item 3's object table needed the exact
+    question, and the store Protocol has had `find_by_property` since Objects
+    item 3, so this exposes it rather than inventing a second search."""
+    _map_and_sync(client, fx, site_type["id"], SITES_OK)
+    r = client.get(
+        f"{wbase(fx)}/object-instances",
+        params={"type_id": site_type["id"], "property": "name", "value": "Depot"},
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 1
+    item = r.json()["items"][0]
+    assert item["properties"]["name"] == "Depot"
+    # The explorer's contract is that every row says what it is.
+    assert item["object_type_id"] == site_type["id"]
+    assert item["object_type_display_name"].startswith("Site ")
+
+
+def test_an_exact_filter_does_not_match_a_prefix(
+    client: TestClient, fx: Fixture, site_type: dict
+) -> None:
+    """The whole reason it exists: picking "Depot" from a dropdown must not
+    also return "Depot North"."""
+    _map_and_sync(client, fx, site_type["id"], SITES_OK)
+    exact = client.get(
+        f"{wbase(fx)}/object-instances",
+        params={"type_id": site_type["id"], "property": "name", "value": "Dep"},
+        headers=hdr(fx.viewer_sub),
+    )
+    assert exact.json()["total"] == 0, "an exact filter is not a prefix filter"
+    fuzzy = client.get(
+        f"{wbase(fx)}/object-instances",
+        params={"type_id": site_type["id"], "q": "Dep"},
+        headers=hdr(fx.viewer_sub),
+    )
+    assert fuzzy.json()["total"] >= 1, "q still matches a prefix - that is its job"
+
+
+def test_the_primary_key_is_filterable_by_its_reserved_name(
+    client: TestClient, fx: Fixture, site_type: dict
+) -> None:
+    _map_and_sync(client, fx, site_type["id"], SITES_OK)
+    r = client.get(
+        f"{wbase(fx)}/object-instances",
+        params={"type_id": site_type["id"], "property": "$primary_key", "value": "A2"},
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["primary_key"] == "A2"
+
+
+def test_a_property_filter_needs_exactly_one_type(
+    client: TestClient, fx: Fixture, site_type: dict
+) -> None:
+    """A property api_name only means something within a type - "status" on an
+    Order and on a Shipment are unrelated columns sharing a name, and matching
+    across both would silently union two different questions."""
+    r = client.get(
+        f"{wbase(fx)}/object-instances",
+        params={"property": "name", "value": "Depot"}, headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 422
+    assert "exactly one type_id" in r.json()["detail"]
+
+    r = client.get(
+        f"{wbase(fx)}/object-instances",
+        params={"type_id": site_type["id"], "property": "name"},
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 422, "half a filter is not a filter"

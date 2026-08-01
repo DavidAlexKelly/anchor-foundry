@@ -521,6 +521,8 @@ class ExplorerPage(BaseModel):
 async def explore_instances(
     q: str | None = Query(default=None, max_length=200),
     type_id: list[UUID] | None = Query(default=None),
+    property: str | None = Query(default=None, max_length=100),
+    value: str | None = Query(default=None, max_length=500),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
@@ -531,17 +533,58 @@ async def explore_instances(
     Workspace-scoped like the ontology it searches: object types are
     workspace-wide, so an explorer that stopped at a project boundary would
     show a partial ontology and call it the whole one.
+
+    **`property`+`value` is an exact match, and is a different question from
+    `q`** (roadmap Canvas item 3, which needed it). `q` is substring/prefix
+    matching across every property at once - the right behaviour for a search
+    box, and the wrong one for a dropdown, where picking the region "North"
+    must not also return a customer called "Northwind". The store Protocol has
+    had `find_by_property` since roadmap Objects item 3; this exposes it.
+
+    It requires **exactly one** `type_id`, because a property api_name only
+    means anything within a type - "status" on an Order and "status" on a
+    Shipment are unrelated columns that happen to share a name, and matching
+    across both would silently union two different questions.
     """
+    if (property is None) != (value is None):
+        raise ValueError("filtering by a property needs both 'property' and 'value'")
+    if property is not None and (not type_id or len(type_id) != 1):
+        raise ValueError(
+            "filtering by a property needs exactly one type_id - a property "
+            "name only means something within a type"
+        )
+
     async with user_connection(access.auth.user_id) as conn:
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        rows, total = await instance_store.store_for(conn).search(
-            search_prefix=prefix,
-            workspace_id=access.workspace_id,
-            query=q,
-            object_type_ids=type_id,
-            limit=limit,
-            offset=offset,
-        )
+        store = instance_store.store_for(conn)
+        if property is not None:
+            assert type_id is not None
+            await ontology_service.get_type(conn, access.workspace_id, type_id[0])
+            rows, total = await store.find_by_property(
+                search_prefix=prefix,
+                object_type_id=type_id[0],
+                # The primary key is a field on the instance, not one of its
+                # properties - same reserved reference link joins use (db 0027).
+                property_name=(
+                    None if property == ontology_service.PRIMARY_KEY_REF else property
+                ),
+                value=value,
+                limit=limit,
+                offset=offset,
+            )
+            # find_by_property is the link-traversal read and returns rows
+            # without the type id (its caller always knew it); the explorer's
+            # response says what each row is, so fill it back in.
+            rows = [{**row, "object_type_id": str(type_id[0])} for row in rows]
+        else:
+            rows, total = await store.search(
+                search_prefix=prefix,
+                workspace_id=access.workspace_id,
+                query=q,
+                object_type_ids=type_id,
+                limit=limit,
+                offset=offset,
+            )
         # Type names come from Postgres whichever store held the instances -
         # the ontology definition never moved.
         types = {
