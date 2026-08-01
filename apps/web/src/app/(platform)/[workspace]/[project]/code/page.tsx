@@ -23,7 +23,7 @@ import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ApiError, code as codeApi } from "@/lib/api";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { CodeFile, CodeHistoryEntry } from "@/lib/types";
+import type { CodeFile, CodeHistoryEntry, CodeProposalDetail } from "@/lib/types";
 
 function DiffText({ text }: { text: string }) {
   if (!text.trim()) {
@@ -87,6 +87,144 @@ function HistoryList({
   );
 }
 
+/**
+ * One open proposal (ROADMAP Code item 4): what it would change, who has said
+ * what about it, and — if it cannot be applied — every reason why, in the
+ * API's own words. A disabled button with no explanation leaves somebody
+ * guessing which rule they tripped.
+ */
+function ProposalPanel({
+  workspaceId,
+  projectId,
+  proposalId,
+  canEdit,
+  onClose,
+  onChanged,
+}: {
+  workspaceId: string;
+  projectId: string;
+  proposalId: string;
+  canEdit: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [comment, setComment] = useState("");
+  const detail = useQuery({
+    queryKey: ["code-proposal", proposalId],
+    queryFn: () => codeApi.proposal(workspaceId, projectId, proposalId),
+  });
+  const act = useMutation({
+    mutationFn: async (action: "approve" | "request_changes" | "apply" | "withdraw") => {
+      if (action === "apply") return codeApi.applyProposal(workspaceId, projectId, proposalId);
+      if (action === "withdraw") return codeApi.withdrawProposal(workspaceId, projectId, proposalId);
+      return codeApi.review(workspaceId, projectId, proposalId, { verdict: action, comment });
+    },
+    onSuccess: async () => {
+      setComment("");
+      await detail.refetch();
+      onChanged();
+    },
+  });
+
+  const p: CodeProposalDetail | undefined = detail.data;
+  return (
+    <div className="code-detail">
+      <div className="canvas-settings-head">
+        <strong>{p?.summary ?? "Proposal"}</strong>
+        <button
+          type="button"
+          className="btn quiet"
+          style={{ padding: "3px 9px", fontSize: 12 }}
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+      {detail.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {p && (
+        <>
+          <p className="code-log-meta">
+            {p.state} · {p.created_by_email ?? "unknown"} ·{" "}
+            {new Date(p.created_at).toLocaleString()}
+          </p>
+          {p.description && <p>{p.description}</p>}
+          {p.files.map((f) => (
+            <div key={f.model_id}>
+              <p className="code-change-file">
+                {f.path}{" "}
+                <span className="code-tree-meta">
+                  proposed against v{f.base_version}
+                  {f.base_version !== f.current_version && ` · live is now v${f.current_version}`}
+                </span>
+              </p>
+              <DiffText text={f.diff} />
+            </div>
+          ))}
+          {p.reviews.length > 0 && (
+            <ul className="code-log">
+              {p.reviews.map((r) => (
+                <li key={r.id} className="code-log-meta">
+                  <span className={`chip${r.verdict === "approve" ? "" : " brass"}`}>
+                    {r.verdict === "approve" ? "approved" : "changes requested"}
+                  </span>{" "}
+                  {r.reviewer_email ?? "unknown"}
+                  {r.comment ? ` — ${r.comment}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {p.blockers.length > 0 && (
+            <ul className="code-blockers">
+              {p.blockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+          )}
+          {act.isError && (
+            <div className="form-error">
+              {act.error instanceof ApiError ? act.error.message : "That didn't work."}
+            </div>
+          )}
+          {canEdit && p.state === "open" && (
+            <>
+              <input
+                type="text"
+                value={comment}
+                placeholder="Comment (optional)"
+                aria-label="Review comment"
+                onChange={(e) => setComment(e.target.value)}
+              />
+              <div className="row-actions">
+                <button type="button" className="btn quiet" onClick={() => act.mutate("approve")}>
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  onClick={() => act.mutate("request_changes")}
+                >
+                  Request changes
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={p.blockers.length > 0 || act.isPending}
+                  onClick={() => act.mutate("apply")}
+                >
+                  Apply
+                </button>
+                <button type="button" className="btn quiet" onClick={() => act.mutate("withdraw")}>
+                  Withdraw
+                </button>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function CodePage() {
   const params = useParams<{ workspace: string; project: string }>();
   const { workspace } = useWorkspaceBySlug(params.workspace);
@@ -97,6 +235,7 @@ export default function CodePage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [summary, setSummary] = useState("");
   const [viewing, setViewing] = useState<CodeHistoryEntry | null>(null);
+  const [openProposal, setOpenProposal] = useState<string | null>(null);
 
   const ready = !!workspace && !!project;
   const tree = useQuery({
@@ -135,20 +274,55 @@ export default function CodePage() {
     enabled: ready && viewing?.kind === "version" && !!viewing?.model_id,
   });
 
+  const policy = useQuery({
+    queryKey: ["code-review-policy", project?.id],
+    queryFn: () => codeApi.reviewPolicy(workspace!.id, project!.id),
+    enabled: ready,
+  });
+  const proposals = useQuery({
+    queryKey: ["code-proposals", project?.id],
+    queryFn: () => codeApi.proposals(workspace!.id, project!.id, "open"),
+    enabled: ready,
+  });
+
   const canEdit = project ? project.effective_role !== "viewer" : false;
+  const isOwner = project?.effective_role === "owner";
+  const reviewRequired = policy.data?.require_code_review ?? false;
   const stagedCount = Object.keys(drafts).length;
+
+  const refreshAll = async () => {
+    setDrafts({});
+    setSummary("");
+    await queryClient.invalidateQueries({ queryKey: ["code-tree", project?.id] });
+    await queryClient.invalidateQueries({ queryKey: ["code-history", project?.id] });
+    await queryClient.invalidateQueries({ queryKey: ["code-proposals", project?.id] });
+    await queryClient.invalidateQueries({ queryKey: ["code-file"] });
+  };
+
   const save = useMutation({
     mutationFn: () =>
       codeApi.saveChangeSet(workspace!.id, project!.id, {
         summary,
         changes: Object.entries(drafts).map(([model_id, code]) => ({ model_id, code })),
       }),
+    onSuccess: refreshAll,
+  });
+  const propose = useMutation({
+    mutationFn: () =>
+      codeApi.propose(workspace!.id, project!.id, {
+        summary,
+        changes: Object.entries(drafts).map(([model_id, code]) => ({ model_id, code })),
+      }),
+    onSuccess: async (created) => {
+      await refreshAll();
+      setOpenProposal(created.id);
+    },
+  });
+  const setPolicy = useMutation({
+    mutationFn: (required: boolean) =>
+      codeApi.setReviewPolicy(workspace!.id, project!.id, required),
     onSuccess: async () => {
-      setDrafts({});
-      setSummary("");
-      await queryClient.invalidateQueries({ queryKey: ["code-tree", project?.id] });
-      await queryClient.invalidateQueries({ queryKey: ["code-history", project?.id] });
-      await queryClient.invalidateQueries({ queryKey: ["code-file"] });
+      await queryClient.invalidateQueries({ queryKey: ["code-review-policy", project?.id] });
     },
   });
 
@@ -164,6 +338,23 @@ export default function CodePage() {
             Every transform in this project, with the history Models already keeps.
             Editing here writes the same versions a run resolves against.
           </p>
+        </div>
+        <div className="row-actions">
+          {/* The gate is a property of the project, so it is stated wherever
+              code is edited rather than hidden in a settings page. */}
+          <span className={`chip${reviewRequired ? " brass" : ""}`}>
+            {reviewRequired ? "review required" : "direct edits allowed"}
+          </span>
+          {isOwner && (
+            <button
+              type="button"
+              className="btn quiet"
+              disabled={setPolicy.isPending}
+              onClick={() => setPolicy.mutate(!reviewRequired)}
+            >
+              {reviewRequired ? "Allow direct edits" : "Require review"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -230,9 +421,9 @@ export default function CodePage() {
                   {stagedCount} file{stagedCount === 1 ? "" : "s"} staged
                 </p>
                 <p className="canvas-widget-empty">
-                  Saving writes one version per changed file, grouped under this message —
-                  files whose content is unchanged are skipped, and if none of them changed
-                  the whole save is refused.
+                  {reviewRequired
+                    ? "This project requires review, so these files become a proposal: nothing takes effect until somebody else approves it and it is applied."
+                    : "Saving writes one version per changed file, grouped under this message — files whose content is unchanged are skipped, and if none of them changed the whole save is refused."}
                 </p>
                 <input
                   type="text"
@@ -241,22 +432,43 @@ export default function CodePage() {
                   aria-label="Change summary"
                   onChange={(e) => setSummary(e.target.value)}
                 />
-                {save.isError && (
+                {(save.isError || propose.isError) && (
                   <div className="form-error">
-                    {save.error instanceof ApiError
-                      ? save.error.message
-                      : "Couldn't save this change set."}
+                    {(save.error ?? propose.error) instanceof ApiError
+                      ? (save.error ?? propose.error as ApiError).message
+                      : "Couldn't save this change."}
                   </div>
                 )}
                 <div className="row-actions">
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={!summary.trim() || save.isPending}
-                    onClick={() => save.mutate()}
-                  >
-                    {save.isPending ? "Saving…" : "Save change set"}
-                  </button>
+                  {reviewRequired ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={!summary.trim() || propose.isPending}
+                      onClick={() => propose.mutate()}
+                    >
+                      {propose.isPending ? "Opening…" : "Open proposal"}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={!summary.trim() || save.isPending}
+                        onClick={() => save.mutate()}
+                      >
+                        {save.isPending ? "Saving…" : "Save change set"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn quiet"
+                        disabled={!summary.trim() || propose.isPending}
+                        onClick={() => propose.mutate()}
+                      >
+                        Propose instead
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="btn quiet"
@@ -273,6 +485,43 @@ export default function CodePage() {
           </section>
 
           <aside className="code-side">
+            {proposals.data && proposals.data.length > 0 && (
+              <>
+                <p className="field-label">Open proposals</p>
+                <ul className="code-log">
+                  {proposals.data.map((p) => (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        className="code-log-entry"
+                        onClick={() => {
+                          setViewing(null);
+                          setOpenProposal(p.id);
+                        }}
+                      >
+                        <span className="code-log-summary">{p.summary}</span>
+                        <span className="code-log-meta">
+                          <span className="chip brass">
+                            {p.file_count} file{p.file_count === 1 ? "" : "s"}
+                          </span>
+                          {p.created_by_email ?? "unknown"}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {openProposal && workspace && project && (
+              <ProposalPanel
+                workspaceId={workspace.id}
+                projectId={project.id}
+                proposalId={openProposal}
+                canEdit={canEdit}
+                onClose={() => setOpenProposal(null)}
+                onChanged={refreshAll}
+              />
+            )}
             <p className="field-label">History</p>
             {history.data && <HistoryList entries={history.data} onOpen={setViewing} />}
             {viewing && (

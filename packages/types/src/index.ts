@@ -867,3 +867,52 @@ export interface CodeChangeSet {
     previous_version: number | null;
   }[];
 }
+
+// ---- code review (ROADMAP Code item 4) ---------------------------------------
+// A proposal is a *request* for code to become a definition. Its files live on
+// the proposal rather than in model_versions, which is what a run resolves
+// against and must never hold code nobody approved.
+
+export interface CodeProposalFile {
+  model_id: string;
+  model_name: string;
+  language: "sql" | "python";
+  path: string | null;
+  code: string;
+  /** The version this was written against; applying re-checks it. */
+  base_version: number;
+  current_version: number;
+  diff: string;
+}
+
+export interface CodeReview {
+  id: string;
+  reviewer_id: string | null;
+  reviewer_email: string | null;
+  verdict: "approve" | "request_changes";
+  comment: string;
+  created_at: string;
+}
+
+export interface CodeProposal {
+  id: string;
+  project_id: string;
+  summary: string;
+  description: string;
+  state: "open" | "applied" | "withdrawn";
+  change_set_id: string | null;
+  created_by: string | null;
+  created_by_email: string | null;
+  created_at: string;
+  files_updated_at: string;
+  closed_by?: string | null;
+  closed_at?: string | null;
+  file_count: number;
+}
+
+export interface CodeProposalDetail extends CodeProposal {
+  files: CodeProposalFile[];
+  reviews: CodeReview[];
+  /** Every reason this cannot be applied, in the words the API used. */
+  blockers: string[];
+}

@@ -704,6 +704,52 @@ export const code = {
     request<import("./types").CodeChangeSet>(
       `/workspaces/${wid}/projects/${pid}/code/change-sets/${id}`,
     ),
+  reviewPolicy: (wid: string, pid: string) =>
+    request<{ require_code_review: boolean }>(
+      `/workspaces/${wid}/projects/${pid}/code/review-policy`,
+    ),
+  setReviewPolicy: (wid: string, pid: string, required: boolean) =>
+    request<{ require_code_review: boolean }>(
+      `/workspaces/${wid}/projects/${pid}/code/review-policy`,
+      { method: "PUT", body: JSON.stringify({ require_code_review: required }) },
+    ),
+  proposals: (wid: string, pid: string, state?: string) =>
+    request<import("./types").CodeProposal[]>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals` + (state ? `?state=${state}` : ""),
+    ),
+  proposal: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}`,
+    ),
+  propose: (
+    wid: string,
+    pid: string,
+    input: { summary: string; description?: string; changes: { model_id: string; code: string }[] },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  review: (
+    wid: string,
+    pid: string,
+    id: string,
+    input: { verdict: "approve" | "request_changes"; comment?: string },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/reviews`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  applyProposal: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/apply`,
+      { method: "POST" },
+    ),
+  withdrawProposal: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/withdraw`,
+      { method: "POST" },
+    ),
   saveChangeSet: (
     wid: string,
     pid: string,

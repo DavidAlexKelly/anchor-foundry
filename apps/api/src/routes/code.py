@@ -205,3 +205,255 @@ async def create_change_set(
             user_agent=request.headers.get("user-agent"),
         )
     return ChangeSetOut(**row)
+
+
+# ---- review-gated promotion (ROADMAP Code item 4) ---------------------------
+class ProposalFileOut(BaseModel):
+    model_id: UUID
+    model_name: str
+    language: str
+    path: str | None
+    code: str
+    base_version: int
+    current_version: int
+    diff: str
+
+
+class ReviewOut(BaseModel):
+    id: UUID
+    reviewer_id: UUID | None
+    reviewer_email: str | None
+    verdict: str
+    comment: str
+    created_at: datetime
+
+
+class ProposalSummary(BaseModel):
+    id: UUID
+    project_id: UUID
+    summary: str
+    description: str
+    state: str
+    change_set_id: UUID | None
+    created_by: UUID | None
+    created_by_email: str | None
+    created_at: datetime
+    files_updated_at: datetime
+    closed_by: UUID | None = None
+    closed_at: datetime | None = None
+    file_count: int = 0
+
+
+class ProposalDetail(ProposalSummary):
+    files: list[ProposalFileOut]
+    reviews: list[ReviewOut]
+    # Every reason this cannot be applied, so the UI can say which rule was
+    # tripped rather than showing a disabled button with no explanation.
+    blockers: list[str]
+
+
+class ProposalIn(BaseModel):
+    summary: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    changes: list[FileChange] = Field(min_length=1)
+
+
+class ProposalPatch(BaseModel):
+    summary: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    changes: list[FileChange] | None = None
+
+
+class ReviewIn(BaseModel):
+    verdict: str = Field(pattern="^(approve|request_changes)$")
+    comment: str = Field(default="", max_length=4000)
+
+
+class ReviewPolicyIn(BaseModel):
+    require_code_review: bool
+
+
+def _detail(row: dict[str, Any]) -> ProposalDetail:
+    return ProposalDetail(**{**row, "file_count": len(row.get("files", []))})
+
+
+@router.get("/proposals", response_model=list[ProposalSummary])
+async def list_proposals(
+    state: str | None = Query(default=None, pattern="^(open|applied|withdrawn)$"),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[ProposalSummary]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await code_service.list_proposals(conn, access.project_id, state)
+    return [ProposalSummary(**r) for r in rows]
+
+
+@router.get("/proposals/{proposal_id}", response_model=ProposalDetail)
+async def get_proposal(
+    proposal_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ProposalDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.get_proposal(conn, access.project_id, proposal_id)
+    return _detail(row)
+
+
+@router.post("/proposals", response_model=ProposalDetail, status_code=201)
+async def create_proposal(
+    body: ProposalIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ProposalDetail:
+    """Propose a change rather than making it. The files live on the proposal,
+    not in `model_versions`, because that table is what a run resolves against
+    and must never hold code nobody approved."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.create_proposal(
+            conn, access.project_id,
+            summary=body.summary, description=body.description,
+            changes=[c.model_dump() for c in body.changes],
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="code_proposal.create",
+            resource_type="code_proposal",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"summary": body.summary, "files": len(body.changes)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _detail(row)
+
+
+@router.patch("/proposals/{proposal_id}", response_model=ProposalDetail)
+async def update_proposal(
+    proposal_id: UUID,
+    body: ProposalPatch,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ProposalDetail:
+    """Author-only, and changing the files invalidates the approvals it
+    already had - otherwise approve-then-swap is a way past a reviewer."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.update_proposal(
+            conn, access.project_id, proposal_id,
+            summary=body.summary, description=body.description,
+            changes=None if body.changes is None else [c.model_dump() for c in body.changes],
+            actor_id=access.auth.user_id,
+        )
+    return _detail(row)
+
+
+@router.post("/proposals/{proposal_id}/reviews", response_model=ProposalDetail, status_code=201)
+async def review_proposal(
+    proposal_id: UUID,
+    body: ReviewIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ProposalDetail:
+    """Editor-level, because approving a change is as consequential as making
+    one - a viewer who could approve would be able to authorise an edit they
+    are not allowed to write."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.review_proposal(
+            conn, access.project_id, proposal_id,
+            verdict=body.verdict, comment=body.comment,
+            reviewer_id=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="code_proposal.review",
+            resource_type="code_proposal",
+            resource_id=proposal_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"verdict": body.verdict},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _detail(row)
+
+
+@router.post("/proposals/{proposal_id}/apply", response_model=ProposalDetail)
+async def apply_proposal(
+    proposal_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ProposalDetail:
+    """Turn an approved proposal into definitions, as one change set. The
+    staleness check happens here rather than at review time: the gap between
+    the two is exactly where a lost update lives."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.apply_proposal(
+            conn, access.project_id, proposal_id, actor_id=access.auth.user_id
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="code_proposal.apply",
+            resource_type="code_proposal",
+            resource_id=proposal_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"change_set": str(row["change_set_id"])},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _detail(row)
+
+
+@router.post("/proposals/{proposal_id}/withdraw", response_model=ProposalDetail)
+async def withdraw_proposal(
+    proposal_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ProposalDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.withdraw_proposal(
+            conn, access.project_id, proposal_id, actor_id=access.auth.user_id
+        )
+    return _detail(row)
+
+
+@router.get("/review-policy", response_model=ReviewPolicyIn)
+async def get_review_policy(
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ReviewPolicyIn:
+    """Readable by anyone who can read the code: whether an edit needs review
+    is part of understanding what you are looking at."""
+    async with user_connection(access.auth.user_id) as conn:
+        required = await code_service.requires_review(conn, access.project_id)
+    return ReviewPolicyIn(require_code_review=required)
+
+
+@router.put("/review-policy", response_model=ReviewPolicyIn)
+async def set_review_policy(
+    body: ReviewPolicyIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("owner")),
+) -> ReviewPolicyIn:
+    """Owner-level: deciding whether changes need review is a governance
+    decision about the project, not an editing action within it."""
+    async with user_connection(access.auth.user_id) as conn:
+        required = await code_service.set_require_review(
+            conn, access.project_id, required=body.require_code_review
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="code_review_policy.update",
+            resource_type="project",
+            resource_id=access.project_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"require_code_review": required},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ReviewPolicyIn(require_code_review=required)

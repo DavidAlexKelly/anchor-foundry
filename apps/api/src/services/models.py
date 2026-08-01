@@ -420,9 +420,29 @@ async def update(
     # a single-model save was not part of a change set, rather than part of
     # an unknown one.
     change_set_id: UUID | None = None,
+    # Set only by the proposal-apply path (ROADMAP Code item 4). The review
+    # gate lives here rather than in a route because this is the function that
+    # makes a definition live - a gate on one screen is a gate on one screen,
+    # and the Models editor and the Code surface are two of them.
+    reviewed: bool = False,
 ) -> dict[str, Any]:
     before = await get(conn, project_id, model_id)
     before_inputs = await list_inputs(conn, model_id)
+    # Only a change to what the model *computes* is gated: trigger mode,
+    # schedule and health policy are how and when it runs, and 0024 already
+    # draws that line for versioning. Gating them would make a project that
+    # requires review unable to pause a job.
+    if not reviewed and (code is not None or inputs is not None):
+        gate = await fetch_one(
+            conn,
+            "SELECT require_code_review FROM projects WHERE id = :pid",
+            {"pid": str(project_id)},
+        )
+        if gate is not None and bool(gate["require_code_review"]):
+            raise ValueError(
+                "this project requires review: open a proposal instead of "
+                "editing a transform directly"
+            )
     if trigger_mode == "cron":
         if not cron_schedule:
             raise ValueError("cron_schedule is required when trigger_mode is 'cron'")
