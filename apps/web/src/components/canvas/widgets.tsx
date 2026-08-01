@@ -10,9 +10,17 @@
 import { useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { actions as actionApi, datasets as dsApi, objects as objApi } from "@/lib/api";
+import { actions as actionApi, ApiError, datasets as dsApi, objects as objApi } from "@/lib/api";
 import { useCanvasEnv, useCanvasParameter, useCanvasParameters } from "./context";
-import { distinctValuesQuery, filteredQuery, type FilterOperator } from "./filter-sql";
+import {
+  chartQuery,
+  distinctValuesQuery,
+  filteredQuery,
+  type Aggregate,
+  type ChartKind,
+  type FilterOperator,
+} from "./filter-sql";
+import { Chart, toPoints } from "./charts";
 
 function connectDragDrop(node: HTMLElement | null, connect: (el: HTMLElement) => HTMLElement, drag: (el: HTMLElement) => HTMLElement) {
   if (node) connect(drag(node));
@@ -461,6 +469,230 @@ CanvasDatasetTable.craft = {
   related: { settings: DatasetTableSettings },
 };
 
+// ---- Chart (ROADMAP Canvas item 2) ------------------------------------------
+/**
+ * The "BI" half of "app/BI builder". Bound to a dataset, aggregated by the
+ * server, and reactive to a filter parameter through the same predicate the
+ * dataset table uses - so a chart and a table pointed at one parameter always
+ * agree about which rows are in scope.
+ */
+export function CanvasChart({
+  datasetId = null,
+  kind = "bar",
+  dimension = null,
+  measure = null,
+  aggregate = "count",
+  title = "",
+  filterColumn = null,
+  filterParameter = null,
+  filterOperator = "equals",
+}: {
+  datasetId?: string | null;
+  kind?: ChartKind;
+  dimension?: string | null;
+  measure?: string | null;
+  aggregate?: Aggregate;
+  title?: string;
+  filterColumn?: string | null;
+  filterParameter?: string | null;
+  filterOperator?: FilterOperator;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, projectId } = useCanvasEnv();
+  const filterValue = useCanvasParameter(filterParameter);
+  const sql = chartQuery({
+    kind, dimension, measure, aggregate,
+    filterColumn, filterOperator, filterValue,
+  });
+
+  const result = useQuery({
+    queryKey: ["canvas-chart", datasetId, sql],
+    queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, sql!),
+    enabled: !!datasetId && sql !== null,
+  });
+
+  const needs =
+    !datasetId ? "pick a dataset in Settings"
+    : !dimension ? (kind === "scatter" ? "pick an X column" : "pick a category column")
+    : (kind === "scatter" || aggregate !== "count") && !measure
+      ? (kind === "scatter" ? "pick a Y column" : `pick a column to ${aggregate}`)
+      : null;
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
+      {needs && <p className="canvas-widget-empty">Chart - {needs}</p>}
+      {!needs && result.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {result.isError && (
+        // The engine's own message, not a generic failure: "Conversion Error:
+        // Could not convert string 'north' to DOUBLE" tells a builder exactly
+        // which column they picked by mistake.
+        <p className="canvas-widget-empty">
+          {result.error instanceof ApiError ? result.error.message : "Couldn't run this chart."}
+        </p>
+      )}
+      {result.data && <Chart kind={kind} points={toPoints(result.data.rows)} />}
+      {result.data && filterParameter && filterValue ? (
+        <p className="canvas-widget-empty">
+          Filtered by {filterParameter}: {String(filterValue)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ChartSettings() {
+  const { workspaceId, projectId } = useCanvasEnv();
+  const {
+    datasetId, kind, dimension, measure, aggregate, title,
+    filterColumn, filterParameter, filterOperator,
+    actions: { setProp },
+  } = useNode((node) => ({
+    datasetId: node.data.props.datasetId,
+    kind: node.data.props.kind,
+    dimension: node.data.props.dimension,
+    measure: node.data.props.measure,
+    aggregate: node.data.props.aggregate,
+    title: node.data.props.title,
+    filterColumn: node.data.props.filterColumn,
+    filterParameter: node.data.props.filterParameter,
+    filterOperator: node.data.props.filterOperator,
+  }));
+  const list = useQuery({
+    queryKey: ["datasets", projectId],
+    queryFn: () => dsApi.list(workspaceId, projectId),
+  });
+  const dataset = list.data?.find((d) => d.id === datasetId);
+  const columns = dataset?.table_schema ?? [];
+  const scatter = kind === "scatter";
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title || ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Chart type</span>
+        <select value={kind || "bar"} onChange={(e) => setProp((p: { kind: string }) => (p.kind = e.target.value))}>
+          <option value="bar">Bar</option>
+          <option value="line">Line</option>
+          <option value="pie">Pie</option>
+          <option value="scatter">Scatter</option>
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Dataset</span>
+        <select
+          value={datasetId || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.datasetId = e.target.value || null;
+              // Column names mean nothing against a different dataset.
+              p.dimension = null;
+              p.measure = null;
+              p.filterColumn = null;
+            })
+          }
+        >
+          <option value="">Choose…</option>
+          {list.data?.map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">{scatter ? "X column" : "Category"}</span>
+        <select
+          value={dimension || ""}
+          disabled={!dataset}
+          onChange={(e) => setProp((p: { dimension: string | null }) => (p.dimension = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {columns.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+        </select>
+      </label>
+      {!scatter && (
+        <label className="field">
+          <span className="field-label">Measure</span>
+          <select
+            value={aggregate || "count"}
+            onChange={(e) => setProp((p: { aggregate: string }) => (p.aggregate = e.target.value))}
+          >
+            <option value="count">Count of rows</option>
+            <option value="sum">Sum of…</option>
+            <option value="avg">Average of…</option>
+            <option value="min">Minimum of…</option>
+            <option value="max">Maximum of…</option>
+          </select>
+        </label>
+      )}
+      {(scatter || aggregate !== "count") && (
+        <label className="field">
+          <span className="field-label">{scatter ? "Y column" : "Of column"}</span>
+          <select
+            value={measure || ""}
+            disabled={!dataset}
+            onChange={(e) => setProp((p: { measure: string | null }) => (p.measure = e.target.value || null))}
+          >
+            <option value="">Choose…</option>
+            {columns.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+          </select>
+        </label>
+      )}
+      <label className="field">
+        <span className="field-label">Filter column</span>
+        <select
+          value={filterColumn || ""}
+          disabled={!dataset}
+          onChange={(e) => setProp((p: { filterColumn: string | null }) => (p.filterColumn = e.target.value || null))}
+        >
+          <option value="">No filter</option>
+          {columns.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Filter parameter</span>
+        <input
+          type="text"
+          value={filterParameter || ""}
+          placeholder="region"
+          onChange={(e) =>
+            setProp((p: { filterParameter: string | null }) => (p.filterParameter = e.target.value || null))
+          }
+        />
+        <span className="field-hint">The name set on a Filter widget</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Match</span>
+        <select
+          value={filterOperator || "equals"}
+          onChange={(e) => setProp((p: { filterOperator: string }) => (p.filterOperator = e.target.value))}
+        >
+          <option value="equals">Exactly equals</option>
+          <option value="contains">Contains</option>
+        </select>
+      </label>
+    </>
+  );
+}
+
+CanvasChart.craft = {
+  displayName: "Chart",
+  props: {
+    datasetId: null, kind: "bar", dimension: null, measure: null,
+    aggregate: "count", title: "", filterColumn: null,
+    filterParameter: null, filterOperator: "equals",
+  },
+  related: { settings: ChartSettings },
+};
+
 // ---- Action form (write-back) --------------------------------------------------
 export function CanvasActionForm({ actionTypeId = null }: { actionTypeId?: string | null }) {
   const {
@@ -577,6 +809,7 @@ export const CANVAS_RESOLVER = {
   CanvasText,
   CanvasParameterControl,
   CanvasDatasetTable,
+  CanvasChart,
   CanvasActionForm,
 };
 
@@ -585,6 +818,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
+  { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
 ];
 

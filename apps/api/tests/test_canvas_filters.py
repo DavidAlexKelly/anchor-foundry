@@ -32,13 +32,14 @@ from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import datasets as ds_routes  # noqa: E402
 from src.services.storage import LocalStorageGateway  # noqa: E402
 
-# An apostrophe in a value, a numeric column, and two rows sharing a region so
-# a filter has something to actually narrow.
+# An apostrophe in a value, a numeric column, and two rows per region so a
+# filter has something to narrow and an aggregation has something to add up.
 ORDERS = (
     b"order_id,region,customer,total\n"
     b"1,North,Acme,100\n"
     b"2,North,\"O'Brien Ltd\",250\n"
     b"3,South,Globex,75\n"
+    b"4,South,Initech,410\n"
 )
 
 
@@ -154,3 +155,78 @@ def test_filtering_is_a_viewer_level_read(
         headers=hdr(fx.outsider_sub), json={"sql": "SELECT * FROM dataset"},
     )
     assert r.status_code == 404
+
+
+# ---- the aggregation shapes chart-sql.ts produces (Canvas item 2) -----------
+def test_a_bar_chart_aggregates_over_the_whole_dataset(
+    client: TestClient, fx: Fixture, orders: str
+) -> None:
+    """Aggregation is server-side for a sharper version of the reason
+    filtering is: a chart that sums the preview page and puts an axis on it
+    does not show less data, it shows a *wrong number*."""
+    result = run(client, fx, orders,
+                 'SELECT "region" AS label, count(*) AS value FROM dataset '
+                 'GROUP BY 1 ORDER BY 2 DESC LIMIT 25')
+    assert dict(result["rows"]) == {"North": 2, "South": 2}
+
+
+def test_a_sum_measure_casts_so_a_numeric_column_adds_up(
+    client: TestClient, fx: Fixture, orders: str
+) -> None:
+    result = run(client, fx, orders,
+                 'SELECT "region" AS label, sum(CAST("total" AS DOUBLE)) AS value '
+                 'FROM dataset GROUP BY 1 ORDER BY 2 DESC LIMIT 25')
+    assert dict(result["rows"]) == {"South": 485.0, "North": 350.0}
+
+
+def test_a_non_numeric_measure_fails_visibly_rather_than_charting_zero(
+    client: TestClient, fx: Fixture, orders: str
+) -> None:
+    """CAST, not TRY_CAST. A measure column that is not numeric should fail
+    with the engine's own message - which names the column and the value -
+    rather than summing to null and drawing an empty chart that reads as
+    "no data"."""
+    r = client.post(
+        f"{pbase(fx)}/datasets/{orders}/query", headers=hdr(fx.viewer_sub),
+        json={"sql": 'SELECT "region" AS label, sum(CAST("customer" AS DOUBLE)) AS value '
+                     'FROM dataset GROUP BY 1'},
+    )
+    assert r.status_code == 422
+    assert "DOUBLE" in r.json()["detail"] or "convert" in r.json()["detail"].lower()
+
+
+def test_a_chart_and_a_table_filter_identically(
+    client: TestClient, fx: Fixture, orders: str
+) -> None:
+    """Both build their WHERE from the same `filterPredicate`, so a chart and
+    a table pointed at one parameter cannot disagree about which rows are in
+    scope - which would be a chart that contradicts the table beside it."""
+    predicate = 'CAST("region" AS VARCHAR) = \'North\''
+    rows = run(client, fx, orders, f"SELECT * FROM dataset WHERE {predicate} LIMIT 200")
+    chart = run(client, fx, orders,
+                f'SELECT "region" AS label, count(*) AS value FROM dataset '
+                f"WHERE {predicate} GROUP BY 1 ORDER BY 2 DESC LIMIT 25")
+    assert len(rows["rows"]) == 2
+    assert dict(chart["rows"]) == {"North": 2}
+
+
+def test_a_line_chart_sorts_by_its_dimension_not_by_value(
+    client: TestClient, fx: Fixture, orders: str
+) -> None:
+    """A line is a series: sorting it by magnitude would draw a shape that
+    means nothing."""
+    result = run(client, fx, orders,
+                 'SELECT "customer" AS label, sum(CAST("total" AS DOUBLE)) AS value '
+                 'FROM dataset GROUP BY 1 ORDER BY 1 ASC LIMIT 200')
+    assert [row[0] for row in result["rows"]] == sorted(row[0] for row in result["rows"])
+
+
+def test_a_scatter_query_keeps_individual_points(
+    client: TestClient, fx: Fixture, orders: str
+) -> None:
+    """No GROUP BY: grouping a scatter plot destroys the thing being looked
+    at. Null pairs are dropped, since a point needs both coordinates."""
+    result = run(client, fx, orders,
+                 'SELECT "order_id" AS label, "total" AS value FROM dataset '
+                 'WHERE "order_id" IS NOT NULL AND "total" IS NOT NULL LIMIT 500')
+    assert len(result["rows"]) == 4

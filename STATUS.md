@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1 — see §21–§40). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–2 — see §21–§41). Test counts below are from the last full regression run.
 
 ---
 
@@ -670,10 +670,34 @@ There is no exception anywhere on any of those paths. A logged warning would be 
 
 ---
 
+### 41. Charts — closing the "BI" half of "app/BI builder" (this session)
+
+`ROADMAP.md` Canvas item 2, which that document calls the single most-requested-sounding gap in it. Bar, line, pie and scatter, bound to a dataset, reactive to §40's filter parameters.
+
+**Aggregation is server-side, and neither option the item offered was taken.** It suggested "aggregated client-side for small results or via a new lightweight aggregation endpoint for larger ones". There is no reliable way for a widget to know a result is small *before* fetching it, so the first option is a guess; and the second is unnecessary, because `GROUP BY` through the existing `/datasets/{id}/query` endpoint already **is** a lightweight aggregation endpoint — and going through it inherits the sandboxing it already applies (`enable_external_access=false`, a memory limit, a row cap) rather than re-deriving them. The deeper reason is the sharper version of §40's: a chart that sums the preview page and puts an axis on it does not show less data, it shows a **wrong number**, and a wrong number with an axis on it looks authoritative.
+
+**No charting library.** The same call §28 made for the pipeline graph — server-side layering so the web app needed no graph library — applies here: four shapes at a few dozen lines of SVG each, against a dependency with bundle size, its own theming to fight and a version to keep current. `charts.tsx` names where the trade flips rather than leaving it implicit: tooltips, zoom, brushing and stacked series are the point to reach for a library instead of growing a bad one.
+
+**The details that are judgement rather than drawing:**
+
+  * **Bar and pie sort by value and cap the categories; line sorts by its dimension.** A line chart is a series — sorting it by magnitude draws a shape that means nothing. A bar chart with 400 categories is a smear, so the cap is part of the chart's definition rather than something the browser discovers.
+  * **Scatter does not aggregate at all.** Grouping a scatter plot destroys the thing being looked at. Its x axis is numeric when the dimension is, and ordinal otherwise, and it *says* which — a scatter of two categorical columns is a grid of dots, and drawing it silently would be pretending it means something.
+  * **A non-numeric measure fails with DuckDB's own message** ("Conversion Error: Could not convert string 'Acme' to DOUBLE"), which names the column and the value. `CAST`, not `TRY_CAST`: the alternative sums to null and draws an empty chart that reads as "no data" rather than "you picked the wrong column".
+  * **The zero baseline is always included.** A bar chart whose baseline is not zero exaggerates differences, which is the single commonest way a chart lies.
+  * **A non-numeric value is dropped, not charted as zero.** A zero bar is a claim about the data; "this row could not be measured" is not that claim.
+
+**Charts and tables share one predicate.** `filterPredicate` was factored out of §40's `filteredQuery` so both build their `WHERE` from the same place — a chart that contradicted the table beside it, because the two disagreed about what "filtered" meant, is exactly the bug a dashboard cannot afford. Browser verification asserts both narrow together, and also that a chart with **no** parameter bound stays unfiltered, which is the point of naming parameters at all.
+
+**Testing.** `test_canvas_filters.py` grew to 12: the aggregation shapes, a sum over a numeric column, the non-numeric measure failing visibly, chart and table filtering identically, a line sorting by dimension, and scatter keeping individual points. Verified in a browser: bar and pie rendering as real SVG with the server-side sums in their tooltips (`South: 485`, `North: 350`), the bad-measure chart showing the engine's conversion error, selecting a filter value narrowing both the chart and the table, and the unbound pie staying put.
+
+**Current totals: API 341/341** (335 + 6), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
 ## What's not started
 
 - **Code** (repo browser) — not started
-- **Canvas widget palette is still small** (see §15, §40): Container, Text, Filter, Dataset table, Action form. No chart/visualization widget yet (spec's "BI" half of "app/BI builder"), no cross-widget interactivity (e.g. a table row selection filtering another widget), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all straightforward additions to the same resolver/widget pattern, just not built yet
+- **Canvas widget palette** (see §15, §40, §41): Container, Text, Filter, Dataset table, Chart, Action form. No object-bound browser widget yet (spec's "BI" half of "app/BI builder"), no cross-widget interactivity (e.g. a table row selection filtering another widget), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all straightforward additions to the same resolver/widget pattern, just not built yet
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
 - **Object instance sync gained scheduling, still full-snapshot by design** — §16 added a cron schedule and a 2M-row worker cap, but §14's cursor-based incremental mode is deliberately connection-sync-only: an object-type-source's input dataset is a wholesale-replaced snapshot with no cursor to hold, so full-snapshot mark-and-sweep is the correct approach here, not a gap (see §16 for the reasoning)
 - **The OpenSearch instance store has never run against a real cluster** — §35 wired it in and tests it over real HTTP against a fixture implementing the REST subset it uses, which proves its requests and parsing but not that OpenSearch agrees (no analyzers, no mapping enforcement, no refresh semantics in a fixture). A deployment reaching for it is the last verification step; until one has, `OPENSEARCH_ENDPOINT` unset leaves every environment on the Postgres store, which is fully tested. **§37 raised what this gap can cost**: link traversal depends on the index's *mapping* — a `keyword` subfield must exist on string properties for an equality query to match — and mapping is precisely what a fixture with no analyzers cannot check; the fixture treats `properties.x` and `properties.x.keyword` as the same value and says so in its own docstring. The mapping is declared explicitly in `_ensure_index` rather than inherited from dynamic defaults, so the guarantee is ours rather than the cluster default's, but verifying it is still the first real cluster's job — and "links traverse to nothing on OpenSearch while working on Postgres" is the shape that failure would take

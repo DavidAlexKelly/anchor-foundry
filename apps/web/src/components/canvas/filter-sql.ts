@@ -51,18 +51,31 @@ export function filteredQuery(
   value: unknown,
   limit = 200,
 ): string | null {
+  const predicate = filterPredicate(column, operator, value);
+  if (!predicate) return null;
+  return `SELECT * FROM dataset WHERE ${predicate} LIMIT ${limit}`;
+}
+
+/** The WHERE body a filter parameter produces, with no SELECT around it —
+ * shared by the table filter and the charts so the two cannot drift on what
+ * "filtered" means. Null when there is nothing to filter by, which callers
+ * read as "no filter" rather than "match nothing".
+ *
+ * The CAST is why a filter works against a numeric or date column at all: the
+ * value arrives from a dropdown or a text box as text either way, and
+ * comparing text to a BIGINT is an error rather than a non-match. */
+export function filterPredicate(
+  column: string | null | undefined,
+  operator: FilterOperator,
+  value: unknown,
+): string | null {
   if (!column) return null;
   if (value === null || value === undefined || value === "") return null;
-  const text = String(value);
   const col = sqlIdentifier(column);
-  // CAST so a filter works against a numeric or date column too: the value
-  // arrives from a dropdown or a text box as text either way, and comparing
-  // text to a BIGINT is an error rather than a non-match.
-  const predicate =
-    operator === "contains"
-      ? `CAST(${col} AS VARCHAR) ILIKE ${sqlLiteral(`%${text}%`)}`
-      : `CAST(${col} AS VARCHAR) = ${sqlLiteral(text)}`;
-  return `SELECT * FROM dataset WHERE ${predicate} LIMIT ${limit}`;
+  const text = String(value);
+  return operator === "contains"
+    ? `CAST(${col} AS VARCHAR) ILIKE ${sqlLiteral(`%${text}%`)}`
+    : `CAST(${col} AS VARCHAR) = ${sqlLiteral(text)}`;
 }
 
 /** Distinct values of a column, for a dropdown's options. Capped: a dropdown
@@ -72,5 +85,93 @@ export function distinctValuesQuery(column: string, limit = 200): string {
   return (
     `SELECT DISTINCT ${sqlIdentifier(column)} AS value FROM dataset ` +
     `WHERE ${sqlIdentifier(column)} IS NOT NULL ORDER BY 1 LIMIT ${limit}`
+  );
+}
+
+// ---- aggregation (ROADMAP Canvas item 2) ------------------------------------
+
+export type ChartKind = "bar" | "line" | "pie" | "scatter";
+export type Aggregate = "count" | "sum" | "avg" | "min" | "max";
+
+/** Per-kind caps. A bar chart with 400 categories is a smear, a line with
+ * 50,000 points is a solid block, and both are slow — so the cap is part of
+ * the chart's definition rather than something the browser discovers. */
+const LIMITS: Record<ChartKind, number> = {
+  bar: 25,
+  pie: 12,
+  line: 200,
+  scatter: 500,
+};
+
+function aggregateExpression(aggregate: Aggregate, measure: string | null | undefined): string | null {
+  if (aggregate === "count") return "count(*)";
+  if (!measure) return null;
+  // CAST rather than TRY_CAST: a measure column that is not numeric should
+  // fail visibly with DuckDB's own message, not silently sum to null and
+  // draw an empty chart that looks like "no data".
+  return `${aggregate}(CAST(${sqlIdentifier(measure)} AS DOUBLE))`;
+}
+
+/**
+ * The query behind a chart (ROADMAP Canvas item 2).
+ *
+ * **Aggregation is server-side**, for a sharper version of the reason
+ * filtering is: a chart that sums the preview page and labels it a total does
+ * not merely show less data, it shows a *wrong number*, and a wrong number
+ * with an axis on it looks authoritative. The roadmap offered "aggregated
+ * client-side for small results"; there is no reliable way for the widget to
+ * know a result is small before fetching it, so that option is not taken.
+ *
+ * No new endpoint either — `GROUP BY` through the existing query endpoint is
+ * exactly the "lightweight aggregation" the item describes, and it inherits
+ * the sandboxing (`enable_external_access=false`, memory limit, row cap) that
+ * endpoint already applies.
+ *
+ * Returns null when the chart is not configured enough to draw, so the widget
+ * can say what is missing instead of rendering an empty axis.
+ */
+export function chartQuery(options: {
+  kind: ChartKind;
+  dimension: string | null | undefined;
+  measure: string | null | undefined;
+  aggregate: Aggregate;
+  filterColumn?: string | null;
+  filterOperator?: FilterOperator;
+  filterValue?: unknown;
+}): string | null {
+  const { kind, dimension, measure, aggregate } = options;
+  if (!dimension) return null;
+
+  // The filter reuses item 1's predicate verbatim, so a chart and a table
+  // pointed at the same parameter always agree about which rows are in scope.
+  const where = filterPredicate(
+    options.filterColumn,
+    options.filterOperator ?? "equals",
+    options.filterValue,
+  );
+  const clause = where ? ` WHERE ${where}` : "";
+  const dim = sqlIdentifier(dimension);
+
+  if (kind === "scatter") {
+    // No aggregation: a scatter plot's whole point is the individual points,
+    // so grouping them would destroy the thing being looked at.
+    if (!measure) return null;
+    const y = sqlIdentifier(measure);
+    const conditions = [`${dim} IS NOT NULL`, `${y} IS NOT NULL`];
+    if (where) conditions.unshift(where);
+    return (
+      `SELECT ${dim} AS label, ${y} AS value FROM dataset ` +
+      `WHERE ${conditions.join(" AND ")} LIMIT ${LIMITS.scatter}`
+    );
+  }
+
+  const agg = aggregateExpression(aggregate, measure);
+  if (!agg) return null;
+  // A line chart is a series, so it sorts by its dimension; bar and pie
+  // compare magnitudes, so they sort by value and the cap keeps the largest.
+  const order = kind === "line" ? "1 ASC" : "2 DESC";
+  return (
+    `SELECT ${dim} AS label, ${agg} AS value FROM dataset${clause} ` +
+    `GROUP BY 1 ORDER BY ${order} LIMIT ${LIMITS[kind]}`
   );
 }
