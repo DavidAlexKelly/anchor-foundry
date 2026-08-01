@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1 — see §21–§45). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–2 — see §21–§46). Test counts below are from the last full regression run.
 
 ---
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0029)
+### 1. Database schema (migrations 0001–0030)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 8/8 tests
@@ -785,9 +785,35 @@ No code, no tests: this item is a decision. **Totals unchanged: API 352/352, wor
 
 ---
 
+### 46. Code, without a repository (this session)
+
+`ROADMAP.md` Code item 2, built to the shape §45 decided: the project's transforms *are* the repository, `model_versions` *is* the history, and this is the surface that renders both. `/{workspace}/{project}/code` replaces the "No repositories yet — New repository" placeholder that had been sitting there since §15, and the button is gone rather than disabled, because there is nothing to create.
+
+**What is genuinely new is one table.** Migration 0030's `code_change_sets` gives a name to something the schema could not previously say: *these three transforms changed together, for one reason*. A save has always written one `model_versions` row per model, so an edit spanning several models was several unrelated events. A change set groups them and holds the message; it holds no code, because the code stays where a run resolves it.
+
+**Membership is nullable and stays that way.** Every version written before 0030 has no change set, and every save from the inline Models editor still writes one without. Backfilling a synthetic single-model change set onto those would invent an intention nobody expressed — the same refusal 0024 made about pointing pre-migration runs at a backfilled v1. So the commit log has **two kinds of entry**: a change set with a message, and a standalone save that says which transform was edited (or "Reverted X to v2", read off `restored_from`). That is the truth about how this codebase gets edited, and the UI shows it rather than smoothing it over.
+
+**Every write goes through `models.update`.** `apply_change_set` loops over the files calling the same service the inline editor calls, in one transaction, so Code cannot bypass a check the other surface enforces — a test drives cycle refusal (Models item 7) through a change set and asserts the whole thing rolls back, log included. This is also `ROADMAP.md` Code item 3 answered by construction: there is no round trip to get right, because there is no second copy. A second authoring surface with weaker validation is a bug with a UI in front of it, and the role floors match Models exactly for the same reason.
+
+**A change set that changes nothing is refused**, not recorded. `update` already declines to write a version when code and inputs are unchanged, so a change set built from no-ops would be a commit message attached to nothing — a claim about history rather than an empty entry in it. The browser check produces that state the way a person does (type something, take it back) and asserts the reason appears on screen.
+
+**Two smaller decisions worth keeping:**
+
+  * **Paths are derived, and collisions suffix *both* sides.** "Daily orders" and "Daily Orders!" collapse to one stem; if only the second took an id suffix, one model's path would move when an unrelated model was renamed. A path that changes between two reads is not a path.
+  * **Diffs are computed on read.** A stored diff is a second copy that can disagree with the versions it describes. One bug came out of that: `unified_diff` with `keepends=True` runs the last `-` line into the first `+` line when the source has no trailing newline (transform source usually doesn't), which rendered as one nonsense line in the browser and looked fine in the API tests.
+
+**The nav count was quietly wrong and now isn't.** The project sidebar read `code_repos` — a table from the original spec that has never had a row written to it — so Code showed "0" beside a section listing two files. It now counts the project's models, which is what the section contains. `code_repos` itself is left in place: it is a spec §16 table the schema verifier asserts, and removing it is a claim about the spec rather than about this feature. It is dead by design, and named as such below.
+
+**Testing.** `test_code.py`, 16 tests: stable paths and both-sided collision suffixes, reading an old version with the inputs it was saved with, diffs including "before v1", change sets grouping several files, a change set writing rows Models' own history endpoint returns, cycle refusal through a change set, the no-op and duplicate-file refusals, the two-kind timeline, revert entries, the permission floors, and the audit record. Verified in a browser: two files staged and saved as one change set, the change set detail naming both files with their `v1 → v2` steps, a save made *outside* Code appearing as a single save, its diff rendering, and the no-op refusal.
+
+**Current totals: API 368/368** (352 + 16), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
 ## What's not started
 
-- **Code** — no implementation yet, but no longer undecided: §45 settled `ROADMAP.md` Code item 1 (the spike the rest of that pillar was blocked on). What is left to build is item 2's repository surface over `model_versions` plus change sets, and item 4's platform-native review gate. A git server is explicitly *not* on the list
+- **Code** — items 1 and 2 are done (§45, §46: the decision, then the repository surface with change sets). What is left is item 4's platform-native review gate, and the optional git *mirror* to a remote the customer owns — a git server is explicitly not on the list. Item 3 needs nothing: with one store there is no round trip to build
+- **`code_repos`** (migration 0003, spec §16) — a table with no writer and, since §45, no future one. Left in place because the schema verifier asserts the spec's tables and dropping it is a claim about the spec rather than about a feature; the project nav no longer counts it (§46). Drop it if the spec is ever revised to match the decision
 - **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), and no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet) — both additions to the same resolver/widget pattern, just not built yet. Reordering placed widgets is done (§44), by buttons as well as by drag
 - **Sharing an app outside the platform** (a public or token-scoped link) — `ROADMAP.md` Canvas item 7, explicitly a stretch: it needs an auth model for an unauthenticated or token-authenticated viewer, which is a bigger question than any widget. §44's viewer route is the in-platform half and stops at the workspace boundary
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL

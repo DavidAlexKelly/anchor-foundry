@@ -80,7 +80,15 @@ async def resource_counts(conn: AsyncConnection, project_id: UUID) -> dict[str, 
             WHERE ot.workspace_id = (SELECT workspace_id FROM projects WHERE id = :pid)
           ) AS objects,
           (SELECT count(*) FROM canvas_apps   WHERE project_id = :pid) AS canvas,
-          (SELECT count(*) FROM code_repos    WHERE project_id = :pid) AS code
+          -- Code counts *files*, which are this project's transforms - the
+          -- same rows Models counts, deliberately. `docs/decisions/0001-where-
+          -- code-lives.md` decided the Code pillar is a view over
+          -- model_versions rather than a second store, so there is no
+          -- repository to count; the `code_repos` table this used to read is
+          -- from the original spec and has never had a row written to it,
+          -- which made this number a permanent zero next to a section that
+          -- lists files.
+          (SELECT count(*) FROM models        WHERE project_id = :pid) AS code
         """,
         {"pid": str(project_id)},
     )

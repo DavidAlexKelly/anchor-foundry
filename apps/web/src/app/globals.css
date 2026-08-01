@@ -577,3 +577,50 @@ button { font: inherit; cursor: pointer; }
 }
 .canvas-map-bar button:hover { border-color: var(--line-strong); }
 .canvas-map-note { color: var(--ink-soft); font-size: 12px; font-style: italic; }
+
+/* ---- code pillar (Code item 2) ------------------------------------------- */
+.code-shell { display: grid; grid-template-columns: 240px minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+/* Grid items default to min-width:auto, so a long file path would widen its
+   column and push the editor sideways instead of ellipsising. */
+.code-shell > * { min-width: 0; }
+.code-tree li { min-width: 0; }
+.code-tree ul, .code-log { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 3px; }
+.code-tree-item {
+  width: 100%; min-width: 0; display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
+  background: none; border: 1px solid transparent; border-radius: var(--radius);
+  padding: 5px 8px; font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px;
+  color: var(--ink); cursor: pointer; text-align: left;
+}
+.code-tree-item:hover { border-color: var(--line); }
+/* A long path ellipsises inside its column rather than running under the
+   editor beside it. */
+.code-tree-item > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-tree-meta { flex: none; }
+.code-tree-item.current { background: var(--paper); border-color: var(--line-strong); }
+.code-tree-meta { color: var(--ink-soft); font-size: 11.5px; font-family: var(--font-sans, inherit); }
+.code-file-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.code-editor {
+  width: 100%; min-height: 380px; resize: vertical;
+  font-family: var(--mono, ui-monospace, monospace); font-size: 13px; line-height: 1.5;
+  padding: 10px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--paper); color: var(--ink);
+}
+.code-commit { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); }
+.code-commit input { width: 100%; margin: 6px 0 8px; }
+.code-log-entry {
+  width: 100%; display: grid; gap: 2px; text-align: left; cursor: pointer;
+  background: none; border: 1px solid transparent; border-radius: var(--radius); padding: 6px 8px;
+}
+.code-log-entry:hover { border-color: var(--line); }
+.code-log-summary { color: var(--ink); font-size: 13px; }
+.code-log-meta { color: var(--ink-soft); font-size: 11.5px; display: flex; gap: 6px; align-items: center; }
+.code-change-file { font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; padding: 3px 8px; }
+.code-detail { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.code-diff {
+  margin: 0; overflow-x: auto; font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px; line-height: 1.45; display: grid;
+}
+.diff-line { white-space: pre; padding: 0 4px; }
+.diff-add { background: rgba(47, 111, 79, 0.14); }
+.diff-del { background: rgba(143, 47, 79, 0.14); }
+.diff-hunk, .diff-meta { color: var(--ink-soft); }

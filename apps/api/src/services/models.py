@@ -251,6 +251,7 @@ async def _record_definition(
     inputs: list[dict[str, Any]],
     created_by: UUID,
     restored_from: int | None = None,
+    change_set_id: UUID | None = None,
 ) -> dict[str, Any]:
     """Append a definition version. Numbering is max+1 within the model, read
     in the caller's transaction - two concurrent edits to one model would
@@ -260,16 +261,17 @@ async def _record_definition(
         conn,
         f"""
         INSERT INTO model_versions (model_id, version_number, code, inputs,
-                                    restored_from, created_by)
+                                    restored_from, created_by, change_set_id)
         VALUES (:mid,
                 COALESCE((SELECT max(version_number) FROM model_versions
                            WHERE model_id = :mid), 0) + 1,
-                :code, CAST(:inputs AS jsonb), :restored, :by)
+                :code, CAST(:inputs AS jsonb), :restored, :by, :cset)
         RETURNING {_VERSION_COLUMNS}
         """,
         {
             "mid": str(model_id), "code": code, "inputs": _inputs_snapshot(inputs),
             "restored": restored_from, "by": str(created_by),
+            "cset": str(change_set_id) if change_set_id else None,
         },
     )
     assert row is not None
@@ -412,6 +414,12 @@ async def update(
     cron_schedule: str | None = None,
     input_health_policy: str | None = None,
     updated_by: UUID,
+    # Set only by the Code pillar's multi-model save (services/code.py), which
+    # groups the versions one edit produced. Every other caller writes a
+    # standalone version, and migration 0030 keeps that the honest default:
+    # a single-model save was not part of a change set, rather than part of
+    # an unknown one.
+    change_set_id: UUID | None = None,
 ) -> dict[str, Any]:
     before = await get(conn, project_id, model_id)
     before_inputs = await list_inputs(conn, model_id)
@@ -475,7 +483,7 @@ async def update(
     ):
         await _record_definition(
             conn, model_id, code=str(row["code"]), inputs=effective_inputs,
-            created_by=updated_by,
+            created_by=updated_by, change_set_id=change_set_id,
         )
 
     if row["trigger_mode"] == "upstream" and not await list_inputs(conn, model_id):

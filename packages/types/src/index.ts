@@ -795,3 +795,75 @@ export interface CanvasAppShare {
   group_id: string;
   group_name: string;
 }
+
+// ---- code (ROADMAP Code item 2) ---------------------------------------------
+// There is no repository object: `docs/decisions/0001-where-code-lives.md`
+// decided the Code pillar renders `model_versions` rather than storing code a
+// second time, so a "file" is a model and the "commit log" is its history.
+
+export interface CodeFile {
+  /** The model's id - a file *is* a transform here. */
+  id: string;
+  /** Derived from the name and language, stable between reads. */
+  path: string;
+  name: string;
+  language: "sql" | "python";
+  description: string;
+  size_bytes: number;
+  current_version: number | null;
+  updated_at: string;
+}
+
+export interface CodeFileDetail extends CodeFile {
+  code: string;
+  version_number: number | null;
+  inputs: { dataset_id: string; input_alias: string }[];
+  created_by_email?: string | null;
+  restored_from?: number | null;
+  change_set_id?: string | null;
+}
+
+export interface CodeDiff {
+  path: string;
+  model_id: string;
+  from_version: number | null;
+  to_version: number | null;
+  /** Unified diff text, computed on read and stored nowhere. */
+  diff: string;
+  added: number;
+  removed: number;
+}
+
+/** One entry in the project's commit log. `kind` is "change_set" for a
+ * grouped edit and "version" for a standalone save from the inline Models
+ * editor - two kinds rather than one, because that is how the code actually
+ * gets edited (migration 0030). */
+export interface CodeHistoryEntry {
+  kind: "change_set" | "version";
+  id: string;
+  summary: string;
+  description: string;
+  created_at: string;
+  created_by_email: string | null;
+  model_count: number;
+  model_id?: string | null;
+  version_number?: number | null;
+  path?: string | null;
+}
+
+export interface CodeChangeSet {
+  id: string;
+  project_id: string;
+  summary: string;
+  description: string;
+  created_at: string;
+  created_by_email: string | null;
+  models: {
+    model_id: string;
+    model_name: string;
+    language: "sql" | "python";
+    path: string | null;
+    version_number: number;
+    previous_version: number | null;
+  }[];
+}
