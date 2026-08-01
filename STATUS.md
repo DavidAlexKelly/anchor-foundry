@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6 — see §21–§44). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1 — see §21–§45). Test counts below are from the last full regression run.
 
 ---
 
@@ -763,9 +763,31 @@ Rows from this path get `object_type_id` filled back in before they are returned
 
 ---
 
+### 45. The Code pillar's design spike — decided, not built (this session)
+
+`ROADMAP.md` Code item 1, the one item in that document which forbids writing code until it is settled: self-hosted git backend in the VPC, or federation with the customer's own GitHub/GitLab. Written up in `docs/decisions/0001-where-code-lives.md`; the summary here is what it decided and why it matters to the rest of the repo.
+
+**Neither, as posed. The system of record stays in Postgres, and git — if it appears at all — is an outbound mirror to a remote the customer already owns.**
+
+The argument that settles it was already in the schema. `model_runs.model_version` pins each run to the exact definition that executed, and 0024 makes rollback *append* rather than rewind precisely so that pointer resolves to one piece of code forever. **A git ref cannot promise that**: branches move, history can be rewritten, and a commit reachable today can be gone after a force-push and a GC. Git as the store means either accepting runs that point at code which no longer exists, or rebuilding immutability on top of git — pinning every run to a SHA and never collecting garbage, which is a worse version of what the database already does.
+
+That collapses the rest of the choice. A self-hosted server becomes a *second copy* whose remaining value is developer tooling interop — clone, local editing, existing CI — and a server in `PRIVATE_WITH_EGRESS` subnets cannot deliver that without new public ingress and a new auth model, on top of new state (there is no EFS in the stack, and Fargate tasks are ephemeral). Meanwhile federation to *the customer's own* git host is the same category of thing Connections already does: outbound over egress the VPC has, credential in `SecretsGateway`. What the self-contained-deployment pitch protects is that **the vendor** holds no customer data, not that the customer may not use their own SaaS.
+
+**Three consequences that change the remaining items** rather than sitting in a document nobody re-reads:
+
+  * **Item 2 shrinks.** "A git-backed store for model definitions" is not what gets built, because the store exists — it is a repository-shaped surface over `model_versions`. The one genuinely new concept is the **change set**: a save writes one version row per model today, so "these three transforms changed together, for one reason" cannot currently be said.
+  * **Item 3 evaporates.** There is no round trip, because there is no second copy: editing through Code calls the same service the inline editor calls and takes the same build path by construction. The roadmap's "may end up being the same mechanism viewed two ways" is stronger than it guessed — they are the same rows.
+  * **Item 4 gains a boundary.** Approval state is platform-native, in Postgres against platform identities. If a merged pull request on the customer's GitHub authorised a change to what runs here, whoever administers that org — people the platform neither manages nor can enumerate — would control what a transform computes. Same refusal as §44's: a mirror may carry the diff, it may not be what says yes.
+
+**Flagged for whoever implements federation:** CodeCommit is the option that would satisfy both halves (in-account *and* clonable, IAM-authenticated, no new auth model), and AWS closed it to new customers in 2024, so a freshly provisioned account cannot be assumed to have it. Verify that rather than taking the doc's word for it — if it has changed, it is the best target by a distance.
+
+No code, no tests: this item is a decision. **Totals unchanged: API 352/352, worker 50/50, control-plane 13/13.**
+
+---
+
 ## What's not started
 
-- **Code** (repo browser) — not started
+- **Code** — no implementation yet, but no longer undecided: §45 settled `ROADMAP.md` Code item 1 (the spike the rest of that pillar was blocked on). What is left to build is item 2's repository surface over `model_versions` plus change sets, and item 4's platform-native review gate. A git server is explicitly *not* on the list
 - **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), and no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet) — both additions to the same resolver/widget pattern, just not built yet. Reordering placed widgets is done (§44), by buttons as well as by drag
 - **Sharing an app outside the platform** (a public or token-scoped link) — `ROADMAP.md` Canvas item 7, explicitly a stretch: it needs an auth model for an unauthenticated or token-authenticated viewer, which is a bigger question than any widget. §44's viewer route is the in-platform half and stops at the workspace boundary
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
