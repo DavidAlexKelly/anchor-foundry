@@ -61,6 +61,15 @@ class AwsGateway(Protocol):
         self, creds: TempCredentials, region: str, stack_name: str
     ) -> dict[str, str]: ...
 
+    # ---- onboarding: preflight and progress (ROADMAP section 7 item 2) -------
+    def stack_events(
+        self, creds: TempCredentials, region: str, stack_name: str, limit: int = 25
+    ) -> list[dict[str, str]]: ...
+
+    def cdk_bootstrap_version(self, creds: TempCredentials, region: str) -> str | None: ...
+
+    def elastic_ip_headroom(self, creds: TempCredentials, region: str) -> tuple[int, int]: ...
+
     # ---- teardown (Deprovisioner) --------------------------------------------
     def disable_deletion_protection(
         self, creds: TempCredentials, region: str, db_instance_identifier: str
@@ -162,6 +171,91 @@ class Boto3Gateway:
         return {o["OutputKey"]: o["OutputValue"] for o in stacks[0].get("Outputs", [])}
 
     # ---- teardown (Deprovisioner) --------------------------------------------
+    def stack_events(
+        self, creds: TempCredentials, region: str, stack_name: str, limit: int = 25
+    ) -> list[dict[str, str]]:
+        """Most recent stack events, newest first. This is the only honest
+        answer to "what is it doing?" during the fifteen minutes a first-time
+        provision takes - CloudFormation knows, and nothing surfaced it."""
+        import boto3
+
+        cfn = boto3.client(
+            "cloudformation",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        try:
+            pages = cfn.get_paginator("describe_stack_events").paginate(StackName=stack_name)
+            events: list[dict[str, str]] = []
+            for page in pages:
+                for e in page["StackEvents"]:
+                    events.append({
+                        "timestamp": e["Timestamp"].isoformat(),
+                        "logical_id": e.get("LogicalResourceId", ""),
+                        "resource_type": e.get("ResourceType", ""),
+                        "status": e.get("ResourceStatus", ""),
+                        "reason": e.get("ResourceStatusReason", ""),
+                    })
+                    if len(events) >= limit:
+                        return events
+            return events
+        except cfn.exceptions.ClientError:
+            # No stack yet is the normal state during onboarding, not an error.
+            return []
+
+    def cdk_bootstrap_version(self, creds: TempCredentials, region: str) -> str | None:
+        """The CDK bootstrap stack's version parameter, or None if this region
+        has never been bootstrapped - which is the single most common reason a
+        first deploy fails ten minutes in."""
+        import boto3
+
+        ssm = boto3.client(
+            "ssm",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        try:
+            return ssm.get_parameter(Name="/cdk-bootstrap/hnb659fds/version")["Parameter"]["Value"]
+        except ssm.exceptions.ParameterNotFound:
+            return None
+
+    def elastic_ip_headroom(self, creds: TempCredentials, region: str) -> tuple[int, int]:
+        """(in use, limit) for Elastic IPs. The stack needs one for its NAT
+        gateway, and an account already at its limit fails a long way into the
+        deploy with an error that names neither the quota nor the fix."""
+        import boto3
+
+        ec2 = boto3.client(
+            "ec2",
+            region_name=region,
+            aws_access_key_id=creds.access_key_id,
+            aws_secret_access_key=creds.secret_access_key,
+            aws_session_token=creds.session_token,
+        )
+        used = len(ec2.describe_addresses()["Addresses"])
+        limit = 5  # the AWS default; Service Quotas may say otherwise
+        try:
+            quotas = boto3.client(
+                "service-quotas",
+                region_name=region,
+                aws_access_key_id=creds.access_key_id,
+                aws_secret_access_key=creds.secret_access_key,
+                aws_session_token=creds.session_token,
+            )
+            limit = int(
+                quotas.get_service_quota(ServiceCode="ec2", QuotaCode="L-0263D0A3")["Quota"]["Value"]
+            )
+        except Exception:
+            # Reading a quota needs a permission the bootstrap role may not
+            # have; the default is the right guess and being wrong here costs
+            # a warning, not a failed deploy.
+            pass
+        return used, limit
+
     def disable_deletion_protection(
         self, creds: TempCredentials, region: str, db_instance_identifier: str
     ) -> None:

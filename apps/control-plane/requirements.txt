@@ -5,3 +5,8 @@
 boto3==1.34.144
 cryptography==43.0.0
 psycopg[binary]==3.2.1
+# The onboarding HTTP surface (ROADMAP section 7 item 2). Pinned to the same
+# versions apps/api uses - two FastAPI versions in one repo is a debugging
+# session nobody needs.
+fastapi==0.111.1
+uvicorn[standard]==0.30.3

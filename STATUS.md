@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4 — see §21–§47). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 2 — see §21–§48). Test counts below are from the last full regression run.
 
 ---
 
@@ -30,8 +30,8 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 ### 1. Database schema (migrations 0001–0031)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
-### 2. Control plane (`apps/control-plane`) - 8/8 tests
-Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts.
+### 2. Control plane (`apps/control-plane`) - 32/32 tests
+Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts, tears a stack down (§19), and since §48 serves the customer-facing onboarding flow that connects an account in the first place.
 
 ### 3. Infrastructure (`infra/cdk`) - synths clean, 87 resources
 VPC, RDS (encrypted, deletion-protected), ElastiCache, OpenSearch, S3, Cognito (spec-exact: MFA optional TOTP-only, 15 min access tokens, no self-signup), 3 ECS services behind an ALB, CloudFront, WAF, GuardDuty, CloudTrail, KMS, 6 scoped IAM roles.
@@ -835,6 +835,30 @@ No code, no tests: this item is a decision. **Totals unchanged: API 352/352, wor
 **Testing.** `test_code_review.py`, 20 tests: the gate off by default, refused on both surfaces when on, not blocking scheduling, owner-only policy; the proposal lifecycle (not a definition until applied, applying writes one change set and closes it, no double-apply, withdraw); and the three refusals above, each asserting the *other* person's work survived. Verified in a browser with two identities: turning the gate on, a direct edit refused, staged files becoming a proposal, self-approval refused, a second identity approving and the change applying, and a stale proposal blocked with its Apply button disabled and the reason on screen.
 
 **Current totals: API 388/388** (368 + 20), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
+### 48. Onboarding somebody could actually do (this session)
+
+`ROADMAP.md` section 7 item 2 — the first item outside the six pillars, because a platform nobody can stand up is a platform nobody uses. Section 7 exists because the honest answer to "how do I launch this on a new instance?" was a runbook with a Python REPL in the middle of it: the operator CLI could `deprovision` a customer but had **no `provision` command at all**.
+
+**The structural gap: there was no surface the customer could touch.** `apps/web` cannot be it — it runs *inside* the stack being provisioned, so at onboarding time it is the thing that does not exist yet, and §19 already recorded that it has no path to the control plane's trust boundary either. So this is a second, small FastAPI app in `apps/control-plane`, server-rendering one page. A second Next.js app for five steps and a poll would have been more scaffolding than page, and this has to deploy in front of the registry without the product's web build anywhere near it.
+
+**The customer types twelve digits, and nothing else.** The bootstrap template hardcodes `RoleName: platform-bootstrap`, so the role ARN is *derivable* from the account ID — the ARN paste that used to travel by email was pure ceremony, and ceremony is where typos live. Everything else is in a **prefilled CloudFormation launch URL**: template, stack name, control-plane role ARN, and the 43-character external ID, all in the query string. Click, tick the IAM box, Create.
+
+**Detection is a probe, not a form field.** "Have they run the template yet?" is answered by trying to assume the role — the same call provisioning makes a minute later. A checkbox saying "I've done it" can be wrong; an `sts:AssumeRole` that succeeds cannot, and it proves the external ID matched too, which is the other half of what could have gone wrong.
+
+**Preflight fails in plain English before CloudFormation fails in a wall of events.** The five checks are the ways the deploys in §17/§20 actually broke: the role is assumable, the region is one this build has been deployed to, the region is CDK-bootstrapped, there is Elastic IP headroom for the NAT gateway, and there is not already a stack. **Every failing check carries a remedy** — a check that reports a problem without saying what to do about it has moved the confusion rather than removed it — and provisioning is *refused* while one stands, because otherwise the customer waits ten minutes to be told something the page already knew.
+
+**The fifteen minutes are no longer silent.** CloudFormation knew what it was doing the whole time and nothing surfaced it; the status endpoint now carries stack events and the page tails them, then hands off to `/setup` in the new deployment.
+
+**Two credentials, two audiences.** The vendor creates an onboarding with an operator token; the customer drives it with a per-customer onboarding token minted at that moment, stored as a SHA-256 hash and authorising exactly one org's onboarding. An unknown token gets the same flat 404 as an expired one — distinguishing them tells a stranger that a token existed. The external ID is **not returned by any route**, not even the one that creates the onboarding: an earlier draft handed it back to the vendor on the assumption they would paste it into a link, and once the link is minted server-side that is a secret with no caller.
+
+**One bug worth keeping**, found in a browser and invisible to the tests: the five-second poll re-opened step 4 on every tick, wiping the "checked" state the preflight had just set, so the page kept forgetting what it had established. Polling loops that write UI state need to *open* steps, never reset them.
+
+**Testing.** `test_onboarding.py`, 19 tests against the real registry with AWS and the provisioner faked: the launch URL carrying both parameters and URL-encoding the external ID, the derived ARN, one link reaching exactly one onboarding, the flat 404, the operator route refusing an absent or wrong token, the external ID never appearing in a token-authenticated read, detection before and after the template is run, bad account IDs and unsupported regions refused before AWS sees them, preflight passing and failing with remedies, provisioning refused on a failing check, running once, reporting its failure, and stack events reaching the status payload. Verified in a browser end to end against a scripted fake account: not-connected → connected → preflight failing with the `cdk bootstrap` command on screen and the button disabled → preflight passing → provisioned, with events tailing and the hand-off link live.
+
+**Current totals: control-plane 32/32** (13 + 19), **API 388/388**, **worker 50/50** (both untouched).
 
 ---
 
