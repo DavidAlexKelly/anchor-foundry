@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§58 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§59 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -189,7 +189,7 @@ One-shot SQL migration to the new format, run against real saved apps, with the 
 
 **What exists today, and it is more than it looks.** `docs/decisions/0001-where-code-lives.md` already decided the hard architectural question: **no git server; the system of record is Postgres; git federation is an optional outbound mirror.** On top of that sit change sets, proposals, reviews and a review gate (`STATUS.md` §45–§47) — the *governance* half of Code Repositories, already built and tested. What is missing is the *repository* and the *editor*: today a "repository" is one SQL string per model version, edited in a textarea.
 
-### 2.1 Design spike: multi-file repositories on Postgres — **M, and blocking**
+### ~~2.1 Design spike: multi-file repositories on Postgres~~ — **done, `docs/decisions/0003-repository-storage.md`, `STATUS.md` §59**
 
 The decision in `0001` covers a single file per model. It does not cover: multiple files, directories, branches, merge, or what a commit *is* when there is no git.
 

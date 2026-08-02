@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§58). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§59). Test counts below are from the last full regression run.
 
 ---
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0032)
+### 1. Database schema (migrations 0001–0033)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 52/52 tests
@@ -1054,6 +1054,26 @@ Neither would have been visible from one store. Both would have surfaced as an a
 **The OpenSearch fixture grew twice to keep its promise** of covering every call the gateway makes: it ignored `must_not` (so `neq` looked like it matched everything and passed), and it read `properties.status` as a top-level key rather than a path, so it matched nothing at all.
 
 Not done here, and named rather than implied: aggregations (what Metric Cards need, roadmap 1.5 - they need a second implementation in both stores plus aggregation support in the fixture), search-around, derived variables and the builder's variables panel. **API 427 → 435.**
+
+---
+
+### 59. Multi-file repositories, on Postgres (this session)
+
+Phase-2 item 2.1, the spike blocking 2.2–2.8. Written up as `docs/decisions/0003-repository-storage.md`, stored by migration 0033, implemented in `services/repositories.py`.
+
+**It had to reconcile with decision 0001**, which said the Code pillar is a *projection* of `model_versions`. A multi-file repository cannot be one. The reconciliation is one-directional: repositories are where code is **authored**; publishing creates a model version that **copies the source in**; `model_versions.code` remains the immutable record of what ran. So 0001 is superseded in one direction only, and the constraint it was built around - `model_runs.model_version` resolving to exactly one piece of code, forever (db 0024) - is untouched. The copy is not redundancy: a version's code has to be readable without resolving a commit that may since have been on a deleted branch.
+
+**Git's data model without git, and without trees.** Content-addressed blobs, so a file unchanged across a hundred commits is one row. But a commit carries a **flat `{path: sha}` manifest** of the whole snapshot rather than nested tree objects. Git splits snapshots into trees so a deep repository can share unchanged subtrees; a transforms repository here is tens of files, and the flat form makes a diff a dict comparison, a checkout one join, and a commit **verifiable by reading it** - which matters for the part of the system that decides what code ran. The cost, paths repeated per commit, is written down along with when to come back to it.
+
+**Fast-forward only.** Merging text in a browser is a product in itself, and its blast radius is production transforms. A rejected move names the branch and its head, because accepting it discards commits silently - which is what the rule exists to prevent.
+
+**Blobs are keyed by `(workspace_id, sha256)`, not by hash alone.** A shared blob table would make "does this hash exist?" a cross-tenant question, and existence is information. Costs storage; buys the isolation property the platform rests on.
+
+**Deleting a branch never deletes commits** - they are still referenced by anything published from them, and `ON DELETE RESTRICT` on both `parent_id` and `model_versions.source_commit_id` makes that structural rather than a convention. Unreferenced commits are garbage, not errors; collecting them is named as a separate decision rather than designed here.
+
+Two things the tests taught, both about the test rather than the code: `pytest-asyncio` is not installed (the suite uses anyio, whose plugin handles async fixtures directly), and a commit created inside the fixture's open transaction is invisible to a second connection - so the pinning test does its work on one connection, with a savepoint so the deliberately-refused DELETE does not poison the surrounding transaction.
+
+**API 435 → 454.**
 
 ---
 
