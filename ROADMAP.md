@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§56 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§57 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -94,7 +94,7 @@ The largest section. Workshop is a real application-building product; treating t
 
 The three things that make Workshop *Workshop* — and that Canvas has none of — are **variables**, **events** and **layouts**. Build them before widget number nine.
 
-### 1.1 Design spike: the module definition document — **M, and blocking**
+### ~~1.1 Design spike: the module definition document~~ — **done, `docs/decisions/0002-workshop-module-format.md`, `STATUS.md` §57**
 
 **The problem.** Canvas stores its definition as Craft.js node props: each widget holds its own configuration inline (`CanvasChart` holds its dataset id, dimension, measure, aggregate). Workshop widgets do not work that way. A widget takes an **input variable** and writes an **output variable**; the filter list does not know the object table exists, and the object table does not know where its object set came from. The wiring is a graph that lives *beside* the layout tree, and Craft.js does not model it.
 

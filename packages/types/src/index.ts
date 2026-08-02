@@ -135,6 +135,56 @@ export interface ResolvedResource extends Resource {
   kind_id: string;
 }
 
+// ---- Workshop module format (docs/decisions/0002-workshop-module-format.md)
+/** A saved app is one document with three parts. `format: 2` is the marker; a
+ * v1 document is a bare Craft.js node map with `ROOT` at the top level and no
+ * wrapper at all. */
+export interface WorkshopModule {
+  format: 2;
+  /** The Craft.js node tree, unchanged from v1 apart from reference props,
+   * which now hold variable ids rather than parameter names. */
+  layout: Record<string, unknown>;
+  variables: Record<string, WorkshopVariable>;
+  events: Record<string, WorkshopEvent>;
+  /** References to a parameter nothing declares, found during conversion.
+   * Recorded rather than repaired: the binding has silently read as "no
+   * filter" for as long as it existed, and quietly tidying it away would
+   * destroy the only evidence that the app is wrong. */
+  broken_bindings?: { node: string; prop: string; parameter: string }[];
+}
+
+/** Reserved now, built in roadmap item 1.2. `object_set` is the one that
+ * carries the weight and the one that needs server-side evaluation. */
+export type WorkshopVariableKind =
+  | "string"
+  | "number"
+  | "boolean"
+  | "date"
+  | "timestamp"
+  | "array"
+  | "single_object"
+  | "object_set";
+
+export interface WorkshopVariable {
+  /** Opaque and stable. Deliberately not derived from the label - a derived id
+   * is a rename waiting to break every reference. */
+  id: string;
+  kind: WorkshopVariableKind;
+  label: string;
+  /** What this was called when it was a string-keyed parameter, so a converted
+   * app can still be read against the v1 document it came from. */
+  legacy_name?: string;
+}
+
+/** Trigger to ordered effects. Effects run in configured order and do not wait
+ * on downstream recomputation; setting a variable copies the value
+ * immediately, so the next effect sees it. Built in item 1.3. */
+export interface WorkshopEvent {
+  id: string;
+  trigger: { node: string; on: string };
+  effects: { type: string; [key: string]: unknown }[];
+}
+
 export interface ProjectMember {
   id: string;
   role: ProjectRole;

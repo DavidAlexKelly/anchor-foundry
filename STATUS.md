@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§56). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§57). Test counts below are from the last full regression run.
 
 ---
 
@@ -1015,6 +1015,24 @@ Phase-2 item 3.1, and item 3.2 folded into it. Sequenced first among the applica
 **A 500 the application turned into the whole screen.** A dataset whose Parquet file is missing - storage cleared under a dev machine, a lifecycle rule, a database restored against the wrong bucket - raised `FileNotFoundError` out of the storage gateway and surfaced as `Internal Server Error`. That was survivable as one broken row in a list and is not survivable as an application's entire content. It is now a 409 saying the file is missing, that the metadata and history are intact, and that rebuilding or re-uploading restores it - three facts the reader needs and a traceback contains none of. Found by opening a real dataset in a real browser; the API tests had never deleted a file behind a live row.
 
 Browser-verified: all five tabs, a 60-row upload previewing in full, profiling with correct types and distinct counts, deep links opening the named tab, tab surviving reload, and the missing-file refusal rendering as a sentence. **API 409 → 411** (397 → 399 here, MariaDB down): one test that the two id spaces are distinct and that the kind id works against that kind's endpoints, one that a dataset whose file has been deleted refuses in a sentence.
+
+---
+
+### 57. What a Workshop module is, on disk (this session)
+
+Phase-2 item 1.1, the spike that blocks 1.2–1.5. Written up as `docs/decisions/0002-workshop-module-format.md`; the summary is that a module becomes one document with three parts - `layout`, `variables`, `events` - and Craft.js keeps the first and loses the other two.
+
+**What the spike found, by reading a real saved app.** A parameter is declared as a *side effect of placing a widget*: a Filter node with `props.name = "region"` is the only place `region` comes into existence. A consumer binds to it with `filterParameter: "region"` - a string that happens to match. Nothing links them, so renaming the filter leaves the map asking for a parameter nobody sets, silently and forever, because a missing parameter reads as "no filter" (deliberately, so an app is not empty on first load). **The map then shows more rows than it should.** That is not a bug to fix in place; it is what an implicit, untyped, string-keyed namespace does, and it is exactly what Workshop variables are not.
+
+**Decisions.** Variables are declared with an opaque id, a kind and a label; widgets reference the id, so renaming is free, deletion can be refused with "used by 2 widgets", and kinds can be checked. Ids are **not derived from the label** - a derived id is a rename waiting to break every reference, which is the failure being removed. Values stay runtime-only, as they already are: a saved app is not a saved session. Events live beside the layout rather than inside a widget's props, because an event routinely spans widgets and nesting it makes a table's behaviour depend on a node the table cannot see.
+
+**Conversion is one-shot, in Python, and keeps the original.** Lazy conversion was rejected because apps nobody opens stay v1 forever and every reader then carries both formats indefinitely. A Node script running the renderer's own converter was rejected on evidence: this repo has no TypeScript test runner, so that converter would be the one piece of format-critical logic with no automated test. `services/canvas.py` still does not interpret definitions - `workshop_format.py` is a format tool imported by the migration and its tests and by nothing serving a request.
+
+**A broken binding is recorded, not repaired.** A reference to a parameter nothing declares is left exactly as it is and listed under `broken_bindings`. The app is already wrong; a converter that quietly tidied the document would destroy the only evidence of it.
+
+**Real data found the defect the fixture could not.** The fixture was copied out of the development database, so it looked authoritative - but every node in it had `type: {"resolvedName": …}`. Running the converter across all 163 saved apps failed on the first one containing a plain element, where Craft.js writes `type: "div"`, a bare string. One `AttributeError`, thirty seconds in, on data no hand-written fixture would have contained. Fixed and given its own test.
+
+Proof, beyond the unit tests: conversion run over **every canvas app in the database** - 163 apps, 92 still in v1 - asserting the layout survives apart from reference props, that converting twice equals converting once, and that no rewritten reference dangles. All passed; 27 variables extracted, zero broken bindings in real data. **API 411 → 427.**
 
 ---
 
