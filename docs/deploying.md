@@ -123,23 +123,42 @@ Two accounts: the vendor's (control plane) and the customer's. This is the path
 a real customer takes, and the only one that exercises the AWS calls preflight
 and the progress view depend on.
 
-**1. Host the bootstrap template.** `infra/cdk/bootstrap/customer-bootstrap.yaml`
-has to be at a URL CloudFormation can read — an S3 object with public read is
-the usual answer. Its URL becomes `BOOTSTRAP_TEMPLATE_URL`.
-
-**2. Run the control plane** with real credentials:
+**1. Stand up the vendor side — one command, in your own account:**
 
 ```bash
 cd apps/control-plane
-CONTROL_PLANE_DATABASE_URL=postgresql://…            \
-ONBOARDING_KMS_KEY_ID=<kms key for external IDs>     \
-CONTROL_PLANE_ROLE_ARN=arn:aws:iam::<vendor>:role/…  \
-BOOTSTRAP_TEMPLATE_URL=https://…/customer-bootstrap.yaml \
-VENDOR_ECR_REGISTRY=$ECR                             \
-PLATFORM_IMAGE_TAG=$TAG                              \
-CONTROL_PLANE_PUBLIC_URL=https://onboard.example.com \
-CDK_DIR=../../infra/cdk                              \
-  python -m src.cli serve --port 8400
+python -m src.cli init --region eu-west-2 --public-url https://onboard.example.com
+```
+
+That creates the KMS key that wraps customers' external IDs, the IAM role their
+bootstrap roles will trust, the three ECR repositories, and an S3 bucket holding
+`customer-bootstrap.yaml` at a public URL — then prints the exact environment
+block for step 2 and the three `docker build` commands.
+
+It is **idempotent**: run it again any time to check the state of an account, or
+after pulling a change that adds a permission to the control-plane role (the
+role policy and the template are rewritten on every run; nothing else is
+touched). Ongoing cost is a KMS key, about a dollar a month.
+
+It deliberately does **not** create the registry database or host the onboarding
+page — both are decisions with a bill attached, and it says so rather than
+leaving you to find out. Postgres on your own machine is fine for a first
+customer.
+
+**Note on credentials:** the customer's bootstrap template trusts a *role*, so
+the control plane has to run as the role `init` created. Assume it (a profile
+with `role_arn = arn:aws:iam::…:role/anchor-control-plane`, or
+`aws sts assume-role`) before running `serve` or `provision`.
+
+**2. Run the control plane** with the environment `init` printed, plus the two
+values only you can supply:
+
+```bash
+cd apps/control-plane
+export CONTROL_PLANE_DATABASE_URL=postgresql://…   # the registry
+export PLATFORM_IMAGE_TAG=$TAG CDK_DIR=../../infra/cdk
+# …plus the block `init` printed
+python -m src.cli serve --port 8400
 ```
 
 Or as a container: `docker build --platform=linux/amd64 -f apps/control-plane/Dockerfile -t control-plane .`
@@ -191,8 +210,8 @@ limit rather than failing the check, on purpose.
 | `CONTROL_PLANE_DATABASE_URL` | control plane | Postgres holding the customer registry. Raw `postgresql://`, **not** `postgresql+psycopg://` |
 | `ONBOARDING_KMS_KEY_ID` | control plane | KMS key that wraps each customer's external ID |
 | `TEARDOWN_KMS_KEY_ID` | `deprovision` | Same key; separate variable because teardown is a separate tool |
-| `CONTROL_PLANE_ROLE_ARN` | onboarding | The vendor role the customer's bootstrap role trusts |
-| `BOOTSTRAP_TEMPLATE_URL` | onboarding | Public URL of `customer-bootstrap.yaml` |
+| `CONTROL_PLANE_ROLE_ARN` | onboarding | The vendor role the customer's bootstrap role trusts — created by `cli init` |
+| `BOOTSTRAP_TEMPLATE_URL` | onboarding | Public URL of `customer-bootstrap.yaml` — uploaded by `cli init` |
 | `CONTROL_PLANE_PUBLIC_URL` | onboarding | Where the onboarding page is reachable; used to build customer links |
 | `CONTROL_PLANE_ADMIN_TOKEN` | onboarding | Operator token for `POST /api/onboardings` |
 | `VENDOR_ECR_REGISTRY` | provisioning | Registry the customer's ECS tasks pull images from |

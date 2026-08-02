@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 — see §21–§49). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§50). Test counts below are from the last full regression run.
 
 ---
 
@@ -30,7 +30,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 ### 1. Database schema (migrations 0001–0031)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
-### 2. Control plane (`apps/control-plane`) - 35/35 tests
+### 2. Control plane (`apps/control-plane`) - 45/45 tests
 Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts, tears a stack down (§19), and since §48 serves the customer-facing onboarding flow that connects an account in the first place.
 
 ### 3. Infrastructure (`infra/cdk`) - synths clean, 87 resources
@@ -881,6 +881,26 @@ One bug the browser caught immediately, and worth keeping because it is this cod
 **Testing.** `test_onboarding.py` grew to 22 (the three failure-recovery tests). Verified in a browser: the documented level-1 walkthrough end to end against `cli demo`, and — against `cli demo --fail` — the failure block naming the real cause with a working Try again. The checklist was verified by creating each resource in turn and watching the count move without anything being clicked.
 
 **Current totals: control-plane 35/35** (32 + 3), **API 388/388**, **worker 50/50** (both untouched).
+
+---
+
+### 50. The vendor's own bootstrap (this session)
+
+§48 and §49 made the *customer's* path one page: pick a region, type twelve digits, click a prefilled CloudFormation link, come back. What they did not touch is the asymmetry underneath it — **everything the customer touches is one page; everything the vendor touches to make that page exist was still five manual steps**: create a KMS key, create a role with the right trust policy, create three ECR repositories, put the bootstrap template somewhere CloudFormation can read, then work out which environment variable wants which ARN.
+
+`python -m src.cli init --region <region>` is those five steps, and it ends by printing the exact environment block and the three `docker build` commands.
+
+**Idempotence is the feature, not a nicety.** Running it again is how you check the state of an account somebody set up months ago, and it is what makes the command safe to put in a runbook people follow twice. Two things are rewritten on every run and everything else is left alone: **the role's inline policy**, so an account bootstrapped a year ago picks up a permission this build has added since, and **the template**, because a stale one is worse than a missing one — the launch link keeps working and hands the customer a role lacking exactly the permission the new deploy needs.
+
+**Two IAM policies, both narrow on purpose.** The control plane may assume `arn:aws:iam::*:role/platform-bootstrap` and nothing else — one that could assume *any* role in a customer account would be a far bigger promise than this product makes — and it may use exactly one KMS key, the one that wraps external IDs. Trust defaults to the account root, which is not "anybody": it delegates to the account's own IAM rather than naming a person who will later leave, and `--trust` narrows it to a principal.
+
+**It stops at two things and says so.** It does not create the registry's Postgres and does not host the onboarding page, because both are decisions with a bill attached: a first customer's registry can live on the operator's laptop, and where the page runs is an availability call that differs at one customer and at fifty. Both are printed under "still yours to decide" — the difference between a tool that finished and a tool that stopped.
+
+**One detail that only shows up in a real account:** the customer's bootstrap template trusts a **role**, so the control plane has to *run as* the role `init` creates. `docs/deploying.md` now says to assume it before `serve` or `provision`; running as your own user with the role ARN configured looks right and fails at `sts:AssumeRole` with a message about trust policies.
+
+**Testing.** `test_vendor_bootstrap.py`, 10 tests against a fake gateway: a first run creating everything, the environment block being the *whole* configuration (anything missing is something somebody has to work out by hand), a second run creating nothing while still reporting everything, the template and role policy being rewritten anyway, both policies' scopes, trust defaulting to the account and narrowing on request, JSON-serialisability of what goes to IAM, and the output naming what is still manual.
+
+**Current totals: control-plane 45/45** (35 + 10), **API 388/388**, **worker 50/50** (both untouched).
 
 ---
 

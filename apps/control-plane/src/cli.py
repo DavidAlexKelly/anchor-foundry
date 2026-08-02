@@ -2,6 +2,7 @@
 module docstring for why teardown lives here and not in the product's own
 UI) - this is a tool run by whoever operates the control plane.
 
+    python -m src.cli init       --region eu-west-2
     python -m src.cli onboard    --org-slug acme --org-name "Acme" --email ops@acme.com
     python -m src.cli provision  --org-slug acme --account-id 123456789012 --region eu-west-2
     python -m src.cli status     --org-slug acme
@@ -9,7 +10,10 @@ UI) - this is a tool run by whoever operates the control plane.
     python -m src.cli demo       --port 8400
     python -m src.cli deprovision --org-slug acme
 
-`onboard` mints the customer's link and stops - the customer drives the rest
+`init` stands up the vendor's own side - the KMS key, the role customers'
+bootstrap roles trust, the image repositories and the hosted template - and is
+idempotent, so running it again is how you check an account you set up months
+ago. `onboard` mints the customer's link and stops - the customer drives the rest
 from the page (`ROADMAP.md` section 7 item 2). `provision` is the same
 lifecycle for an operator who would rather not, or for a customer who cannot:
 it detects, preflights and deploys with CloudFormation's events on stdout.
@@ -47,6 +51,33 @@ def _cmd_deprovision(args: argparse.Namespace) -> int:
     logger.info("tearing down stack for %r - this deletes real infrastructure and data", args.org_slug)
     deprovisioner.deprovision(args.org_slug)
     logger.info("%r: torn down", args.org_slug)
+    return 0
+
+
+# ---- vendor bootstrap -------------------------------------------------------
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Create everything the control plane needs in the vendor's own account.
+
+    Idempotent by design: it reports what already existed rather than failing
+    on it, and rewrites the role's policy every time so an account bootstrapped
+    a year ago picks up a permission added since.
+    """
+    from pathlib import Path
+
+    from .bootstrap.vendor import Boto3VendorGateway, VendorBootstrap
+
+    template = Path(args.template).resolve()
+    if not template.is_file():
+        print(f"error: no bootstrap template at {template}", file=sys.stderr)
+        return 1
+    bootstrap = VendorBootstrap(Boto3VendorGateway(args.region), template_path=template)
+    result = bootstrap.ensure(
+        region=args.region,
+        bucket=args.bucket,
+        trust_principal=args.trust,
+        public_url=args.public_url,
+    )
+    print(result.render())
     return 0
 
 
@@ -213,6 +244,17 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(prog="python -m src.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init = subparsers.add_parser(
+        "init", help="Create the vendor-side AWS resources the control plane needs."
+    )
+    init.add_argument("--region", required=True)
+    init.add_argument("--bucket", help="Bucket for the hosted bootstrap template")
+    init.add_argument("--trust", help="Principal ARN allowed to assume the control-plane role "
+                                      "(default: the account itself)")
+    init.add_argument("--public-url", default="", help="Where the onboarding page will be served")
+    init.add_argument("--template", default="infra/cdk/bootstrap/customer-bootstrap.yaml")
+    init.set_defaults(func=_cmd_init)
 
     onboard = subparsers.add_parser(
         "onboard", help="Register a customer and mint their onboarding link."
