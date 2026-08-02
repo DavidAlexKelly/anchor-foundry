@@ -95,6 +95,51 @@ export const api = {
     request<ProjectDetail>(`/workspaces/${workspaceId}/projects/${projectId}`),
 };
 
+/** Repositories (db 0033). Read-only from the browser for now: editing
+ * arrives with the editor in roadmap 2.2. */
+export const repositories = {
+  list: (wid: string, pid: string) =>
+    request<import("./types").Repository[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories`,
+    ),
+  get: (wid: string, pid: string, rid: string) =>
+    request<import("./types").Repository>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}`,
+    ),
+  branches: (wid: string, pid: string, rid: string) =>
+    request<import("./types").RepositoryBranch[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branches`,
+    ),
+  tree: (wid: string, pid: string, rid: string, ref: { branch?: string; commitId?: string }) => {
+    const q = new URLSearchParams();
+    if (ref.commitId) q.set("commit_id", ref.commitId);
+    else if (ref.branch) q.set("branch", ref.branch);
+    const qs = q.toString();
+    return request<import("./types").RepositoryTree>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tree${qs ? `?${qs}` : ""}`,
+    );
+  },
+  commits: (wid: string, pid: string, rid: string, branch?: string) =>
+    request<import("./types").RepositoryCommit[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/commits` +
+        (branch ? `?branch=${encodeURIComponent(branch)}` : ""),
+    ),
+  commit: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { branch: string; files: Record<string, string>; message: string },
+  ) =>
+    request<import("./types").RepositoryCommit>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/commits`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  diff: (wid: string, pid: string, rid: string, toCommitId: string) =>
+    request<import("./types").RepositoryDiff>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,
+    ),
+};
+
 /** The resource registry (db 0032). `resolve` takes an id and nothing else -
  * that is the point of the id, so a link survives a rename or a move. */
 export const resources = {

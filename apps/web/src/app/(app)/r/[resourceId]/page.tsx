@@ -19,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { ApplicationShell, ResourceSummary } from "@/components/application-shell";
 import { DatasetApplication } from "@/components/applications/dataset-app";
+import { RepositoryApplication } from "@/components/applications/repository-app";
 import { resources as resourcesApi } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { ResolvedResource, ResourceKind } from "@/lib/types";
@@ -27,7 +28,7 @@ import type { ResolvedResource, ResourceKind } from "@/lib/types";
  * a real application. `href` is null for kinds whose current home cannot be
  * linked to for one resource. */
 const APPLICATIONS: Record<
-  Exclude<ResourceKind, "dataset">,
+  Exclude<ResourceKind, "dataset" | "code_repo">,
   { buildingIn: string; label: string; href: (r: ResolvedResource) => string | null }
 > = {
   model: {
@@ -49,11 +50,6 @@ const APPLICATIONS: Record<
     buildingIn: "not yet scheduled",
     label: "Open in Connections",
     href: (r) => (r.project_slug ? `/${r.workspace_slug}/${r.project_slug}/connections` : null),
-  },
-  code_repo: {
-    buildingIn: "roadmap section 2 (Code Repositories)",
-    label: "Open in Code",
-    href: (r) => (r.project_slug ? `/${r.workspace_slug}/${r.project_slug}/code` : null),
   },
 };
 
@@ -83,12 +79,19 @@ export default function ResourcePage() {
     );
   }
 
-  // Datasets have a real application (item 3.1); the rest resolve to their
+  // Kinds with a real application of their own. The rest resolve to their
   // summary until theirs is built.
   if (resource.data.kind === "dataset") {
     return (
       <ApplicationShell resource={resource.data}>
         <DatasetApplication resource={resource.data} />
+      </ApplicationShell>
+    );
+  }
+  if (resource.data.kind === "code_repo") {
+    return (
+      <ApplicationShell resource={resource.data}>
+        <RepositoryApplication resource={resource.data} />
       </ApplicationShell>
     );
   }

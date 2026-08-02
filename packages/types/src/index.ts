@@ -185,6 +185,49 @@ export interface WorkshopEvent {
   effects: { type: string; [key: string]: unknown }[];
 }
 
+// ---- repositories (docs/decisions/0003-repository-storage.md, db 0033) -----
+export interface Repository {
+  id: string;
+  project_id: string;
+  name: string;
+  slug: string;
+  description: string;
+  default_branch: string;
+  resource_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RepositoryBranch {
+  id: string;
+  name: string;
+  /** Null on a branch created before its first commit, and on the default
+   * branch of a repository nobody has committed to - which has no row at all,
+   * since branches are created by the first commit. */
+  head_commit_id: string | null;
+}
+
+export interface RepositoryCommit {
+  id: string;
+  parent_id: string | null;
+  message: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+/** A whole snapshot: every file at a commit, path to content. A commit carries
+ * a flat manifest rather than a tree, so this is one join. */
+export interface RepositoryTree {
+  commit_id: string | null;
+  files: Record<string, string>;
+}
+
+export interface RepositoryDiff {
+  added: string[];
+  deleted: string[];
+  modified: string[];
+}
+
 export interface ProjectMember {
   id: string;
   role: ProjectRole;
