@@ -124,6 +124,16 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/commits` +
         (branch ? `?branch=${encodeURIComponent(branch)}` : ""),
     ),
+  commit: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { branch: string; files: Record<string, string>; message: string },
+  ) =>
+    request<import("./types").RepositoryCommit>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/commits`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   diff: (wid: string, pid: string, rid: string, toCommitId: string) =>
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,

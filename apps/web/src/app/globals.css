@@ -1050,3 +1050,33 @@ button { font: inherit; cursor: pointer; }
 .repo-diff li.added span { color: var(--accent-deep); }
 .repo-diff li.modified span { color: var(--brass); }
 .repo-diff li.deleted span { color: var(--danger); }
+
+/* ---- code editor (ROADMAP phase 2, 2.2) ----------------------------------- */
+.repo-work { display: flex; flex-direction: column; gap: 12px; min-height: 0; flex: 1 1 auto; }
+.repo-editor { height: 460px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.code-editor-loading {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--ink-soft); font-size: 13px;
+}
+.repo-file.edited::after { content: " •"; color: var(--brass); }
+.repo-tree-actions { display: flex; gap: 8px; margin-top: 10px; }
+.repo-tree-actions button {
+  font: inherit; font-size: 12px; padding: 4px 9px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: #fff; cursor: pointer;
+}
+.repo-tree-actions button:hover { border-color: var(--accent); }
+.repo-commit-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--brass);
+  background: var(--brass-wash); border-radius: var(--radius);
+}
+.repo-commit-bar input {
+  flex: 1 1 auto; font: inherit; padding: 6px 9px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff;
+}
+.repo-dirty { font-size: 12.5px; color: var(--brass); white-space: nowrap; }
+.repo-discard {
+  font: inherit; font-size: 12.5px; border: none; background: none;
+  color: var(--ink-soft); cursor: pointer; text-decoration: underline;
+}

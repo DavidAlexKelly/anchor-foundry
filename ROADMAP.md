@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§61 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§62 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -199,13 +199,13 @@ The decision in `0001` covers a single file per model. It does not cover: multip
 - How a repository relates to the datasets it produces. In Foundry a transform *declares* its outputs; that declaration is what lineage is built from. Anchor derives lineage from model definitions today, so this is a change to how the DAG is computed.
 - What happens to `model_versions`. It cannot simply be dropped — rollback (`STATUS.md` §29) depends on it.
 
-### 2.2 A real editor — **M** (the surface it slots into exists: `STATUS.md` §61)
+### ~~2.2 A real editor~~ — **done, `STATUS.md` §62**
 
 **Monaco**, self-hosted. Not a CDN import: the deployed stack has a strict egress posture and the onboarding page's CSP experience is the precedent. Bundle it, lazy-load it, and pin the version.
 
 Python and SQL syntax first; language-server-grade IntelliSense is 2.9, not this item. Ship: syntax highlighting, bracket matching, multi-cursor, find/replace, a keybinding set people recognise.
 
-### 2.3 File tree and multi-file editing — **M** (the read/write API behind it is done: `STATUS.md` §60)
+### ~~2.3 File tree and multi-file editing~~ — **done, `STATUS.md` §60, §62**
 
 Tree, create/rename/delete/move, tabbed editors, unsaved-state indicators, and a working-set concept so a half-finished edit survives navigating away. **Depends on** 2.1.
 

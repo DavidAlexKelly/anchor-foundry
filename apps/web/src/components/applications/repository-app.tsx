@@ -13,10 +13,18 @@
  * anything means describing where to click.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { repositories as repoApi } from "@/lib/api";
 import type { RepositoryTree, ResolvedResource } from "@/lib/types";
+
+// Monaco touches `window` at module scope and is ~1 MB nothing else needs.
+const CodeEditor = dynamic(
+  () => import("@/components/code-editor").then((m) => m.CodeEditor),
+  { ssr: false, loading: () => <div className="code-editor-loading">Loading editor…</div> },
+);
 
 type Tab = "files" | "history";
 
@@ -108,6 +116,11 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
 
       {tab === "files" ? (
         <FilesTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          branch={current}
+          pinned={!!commitId}
           tree={tree.data}
           pending={tree.isPending}
           error={tree.error as Error | null}
@@ -128,71 +141,187 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
 }
 
 function FilesTab({
+  wid,
+  pid,
+  rid,
+  branch,
+  pinned,
   tree,
   pending,
   error,
   openPath,
   onOpen,
 }: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  pinned: boolean;
   tree: RepositoryTree | undefined;
   pending: boolean;
   error: Error | null;
   openPath: string | undefined;
   onOpen: (path: string) => void;
 }) {
+  const queryClient = useQueryClient();
+  // The working set: the committed tree with unsaved edits laid over it. Kept
+  // apart from the query cache so a refetch cannot silently discard typing,
+  // and reset only when the ref changes - switching branch or commit is a
+  // deliberate act, and losing edits to it is the user's own decision.
+  const [edits, setEdits] = useState<Record<string, string | null>>({});
+  const [message, setMessage] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
+  useEffect(() => {
+    setEdits({});
+    setMessage("");
+  }, [tree?.commit_id, branch]);
+
+  const committed = tree?.files ?? {};
+  const working = useMemo(() => {
+    const merged: Record<string, string> = { ...committed };
+    for (const [path, content] of Object.entries(edits)) {
+      if (content === null) delete merged[path];
+      else merged[path] = content;
+    }
+    return merged;
+  }, [committed, edits]);
+
+  const dirty = Object.entries(edits).some(
+    ([path, content]) => (committed[path] ?? null) !== content,
+  );
+
+  const commit = useMutation({
+    mutationFn: () =>
+      repoApi.commit(wid, pid, rid, { branch, files: working, message }),
+    onSuccess: () => {
+      setEdits({});
+      setMessage("");
+      setFailure(null);
+      queryClient.invalidateQueries({ queryKey: ["repo-tree", rid] });
+      queryClient.invalidateQueries({ queryKey: ["repo-commits", rid] });
+      queryClient.invalidateQueries({ queryKey: ["repo-branches", rid] });
+    },
+    onError: (e: Error) => setFailure(e.message),
+  });
+
   if (pending) return <p className="state">Loading files…</p>;
   if (error) return <p className="state error">{error.message}</p>;
-  if (!tree || tree.commit_id === null) {
-    return (
-      <p className="state">
-        This repository is empty. Nothing has been committed to it yet.
-      </p>
-    );
+
+  const paths = Object.keys(working).sort();
+  const selected = openPath && paths.includes(openPath) ? openPath : paths[0];
+  const source = selected === undefined ? undefined : working[selected];
+  // Editing is against a branch. A pinned commit is history, and history that
+  // could be typed into would stop being a record of what happened.
+  const readOnly = pinned;
+
+  function addFile() {
+    const path = window.prompt("New file path", "src/new.sql");
+    if (!path) return;
+    if (paths.includes(path)) {
+      setFailure(`${path} already exists`);
+      return;
+    }
+    setEdits((c) => ({ ...c, [path]: "" }));
+    onOpen(path);
   }
 
-  const paths = Object.keys(tree.files).sort();
-  // The requested file if it exists at this ref, otherwise the first. Switching
-  // branches while a file is open must not blank the pane when that file does
-  // not exist on the branch you moved to.
-  const selected = openPath && paths.includes(openPath) ? openPath : paths[0];
-  const source = selected === undefined ? undefined : tree.files[selected];
-
   return (
-    <div className="repo-split">
-      <nav className="repo-tree" aria-label="Files">
-        {paths.map((path) => (
-          <button
-            key={path}
-            type="button"
-            className={`repo-file${path === selected ? " on" : ""}`}
-            aria-current={path === selected}
-            onClick={() => onOpen(path)}
-          >
-            {path}
-          </button>
-        ))}
-      </nav>
-      <div className="repo-viewer">
-        {selected !== undefined && source !== undefined ? (
-          <>
-            <div className="repo-file-head">
-              <code>{selected}</code>
-              <span className="soft">{source.split("\n").length} lines</span>
+    <div className="repo-work">
+      {tree?.commit_id === null && !dirty && (
+        <p className="state">
+          This repository is empty. Add a file to make the first commit.
+        </p>
+      )}
+      <div className="repo-split">
+        <div>
+          <nav className="repo-tree" aria-label="Files">
+            {paths.map((path) => (
+              <button
+                key={path}
+                type="button"
+                className={`repo-file${path === selected ? " on" : ""}${
+                  (committed[path] ?? null) !== (edits[path] ?? committed[path] ?? null)
+                    ? " edited"
+                    : ""
+                }`}
+                aria-current={path === selected}
+                onClick={() => onOpen(path)}
+              >
+                {path}
+              </button>
+            ))}
+          </nav>
+          {!readOnly && (
+            <div className="repo-tree-actions">
+              <button type="button" onClick={addFile}>
+                New file
+              </button>
+              {selected !== undefined && (
+                <button
+                  type="button"
+                  onClick={() => setEdits((c) => ({ ...c, [selected]: null }))}
+                >
+                  Delete file
+                </button>
+              )}
             </div>
-            {/* Plain text, with line numbers rendered beside it rather than
-                inside it, so a copy of the file is the file. Highlighting is
-                the editor's job (2.2). */}
-            <pre className="repo-source">
-              <code>{source}</code>
-            </pre>
-          </>
-        ) : (
-          <p className="state">This commit contains no files.</p>
-        )}
+          )}
+        </div>
+
+        <div className="repo-viewer">
+          {selected !== undefined && source !== undefined ? (
+            <>
+              <div className="repo-file-head">
+                <code>{selected}</code>
+                <span className="soft">{source.split("\n").length} lines</span>
+              </div>
+              <div className="repo-editor">
+                <CodeEditor
+                  path={selected}
+                  value={source}
+                  readOnly={readOnly}
+                  onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="state">
+              {readOnly ? "This commit contains no files." : "No files yet."}
+            </p>
+          )}
+        </div>
       </div>
+
+      {!readOnly && dirty && (
+        <form
+          className="repo-commit-bar"
+          onSubmit={(e) => {
+            e.preventDefault();
+            commit.mutate();
+          }}
+        >
+          <span className="repo-dirty">
+            {Object.keys(edits).length} file{Object.keys(edits).length === 1 ? "" : "s"} changed
+          </span>
+          <input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="What changed, and why"
+            aria-label="Commit message"
+          />
+          <button className="btn" type="submit" disabled={commit.isPending}>
+            {commit.isPending ? "Committing…" : `Commit to ${branch}`}
+          </button>
+          <button type="button" className="repo-discard" onClick={() => setEdits({})}>
+            Discard
+          </button>
+        </form>
+      )}
+      {failure && <p className="state error">{failure}</p>}
     </div>
   );
 }
+
 
 function HistoryTab({
   wid,

@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§61). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§62). Test counts below are from the last full regression run.
 
 ---
 
@@ -1108,6 +1108,24 @@ Two small things that only exist because the API was built first and honestly. A
 Per-commit diffs are fetched per row rather than returned with the history: a history endpoint that carried every diff would do that work whether or not anybody looked at it.
 
 Browser-verified against a seeded repository with two branches and three commits: the file tree, the file choice surviving in the URL, `experiment` showing a genuinely different tree from `main`, per-commit diffs reading `added`/`changed`/`deleted`, and pinning to a commit showing that commit's files. No console errors. **API unchanged at 468** - this commit is frontend and shared types only.
+
+---
+
+### 62. A real editor, bundled (this session)
+
+Phase-2 items 2.2 and 2.3. Monaco, and a working set you can commit from.
+
+**The dependency decision is the item.** `@monaco-editor/react` fetches Monaco from jsDelivr by default, and the deployed stack runs inside the customer's VPC behind a strict egress policy - a CDN import is an editor that works on a laptop and is a blank rectangle in production. `loader.config({ monaco })` hands it the bundled copy instead. The browser check asserts it directly: **zero off-origin requests** while the editor loads and runs. Anything less would have been a bug that only appears after a real deploy, which is the class this phase keeps producing.
+
+Workers are routed to the plain `editor.worker`. The languages offered - SQL, Python, Markdown, YAML, JSON - are tokenised by Monarch on the main thread and have no worker-backed language service; the ones that do (TypeScript) are not offered. Without this Monaco asks for a worker URL, does not find one, and logs on every keystroke.
+
+**Loaded through `next/dynamic` with `ssr: false`**, so nothing but an editor pays for it: the production build puts `/r/[resourceId]` at 10.9 kB and 119 kB first-load, with Monaco outside both. Verified with a real `next build` rather than assumed - dev mode and production webpack are different enough that a bundling change unverified in production is a bundling change untested.
+
+**The working set** is the committed tree with unsaved edits laid over it, kept out of the query cache so a refetch cannot silently discard typing, and reset only when the ref changes. Editing is against a *branch*: a pinned commit is read-only, because history that could be typed into would stop being a record of what happened. Files can be created and deleted; a changed file is marked in the tree; a commit sends the whole working tree, which is what a flat manifest means (decision 0003).
+
+An unknown extension gets `plaintext` rather than a guess - mis-highlighted code reads as broken code. The editor is keyed by path, so switching files swaps the model rather than replaying new text into the old one, which would put a change in the undo stack of a file it did not come from.
+
+Browser-verified end to end: the editor mounts with SQL colouring, typing raises the commit bar and marks the file, committing clears it, and the new commit appears at the top of history with its diff. No console errors, no off-origin requests. **API unchanged at 468.**
 
 ---
 
