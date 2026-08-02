@@ -269,3 +269,29 @@ def test_canvas_actions_audited(client: TestClient, fx: Fixture) -> None:
         "canvas_app.create", "canvas_app.update", "canvas_app.save",
         "canvas_app.publish", "canvas_app.delete",
     } <= actions
+
+
+def test_publishing_shares_the_layout_not_access_to_the_data(
+    client: TestClient, fx: Fixture, custom_project: dict[str, str]
+) -> None:
+    """The thing a published app must never become is a way to launder access
+    to data somebody was not given (roadmap Canvas item 6, which built the
+    route that opens one).
+
+    The viewer here can read the app - the test above proves it - and still
+    cannot read the project's datasets, models or objects. That is the design,
+    not a gap: every widget in a published app reads as whoever is looking, so
+    an app published to the workspace shows a `permission_mode='custom'`
+    project's data only to the people that project already trusted. The UI
+    says what it could not read rather than rendering an empty table.
+    """
+    pid = custom_project["id"]
+    for path in ("datasets", "models", "object-type-sources"):
+        r = client.get(f"/api/workspaces/{fx.workspace}/projects/{pid}/{path}",
+                       headers=hdr(fx.viewer_sub))
+        assert r.status_code == 404, f"{path}: {r.status_code} {r.text}"
+
+    # And the editor who does belong to the project still can.
+    r = client.get(f"/api/workspaces/{fx.workspace}/projects/{pid}/datasets",
+                   headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text

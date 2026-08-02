@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4 — see §21–§43). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§50). Test counts below are from the last full regression run.
 
 ---
 
@@ -27,11 +27,11 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0029)
+### 1. Database schema (migrations 0001–0031)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
-### 2. Control plane (`apps/control-plane`) - 8/8 tests
-Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts.
+### 2. Control plane (`apps/control-plane`) - 45/45 tests
+Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts, tears a stack down (§19), and since §48 serves the customer-facing onboarding flow that connects an account in the first place.
 
 ### 3. Infrastructure (`infra/cdk`) - synths clean, 87 resources
 VPC, RDS (encrypted, deletion-protected), ElastiCache, OpenSearch, S3, Cognito (spec-exact: MFA optional TOTP-only, 15 min access tokens, no self-signup), 3 ECS services behind an ALB, CloudFront, WAF, GuardDuty, CloudTrail, KMS, 6 scoped IAM roles.
@@ -745,10 +745,171 @@ Rows from this path get `object_type_id` filled back in before they are returned
 
 ---
 
+### 44. Somewhere for a published app to lead (this session)
+
+`ROADMAP.md` Canvas item 6, which describes itself as polish: "the read API already exists — just needs a list page and a nav entry".
+
+**The list page was the easy half. Publishing had nowhere to lead.** The only route that rendered an app was the project editor, which resolves its project by slug and reads the project-scoped endpoint — so anybody without project membership, *the exact audience publishing exists for*, followed a link to an app published to them and got a 404. The workspace-wide read path has been in the API since §15 with nothing in the web app calling it. So this shipped as a pair: `/{workspace}/apps` (the gallery) and `/{workspace}/apps/{appId}` (the viewer), the latter rendering the definition with Craft's editor hard-disabled rather than merely chrome-hidden.
+
+**The gallery is workspace-scoped, not a project tab**, and that is the whole point of it: somebody who opens a dashboard every Monday does not know which project its author filed it in, and making them find the project first is asking them to learn the builder's filing system.
+
+**Publishing shares the layout, not access to the data**, and the new route is what makes that observable. Every widget in a published app still reads its dataset or object type *as whoever is looking* — an app must never become a way to launder access to data somebody was not given. For a project on inherited permissions (the default) every workspace member already has viewer access, so an app published to the workspace simply works; in a `permission_mode='custom'` project the widgets report what they could not read. `test_canvas.py` now pins that boundary directly — the same viewer who can read the published app gets 404 on that project's datasets, models and object sources — so nobody later "fixes" the empty widgets by widening the read path. The Publish dialog's copy was wrong about the other half too: it said "shares the current saved version", implying a pinned snapshot, when publishing is a visibility flag over the live definition. It now says so, and the browser check asserts it (reorder, save, and the published view follows).
+
+**Reordering got two buttons rather than only drag.** Craft.js already lets a placed widget be dragged, but native HTML5 drag-and-drop is the one canvas interaction automation cannot drive (an entry in the rough edges below since §15) — *and* it is the one a keyboard cannot do at all. Move up/move down in the settings panel is both testable and the only accessible way to reorder an app. One trap worth keeping: Craft's `move(id, parent, index)` inserts at an index in the parent's list *before* the node is removed from it, so moving down by one is `index + 2`; get it wrong and the widget silently stays put.
+
+**Testing.** `test_canvas.py` grew to 16 with the access-boundary test above. Verified in a browser: the workspace page's Apps link, the gallery listing a published app and *not* a private one in the same project, the published view rendering with live widget data and no palette or Save button, move down/move up reordering, and the new order surviving a save, a reload, and showing through to the published view.
+
+**Current totals: API 352/352** (351 + 1), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
+### 45. The Code pillar's design spike — decided, not built (this session)
+
+`ROADMAP.md` Code item 1, the one item in that document which forbids writing code until it is settled: self-hosted git backend in the VPC, or federation with the customer's own GitHub/GitLab. Written up in `docs/decisions/0001-where-code-lives.md`; the summary here is what it decided and why it matters to the rest of the repo.
+
+**Neither, as posed. The system of record stays in Postgres, and git — if it appears at all — is an outbound mirror to a remote the customer already owns.**
+
+The argument that settles it was already in the schema. `model_runs.model_version` pins each run to the exact definition that executed, and 0024 makes rollback *append* rather than rewind precisely so that pointer resolves to one piece of code forever. **A git ref cannot promise that**: branches move, history can be rewritten, and a commit reachable today can be gone after a force-push and a GC. Git as the store means either accepting runs that point at code which no longer exists, or rebuilding immutability on top of git — pinning every run to a SHA and never collecting garbage, which is a worse version of what the database already does.
+
+That collapses the rest of the choice. A self-hosted server becomes a *second copy* whose remaining value is developer tooling interop — clone, local editing, existing CI — and a server in `PRIVATE_WITH_EGRESS` subnets cannot deliver that without new public ingress and a new auth model, on top of new state (there is no EFS in the stack, and Fargate tasks are ephemeral). Meanwhile federation to *the customer's own* git host is the same category of thing Connections already does: outbound over egress the VPC has, credential in `SecretsGateway`. What the self-contained-deployment pitch protects is that **the vendor** holds no customer data, not that the customer may not use their own SaaS.
+
+**Three consequences that change the remaining items** rather than sitting in a document nobody re-reads:
+
+  * **Item 2 shrinks.** "A git-backed store for model definitions" is not what gets built, because the store exists — it is a repository-shaped surface over `model_versions`. The one genuinely new concept is the **change set**: a save writes one version row per model today, so "these three transforms changed together, for one reason" cannot currently be said.
+  * **Item 3 evaporates.** There is no round trip, because there is no second copy: editing through Code calls the same service the inline editor calls and takes the same build path by construction. The roadmap's "may end up being the same mechanism viewed two ways" is stronger than it guessed — they are the same rows.
+  * **Item 4 gains a boundary.** Approval state is platform-native, in Postgres against platform identities. If a merged pull request on the customer's GitHub authorised a change to what runs here, whoever administers that org — people the platform neither manages nor can enumerate — would control what a transform computes. Same refusal as §44's: a mirror may carry the diff, it may not be what says yes.
+
+**Flagged for whoever implements federation:** CodeCommit is the option that would satisfy both halves (in-account *and* clonable, IAM-authenticated, no new auth model), and AWS closed it to new customers in 2024, so a freshly provisioned account cannot be assumed to have it. Verify that rather than taking the doc's word for it — if it has changed, it is the best target by a distance.
+
+No code, no tests: this item is a decision. **Totals unchanged: API 352/352, worker 50/50, control-plane 13/13.**
+
+---
+
+### 46. Code, without a repository (this session)
+
+`ROADMAP.md` Code item 2, built to the shape §45 decided: the project's transforms *are* the repository, `model_versions` *is* the history, and this is the surface that renders both. `/{workspace}/{project}/code` replaces the "No repositories yet — New repository" placeholder that had been sitting there since §15, and the button is gone rather than disabled, because there is nothing to create.
+
+**What is genuinely new is one table.** Migration 0030's `code_change_sets` gives a name to something the schema could not previously say: *these three transforms changed together, for one reason*. A save has always written one `model_versions` row per model, so an edit spanning several models was several unrelated events. A change set groups them and holds the message; it holds no code, because the code stays where a run resolves it.
+
+**Membership is nullable and stays that way.** Every version written before 0030 has no change set, and every save from the inline Models editor still writes one without. Backfilling a synthetic single-model change set onto those would invent an intention nobody expressed — the same refusal 0024 made about pointing pre-migration runs at a backfilled v1. So the commit log has **two kinds of entry**: a change set with a message, and a standalone save that says which transform was edited (or "Reverted X to v2", read off `restored_from`). That is the truth about how this codebase gets edited, and the UI shows it rather than smoothing it over.
+
+**Every write goes through `models.update`.** `apply_change_set` loops over the files calling the same service the inline editor calls, in one transaction, so Code cannot bypass a check the other surface enforces — a test drives cycle refusal (Models item 7) through a change set and asserts the whole thing rolls back, log included. This is also `ROADMAP.md` Code item 3 answered by construction: there is no round trip to get right, because there is no second copy. A second authoring surface with weaker validation is a bug with a UI in front of it, and the role floors match Models exactly for the same reason.
+
+**A change set that changes nothing is refused**, not recorded. `update` already declines to write a version when code and inputs are unchanged, so a change set built from no-ops would be a commit message attached to nothing — a claim about history rather than an empty entry in it. The browser check produces that state the way a person does (type something, take it back) and asserts the reason appears on screen.
+
+**Two smaller decisions worth keeping:**
+
+  * **Paths are derived, and collisions suffix *both* sides.** "Daily orders" and "Daily Orders!" collapse to one stem; if only the second took an id suffix, one model's path would move when an unrelated model was renamed. A path that changes between two reads is not a path.
+  * **Diffs are computed on read.** A stored diff is a second copy that can disagree with the versions it describes. One bug came out of that: `unified_diff` with `keepends=True` runs the last `-` line into the first `+` line when the source has no trailing newline (transform source usually doesn't), which rendered as one nonsense line in the browser and looked fine in the API tests.
+
+**The nav count was quietly wrong and now isn't.** The project sidebar read `code_repos` — a table from the original spec that has never had a row written to it — so Code showed "0" beside a section listing two files. It now counts the project's models, which is what the section contains. `code_repos` itself is left in place: it is a spec §16 table the schema verifier asserts, and removing it is a claim about the spec rather than about this feature. It is dead by design, and named as such below.
+
+**Testing.** `test_code.py`, 16 tests: stable paths and both-sided collision suffixes, reading an old version with the inputs it was saved with, diffs including "before v1", change sets grouping several files, a change set writing rows Models' own history endpoint returns, cycle refusal through a change set, the no-op and duplicate-file refusals, the two-kind timeline, revert entries, the permission floors, and the audit record. Verified in a browser: two files staged and saved as one change set, the change set detail naming both files with their `v1 → v2` steps, a save made *outside* Code appearing as a single save, its diff rendering, and the no-op refusal.
+
+**Current totals: API 368/368** (352 + 16), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
+### 47. Review-gated promotion (this session)
+
+`ROADMAP.md` Code item 4, the last unbuilt item in that document. It asks for "a PR-like review step before a change to a transform's code takes effect on whichever branch/environment is considered live", and names "branch-to-environment mapping" as part of the scope.
+
+**There are no branches and no environments here**, and §45 explains why there will not be a branch: `models.code` is the live definition and `model_runs.model_version` pins every run to the row that produced it. So "live" means the project, and the review step gates **the write that makes a definition live** rather than a merge between two refs. That is the item's stated scope minus a third of it, and the missing third is a Foundry structure this platform deliberately does not have — recorded rather than quietly skipped.
+
+**A proposal is a request, not a definition.** Its files live in `code_proposal_files` (migration 0031), never in `model_versions`, because that table is what a run resolves against and must never contain code nobody approved. Applying writes the versions — through §46's change set path, so an approved change lands in the same log as every other edit rather than a parallel history — and only then does the code exist as a definition. Nothing runs a proposal, and nothing can.
+
+**The gate lives in `models.update`, not in a route.** That function is what makes a definition live, and the Models editor and the Code change-set endpoint are two doors into it; a check on one screen is a check on one screen. It gates *code and inputs only*: trigger mode, schedule and health policy stay editable, because 0024 already drew that line and a project that required review to pause a job would be one people turn the gate off for. Review is **off by default** — turning it on for every existing project would break how every existing project is edited.
+
+**Three ways round a review, all refused:**
+
+  * **Approving your own proposal.** A review somebody gave themselves is not a review, and letting it count makes the gate a formality anyone in a hurry can perform alone.
+  * **Approve, then swap the code.** Editing a proposal's files bumps `files_updated_at`, and approvals older than that no longer count — otherwise a reviewer's name ends up against a change they never saw. Editing only the summary keeps the approval: the reviewer approved code, not prose.
+  * **Applying a stale proposal.** Each file records the version it was written against, and applying re-checks it. Without that, approving on Monday and applying on Friday silently discards whatever happened in between — a lost update wearing a reviewer's approval. The check is at *apply* time rather than review time, because the gap between the two is exactly where the race lives.
+
+**Blockers are a list, not a boolean.** `get_proposal` returns every reason it cannot be applied, in the API's own words, and the UI prints them. A disabled button with no explanation leaves somebody guessing which rule they tripped — and there are four of them.
+
+**Reviews are append-only**, like every other history in this codebase: a reviewer who changes their mind leaves a second row, and what counts is each reviewer's latest verdict. Setting the policy is **owner**-level (a governance decision about the project), reviewing is **editor**-level (a viewer who could approve would be authorising an edit they are not allowed to write themselves).
+
+**Two bugs worth keeping.** A nullable enum filter written as `:state IS NULL OR state = CAST(:state AS ...)` makes Postgres refuse the whole statement — "could not determine data type of parameter" — and the API tests never hit it because only the browser asked for `?state=open`; there is now a test for the list endpoint itself. And `npm run build` while `next dev` is running overwrites `.next` under the dev server, which then 500s on every route with `Cannot find module './vendor-chunks/...'`: nothing to do with the code, but it looks exactly like a broken page. Kill the dev server, delete `.next`, restart.
+
+**Testing.** `test_code_review.py`, 20 tests: the gate off by default, refused on both surfaces when on, not blocking scheduling, owner-only policy; the proposal lifecycle (not a definition until applied, applying writes one change set and closes it, no double-apply, withdraw); and the three refusals above, each asserting the *other* person's work survived. Verified in a browser with two identities: turning the gate on, a direct edit refused, staged files becoming a proposal, self-approval refused, a second identity approving and the change applying, and a stale proposal blocked with its Apply button disabled and the reason on screen.
+
+**Current totals: API 388/388** (368 + 20), **worker 50/50**, **control-plane 13/13** (both untouched).
+
+---
+
+### 48. Onboarding somebody could actually do (this session)
+
+`ROADMAP.md` section 7 item 2 — the first item outside the six pillars, because a platform nobody can stand up is a platform nobody uses. Section 7 exists because the honest answer to "how do I launch this on a new instance?" was a runbook with a Python REPL in the middle of it: the operator CLI could `deprovision` a customer but had **no `provision` command at all**.
+
+**The structural gap: there was no surface the customer could touch.** `apps/web` cannot be it — it runs *inside* the stack being provisioned, so at onboarding time it is the thing that does not exist yet, and §19 already recorded that it has no path to the control plane's trust boundary either. So this is a second, small FastAPI app in `apps/control-plane`, server-rendering one page. A second Next.js app for five steps and a poll would have been more scaffolding than page, and this has to deploy in front of the registry without the product's web build anywhere near it.
+
+**The customer types twelve digits, and nothing else.** The bootstrap template hardcodes `RoleName: platform-bootstrap`, so the role ARN is *derivable* from the account ID — the ARN paste that used to travel by email was pure ceremony, and ceremony is where typos live. Everything else is in a **prefilled CloudFormation launch URL**: template, stack name, control-plane role ARN, and the 43-character external ID, all in the query string. Click, tick the IAM box, Create.
+
+**Detection is a probe, not a form field.** "Have they run the template yet?" is answered by trying to assume the role — the same call provisioning makes a minute later. A checkbox saying "I've done it" can be wrong; an `sts:AssumeRole` that succeeds cannot, and it proves the external ID matched too, which is the other half of what could have gone wrong.
+
+**Preflight fails in plain English before CloudFormation fails in a wall of events.** The five checks are the ways the deploys in §17/§20 actually broke: the role is assumable, the region is one this build has been deployed to, the region is CDK-bootstrapped, there is Elastic IP headroom for the NAT gateway, and there is not already a stack. **Every failing check carries a remedy** — a check that reports a problem without saying what to do about it has moved the confusion rather than removed it — and provisioning is *refused* while one stands, because otherwise the customer waits ten minutes to be told something the page already knew.
+
+**The fifteen minutes are no longer silent.** CloudFormation knew what it was doing the whole time and nothing surfaced it; the status endpoint now carries stack events and the page tails them, then hands off to `/setup` in the new deployment.
+
+**Two credentials, two audiences.** The vendor creates an onboarding with an operator token; the customer drives it with a per-customer onboarding token minted at that moment, stored as a SHA-256 hash and authorising exactly one org's onboarding. An unknown token gets the same flat 404 as an expired one — distinguishing them tells a stranger that a token existed. The external ID is **not returned by any route**, not even the one that creates the onboarding: an earlier draft handed it back to the vendor on the assumption they would paste it into a link, and once the link is minted server-side that is a secret with no caller.
+
+**One bug worth keeping**, found in a browser and invisible to the tests: the five-second poll re-opened step 4 on every tick, wiping the "checked" state the preflight had just set, so the page kept forgetting what it had established. Polling loops that write UI state need to *open* steps, never reset them.
+
+**Testing.** `test_onboarding.py`, 19 tests against the real registry with AWS and the provisioner faked: the launch URL carrying both parameters and URL-encoding the external ID, the derived ARN, one link reaching exactly one onboarding, the flat 404, the operator route refusing an absent or wrong token, the external ID never appearing in a token-authenticated read, detection before and after the template is run, bad account IDs and unsupported regions refused before AWS sees them, preflight passing and failing with remedies, provisioning refused on a failing check, running once, reporting its failure, and stack events reaching the status payload. Verified in a browser end to end against a scripted fake account: not-connected → connected → preflight failing with the `cdk bootstrap` command on screen and the button disabled → preflight passing → provisioned, with events tailing and the hand-off link live.
+
+**Current totals: control-plane 32/32** (13 + 19), **API 388/388**, **worker 50/50** (both untouched).
+
+---
+
+### 49. The rest of section 7: a CLI, an image, a runbook, a checklist, and a failure that explains itself (this session)
+
+Items 1, 3 and 4, finishing the deployment section §48 opened.
+
+**Item 1 — operator ergonomics.** `python -m src.cli` gained `onboard` (register a customer, print their link), `provision` (detect → preflight → deploy, streaming CloudFormation events to stdout), `status`, `serve` (the customer-facing app) and `demo`. It had exactly one command before this: `deprovision`. A control plane that could destroy a customer's stack but not create one was the sharpest single fact about how this got deployed. Both paths — CLI and page — run the same `OnboardingService`, so they preflight identically and refuse identically; a CLI that drifted would eventually provision something the page would have refused.
+
+**The control plane can now be run at all.** It had no Dockerfile: the other three services have one each, and it never needed one until §48 gave it a web surface. Its image carries **Node and the CDK CLI plus `infra/cdk` itself**, because `cdk deploy` is a subprocess — a control plane that can take an order and not fill it is not one.
+
+**`docs/deploying.md` is the runbook that did not exist**, written as three test levels rather than a list of commands: the whole onboarding flow with **no AWS at all** (`cli demo`, which scripts an account that starts un-assumable so the failure screens can be walked before anybody spends fifteen minutes), one stack **by hand**, and the real thing **through the page**. It names what level 3 exercises for the first time: `stack_events`, `cdk_bootstrap_version` and `elastic_ip_headroom` have only ever run against fakes, so that is where to expect the first real-AWS surprise — most likely a permission the bootstrap role lacks.
+
+**Item 3 — the first-run checklist**, on the project overview: bring data in → transform it → give it a shape → build something on it. **Every item is derived, not stored**: it is true when the thing it names exists, so nothing is ticked by hand, nothing goes stale, and a project somebody else set up shows the right state to whoever opens it next. It retires itself once all four are done.
+
+One bug the browser caught immediately, and worth keeping because it is this codebase's recurring shape: the "give it a shape" step first used `resource_counts.objects`, and **object types are workspace-wide**. A brand-new project in this dev workspace opened with that step already ticked by 26 types somebody else had made — a green tick claiming work nobody had done. It now counts the project's *object type sources*, which is what actually belongs to the project. The screenshot of the fix shows "2 of 4" next to a sidebar reading "Objects 26", which is the whole argument in one frame.
+
+**Item 4 — failure recovery.** A failed deploy now returns its failures in plain English with the one action that resolves each, and offers a retry. The hints are the failures this build actually hit (§17, §20): a cancelled resource pointing at the *earlier* failure that really caused it, the migration Lambda's "no pq wrapper available", an image built for the wrong architecture, no Elastic IPs, a dependent object blocking a delete, a missing bootstrap-role permission. **An unrecognised failure gets no invented advice** — CloudFormation's own reason beats a guess dressed as guidance.
+
+**Testing.** `test_onboarding.py` grew to 22 (the three failure-recovery tests). Verified in a browser: the documented level-1 walkthrough end to end against `cli demo`, and — against `cli demo --fail` — the failure block naming the real cause with a working Try again. The checklist was verified by creating each resource in turn and watching the count move without anything being clicked.
+
+**Current totals: control-plane 35/35** (32 + 3), **API 388/388**, **worker 50/50** (both untouched).
+
+---
+
+### 50. The vendor's own bootstrap (this session)
+
+§48 and §49 made the *customer's* path one page: pick a region, type twelve digits, click a prefilled CloudFormation link, come back. What they did not touch is the asymmetry underneath it — **everything the customer touches is one page; everything the vendor touches to make that page exist was still five manual steps**: create a KMS key, create a role with the right trust policy, create three ECR repositories, put the bootstrap template somewhere CloudFormation can read, then work out which environment variable wants which ARN.
+
+`python -m src.cli init --region <region>` is those five steps, and it ends by printing the exact environment block and the three `docker build` commands.
+
+**Idempotence is the feature, not a nicety.** Running it again is how you check the state of an account somebody set up months ago, and it is what makes the command safe to put in a runbook people follow twice. Two things are rewritten on every run and everything else is left alone: **the role's inline policy**, so an account bootstrapped a year ago picks up a permission this build has added since, and **the template**, because a stale one is worse than a missing one — the launch link keeps working and hands the customer a role lacking exactly the permission the new deploy needs.
+
+**Two IAM policies, both narrow on purpose.** The control plane may assume `arn:aws:iam::*:role/platform-bootstrap` and nothing else — one that could assume *any* role in a customer account would be a far bigger promise than this product makes — and it may use exactly one KMS key, the one that wraps external IDs. Trust defaults to the account root, which is not "anybody": it delegates to the account's own IAM rather than naming a person who will later leave, and `--trust` narrows it to a principal.
+
+**It stops at two things and says so.** It does not create the registry's Postgres and does not host the onboarding page, because both are decisions with a bill attached: a first customer's registry can live on the operator's laptop, and where the page runs is an availability call that differs at one customer and at fifty. Both are printed under "still yours to decide" — the difference between a tool that finished and a tool that stopped.
+
+**One detail that only shows up in a real account:** the customer's bootstrap template trusts a **role**, so the control plane has to *run as* the role `init` creates. `docs/deploying.md` now says to assume it before `serve` or `provision`; running as your own user with the role ARN configured looks right and fails at `sts:AssumeRole` with a message about trust policies.
+
+**Testing.** `test_vendor_bootstrap.py`, 10 tests against a fake gateway: a first run creating everything, the environment block being the *whole* configuration (anything missing is something somebody has to work out by hand), a second run creating nothing while still reporting everything, the template and role policy being rewritten anyway, both policies' scopes, trust defaulting to the account and narrowing on request, JSON-serialisability of what goes to IAM, and the output naming what is still manual.
+
+**Current totals: control-plane 45/45** (35 + 10), **API 388/388**, **worker 50/50** (both untouched).
+
+---
+
 ## What's not started
 
-- **Code** (repo browser) — not started
-- **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet), and no drag-and-drop reordering of already-placed widgets beyond what Craft.js gives for free — all additions to the same resolver/widget pattern, just not built yet
+- **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
+- **`code_repos`** (migration 0003, spec §16) — a table with no writer and, since §45, no future one. Left in place because the schema verifier asserts the spec's tables and dropping it is a claim about the spec rather than about a feature; the project nav no longer counts it (§46). Drop it if the spec is ever revised to match the decision
+- **Canvas widget palette** (see §15, §40, §41, §42, §43): Container, Text, Filter, Dataset table, Object table, Chart, Map, Action form. No configurable tile source for the map (§43 ships country outlines in the bundle and names this as the extension point), and no cross-widget interactivity beyond parameters (e.g. a table row selection driving another widget's detail view — `MapCanvas` already takes an `onSelect` nothing passes yet) — both additions to the same resolver/widget pattern, just not built yet. Reordering placed widgets is done (§44), by buttons as well as by drag
+- **Sharing an app outside the platform** (a public or token-scoped link) — `ROADMAP.md` Canvas item 7, explicitly a stretch: it needs an auth model for an unauthenticated or token-authenticated viewer, which is a bigger question than any widget. §44's viewer route is the in-platform half and stops at the workspace boundary
 - **Canvas apps don't appear on the workspace-wide "published apps" nav anywhere yet** — the `GET .../published-canvas-apps` read path exists and is tested (§15) but no frontend page lists it; today a workspace member reaches a published app only if handed its direct URL
 - **Object instance sync gained scheduling, still full-snapshot by design** — §16 added a cron schedule and a 2M-row worker cap, but §14's cursor-based incremental mode is deliberately connection-sync-only: an object-type-source's input dataset is a wholesale-replaced snapshot with no cursor to hold, so full-snapshot mark-and-sweep is the correct approach here, not a gap (see §16 for the reasoning)
 - **The OpenSearch instance store has never run against a real cluster** — §35 wired it in and tests it over real HTTP against a fixture implementing the REST subset it uses, which proves its requests and parsing but not that OpenSearch agrees (no analyzers, no mapping enforcement, no refresh semantics in a fixture). A deployment reaching for it is the last verification step; until one has, `OPENSEARCH_ENDPOINT` unset leaves every environment on the Postgres store, which is fully tested. **§37 raised what this gap can cost**: link traversal depends on the index's *mapping* — a `keyword` subfield must exist on string properties for an equality query to match — and mapping is precisely what a fixture with no analyzers cannot check; the fixture treats `properties.x` and `properties.x.keyword` as the same value and says so in its own docstring. The mapping is declared explicitly in `_ensure_index` rather than inherited from dynamic defaults, so the guarantee is ours rather than the cluster default's, but verifying it is still the first real cluster's job — and "links traverse to nothing on OpenSearch while working on Postgres" is the shape that failure would take
@@ -777,6 +938,7 @@ Rows from this path get `object_type_id` filled back in before they are returned
 - **The API's and worker's connector registries are two files that must be kept in step** (`apps/api/src/services/connectors.py` and `apps/worker/src/anchor_worker/connectors.py`) - duplicated deliberately, for the same reason `dataset_engine.py`/`storage.py` already are (independently deployable images, no shared Python package in this build), but with a nastier failure mode than those two: a source type registered in the API but missing from the worker syncs fine interactively and then silently fails on its schedule, per connection. `apps/worker/tests/test_mysql_sync_configs.py` asserts the registries agree; extend that assertion when a third source type lands, and treat "did the worker get it too?" as part of adding any connector. A shared package would remove the class of bug entirely and is worth doing if a third or fourth connector arrives - it means moving both service images to a repo-root Docker build context, which `apps/web/Dockerfile` already requires (§17 bug 1), so the precedent exists. **§29 raised the stakes on this**: the expectations evaluator is now mirrored too (a fourth thing to keep in step, with its own parity test in `test_model_runs.py`), and its drift mode is worse than the connectors' - a rule the API can store but the worker cannot evaluate would make a gated run's verdict silently disagree with the dataset's own health badge. Whoever adds the fifth mirror should build the shared package instead.
 - **Worker jobs' per-candidate `except` tuples are the single most repeated bug in this codebase** - §14 (twice, `sync_configs.py`), §16 (`instance_syncs.py`, `StorageKeyError`), and §21 (`sync_configs.py` again, the *same* `StorageKeyError` gap §16 fixed one file over). Every occurrence has the same shape: a job calls something that raises an exception type the isolation tuple doesn't name, so one bad candidate crashes the whole batch instead of failing alone. When adding or editing a scheduled job, enumerate every exception type on the call path rather than the ones a first test run happens to exercise - and when fixing one job, check its siblings for the identical gap.
 - **RLS policies that read another RLS-protected table are a recurring bug class in this codebase** - 0008 (users), 0009 (canvas_apps↔canvas_app_shares), and now 0015 (canvas_apps↔projects) all hit the same shape: a policy's `USING` clause subqueries a table whose own policy can legitimately hide the exact row the first policy needs, so the check silently fails closed instead of erroring loudly. Worth a systematic pass if another cross-table RLS policy gets added - the fix is always the same (`SECURITY DEFINER` helper resolving just the needed column, bypassing RLS internally) but nothing currently catches the pattern except noticing a feature silently doesn't work.
+- **`npm run build` while `next dev` is running corrupts the dev server.** Both write `apps/web/.next`, so a production build under a running dev server leaves it serving 500s with `Cannot find module './vendor-chunks/@tanstack.js'` on every route - which reads as a broken page rather than a broken cache, and cost a debugging detour in §47. Recovery: stop the dev server, `rm -rf apps/web/.next`, restart. Run the two in sequence, never concurrently.
 - Native HTML5 drag-and-drop (what Craft.js's toolbox uses to create new widgets) can't be reliably driven by Playwright automation - `dragTo()` and manual mouse event sequences both no-op against it. Verify that specific interaction with a real mouse in a real browser; every other canvas interaction (select, edit, save, preview, publish) was verified via automation and works.
 - **`TEST_ADMIN_DSN` must contain a literal `?` (e.g. `...devpass@localhost:5432/platform?sslmode=disable`), not just `.../platform`** - `tests/test_connections.py`'s source-database fixture builds its isolated test database's DSN via `ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")`; if `ADMIN_DSN` has no `?` suffix the `.replace()` silently no-ops and every statement meant for the fixture's own throwaway `conn_source_test` database (a `public.orders` table, a `public.recent_orders` view, a blanket `GRANT ALL ON ALL TABLES` to a scratch login role) runs against the real shared `platform` database instead. This session hit it directly: a malformed DSN during this session's final regression run polluted the shared dev Postgres with exactly those objects and grants, breaking every other suite's fixtures with `DependentObjectsStillExist` on an unrelated `DROP ROLE`. Fixed by using a correctly-suffixed DSN and manually reverting the pollution (`REVOKE`/`DROP VIEW`/`DROP TABLE`/`DROP ROLE`) - not a product bug, but worth getting right the first time since the failure mode is silent until a much later, unrelated test trips over it.
 - **Worker jobs' discovery functions are global across every workspace by design** (§14, §16 - RLS-blind on purpose, since a scoped connection can't discover work in workspaces it doesn't know about), which means running the worker test suite's `run_due_object_source_syncs`/`run_due_sync_configs`/etc. against the *real* dev `platform` database (rather than a disposable one) will also pick up and act on any real, non-test source/connection that happens to be due at that moment - including one left over from manual browser verification in this same session, whose `LOCAL_STORAGE_ROOT` differed between the manual run and the pytest run and so failed with a stale storage-path error the next time discovery found it due. Point `WORKER_DATABASE_URL` at a disposable database for routine worker test runs where possible; if it must be the shared dev database, expect real dev-sandbox rows to occasionally get touched by test runs and vice versa.

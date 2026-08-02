@@ -89,6 +89,8 @@ class KmsSecretsCodec:
 class CustomerRecord:
     id: str
     org_slug: str
+    org_name: str | None
+    contact_email: str | None
     aws_account_id: str | None
     aws_region: str | None
     bootstrap_role_arn: str | None
@@ -115,6 +117,19 @@ CREATE TABLE IF NOT EXISTS customer_stacks (
     created_at           timestamptz NOT NULL DEFAULT now(),
     updated_at           timestamptz NOT NULL DEFAULT now()
 );
+
+-- Onboarding (ROADMAP section 7 item 2). Added by ALTER rather than folded
+-- into the CREATE above so an existing control-plane database picks them up
+-- on the next `ensure_schema()` - this registry predates the onboarding flow
+-- and is not managed by the platform's numbered migrations.
+ALTER TABLE customer_stacks ADD COLUMN IF NOT EXISTS org_name text;
+ALTER TABLE customer_stacks ADD COLUMN IF NOT EXISTS contact_email text;
+-- SHA-256 of the onboarding token, never the token itself: it authorises the
+-- one flow that by definition has no user account behind it, so a leaked
+-- registry dump must not hand somebody else's onboarding to a reader.
+ALTER TABLE customer_stacks ADD COLUMN IF NOT EXISTS onboarding_token_hash text;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_stacks_onboarding_token
+    ON customer_stacks (onboarding_token_hash) WHERE onboarding_token_hash IS NOT NULL;
 """
 
 _SLUG_RE = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
@@ -244,11 +259,45 @@ class StackRegistry:
             raise KeyError(f"unknown customer {org_slug!r}")
         return self._codec.decrypt(bytes(row["external_id_cipher"]))
 
+    # ---- onboarding (ROADMAP section 7 item 2) -------------------------------
+    def set_onboarding(
+        self, org_slug: str, *, org_name: str, contact_email: str, token_hash: str
+    ) -> CustomerRecord:
+        """Attach the customer's own details and the hash of their onboarding
+        token. The token itself is returned to the caller once and never
+        stored - the same shape the external ID already uses, for the same
+        reason."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """UPDATE customer_stacks
+                      SET org_name=%s, contact_email=%s, onboarding_token_hash=%s,
+                          updated_at=now()
+                    WHERE org_slug=%s RETURNING *""",
+                (org_name, contact_email, token_hash, org_slug),
+            ).fetchone()
+            conn.commit()
+        if row is None:
+            raise KeyError(f"unknown customer {org_slug!r}")
+        return self._to_record(row)
+
+    def find_by_onboarding_token_hash(self, token_hash: str) -> CustomerRecord | None:
+        """Resolve an onboarding token to its customer. Returns None rather
+        than raising: an unknown token is a routine wrong-link, not an
+        exceptional condition, and the caller answers both the same way."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM customer_stacks WHERE onboarding_token_hash=%s",
+                (token_hash,),
+            ).fetchone()
+        return self._to_record(row) if row is not None else None
+
     @staticmethod
     def _to_record(row: dict[str, object]) -> CustomerRecord:
         return CustomerRecord(
             id=str(row["id"]),
             org_slug=str(row["org_slug"]),
+            org_name=row.get("org_name"),  # type: ignore[arg-type]
+            contact_email=row.get("contact_email"),  # type: ignore[arg-type]
             aws_account_id=row["aws_account_id"],  # type: ignore[arg-type]
             aws_region=row["aws_region"],  # type: ignore[arg-type]
             bootstrap_role_arn=row["bootstrap_role_arn"],  # type: ignore[arg-type]

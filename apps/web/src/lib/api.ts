@@ -673,3 +673,94 @@ export const canvas = {
   getPublished: (wid: string, appId: string) =>
     request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/published-canvas-apps/${appId}`),
 };
+
+/** The Code pillar's repository surface (ROADMAP Code item 2). Reads render
+ * `model_versions`; the one write is the change set, which saves several
+ * transforms as a single edit through the same service the inline Models
+ * editor calls. */
+export const code = {
+  tree: (wid: string, pid: string) =>
+    request<import("./types").CodeFile[]>(
+      `/workspaces/${wid}/projects/${pid}/code/tree`,
+    ),
+  file: (wid: string, pid: string, modelId: string, version?: number) =>
+    request<import("./types").CodeFileDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/files/${modelId}` +
+        (version ? `?version=${version}` : ""),
+    ),
+  diff: (wid: string, pid: string, modelId: string, from: number | null, to?: number) =>
+    request<import("./types").CodeDiff>(
+      `/workspaces/${wid}/projects/${pid}/code/files/${modelId}/diff?` +
+        new URLSearchParams({
+          ...(from ? { from_version: String(from) } : {}),
+          ...(to ? { to_version: String(to) } : {}),
+        }).toString(),
+    ),
+  history: (wid: string, pid: string) =>
+    request<import("./types").CodeHistoryEntry[]>(
+      `/workspaces/${wid}/projects/${pid}/code/history`,
+    ),
+  changeSet: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeChangeSet>(
+      `/workspaces/${wid}/projects/${pid}/code/change-sets/${id}`,
+    ),
+  reviewPolicy: (wid: string, pid: string) =>
+    request<{ require_code_review: boolean }>(
+      `/workspaces/${wid}/projects/${pid}/code/review-policy`,
+    ),
+  setReviewPolicy: (wid: string, pid: string, required: boolean) =>
+    request<{ require_code_review: boolean }>(
+      `/workspaces/${wid}/projects/${pid}/code/review-policy`,
+      { method: "PUT", body: JSON.stringify({ require_code_review: required }) },
+    ),
+  proposals: (wid: string, pid: string, state?: string) =>
+    request<import("./types").CodeProposal[]>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals` + (state ? `?state=${state}` : ""),
+    ),
+  proposal: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}`,
+    ),
+  propose: (
+    wid: string,
+    pid: string,
+    input: { summary: string; description?: string; changes: { model_id: string; code: string }[] },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  review: (
+    wid: string,
+    pid: string,
+    id: string,
+    input: { verdict: "approve" | "request_changes"; comment?: string },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/reviews`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  applyProposal: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/apply`,
+      { method: "POST" },
+    ),
+  withdrawProposal: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/withdraw`,
+      { method: "POST" },
+    ),
+  saveChangeSet: (
+    wid: string,
+    pid: string,
+    input: {
+      summary: string;
+      description?: string;
+      changes: { model_id: string; code?: string }[];
+    },
+  ) =>
+    request<import("./types").CodeChangeSet>(
+      `/workspaces/${wid}/projects/${pid}/code/change-sets`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+};
