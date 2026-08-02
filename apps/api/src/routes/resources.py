@@ -21,12 +21,22 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..lib.db import user_connection
+from ..lib.errors import NotFoundError
+from ..middleware.auth import AuthContext, get_current_user
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import resources as resources_service
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/resources", tags=["resources"]
 )
+
+# Resolution by id alone, with no workspace or project in the path. The whole
+# point of a stable resource id is that a link keeps working when the resource
+# is renamed or moved, which a path carrying its location cannot do. Access is
+# decided by RLS on the connection rather than by a path-shaped permission
+# dependency: a resource the caller cannot see is indistinguishable from one
+# that does not exist, which is the intended answer and not a limitation.
+resolve_router = APIRouter(prefix="/resources", tags=["resources"])
 
 
 class ResourceOut(BaseModel):
@@ -92,3 +102,26 @@ async def resource_counts(
     async with user_connection(access.auth.user_id) as conn:
         counts = await resources_service.counts_for_project(conn, access.project_id)
     return ResourceCountsOut(counts=counts)
+
+
+class ResourceResolved(ResourceOut):
+    """What the application shell needs to render a resource's page before it
+    knows anything kind-specific: where it sits (for the breadcrumb) and
+    whether it is still there."""
+    workspace_slug: str
+    workspace_name: str
+    project_slug: str | None
+    project_name: str | None
+    trashed: bool
+
+
+@resolve_router.get("/{resource_id}", response_model=ResourceResolved)
+async def resolve_resource(
+    resource_id: UUID,
+    auth: AuthContext = Depends(get_current_user),
+) -> ResourceResolved:
+    async with user_connection(auth.user_id) as conn:
+        row = await resources_service.resolve(conn, resource_id)
+    if row is None:
+        raise NotFoundError("this resource does not exist, or you do not have access to it")
+    return ResourceResolved(**row)

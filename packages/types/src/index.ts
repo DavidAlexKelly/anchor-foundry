@@ -82,6 +82,55 @@ export interface ProjectDetail extends ProjectSummary {
   resource_counts: ResourceCounts;
 }
 
+/** The resource registry (db migration 0032). One row per resource, whatever
+ * kind it is - the list a project browser reads, and the thing a /r/{id} link
+ * resolves against. */
+export type ResourceKind =
+  | "connection"
+  | "dataset"
+  | "model"
+  | "object_type"
+  | "canvas_app"
+  | "code_repo";
+
+export interface Resource {
+  id: string;
+  workspace_id: string;
+  /** Null for resources that belong to the workspace rather than to a
+   * project: object types, and workspace-scoped connections. */
+  project_id: string | null;
+  kind: ResourceKind;
+  name: string;
+  description: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResourceList {
+  resources: Resource[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Every kind is present, including the ones with nothing in them, so a
+ * caller never has to tell "none of these" from "no such kind". */
+export type ResourceKindCounts = Record<ResourceKind, number>;
+
+/** What `/resources/{id}` returns: the resource plus enough of where it lives
+ * to draw a breadcrumb without a second round trip. A trashed resource
+ * resolves and says so rather than 404ing - answering "no such thing" for
+ * something that demonstrably existed sends whoever followed the link looking
+ * for a typo. */
+export interface ResolvedResource extends Resource {
+  workspace_slug: string;
+  workspace_name: string;
+  project_slug: string | null;
+  project_name: string | null;
+  trashed: boolean;
+}
+
 export interface ProjectMember {
   id: string;
   role: ProjectRole;

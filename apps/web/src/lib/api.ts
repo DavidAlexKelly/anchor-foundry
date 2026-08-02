@@ -2,10 +2,11 @@
  * process in dev; CloudFront routes it in production). 401 anywhere sends
  * the user back to sign-in - the token is either absent or expired. */
 
-import { clearToken, getToken } from "./auth";
+import { clearToken, getToken, loginHrefFor } from "./auth";
 import type {
   BootstrapFirstOwnerInput, BootstrapFirstOwnerResult, BootstrapStatus,
-  Me, Org, OrgUser, ProjectDetail, ProjectSummary, WorkspaceDetail, WorkspaceSummary,
+  Me, Org, OrgUser, ProjectDetail, ProjectSummary, ResourceKindCounts, ResourceList, ResolvedResource,
+  WorkspaceDetail, WorkspaceSummary,
 } from "./types";
 
 export class ApiError extends Error {
@@ -31,7 +32,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 401) {
     clearToken();
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-      window.location.assign("/login");
+      window.location.assign(loginHrefFor(window.location.pathname, window.location.search));
     }
     throw new ApiError(401, "Signed out");
   }
@@ -87,6 +88,45 @@ export const api = {
     request<ProjectSummary[]>(`/workspaces/${workspaceId}/projects`),
   project: (workspaceId: string, projectId: string) =>
     request<ProjectDetail>(`/workspaces/${workspaceId}/projects/${projectId}`),
+};
+
+/** The resource registry (db 0032). `resolve` takes an id and nothing else -
+ * that is the point of the id, so a link survives a rename or a move. */
+export const resources = {
+  list: (
+    workspaceId: string,
+    projectId: string,
+    params: {
+      kind?: string[];
+      search?: string;
+      sort?: string;
+      direction?: "asc" | "desc";
+      limit?: number;
+      offset?: number;
+      includeWorkspaceLevel?: boolean;
+    } = {},
+  ) => {
+    const q = new URLSearchParams();
+    // Repeated `kind` params rather than a comma-joined string: FastAPI reads
+    // a list that way, and a name containing a comma would otherwise be a bug
+    // waiting for the first customer who has one.
+    for (const k of params.kind ?? []) q.append("kind", k);
+    if (params.search) q.set("search", params.search);
+    if (params.sort) q.set("sort", params.sort);
+    if (params.direction) q.set("direction", params.direction);
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.offset != null) q.set("offset", String(params.offset));
+    if (params.includeWorkspaceLevel) q.set("include_workspace_level", "true");
+    const qs = q.toString();
+    return request<ResourceList>(
+      `/workspaces/${workspaceId}/projects/${projectId}/resources${qs ? `?${qs}` : ""}`,
+    );
+  },
+  counts: (workspaceId: string, projectId: string) =>
+    request<{ counts: ResourceKindCounts }>(
+      `/workspaces/${workspaceId}/projects/${projectId}/resources/counts`,
+    ),
+  resolve: (resourceId: string) => request<ResolvedResource>(`/resources/${resourceId}`),
 };
 
 // Unauthenticated on purpose (services/orgs.bootstrap_first_owner): there is

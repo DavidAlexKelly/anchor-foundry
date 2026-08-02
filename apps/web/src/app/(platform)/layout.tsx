@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { api } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
+import { clearToken, getToken, loginHrefFor } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
@@ -13,8 +13,8 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
   const pathname = usePathname();
 
   useEffect(() => {
-    if (!getToken()) router.replace("/login");
-  }, [router]);
+    if (!getToken()) router.replace(loginHrefFor(pathname, window.location.search));
+  }, [router, pathname]);
 
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: !!getToken() });
 

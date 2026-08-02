@@ -280,3 +280,56 @@ def test_a_viewer_can_read_the_registry(
         )
     r = client.get(base(fx, empty_project), headers=hdr(fx.viewer_sub))
     assert r.status_code == 200, r.text
+
+
+# ---- resolution by id alone --------------------------------------------------
+def test_a_resource_resolves_by_id_with_enough_to_draw_a_breadcrumb(
+    client: TestClient, fx: Fixture, empty_project: str
+) -> None:
+    """The reason resource ids exist: a link built from workspace and project
+    slugs stops working the moment somebody renames either."""
+    model_id = make_model(client, fx, empty_project, f"Resolvable {fx.tag}")
+    r = client.get(f"/api/resources/{model_id}", headers=hdr(fx.owner_sub))
+    assert r.status_code == 404, "the kind row's id is not the resource id"
+
+    listed = listing(client, fx, empty_project, search=f"Resolvable {fx.tag}")["resources"]
+    resource_id = listed[0]["id"]
+    r = client.get(f"/api/resources/{resource_id}", headers=hdr(fx.owner_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["kind"] == "model" and body["name"] == f"Resolvable {fx.tag}"
+    assert body["project_slug"] and body["workspace_slug"]
+    assert body["trashed"] is False
+
+
+def test_a_renamed_resource_keeps_the_same_id(
+    client: TestClient, fx: Fixture, empty_project: str
+) -> None:
+    """Stable for life, surviving renames, is the whole promise of the id."""
+    dataset_id = make_dataset(client, fx, empty_project, f"Renameable {fx.tag}")
+    found = listing(client, fx, empty_project, search=f"Renameable {fx.tag}")["resources"]
+    resource_id = found[0]["id"]
+
+    client.patch(
+        f"/api/workspaces/{fx.workspace}/projects/{empty_project}/datasets/{dataset_id}",
+        headers=hdr(fx.owner_sub),
+        json={"name": f"Renamed {fx.tag}"},
+    )
+    r = client.get(f"/api/resources/{resource_id}", headers=hdr(fx.owner_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == f"Renamed {fx.tag}"
+
+
+def test_resolving_someone_elses_resource_is_a_flat_404(
+    client: TestClient, fx: Fixture, empty_project: str
+) -> None:
+    """Indistinguishable from "no such resource" on purpose: a 403 here would
+    confirm that an id belongs to something, which is the one bit an id-only
+    endpoint must not leak."""
+    make_model(client, fx, empty_project, f"Private {fx.tag}")
+    resource_id = listing(client, fx, empty_project, search=f"Private {fx.tag}")["resources"][0]["id"]
+
+    for sub in (fx.outsider_sub, fx.foreign_sub):
+        r = client.get(f"/api/resources/{resource_id}", headers=hdr(sub))
+        assert r.status_code == 404, (sub, r.text)
+        assert isinstance(r.json()["detail"], str)

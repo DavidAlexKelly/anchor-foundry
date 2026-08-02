@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§53). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§54). Test counts below are from the last full regression run.
 
 ---
 
@@ -959,6 +959,26 @@ First item of the phase-2 roadmap, and the precondition for everything after it:
 **RLS matters more here, not less:** this table holds resource *names* across every project in a workspace, which is precisely the metadata a project boundary exists to keep private, and a leak would be uniform across every kind at once. The policy mirrors the connections one, because the nullable `project_id` has the same meaning in both places.
 
 Tests assert the invariant rather than the endpoint - rows are created through the existing per-kind endpoints and the registry is checked to have noticed, which is the only version that fails if a trigger is dropped - plus a whole-database check that no kind table has an unregistered row, which is what will fail when a future migration adds a kind table and forgets to wire it up. **API 388 → 400** (376 → 388 with MariaDB down); worker unchanged at 50, which is the answer to "did adding a trigger to six hot tables break anything".
+
+---
+
+### 54. The resource browser and the application shell (this session)
+
+Phase-2 items 0.2 and 0.3, built together because neither is worth much alone: the browser is a list of links to applications, and the shell is what those links open.
+
+**The project page is now a directory rather than a menu.** The six pillar cards were a menu of *types*; the browser lists the resources themselves with the type as a column, sorted by what changed most recently, with per-kind filter chips carrying live counts, substring search, and paging. The pillar pages stay in the sidebar - deleting them would strand anyone who navigates that way, and keeping them as a second implementation of the same list is what would cause drift, so they remain the per-kind views they always were.
+
+**Workspace-level resources are opt-in and labelled.** Object types and workspace-scoped connections have no project, so the browser shows them only when asked and marks each row `workspace`. Defaulting them in would repeat §44's mistake in a more visible place.
+
+**`/r/{id}` is a route group outside `(platform)`**, so an application gets the whole viewport with no topbar or project sidebar - the point of the phase. A shared `ApplicationShell` carries the breadcrumb, the name and the kind; per-kind applications are later items, and until each lands its entry renders the resource's own summary plus a link to the pillar page that handles it today. That is not a placeholder for the shell: resolution, breadcrumbs, the tab and the stable link all work, and it names the roadmap item rather than saying "coming soon".
+
+**The browser found the bug the tests could not.** Rows open in a new tab, and the new tab landed on `/login`. The session token lives in `sessionStorage`, which is **per-tab** - and Chrome does not clone it into a tab opened from a link, with or without `rel="noopener"` (both were tested; `noopener` was dropped anyway, since it guards against an untrusted page reaching `window.opener` and this is our own origin). **Per-tab token storage is structurally incompatible with a multi-tab, resource-centric product**, which is what this phase makes Anchor into.
+
+Fixed as far as it can be without changing the security posture: the route guards now carry the requested path into `/login?next=…`, the dev sign-in honours it, and the hosted-UI round trip carries it through `sessionStorage` so a *shared* link survives a cold load and returns the reader to the resource. `safeReturnPath` refuses anything that is not a same-origin path - an absolute URL or a protocol-relative `//host` would make the login page an open redirect. Verified end to end in a browser: a cold context opening `/r/{id}` is bounced, signs in, and lands back on the resource.
+
+**What that leaves open is a decision, not a bug:** every new tab still costs an authentication round trip. Choosing between shared storage, an httpOnly cookie session brokered by the API (which `lib/auth.ts` already flags as the stronger design), and living with the redirect is a change to the platform's security posture, so it is the owner's call rather than a detail to settle in a UI commit.
+
+Browser-verified: chips and counts, kind filtering, the workspace-level toggle (24 scope markers on, 0 off), the shell with zero platform chrome, a real "this resource is not here" page for an unknown id, and no console errors. **API 400 → 403** (388 → 391 with MariaDB down).
 
 ---
 

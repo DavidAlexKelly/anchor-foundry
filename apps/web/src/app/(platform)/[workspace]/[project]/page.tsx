@@ -5,15 +5,7 @@ import { useParams } from "next/navigation";
 import { api, objects as objectsApi } from "@/lib/api";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { FirstRunChecklist } from "@/components/first-run";
-
-const SUMMARY: { key: "connections" | "datasets" | "models" | "objects" | "canvas" | "code"; label: string; blurb: string }[] = [
-  { key: "connections", label: "Connections", blurb: "Links to your source systems" },
-  { key: "datasets", label: "Datasets", blurb: "Tables landed and transformed" },
-  { key: "models", label: "Models", blurb: "Transforms that build datasets" },
-  { key: "objects", label: "Objects", blurb: "The workspace ontology" },
-  { key: "canvas", label: "Canvas", blurb: "Apps built on your objects" },
-  { key: "code", label: "Code", blurb: "Repositories for power mode" },
-];
+import { ResourceBrowser } from "@/components/resource-browser";
 
 export default function ProjectOverview() {
   const params = useParams<{ workspace: string; project: string }>();
@@ -34,7 +26,6 @@ export default function ProjectOverview() {
   });
 
   const counts = detail.data?.resource_counts;
-  const total = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : null;
 
   return (
     <main>
@@ -62,18 +53,12 @@ export default function ProjectOverview() {
         />
       )}
 
-      {counts && total !== 0 && (
-        <div className="grid">
-          {SUMMARY.map((s) => (
-            <a key={s.key} className="card" href={`/${params.workspace}/${params.project}/${s.key}`}>
-              <h3>{s.label}</h3>
-              <p>{s.blurb}</p>
-              <div className="meta">
-                <span className="count">{counts[s.key]}</span>
-              </div>
-            </a>
-          ))}
-        </div>
+      {/* The pillar cards this replaced were a menu of six *types*; Foundry's
+          project page is a browser of the resources themselves, and the type
+          is a column rather than a destination. The pillar pages still exist
+          in the sidebar for anyone who navigates that way. */}
+      {workspace && project && (
+        <ResourceBrowser workspaceId={workspace.id} projectId={project.id} />
       )}
       {detail.isPending && <div className="state">Loading…</div>}
     </main>

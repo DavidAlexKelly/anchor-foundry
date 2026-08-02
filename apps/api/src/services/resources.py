@@ -138,6 +138,37 @@ async def get(conn: AsyncConnection, resource_id: UUID) -> dict[str, Any] | None
     return dict(row) if row else None
 
 
+async def resolve(conn: AsyncConnection, resource_id: UUID) -> dict[str, Any] | None:
+    """One resource by id, with enough of its location to draw a breadcrumb.
+
+    This is what `/r/{id}` resolves against, and the reason resource ids exist
+    at all: a link built from a workspace and project slug stops working the
+    moment somebody renames either, which is precisely when a shared link is
+    most likely to be clicked.
+
+    A trashed resource resolves rather than 404s, and says it is trashed. A
+    link to something that has been deleted should say so - answering "no such
+    thing" for a resource that demonstrably existed sends the person who
+    followed the link looking for a typo.
+    """
+    row = await fetch_one(
+        conn,
+        """
+        SELECT r.id, r.workspace_id, r.project_id, r.kind::text AS kind,
+               r.name, r.description, r.created_by, r.created_at, r.updated_at,
+               r.trashed_at IS NOT NULL AS trashed,
+               w.slug AS workspace_slug, w.name AS workspace_name,
+               p.slug AS project_slug, p.name AS project_name
+          FROM resources r
+          JOIN workspaces w ON w.id = r.workspace_id
+          LEFT JOIN projects p ON p.id = r.project_id
+         WHERE r.id = :rid
+        """,
+        {"rid": str(resource_id)},
+    )
+    return dict(row) if row else None
+
+
 async def counts_for_project(
     conn: AsyncConnection, project_id: UUID
 ) -> dict[str, int]:

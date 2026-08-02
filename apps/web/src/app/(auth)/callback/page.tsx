@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
-import { completeLogin } from "@/lib/auth";
+import { completeLogin, consumeReturnPath } from "@/lib/auth";
 
 function CallbackInner() {
   const router = useRouter();
@@ -19,7 +19,7 @@ function CallbackInner() {
       return;
     }
     completeLogin(code)
-      .then(() => router.replace("/home"))
+      .then(() => router.replace(consumeReturnPath() ?? "/home"))
       .catch((e) => setError(e instanceof Error ? e.message : "Sign-in failed"));
   }, [params, router]);
 

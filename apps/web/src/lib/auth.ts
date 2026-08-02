@@ -9,6 +9,7 @@
 
 const KEY_TOKEN = "anchor.access_token";
 const KEY_VERIFIER = "anchor.pkce_verifier";
+const KEY_RETURN = "anchor.return_to";
 
 interface CognitoConfig {
   domain: string;   // e.g. https://acme-anchor.auth.eu-west-1.amazoncognito.com
@@ -100,4 +101,44 @@ export function clearToken(): void {
  * review: never enable in a deployed environment. */
 export function devAuthEnabled(): boolean {
   return process.env.NEXT_PUBLIC_AUTH_MODE === "dev";
+}
+
+/** Where to send someone after they sign in.
+ *
+ * sessionStorage is per-tab, so a resource link that somebody *shares* is
+ * always loaded cold: there is no session to inherit and the guard bounces it
+ * to /login. Without this, signing in then dropped them at /home having lost
+ * the thing they were sent - which would make "send someone a link to what you
+ * are looking at" false in the one case it matters.
+ *
+ * Only same-origin paths are honoured. An absolute URL, or a protocol-relative
+ * "//evil.example" (which the browser treats as a host, not a path), would
+ * turn the login page into an open redirect.
+ */
+export function safeReturnPath(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/") || raw.startsWith("//")) return null;
+  return raw;
+}
+
+/** The hosted UI round trip leaves and re-enters the app, so the return path
+ * cannot ride on a query param the way the dev sign-in box's can. Same tab,
+ * so sessionStorage survives it. */
+export function rememberReturnPath(path: string | null): void {
+  const safe = safeReturnPath(path);
+  if (safe) sessionStorage.setItem(KEY_RETURN, safe);
+  else sessionStorage.removeItem(KEY_RETURN);
+}
+
+export function consumeReturnPath(): string | null {
+  const raw = sessionStorage.getItem(KEY_RETURN);
+  sessionStorage.removeItem(KEY_RETURN);
+  return safeReturnPath(raw);
+}
+
+export function loginHrefFor(pathname: string, search = ""): string {
+  const target = `${pathname}${search}`;
+  // No point round-tripping somebody back to the page that sent them away.
+  if (pathname === "/login" || pathname === "/") return "/login";
+  return `/login?next=${encodeURIComponent(target)}`;
 }

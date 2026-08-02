@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§52 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§54 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -54,7 +54,7 @@ Three shifts follow, and they are the whole of this roadmap:
 
 **Watch for.** The temptation to make `resources` the *only* table and hang JSON off it. That trades six well-typed schemas for one untyped one, and the schema verifier that has caught real bugs (`STATUS.md` §7) has nothing left to verify.
 
-### 0.2 The project resource browser — **M**
+### ~~0.2 The project resource browser~~ — **done, `STATUS.md` §54**
 
 **What Foundry does.** The project page is a file browser: name, type icon, last modified, owner; sortable, filterable by type, searchable. It is deliberately dull, because it is a *directory*, not a dashboard.
 
@@ -66,7 +66,7 @@ Three shifts follow, and they are the whole of this roadmap:
 
 **Depends on** 0.1.
 
-### 0.3 The application shell and `/r/{id}` routing — **M**
+### ~~0.3 The application shell and `/r/{id}` routing~~ — **done, `STATUS.md` §54**
 
 **What Foundry does.** A resource URL resolves to whichever application handles that type, full-viewport, with a thin top bar (breadcrumb back to the project, resource name, sharing, save state) and no platform chrome.
 
