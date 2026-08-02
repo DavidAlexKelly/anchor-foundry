@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§52). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§52). Test counts below are from the last full regression run.
 
 ---
 
