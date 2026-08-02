@@ -92,7 +92,13 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000"],
-        allow_credentials=False,  # bearer tokens, not cookies
+        # Stays False now that a session cookie exists, and matters more for
+        # it: the browser session is same-origin (CloudFront in production,
+        # Next's /api rewrite in dev), so no legitimate caller needs a
+        # credentialed cross-origin request - and refusing them is what makes
+        # the X-Anchor-Session header a real CSRF barrier rather than a
+        # convention (middleware/auth.py).
+        allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )

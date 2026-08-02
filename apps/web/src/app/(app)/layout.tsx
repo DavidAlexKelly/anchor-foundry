@@ -14,7 +14,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { getToken, loginHrefFor } from "@/lib/auth";
+import { isSignedIn, loginHrefFor } from "@/lib/auth";
 
 export default function ApplicationLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -23,7 +23,7 @@ export default function ApplicationLayout({ children }: { children: React.ReactN
   useEffect(() => {
     // A shared /r/{id} link is always loaded cold - sessionStorage is per-tab -
     // so the path has to survive the trip through sign-in.
-    if (!getToken()) router.replace(loginHrefFor(pathname, window.location.search));
+    if (!isSignedIn()) router.replace(loginHrefFor(pathname, window.location.search));
   }, [router, pathname]);
 
   return <div className="app-viewport">{children}</div>;

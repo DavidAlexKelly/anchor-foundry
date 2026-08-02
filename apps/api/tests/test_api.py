@@ -32,6 +32,13 @@ APP_DSN = os.environ["DATABASE_URL"]          # role: platform_app - what the AP
 
 os.environ.setdefault("COGNITO_CLIENT_ID", "test-client")
 os.environ.setdefault("COGNITO_ISSUER", "https://test-issuer.local")
+# TestClient speaks http://testserver, and a Secure cookie is not sent over
+# http - so with the production default the session cookie would be set and
+# then never come back, and every cookie test would fail for a reason that has
+# nothing to do with what it is testing. Set here rather than defaulted to
+# False in config.py: a non-Secure session cookie in production is a token on
+# the wire, and that must take a deliberate act to turn off.
+os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
 
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
@@ -396,3 +403,70 @@ def test_disabled_user_is_locked_out(client: TestClient, fx: Fixture) -> None:
 
 def test_health_is_public(client: TestClient) -> None:
     assert client.get("/api/health").status_code == 200
+
+
+# ---- browser session cookie (STATUS.md §55) ---------------------------------
+def test_a_verified_token_becomes_an_httponly_session_cookie(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The credential travels inward only: the response carries a Set-Cookie
+    and no token, so a script on this origin has nothing to exfiltrate."""
+    r = client.post("/api/auth/session", json={"access_token": mint(fx.owner_sub)})
+    assert r.status_code == 200, r.text
+    assert r.json()["email"].startswith("owner-")
+    assert "access_token" not in r.text
+
+    raw = r.headers["set-cookie"]
+    assert "anchor_session=" in raw
+    assert "HttpOnly" in raw
+    assert "SameSite=lax" in raw.replace("samesite", "SameSite")
+
+
+def test_the_session_cookie_authenticates_subsequent_requests(
+    client: TestClient, fx: Fixture
+) -> None:
+    client.post("/api/auth/session", json={"access_token": mint(fx.owner_sub)})
+    r = client.get("/api/auth/me", headers={"X-Anchor-Session": "1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["email"].startswith("owner-")
+    client.cookies.clear()
+
+
+def test_a_cookie_without_the_session_header_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The CSRF barrier. A form POST from another site carries the cookie and
+    cannot carry the header; without this check the cookie alone would be
+    enough to act as the user."""
+    client.post("/api/auth/session", json={"access_token": mint(fx.owner_sub)})
+    r = client.get("/api/auth/me")
+    assert r.status_code == 401, r.text
+    assert "X-Anchor-Session" in r.json()["detail"]
+    client.cookies.clear()
+
+
+def test_an_authorization_header_still_wins_and_needs_no_session_header(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Every non-browser caller - the tests, the worker, anything holding a
+    token deliberately - must keep working exactly as before."""
+    r = client.get("/api/auth/me", headers=hdr(fx.owner_sub))
+    assert r.status_code == 200, r.text
+
+
+def test_a_bad_token_does_not_get_a_session(client: TestClient) -> None:
+    r = client.post("/api/auth/session", json={"access_token": "not-a-jwt"})
+    assert r.status_code == 401, r.text
+    assert "anchor_session" not in r.headers.get("set-cookie", "")
+
+
+def test_signing_out_clears_the_cookie(client: TestClient, fx: Fixture) -> None:
+    """The cookie is httpOnly, so this endpoint is the only thing that can end
+    the session; a delete that missed would leave somebody signed in while
+    being told otherwise."""
+    client.post("/api/auth/session", json={"access_token": mint(fx.owner_sub)})
+    r = client.post("/api/auth/logout", headers={"X-Anchor-Session": "1"})
+    assert r.status_code == 204, r.text
+    assert 'anchor_session=""' in r.headers["set-cookie"] or "anchor_session=;" in r.headers["set-cookie"]
+    assert client.get("/api/auth/me", headers={"X-Anchor-Session": "1"}).status_code == 401
+    client.cookies.clear()

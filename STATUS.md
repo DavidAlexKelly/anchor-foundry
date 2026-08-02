@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§54). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§55). Test counts below are from the last full regression run.
 
 ---
 
@@ -979,6 +979,26 @@ Fixed as far as it can be without changing the security posture: the route guard
 **What that leaves open is a decision, not a bug:** every new tab still costs an authentication round trip. Choosing between shared storage, an httpOnly cookie session brokered by the API (which `lib/auth.ts` already flags as the stronger design), and living with the redirect is a change to the platform's security posture, so it is the owner's call rather than a detail to settle in a UI commit.
 
 Browser-verified: chips and counts, kind filtering, the workspace-level toggle (24 scope markers on, 0 off), the shell with zero platform chrome, a real "this resource is not here" page for an unknown id, and no console errors. **API 400 → 403** (388 → 391 with MariaDB down).
+
+---
+
+### 55. An httpOnly session, because per-tab storage could not survive the phase (this session)
+
+§54 ended on a decision rather than a bug: with the token in `sessionStorage`, every resource tab cost an authentication round trip. The owner chose the httpOnly-cookie session that `lib/auth.ts` had been flagging as the stronger design since it was written.
+
+**The token no longer exists in JavaScript.** `POST /api/auth/session` takes a token, verifies it through exactly the path every other route uses, and answers with nothing but a `Set-Cookie` - httpOnly, `SameSite=Lax`, `Secure`, session-scoped. The direction is the point: a credential that only ever travels inward cannot be exfiltrated by a script that gets to run on this origin. An XSS can still *act* as the user while the page is open; nothing short of removing the browser from the loop prevents that. What it can no longer do is walk away with something that outlives the page.
+
+**CSRF is handled by a header, not only by SameSite.** A cookie is attached to any request to this origin, including one another site caused, so cookie authentication is accepted only when the request also carries `X-Anchor-Session`. Cross-site markup cannot set headers, and a cross-origin `fetch` that sets one triggers a preflight this API does not answer - `allow_credentials=False` and no named origins, which is now load-bearing rather than incidental. `SameSite=Lax` is the second layer.
+
+**The `Authorization` header still wins.** Extraction tries the header first and the cookie second, so every non-browser caller - the tests, the worker, anything holding a token deliberately - is untouched. The cookie is purely an addition for the browser.
+
+**One thing broke on the way and is worth recording.** The session route first tried to reuse `get_current_user` by rewriting the request's headers in place. Starlette caches `request.headers` on first access, so it silently did nothing and the endpoint 401'd on a token it had just been handed. The fix was the structure the reuse was reaching for anyway: `authenticate_token(token)` split out of the dependency, called directly by the route and through `_extract_bearer` by everything else. Same verification, one implementation.
+
+**`SESSION_COOKIE_SECURE` defaults to true and is turned off explicitly** by the test suite and the dev server, both of which speak http. The default is not `False`-for-convenience because the failure modes are asymmetric: a Secure cookie on `http://localhost` is a dev annoyance noticed in seconds, and a non-Secure cookie in production is a session token on the wire.
+
+`localStorage` keeps one non-secret flag, `anchor.signed_in`, so the route guards can render or redirect without waiting on a request. Being wrong about it costs a redirect, not access - the API's 401 is what decides.
+
+Browser-verified: `document.cookie` is empty and `sessionStorage` holds no token; the cookie reports `httpOnly: true`, `sameSite: Lax`; a ctrl-clicked tab and a fresh typed-in tab both load the resource with no sign-in; signing out clears the cookie and the next tab to act is bounced to `/login?next=…`. **API 403 → 409** (391 → 397 with MariaDB down); worker 50 unchanged.
 
 ---
 

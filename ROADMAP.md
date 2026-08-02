@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§54 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§55 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -271,6 +271,7 @@ Type and link management, property types, change history (§34, §35) as a prope
 
 ## Cross-cutting
 
+- ~~**Session storage.**~~ Done (`STATUS.md` §55): the browser session is an httpOnly cookie brokered by the API, which is what made opening every resource in its own tab workable at all.
 - **Permissions per resource.** `resources` is the natural place for resource-level sharing. Today permissions are project-scoped; Foundry's are per-resource. Decide before Workshop publishing (1.7) needs it.
 - **Testing standard is unchanged**: real Postgres, real OpenSearch, real dev servers, real browser. Two of the four defects found this week were invisible to the API tests and obvious in a browser (`STATUS.md` §52) — Workshop is far more interactive than anything built so far, and Playwright coverage of the builder is not optional.
 - **Performance.** Object set evaluation (1.2) is the first thing here that can be slow in a way users notice. Budget for server-side evaluation and paging from the start.

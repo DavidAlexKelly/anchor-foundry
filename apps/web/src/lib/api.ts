@@ -2,7 +2,7 @@
  * process in dev; CloudFront routes it in production). 401 anywhere sends
  * the user back to sign-in - the token is either absent or expired. */
 
-import { clearToken, getToken, loginHrefFor } from "./auth";
+import { clearSignedIn, loginHrefFor } from "./auth";
 import type {
   BootstrapFirstOwnerInput, BootstrapFirstOwnerResult, BootstrapStatus,
   Me, Org, OrgUser, ProjectDetail, ProjectSummary, ResourceKindCounts, ResourceList, ResolvedResource,
@@ -19,18 +19,23 @@ export class ApiError extends Error {
   }
 }
 
+/** Sent on every call. The API refuses cookie authentication without it, so
+ * that a request some other site caused - which cannot set headers - is not
+ * authenticated by a cookie the browser attached automatically. */
+const SESSION_HEADERS = { "X-Anchor-Session": "1" };
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
   const res = await fetch(`/api${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: {
       ...(init?.headers ?? {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...SESSION_HEADERS,
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
     },
   });
   if (res.status === 401) {
-    clearToken();
+    clearSignedIn();
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
       window.location.assign(loginHrefFor(window.location.pathname, window.location.search));
     }
@@ -55,10 +60,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 /** A multipart POST. Deliberately not `request`: the browser has to set the
  * multipart boundary itself, so this path must *not* send a Content-Type. */
 async function requestForm<T>(path: string, form: FormData): Promise<T> {
-  const token = getToken();
   const res = await fetch(`/api${path}`, {
     method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "same-origin",
+    headers: SESSION_HEADERS,
     body: form,
   });
   if (!res.ok) {
@@ -301,12 +306,14 @@ export const datasets = {
     request<void>(`/workspaces/${wid}/projects/${pid}/datasets/${did}`, { method: "DELETE" }),
 };
 
-/** Authenticated file download: plain <a href> can't carry the bearer token,
- * so fetch the bytes and hand them to the browser as an object URL. */
+/** Authenticated file download. The session cookie now rides along on a plain
+ * <a href>, but the CSRF header does not - and the API refuses cookie
+ * authentication without it - so this still fetches the bytes and hands them to
+ * the browser as an object URL. */
 export async function downloadFile(url: string, filename: string): Promise<void> {
-  const token = getToken();
   const res = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "same-origin",
+    headers: SESSION_HEADERS,
   });
   if (!res.ok) throw new ApiError(res.status, "download failed");
   const blob = await res.blob();

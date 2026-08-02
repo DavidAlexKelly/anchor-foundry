@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { bootstrap } from "@/lib/api";
-import { beginLogin, cognitoConfig, devAuthEnabled, safeReturnPath, setToken } from "@/lib/auth";
+import { beginLogin, cognitoConfig, devAuthEnabled, establishSession, safeReturnPath } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 
 function LoginInner() {
@@ -45,13 +45,23 @@ function LoginInner() {
     }
   }
 
-  function onDevSignIn() {
+  async function onDevSignIn() {
     if (!devToken.trim()) {
       setError("Paste an access token first");
       return;
     }
-    setToken(devToken.trim());
-    router.replace(nextPath);
+    setBusy(true);
+    setError(null);
+    try {
+      // The token goes to the API and comes back as a cookie; it is never
+      // stored here. Same path the hosted UI takes, so dev and production
+      // cannot diverge in how a session is established.
+      await establishSession(devToken.trim());
+      router.replace(nextPath);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign-in failed");
+      setBusy(false);
+    }
   }
 
   return (
