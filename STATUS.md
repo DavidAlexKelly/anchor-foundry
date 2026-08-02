@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§62). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§65). Test counts below are from the last full regression run.
 
 ---
 
@@ -1126,6 +1126,62 @@ Workers are routed to the plain `editor.worker`. The languages offered - SQL, Py
 An unknown extension gets `plaintext` rather than a guess - mis-highlighted code reads as broken code. The editor is keyed by path, so switching files swaps the model rather than replaying new text into the old one, which would put a change in the undo stack of a file it did not come from.
 
 Browser-verified end to end: the editor mounts with SQL colouring, typing raises the commit bar and marks the file, committing clears it, and the new commit appears at the top of history with its diff. No console errors, no off-origin requests. **API unchanged at 468.**
+
+---
+
+### 63. Where customer code runs, and what it could reach (this session)
+
+Item 2.5's blocker, spiked before building the way 1.1 and 2.1 were. Written up as `docs/decisions/0004-running-customer-code.md`. It found something.
+
+**Stating the threat model changed the answer.** `python_sandbox.py` already says it is "not a hard multi-tenant security boundary", but not what it is not a boundary *against*. The author of a transform is a customer employee with editor access, writing in the customer's own deployment in the customer's own AWS account - not an anonymous attacker, and already entitled to the data in their project. So the bar is not "run hostile code safely"; it is **a transform must not reach anything its author could not already reach**. By that measure process isolation with resource caps is close to right. One thing is not.
+
+**The finding.** The sandbox builds the subprocess environment as an allowlist - `{"PATH", "HOME"}` - so no database URL and no AWS keys are inherited. Correct, and where the reasoning stopped. **In the deployed stack credentials do not arrive in the environment**: ECS delivers the task role over the network from `169.254.170.2`. Stripping `os.environ` does not touch it, and the same docstring already notes the sandbox "does not stop the transform from opening a network socket" - the two facts had never been put next to each other.
+
+The worker's task role holds `dataBucket.grantReadWrite` (every project, every workspace in that deployment) and `appDbSecret.grantRead`. The second is worse than it looks: that secret is `platform_app`, which RLS applies to - but `rls_worker_for_workspace` (db 0006) grants visibility to any connection that sets `app.service = 'worker'` and `app.workspace_id`. That escape hatch is sound *because only the worker holds those credentials*. Three HTTP requests from inside a transform - fetch task credentials, fetch the secret, connect - and workspace isolation is gone.
+
+**Not a live vulnerability**: Python transforms do not execute at all today, the API leaves them queued. Exactly the constraint that had to be settled before they run, which is what spiking is for.
+
+**Decided:** the runner gets its own ECS task definition with no egress and an empty task role. Inputs are staged into its working directory by the caller, which holds the credentials; the output is read back the same way. The runner never touches S3 or Postgres and has no role worth stealing, which makes the network rule defence in depth rather than the only wall. Until both exist, Python stays off. SQL is unaffected - DuckDB with `enable_external_access` off is a real boundary for what SQL can express.
+
+**Declarations are read statically, and that is part of the same decision.** Foundry evaluates a decorator at import time to find a transform's inputs and outputs; doing that here would mean *executing the file on the API's request path* to find out what it builds - the exact thing under discussion, before any sandbox is involved. `services/transform_declarations.py` parses with `ast` instead. Only literals are read: a computed output is refused rather than guessed, because a lineage graph that is right most of the time is worse than one that says it cannot read a file. SQL declares the same shape in its leading comment block, and only there - a `-- output:` inside a query is somebody explaining a column.
+
+The load-bearing test is a file whose import would `rmtree("/")` and which parses fine. **API 468 → 482.**
+
+---
+
+### 64. The transform runner, and a correction to §63 (this session)
+
+The infrastructure decision 0004 requires, and one thing §63 got the wrong way round.
+
+**The correction.** §63 said "the runner is network-denied, and that is enforced outside the runner" as the control, with the empty role as defence in depth. That is backwards. ECS hands a task its role credentials over **link-local** networking from `169.254.170.2`, which a security group does not filter - so no egress rule prevents a transform *obtaining* credentials. What makes them harmless is that these ones grant nothing. **The empty role is the control; closed egress is the blast radius.** Both are built; the ordering matters because it decides which one must never be quietly relaxed.
+
+**Built:** a Fargate task definition of its own, a task role with no policies of any kind, no `commonEnv` and no database secret, `AWS_EC2_METADATA_DISABLED` as a further layer, and a security group with `allowAllOutbound: false`. Run on demand rather than as a service - a transform is a job, and a service would be a container sitting idle with customer code in it.
+
+**A no-egress task cannot start without help**, and this would have been found on a deploy. Fargate pulls the image and ships logs over the *task ENI*, so both are subject to that security group: with no route out the container never runs and CloudWatch shows an empty log stream - the same symptom as the arm64 problem in §20 and just as unhelpful. So the stack gains interface endpoints for ECR, ECR Docker and CloudWatch Logs, plus the **gateway** endpoint for S3 that people forget, since layers come from S3 rather than the ECR API and without it a pull authenticates and then hangs. **Cost, stated rather than discovered on a bill: roughly $21-24 a month per deployment.** That is the price of customer code that cannot phone home.
+
+**`infra/cdk` had no tests**, and `cdk synth` needs Docker here (the migration Lambda bundles psycopg in a container, deliberately). So the check builds *only* the constructs under test into a throwaway stack and asserts the synthesised template, which needs neither: the runner has a role, that role holds no inline, managed or attached policies, its security group has no `0.0.0.0/0` egress, its container is given no secrets, and - the counterweight - the worker still has the permissions it needs, so a future tightening cannot strip the wrong task.
+
+**The checks were mutation-tested rather than trusted.** Granting the runner the data bucket and opening its egress makes exactly those two fail, with the count in the message; reverting makes them pass. A check that cannot fail is theatre. `npm test` in `infra/cdk` now runs them, where it previously exited 1 with "no test specified".
+
+Still missing before Python transforms run: the worker has no code that calls `RunTask` against this definition, and `transform_runner` does not exist as a module. The task definition names it, so the container would fail loudly rather than run something unintended.
+
+---
+
+### 65. The transform runner module, and the gap it exposed (this session)
+
+§64 built the task definition and named a module that did not exist. This is that module - the container entrypoint customer transform code runs as, in a container with no egress and a task role that grants nothing.
+
+**Everything it can reach is in its working directory, because that is all there is.** No S3 client, no database connection, nothing worth having credentials for. A test asserts it imports neither boto3 nor psycopg nor requests - not style policing: a client for any of them could only fail confusingly in that container, and its appearance would be a sign somebody had started to undo decision 0004.
+
+**The design point is what `result.json` means.** It is written when the transform fails and *not* written when the run never got off the ground. A task that was never staged, ran out of memory or was killed leaves no result file, and that absence is how the caller tells "your SQL has a typo" from "the platform did not manage to run anything" - different problems, different owners, and a caller that could not distinguish them would report the wrong one to the wrong person. `read_job` therefore sits deliberately *outside* the try block that writes failures.
+
+Execution reuses the contract `python_sandbox.py` established (inputs as DataFrames bound to their alias, result assigned to `output`), so the two paths do not disagree about what a transform is.
+
+**The gap this exposed, and it is a real one.** With an empty task role and no egress, *how do inputs get in and outputs get out?* Not S3 - the runner cannot reach it, by design. The answer is a shared filesystem mounted by the infrastructure rather than by code holding credentials: an EFS access point, mounted into both the worker and the runner, with the ECS agent doing the mount. That preserves the empty role exactly - the container never authenticates to anything - and it is a filesystem, a mount target per subnet and a security group rule that do not exist yet.
+
+Naming it rather than improvising: the transport is the next decision, and picking it while writing the runner would have meant deciding infrastructure inside a module that must not know any exists.
+
+**Worker 50 → 55.** Still missing before Python transforms run: the EFS transport above, and worker-side dispatch that calls `RunTask` and waits.
 
 ---
 

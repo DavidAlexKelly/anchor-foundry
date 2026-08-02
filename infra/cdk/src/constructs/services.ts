@@ -25,6 +25,9 @@ export interface ServicesProps {
   readonly workerImage: string;
   readonly webImage: string;
   readonly imageTag: string;
+  /** The security group in front of the VPC's interface endpoints. The
+   * transform runner is allowed to reach these and nothing else. */
+  readonly vpcEndpointSecurityGroup: ec2.ISecurityGroup;
 }
 
 /**
@@ -42,6 +45,11 @@ export class ServicesConstruct extends Construct {
   public readonly cluster: ecs.Cluster;
   public readonly apiService: ecs.FargateService;
   public readonly workerService: ecs.FargateService;
+  /** Run on demand by the worker, never as a long-running service: a
+   * transform is a job, and a service would be a container sitting idle with
+   * customer code in it. */
+  public readonly transformRunnerTaskDefinition: ecs.FargateTaskDefinition;
+  public readonly transformRunnerSecurityGroup: ec2.SecurityGroup;
   public readonly webService: ecs.FargateService;
   public readonly alb: elbv2.ApplicationLoadBalancer;
 
@@ -112,6 +120,75 @@ export class ServicesConstruct extends Construct {
         resources: [`arn:aws:athena:*:*:workgroup/platform`],
       })
     );
+
+    // ---- Transform runner (decision 0004) -----------------------------------
+    // Customer-authored Python runs here and nowhere else. Two properties, and
+    // the order matters because the first is the control and the second is the
+    // blast radius.
+    //
+    // **The role grants nothing.** ECS hands a task its role credentials over
+    // the network from 169.254.170.2, which is link-local and not something a
+    // security group can filter - so "no egress" does not stop a transform
+    // *obtaining* credentials. What stops it mattering is that these ones can
+    // do nothing: no bucket, no secret, no Athena. Compare the worker's role,
+    // which can read the whole data bucket and the app database secret, and
+    // whose secret would let any holder set app.service='worker' and read
+    // every workspace in the deployment (db 0006). That is why customer code
+    // may not run as the worker.
+    //
+    // **Egress is closed except to the VPC endpoints below.** A transform
+    // needs no network - its inputs arrive as files and its output is a file -
+    // so this is what turns a mistake into a contained one rather than an
+    // exfiltration route, in a product whose premise is that data stays inside
+    // the customer's boundary.
+    const runnerTaskRole = new iam.Role(this, "TransformRunnerTaskRole", {
+      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+      description:
+        "Customer transform code runs as this. Deliberately holds no policies - " +
+        "see docs/decisions/0004-running-customer-code.md",
+    });
+
+    this.transformRunnerSecurityGroup = new ec2.SecurityGroup(this, "TransformRunnerSg", {
+      vpc: props.vpc,
+      description: "Transform runner - no egress except AWS endpoints for image pull and logs",
+      // CDK's default is an allow-all egress rule, which is the thing this
+      // security group exists to not have.
+      allowAllOutbound: false,
+    });
+    // Fargate pulls the image and ships logs over the task ENI, so both are
+    // subject to this group. Without a path to the endpoints the task cannot
+    // start at all - the container never runs and CloudWatch shows an empty
+    // log stream, which is the same symptom as the arm64 image problem in
+    // STATUS.md §20 and just as unhelpful.
+    this.transformRunnerSecurityGroup.addEgressRule(
+      props.vpcEndpointSecurityGroup,
+      ec2.Port.tcp(443),
+      "ECR, S3 and CloudWatch Logs via VPC endpoints - no route to the internet"
+    );
+
+    const runnerTaskDef = new ecs.FargateTaskDefinition(this, "TransformRunnerTaskDef", {
+      cpu: 1024,
+      memoryLimitMiB: 2048,
+      taskRole: runnerTaskRole,
+    });
+    runnerTaskDef.obtainExecutionRole().addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AmazonECSTaskExecutionRolePolicy")
+    );
+    runnerTaskDef.addContainer("runner", {
+      image: ecs.ContainerImage.fromRegistry(`${props.workerImage}:${props.imageTag}`),
+      logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: "transform-runner" }),
+      // No commonEnv and no dbSecretEnv. The runner is handed its inputs as
+      // files by whoever started it; it has no use for a database host and no
+      // business holding a database password.
+      environment: {
+        // Belt and braces behind the empty role: stops the AWS SDKs inside the
+        // container from reaching for instance metadata at all. Not the
+        // control - the role is - but it removes a confusing failure mode.
+        AWS_EC2_METADATA_DISABLED: "true",
+      },
+      command: ["python", "-m", "anchor_worker.transform_runner"],
+    });
+    this.transformRunnerTaskDefinition = runnerTaskDef;
 
     const webTaskRole = new iam.Role(this, "WebTaskRole", {
       assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
