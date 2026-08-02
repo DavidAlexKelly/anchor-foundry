@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§52). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§53). Test counts below are from the last full regression run.
 
 ---
 
@@ -27,7 +27,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0031)
+### 1. Database schema (migrations 0001–0032)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
 ### 2. Control plane (`apps/control-plane`) - 52/52 tests
@@ -939,6 +939,26 @@ Browser-verified against the demo: empty, short and non-numeric account IDs all 
 **Same walkthrough, same class of defect one route over.** Re-running `POST /api/onboardings` with a slug already in the registry returned **500 and a traceback**: `register_customer` raises `ValueError: customer 'demo-co' is already registered` and the route did not catch it. It is an ordinary thing for an operator to type — the registry is in Postgres, so restarting the demo does not clear it — and now answers **409** with that sentence. Deliberately *not* made idempotent: re-registering would have to mint a fresh token, invalidating a link the customer may already be holding, possibly mid-provision. Re-issuing a lost link is a different operation and should be named like one.
 
 Both defects are the same shape — a real refusal already existed, phrased for a human, and the HTTP layer replaced it with something machine-shaped on the way out. **Control plane 45 → 52.**
+
+---
+
+### 53. The resource registry (this session)
+
+First item of the phase-2 roadmap, and the precondition for everything after it: Foundry's unit of navigation is the *resource*, and a schema with six unrelated kind tables cannot answer "what is in this project?". `resource_counts` on the project endpoint was six separate `COUNT(*)`s, which is the shape of a missing table.
+
+**Migration 0032 adds `resources`** - identity, location, name, lifecycle - and a `resource_id` on each of the six kind tables. It is a registry, not a rewrite: `datasets` still owns everything true of a dataset and nothing else. The alternative, one table with a jsonb blob per kind, trades six verified schemas for one unverifiable one and leaves the schema tests nothing to check.
+
+**Two kinds do not live in a project, and the registry says so.** `object_types` are workspace-wide - no `project_id` column at all, which is what made the first-run checklist tick a step in an empty project (§44) - and `connections` are workspace-wide when `scope = 'workspace'`. So `project_id` is nullable and means what it says: NULL is a resource belonging to the workspace, not a resource whose project is unknown. Forcing every kind into a project would have made the registry lie about two of them on day one. The listing endpoint keeps them out by default and returns them only for a caller that asks, with `project_id: null` so the UI can say which scope a row came from.
+
+**Registration is structural, not a convention.** A BEFORE INSERT trigger creates the registry row and fills in `resource_id`; `NOT NULL` on that column means a kind row without a registry row cannot be written at all. Nothing in the API had to change to register anything - the datasets endpoint still knows nothing about the registry and the registry is still right. That was the point: partial adoption of a registry is worse than none, because the browser is then confidently incomplete rather than obviously empty.
+
+**One writer for the name.** The kind table stays the source of truth; triggers mirror name and description into the registry, guarded by `IS DISTINCT FROM` so an unrelated column change does not churn the `updated_at` the browser sorts on. Two writable copies of a name is a guarantee of drift. One generic trigger function serves all six kinds, reading the row through `to_jsonb` rather than naming columns - the six tables disagree about which columns they have (`object_types` calls its name `display_name`, `connections` has no description, `models` have no `workspace_id`), and six near-identical functions would drift the moment one kind gained a column.
+
+**The backfill is in the migration**, not a follow-up script, for the same reason. 12,025 existing rows registered, verified per kind against the source tables with zero orphans. The id is generated on the *source* side first, so correlating a registry row back to the row it describes is a column comparison rather than a clever trick that has to be trusted - the first attempt correlated by `row_number()` and was thrown away for being unverifiable.
+
+**RLS matters more here, not less:** this table holds resource *names* across every project in a workspace, which is precisely the metadata a project boundary exists to keep private, and a leak would be uniform across every kind at once. The policy mirrors the connections one, because the nullable `project_id` has the same meaning in both places.
+
+Tests assert the invariant rather than the endpoint - rows are created through the existing per-kind endpoints and the registry is checked to have noticed, which is the only version that fails if a trigger is dropped - plus a whole-database check that no kind table has an unregistered row, which is what will fail when a future migration adds a kind table and forgets to wire it up. **API 388 → 400** (376 → 388 with MariaDB down); worker unchanged at 50, which is the answer to "did adding a trigger to six hot tables break anything".
 
 ---
 

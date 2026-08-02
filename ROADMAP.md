@@ -38,7 +38,7 @@ Three shifts follow, and they are the whole of this roadmap:
 
 **Nothing else in this roadmap can be built first.** Both Workshop and Code Repositories are full-viewport applications; there is currently no way to *be* one. Sequenced first for that reason alone, and it is the smallest section.
 
-### 0.1 A resource registry with stable resource IDs — **L**
+### ~~0.1 A resource registry with stable resource IDs~~ — **done, `STATUS.md` §53**
 
 **What Foundry does.** Every resource has an RID (`ri.foundry.main.dataset.<uuid>`) that is stable for life, survives renames and moves, and is what every link, permission and lineage edge points at. The resource type is *in* the identifier, so a link can be resolved to an application without knowing where it came from.
 
