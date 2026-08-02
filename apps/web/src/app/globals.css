@@ -920,3 +920,133 @@ button { font: inherit; cursor: pointer; }
   color: var(--ink-soft);
 }
 .ds-health-detail { color: var(--ink-soft); font-size: 12.5px; margin-left: auto; }
+
+/* ---- repository application (ROADMAP phase 2, section 2) ------------------
+   Read-only: a tree at a ref, plus what changed. The editor lands in 2.2. */
+.repo-app { display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 0; }
+
+.repo-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--line-strong);
+  padding-bottom: 2px;
+}
+.repo-bar .spacer { flex: 1 1 auto; }
+.repo-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.repo-ref select {
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--ink);
+}
+.repo-ref select:disabled { opacity: 0.55; }
+.repo-tabs { border-bottom: none; }
+.repo-pinned {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--brass);
+  background: var(--brass-wash);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.repo-pinned button {
+  font: inherit;
+  font-size: 12px;
+  border: none;
+  background: none;
+  color: var(--accent-deep);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.repo-split {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  gap: 16px;
+  align-items: start;
+  min-height: 0;
+}
+.repo-tree { display: flex; flex-direction: column; gap: 1px; }
+.repo-file {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+  padding: 5px 9px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repo-file:hover { background: var(--paper); }
+.repo-file.on { background: var(--accent-wash); color: var(--accent-deep); font-weight: 600; }
+
+.repo-viewer { min-width: 0; }
+.repo-file-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
+}
+.repo-file-head code { font-family: var(--font-mono); font-weight: 600; }
+.repo-source {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.repo-history { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.repo-commit {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+}
+.repo-commit-head { display: flex; align-items: baseline; gap: 12px; font-size: 13px; }
+.repo-commit-open {
+  font: inherit;
+  font-weight: 600;
+  border: none;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+.repo-commit-open:hover { color: var(--accent-deep); text-decoration: underline; }
+.repo-sha { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-soft); }
+.repo-commit-head .soft { margin-left: auto; font-size: 12px; }
+.repo-diff { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 2px; }
+.repo-diff li { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-soft); }
+.repo-diff li span {
+  display: inline-block;
+  min-width: 62px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.repo-diff li.added span { color: var(--accent-deep); }
+.repo-diff li.modified span { color: var(--brass); }
+.repo-diff li.deleted span { color: var(--danger); }

@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§60). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§61). Test counts below are from the last full regression run.
 
 ---
 
@@ -1092,6 +1092,22 @@ Two bugs, both found by the tests and both worth recording.
 **A brand-new repository 404'd on its own default branch.** Branches are created by the first commit, so a repository nobody has committed to has no branch row at all, and `resolve_ref` treated that as "no such branch". An editor cannot open a repository it is told does not exist. The distinction now lives in the signature: a caller that *names* a branch gets a 404 for a typo; a caller falling back to the default gets an empty repository, because that is what it is.
 
 **API 454 → 468.**
+
+---
+
+### 61. The repository application (this session)
+
+§59 decided how repositories are stored and §60 gave them a door; this is the first thing that lets a person *look* at one. Until now a `code_repo` resource resolved to the placeholder summary, so the whole of decision 0003 was invisible outside a test.
+
+Read-only, deliberately. The editor is roadmap 2.2 and brings Monaco with it; shipping a viewer first answers every question the editor will need answered - which branch, which commit, what changed - without a large dependency in the way, and makes the storage layer something you can point at.
+
+**A tree at a ref**, so the ref is in the URL alongside the open file: `?branch=…&file=…`, or `?commit=…` when pinned to a point in history. "Look at this file on this branch" has to be a link, or reviewing anything means describing where to click. History lists commits on the selected branch with each one's diff, and clicking a commit pins the file view to it with a way back.
+
+Two small things that only exist because the API was built first and honestly. A repository nobody has committed to has **no branch row at all** - branches are created by the first commit - so the branch picker offers the default anyway rather than rendering an empty select, and the files tab says the repository is empty rather than erroring. And switching branches while a file is open falls back to the first file rather than blanking the pane, because a file on one branch need not exist on another.
+
+Per-commit diffs are fetched per row rather than returned with the history: a history endpoint that carried every diff would do that work whether or not anybody looked at it.
+
+Browser-verified against a seeded repository with two branches and three commits: the file tree, the file choice surviving in the URL, `experiment` showing a genuinely different tree from `main`, per-commit diffs reading `added`/`changed`/`deleted`, and pinning to a commit showing that commit's files. No console errors. **API unchanged at 468** - this commit is frontend and shared types only.
 
 ---
 
