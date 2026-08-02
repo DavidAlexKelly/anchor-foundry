@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§59). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§60). Test counts below are from the last full regression run.
 
 ---
 
@@ -1074,6 +1074,24 @@ Phase-2 item 2.1, the spike blocking 2.2–2.8. Written up as `docs/decisions/00
 Two things the tests taught, both about the test rather than the code: `pytest-asyncio` is not installed (the suite uses anyio, whose plugin handles async fixtures directly), and a commit created inside the fixture's open transaction is invisible to a second connection - so the pinning test does its work on one connection, with a savepoint so the deliberately-refused DELETE does not poison the surrounding transaction.
 
 **API 435 → 454.**
+
+---
+
+### 60. The repository HTTP surface (this session)
+
+§59 built the store; this gives it a door, and gives `code_repos` the first writer it has had. The table has been in the schema since migration 0003 and empty in every deployment - decision 0001 declined to build a git server and left it with nothing to do - which is the state §46 flagged as "a table with no writer". Shipping a storage layer and stopping would have repeated it.
+
+Create and list repositories, commit a snapshot, read a tree at a branch or a commit, list and create branches, delete a branch, walk history, diff two commits. Viewer reads, editor writes. Publishing a transform from a commit is deliberately *not* here: that is a separate act with its own review gate (§47).
+
+**A new repository appears in the project browser and resolves at `/r/{id}` without this code knowing either exists** - db 0032's trigger registers it. That is the registry invariant paying off rather than being maintained: the route never mentions `resources`, and a test asserts the resource resolves with `kind: "code_repo"` and the right `kind_id`.
+
+Two bugs, both found by the tests and both worth recording.
+
+**`AmbiguousParameter`, the same family as §46.** `create_repository` built the vestigial `s3_prefix` column with `'repos/' || :pid || '/' || :slug`, so the same bind was a uuid column value in one place and a string operand in another and Postgres refused to deduce a type. Built in Python now. (The column itself is vestigial - it was for the bare git repository on S3 that decision 0001 rejected - and is filled with a derived value rather than dropped, because dropping a column the schema verifier asserts is a claim about the spec rather than about a feature.)
+
+**A brand-new repository 404'd on its own default branch.** Branches are created by the first commit, so a repository nobody has committed to has no branch row at all, and `resolve_ref` treated that as "no such branch". An editor cannot open a repository it is told does not exist. The distinction now lives in the signature: a caller that *names* a branch gets a 404 for a typo; a caller falling back to the default gets an empty repository, because that is what it is.
+
+**API 454 → 468.**
 
 ---
 

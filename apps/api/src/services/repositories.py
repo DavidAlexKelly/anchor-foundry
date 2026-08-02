@@ -304,3 +304,154 @@ async def delete_branch(conn: AsyncConnection, *, repo_id: UUID, name: str) -> N
         "DELETE FROM code_branches WHERE repo_id = %s AND name = %s",
         (str(repo_id), name),
     )
+
+
+# ---- repositories themselves -------------------------------------------------
+# `code_repos.s3_prefix` is NOT NULL UNIQUE and vestigial: it was for the bare
+# git repository the design in ROADMAP phase 1's Code item 1 would have kept on
+# S3, which decision 0001 rejected and 0003 supersedes. Filled with a derived
+# value rather than dropped, because dropping a column the schema verifier
+# asserts is a claim about the spec rather than about a feature - the same
+# reasoning that left `code_repos` itself in place when it had no writer.
+async def create_repository(
+    conn: AsyncConnection,
+    *,
+    project_id: UUID,
+    name: str,
+    description: str,
+    default_branch: str,
+    created_by: UUID | None,
+) -> dict[str, Any]:
+    slug = _slugify(name)
+    existing = await fetch_one(
+        conn,
+        "SELECT id FROM code_repos WHERE project_id = :pid AND slug = :slug",
+        {"pid": str(project_id), "slug": slug},
+    )
+    if existing is not None:
+        raise ConflictError(f"a repository called {slug!r} already exists in this project")
+    row = await fetch_one(
+        conn,
+        """
+        INSERT INTO code_repos (project_id, name, slug, description, s3_prefix,
+                                default_branch, created_by)
+        VALUES (:pid, :name, :slug, :description, :prefix, :branch, :author)
+        RETURNING id, project_id, name, slug, description, default_branch,
+                  resource_id, created_at, updated_at
+        """,
+        {
+            "pid": str(project_id),
+            "name": name,
+            "slug": slug,
+            "description": description,
+            # Built here rather than concatenated in SQL: the same bind cannot
+            # be a uuid column value and a string operand, and Postgres says so
+            # with AmbiguousParameter - the same family as STATUS.md §46.
+            "prefix": f"repos/{project_id}/{slug}/",
+            "branch": default_branch,
+            "author": str(created_by) if created_by else None,
+        },
+    )
+    assert row is not None
+    return dict(row)
+
+
+_REPO_COLUMNS = (
+    "id, project_id, name, slug, description, default_branch, resource_id, "
+    "created_at, updated_at"
+)
+
+
+async def list_repositories(conn: AsyncConnection, project_id: UUID) -> list[dict[str, Any]]:
+    rows = await fetch_all(
+        conn,
+        f"SELECT {_REPO_COLUMNS} FROM code_repos WHERE project_id = :pid ORDER BY name",
+        {"pid": str(project_id)},
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_repository(
+    conn: AsyncConnection, *, project_id: UUID, repo_id: UUID
+) -> dict[str, Any]:
+    row = await fetch_one(
+        conn,
+        f"SELECT {_REPO_COLUMNS} FROM code_repos WHERE id = :rid AND project_id = :pid",
+        {"rid": str(repo_id), "pid": str(project_id)},
+    )
+    if row is None:
+        raise NotFoundError("repository not found")
+    return dict(row)
+
+
+async def history(
+    conn: AsyncConnection, *, repo_id: UUID, branch: str | None, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Commits, newest first. Walking back from a branch head when one is
+    named, so a branch's history is *its* history rather than everything that
+    happens to share the repository."""
+    if branch:
+        head = await branch_head(conn, repo_id=repo_id, name=branch)
+        if head is None or head["head_commit_id"] is None:
+            return []
+        chain = await ancestors(conn, head["head_commit_id"])
+        ids = [str(c) for c in chain[:limit]]
+        rows = await fetch_all(
+            conn,
+            "SELECT id, parent_id, message, created_by, created_at FROM code_commits "
+            "WHERE id = ANY(CAST(:ids AS uuid[])) ORDER BY created_at DESC",
+            {"ids": ids},
+        )
+    else:
+        rows = await fetch_all(
+            conn,
+            "SELECT id, parent_id, message, created_by, created_at FROM code_commits "
+            "WHERE repo_id = :repo ORDER BY created_at DESC LIMIT :limit",
+            {"repo": str(repo_id), "limit": limit},
+        )
+    return [dict(r) for r in rows]
+
+
+async def resolve_ref(
+    conn: AsyncConnection,
+    *,
+    repo_id: UUID,
+    branch: str | None,
+    commit_id: UUID | None,
+    allow_missing_branch: bool = False,
+) -> UUID | None:
+    """A branch name or a commit id, never both silently.
+
+    Returns None when there is no commit to resolve to. Two different reasons
+    produce that, and only one of them is an error:
+
+    * a branch that exists and has no commits yet, and
+    * `allow_missing_branch` - the *default* branch of a repository nobody has
+      committed to, which has no row at all because branches are created by the
+      first commit. A caller that named a branch gets a 404 for a typo; a
+      caller falling back to the default gets an empty repository, because that
+      is what it is.
+    """
+    if commit_id is not None:
+        snapshot = await get_commit(conn, commit_id)
+        if str(snapshot["repo_id"]) != str(repo_id):
+            raise NotFoundError("commit not found in this repository")
+        return commit_id
+    if not branch:
+        raise ValueError("name a branch or a commit")
+    head = await branch_head(conn, repo_id=repo_id, name=branch)
+    if head is None:
+        if allow_missing_branch:
+            return None
+        raise NotFoundError(f"branch {branch!r}")
+    return UUID(str(head["head_commit_id"])) if head["head_commit_id"] else None
+
+
+def _slugify(name: str) -> str:
+    import re
+
+    slug = re.sub(r"[^a-z0-9_-]+", "-", name.lower()).strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)[:63].strip("-")
+    if not re.match(r"^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$", slug):
+        raise ValueError(f"cannot derive a repository slug from {name!r}")
+    return slug
