@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§55 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§56 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -243,11 +243,11 @@ Foundry's Code Repositories offers inline AI assistance over a highlighted snipp
 
 **What exists today.** All of the substance and none of the shape: column profiling (`STATUS.md` §22), lineage (§27), forking (§28), schema policy and drift detection (§26). It is spread across pillar pages and row expanders.
 
-### 3.1 The dataset application — **M**
+### ~~3.1 The dataset application~~ — **done, `STATUS.md` §56**
 
 Full-page app at `/r/{id}` with tabs Preview / Schema / Details / History / Lineage. Mostly a re-presentation of endpoints that already exist, which makes it the **best first application to build after Section 0** — it proves the shell against something already working, rather than co-developing an app and its backend.
 
-### 3.2 Column detail — **S**
+### ~~3.2 Column detail~~ — **done with 3.1** (`STATUS.md` §56): profiling is in the Schema tab
 
 Profiling per column (min/max/null rate/distinct) surfaced in the Schema tab, where it belongs.
 

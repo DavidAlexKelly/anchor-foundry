@@ -333,3 +333,25 @@ def test_resolving_someone_elses_resource_is_a_flat_404(
         r = client.get(f"/api/resources/{resource_id}", headers=hdr(sub))
         assert r.status_code == 404, (sub, r.text)
         assert isinstance(r.json()["detail"], str)
+
+
+def test_resolution_carries_the_id_the_per_kind_endpoints_use(
+    client: TestClient, fx: Fixture, empty_project: str
+) -> None:
+    """Two id spaces, both needed: the resource id says what this is and
+    survives renames; the kind id is what /datasets/{id} and friends take.
+    Without the second, an application opened from /r/{id} could name a
+    resource and then call nothing about it."""
+    dataset_id = make_dataset(client, fx, empty_project, f"Both ids {fx.tag}")
+    listed = listing(client, fx, empty_project, search=f"Both ids {fx.tag}")["resources"][0]
+
+    resolved = client.get(f"/api/resources/{listed['id']}", headers=hdr(fx.owner_sub)).json()
+    assert resolved["kind_id"] == dataset_id
+    assert resolved["id"] != resolved["kind_id"]
+
+    # And the id it hands over actually works against that kind's endpoints.
+    r = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{empty_project}/datasets/{resolved['kind_id']}",
+        headers=hdr(fx.owner_sub),
+    )
+    assert r.status_code == 200, r.text

@@ -113,6 +113,8 @@ class ResourceResolved(ResourceOut):
     project_slug: str | None
     project_name: str | None
     trashed: bool
+    # The row's id in its own table - what every per-kind endpoint is keyed by.
+    kind_id: UUID
 
 
 @resolve_router.get("/{resource_id}", response_model=ResourceResolved)

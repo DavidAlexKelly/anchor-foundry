@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§55). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§56). Test counts below are from the last full regression run.
 
 ---
 
@@ -999,6 +999,22 @@ Browser-verified: chips and counts, kind filtering, the workspace-level toggle (
 `localStorage` keeps one non-secret flag, `anchor.signed_in`, so the route guards can render or redirect without waiting on a request. Being wrong about it costs a redirect, not access - the API's 401 is what decides.
 
 Browser-verified: `document.cookie` is empty and `sessionStorage` holds no token; the cookie reports `httpOnly: true`, `sameSite: Lax`; a ctrl-clicked tab and a fresh typed-in tab both load the resource with no sign-in; signing out clears the cookie and the next tab to act is bounced to `/login?next=…`. **API 403 → 409** (391 → 397 with MariaDB down); worker 50 unchanged.
+
+---
+
+### 56. The dataset application (this session)
+
+Phase-2 item 3.1, and item 3.2 folded into it. Sequenced first among the applications on purpose: every answer it shows already existed, so it proves the application shell against endpoints known to work rather than co-developing an app and its backend.
+
+**Five tabs over one resource** - Preview, Schema, History, Lineage, Details - replacing a list page, a row expander and two dialogs. Schema is where column profiling finally belongs (item 3.2): nulls, null rate, distinct count, min and max per column, computed once per version and cached on the version row (§22), so the tab costs nothing after the first open. History reads the version list and shows the row-count delta between consecutive versions, which is the question anybody opening a history actually has. Lineage reuses `PipelineGraphView` and the same focused-pipeline endpoint the old dialog used - one renderer, still only one.
+
+**The tab is in the URL** (`?tab=schema`), so a link to a dataset's schema is a different link from one to its rows. `router.replace` rather than `push`: flicking between tabs should not bury the page the reader came from under a stack of back-button steps. Verified by deep link and by reload.
+
+**`resolve` now returns `kind_id`.** `/r/{id}` knew *what* a resource was and could call nothing about it - every per-kind endpoint is keyed by the row's id in its own table, not by the resource id. Two id spaces, both needed: the resource id survives renames and is what links carry; the kind id is what `/datasets/{id}` takes. Six LEFT JOINs on a unique index, one of which matches.
+
+**A 500 the application turned into the whole screen.** A dataset whose Parquet file is missing - storage cleared under a dev machine, a lifecycle rule, a database restored against the wrong bucket - raised `FileNotFoundError` out of the storage gateway and surfaced as `Internal Server Error`. That was survivable as one broken row in a list and is not survivable as an application's entire content. It is now a 409 saying the file is missing, that the metadata and history are intact, and that rebuilding or re-uploading restores it - three facts the reader needs and a traceback contains none of. Found by opening a real dataset in a real browser; the API tests had never deleted a file behind a live row.
+
+Browser-verified: all five tabs, a 60-row upload previewing in full, profiling with correct types and distinct counts, deep links opening the named tab, tab surviving reload, and the missing-file refusal rendering as a sentence. **API 409 → 411** (397 → 399 here, MariaDB down): one test that the two id spaces are distinct and that the kind id works against that kind's endpoints, one that a dataset whose file has been deleted refuses in a sentence.
 
 ---
 

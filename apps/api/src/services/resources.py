@@ -158,10 +158,21 @@ async def resolve(conn: AsyncConnection, resource_id: UUID) -> dict[str, Any] | 
                r.name, r.description, r.created_by, r.created_at, r.updated_at,
                r.trashed_at IS NOT NULL AS trashed,
                w.slug AS workspace_slug, w.name AS workspace_name,
-               p.slug AS project_slug, p.name AS project_name
+               p.slug AS project_slug, p.name AS project_name,
+               -- The row's id in its own table. Every per-kind endpoint is
+               -- keyed by it, so without this an application reached through
+               -- /r/{id} could identify a resource and then call nothing about
+               -- it. Six joins on a unique index, one of which matches.
+               COALESCE(c.id, d.id, m.id, o.id, ca.id, cr.id) AS kind_id
           FROM resources r
           JOIN workspaces w ON w.id = r.workspace_id
           LEFT JOIN projects p ON p.id = r.project_id
+          LEFT JOIN connections c ON c.resource_id = r.id
+          LEFT JOIN datasets d ON d.resource_id = r.id
+          LEFT JOIN models m ON m.resource_id = r.id
+          LEFT JOIN object_types o ON o.resource_id = r.id
+          LEFT JOIN canvas_apps ca ON ca.resource_id = r.id
+          LEFT JOIN code_repos cr ON cr.resource_id = r.id
          WHERE r.id = :rid
         """,
         {"rid": str(resource_id)},

@@ -18,6 +18,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { ApplicationShell, ResourceSummary } from "@/components/application-shell";
+import { DatasetApplication } from "@/components/applications/dataset-app";
 import { resources as resourcesApi } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { ResolvedResource, ResourceKind } from "@/lib/types";
@@ -26,14 +27,9 @@ import type { ResolvedResource, ResourceKind } from "@/lib/types";
  * a real application. `href` is null for kinds whose current home cannot be
  * linked to for one resource. */
 const APPLICATIONS: Record<
-  ResourceKind,
+  Exclude<ResourceKind, "dataset">,
   { buildingIn: string; label: string; href: (r: ResolvedResource) => string | null }
 > = {
-  dataset: {
-    buildingIn: "roadmap item 3.1",
-    label: "Open in Datasets",
-    href: (r) => (r.project_slug ? `/${r.workspace_slug}/${r.project_slug}/datasets` : null),
-  },
   model: {
     buildingIn: "roadmap section 2 (Code Repositories)",
     label: "Open in Models",
@@ -84,6 +80,16 @@ export default function ResourcePage() {
             : (resource.error as Error).message}
         </p>
       </div>
+    );
+  }
+
+  // Datasets have a real application (item 3.1); the rest resolve to their
+  // summary until theirs is built.
+  if (resource.data.kind === "dataset") {
+    return (
+      <ApplicationShell resource={resource.data}>
+        <DatasetApplication resource={resource.data} />
+      </ApplicationShell>
     );
   }
 

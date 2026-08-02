@@ -833,3 +833,90 @@ button { font: inherit; cursor: pointer; }
 .app-elsewhere { margin: 18px 0 6px; }
 .app-pending { font-size: 12.5px; }
 .app-gone { max-width: 560px; margin: 80px auto; text-align: center; }
+
+/* ---- dataset application (ROADMAP phase 2, 3.1) ---------------------------
+   Tabs over one resource, inside the application shell. The shell already
+   owns the name and the breadcrumb, so this starts at the tab strip. */
+.ds-app { display: flex; flex-direction: column; gap: 14px; }
+
+.ds-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.ds-tab {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.ds-tab:hover { color: var(--ink); }
+.ds-tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+
+.ds-note { font-size: 12.5px; margin: 0 0 10px; }
+
+/* Wide tables scroll inside their own box; the page never scrolls sideways. */
+.ds-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.ds-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.ds-table th {
+  text-align: left;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--paper);
+  white-space: nowrap;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+.ds-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ds-table tbody tr:hover { background: var(--paper); }
+.ds-coltype {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ink-soft);
+  text-transform: none;
+}
+.ds-coltype-cell, .ds-slug { font-family: var(--font-mono); font-size: 12px; color: var(--ink-soft); }
+.ds-null { color: var(--ink-soft); font-style: italic; }
+.ds-minmax { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.ds-delta { margin-left: 8px; font-size: 11.5px; font-family: var(--font-mono); }
+.ds-delta.up { color: var(--accent-deep); }
+.ds-delta.down { color: var(--danger); }
+
+.ds-details { max-width: 760px; }
+.ds-h2 { font-size: 14px; margin: 26px 0 10px; }
+.ds-health { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.ds-health li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.ds-health li.pass { border-left: 3px solid var(--accent); }
+.ds-health li.fail { border-left: 3px solid var(--danger); background: var(--danger-wash); }
+/* `error` means the rule could not be evaluated - deliberately not styled as
+   a failure, because "we do not know" and "the data is bad" are different
+   answers and only one of them is about the data. */
+.ds-health li.error { border-left: 3px solid var(--brass); }
+.ds-health-status {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.ds-health-detail { color: var(--ink-soft); font-size: 12.5px; margin-left: auto; }

@@ -129,6 +129,10 @@ export interface ResolvedResource extends Resource {
   project_slug: string | null;
   project_name: string | null;
   trashed: boolean;
+  /** The row's id in its own table (`datasets.id`, `models.id`, …). The
+   * resource id identifies *what* this is; every per-kind endpoint is keyed by
+   * this one, so an application needs both. */
+  kind_id: string;
 }
 
 export interface ProjectMember {
@@ -346,6 +350,20 @@ export interface DatasetHealth {
   status: "pass" | "warn" | "fail" | "none";
   evaluated_at: string | null;
   results: ExpectationResult[];
+}
+
+/** One committed version of a dataset. The row a "time travel" view browses,
+ * and the reason a record of what a dataset *was* does not change when the
+ * dataset does. */
+export interface DatasetVersion {
+  id: string;
+  version_number: number;
+  row_count: number;
+  table_schema: { name: string; data_type: string }[];
+  /** What produced it: an upload, a sync, a model run. Null for versions
+   * written before this was recorded. */
+  produced_by_kind: string | null;
+  created_at: string;
 }
 
 export interface TabularResult {

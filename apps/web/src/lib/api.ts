@@ -227,6 +227,12 @@ export const connections = {
 export const datasets = {
   list: (wid: string, pid: string) =>
     request<import("./types").Dataset[]>(`/workspaces/${wid}/projects/${pid}/datasets`),
+  get: (wid: string, pid: string, did: string) =>
+    request<import("./types").Dataset>(`/workspaces/${wid}/projects/${pid}/datasets/${did}`),
+  versions: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetVersion[]>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/versions`,
+    ),
   upload: (wid: string, pid: string, input: { name: string; file: File }) => {
     const form = new FormData();
     form.set("name", input.name);
