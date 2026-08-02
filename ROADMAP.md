@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§57 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§58 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -106,7 +106,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Prove it.** Round-trip an existing canvas app through the new format and render it unchanged.
 
-### 1.2 Variables — **L**
+### 1.2 Variables — **L, part done** (`STATUS.md` §58: object-set evaluation shipped; the builder panel and derived variables remain)
 
 **What Foundry does.** Typed variables are the wiring. Types: **object set**, **single object**, string, numeric, boolean, date/timestamp, array (of boolean, date, numeric, geopoint, geoshape, string, timestamp or struct), and object-set-filter variables. Object set variables are initialised from an object type or another object set, then optionally filtered by property values or Filter variables, or **pivoted to linked objects via a Search Around**. Variables also support **transformations**: string concatenation, if/else, casting between primitives, `is empty`/`is not empty`, `object property` (a property of a single object), and `object set aggregation` (an aggregate over a property of a set) — and transformations chain, referencing earlier ones.
 

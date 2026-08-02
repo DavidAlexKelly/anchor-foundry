@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§57). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§58). Test counts below are from the last full regression run.
 
 ---
 
@@ -1033,6 +1033,27 @@ Phase-2 item 1.1, the spike that blocks 1.2–1.5. Written up as `docs/decisions
 **Real data found the defect the fixture could not.** The fixture was copied out of the development database, so it looked authoritative - but every node in it had `type: {"resolvedName": …}`. Running the converter across all 163 saved apps failed on the first one containing a plain element, where Craft.js writes `type: "div"`, a bare string. One `AttributeError`, thirty seconds in, on data no hand-written fixture would have contained. Fixed and given its own test.
 
 Proof, beyond the unit tests: conversion run over **every canvas app in the database** - 163 apps, 92 still in v1 - asserting the layout survives apart from reference props, that converting twice equals converting once, and that no rewritten reference dangles. All passed; 27 variables extracted, zero broken bindings in real data. **API 411 → 427.**
+
+---
+
+### 58. Object sets, and two ways a set can mean two things (this session)
+
+The half of phase-2 item 1.2 the roadmap calls the thing that "decides whether Workshop parity is real": a set is a **query**, evaluated where the data is. Canvas filters a page of at most 200 rows in the browser (§36), which is fine for narrowing what is already on screen and cannot answer "how many match" or "give me the next page of the filtered set" - the two questions every Workshop widget asks.
+
+**A definition, not a result.** A variable holds the *description* of a set - one object type plus filters - which is small, serialisable and identical for every viewer. Rows come from evaluating it. Storing rows would make a saved app a saved session, which decision 0002 rules out.
+
+**`POST /workspaces/{ws}/object-sets/evaluate`**, viewer floor, returns a page plus the size of the whole set. Implemented in *both* stores - Postgres in SQL, OpenSearch in its query DSL - behind the existing gateway Protocol, with the object type verified to be in the workspace before it is used (an id in a request body is never trusted to be in scope).
+
+**The cross-store test was the point, and it earned its keep twice.** `object_sets.matches` is the written-down definition of "does this row match"; the same rows and filters go through it, through Postgres and through OpenSearch, and all three must agree. Two disagreements fell out on the first run, both in code I had just written:
+
+- **Ordered comparison.** Properties are stored untyped - jsonb in Postgres, a dynamically-mapped text field in OpenSearch - so `capacity > 40` means 250 > 40 on one store (which can cast) and `"250" < "40"` on the other (which compares indexed text). **`gt`/`gte`/`lt`/`lte` are now refused**, in a sentence that says why, rather than picked: a numeric-only reading breaks dates and codes, a lexicographic one is indefensible to anyone filtering a number, and the right answer is to honour the declared property type (`object_type_properties.data_type`, db 0026) and index accordingly - a mapping change with a backfill behind it, which is its own item.
+- **Substring versus prefix.** The first implementation paired Postgres `ILIKE '%x%'` with OpenSearch `phrase_prefix`, so "los" matched "closed" on one store and not the other. The operator is now **`starts_with`** on both, which is also the only version that can use an index - a substring match is a wildcard query, fine on a hundred rows and pathological on a million, which is the exact cost server-side evaluation exists to avoid.
+
+Neither would have been visible from one store. Both would have surfaced as an app giving different answers in staging and production.
+
+**The OpenSearch fixture grew twice to keep its promise** of covering every call the gateway makes: it ignored `must_not` (so `neq` looked like it matched everything and passed), and it read `properties.status` as a top-level key rather than a path, so it matched nothing at all.
+
+Not done here, and named rather than implied: aggregations (what Metric Cards need, roadmap 1.5 - they need a second implementation in both stores plus aggregation support in the fixture), search-around, derived variables and the builder's variables panel. **API 427 → 435.**
 
 ---
 
