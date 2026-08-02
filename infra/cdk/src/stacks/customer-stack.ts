@@ -45,6 +45,43 @@ export class CustomerStack extends Stack {
       ],
     });
 
+    // ---- VPC endpoints: how a no-egress task still starts -------------------
+    // The transform runner has no route to the internet (decision 0004), and
+    // Fargate pulls its image and ships its logs over the task ENI - so
+    // without these it cannot start, and the symptom is an empty CloudWatch
+    // log stream, exactly like the arm64 image problem in STATUS.md §20.
+    //
+    // Cost, stated rather than discovered on a bill: three interface endpoints
+    // at roughly $7-8 each per month, per deployment. The gateway endpoint for
+    // S3 is free. That is the price of customer code that cannot phone home,
+    // in a product whose premise is that data stays inside the customer's
+    // account.
+    const vpcEndpointSecurityGroup = new ec2.SecurityGroup(this, "VpcEndpointSg", {
+      vpc,
+      description: "AWS interface endpoints reachable from private subnets",
+      allowAllOutbound: false,
+    });
+    vpcEndpointSecurityGroup.addIngressRule(
+      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Port.tcp(443),
+      "HTTPS from inside the VPC"
+    );
+    for (const [id, service] of [
+      ["EcrApiEndpoint", ec2.InterfaceVpcEndpointAwsService.ECR],
+      ["EcrDockerEndpoint", ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER],
+      ["LogsEndpoint", ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS],
+    ] as const) {
+      vpc.addInterfaceEndpoint(id, {
+        service,
+        securityGroups: [vpcEndpointSecurityGroup],
+        subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      });
+    }
+    // Image *layers* come from S3, not from the ECR API. A gateway endpoint is
+    // a route-table entry rather than an ENI, so it is free and it is also the
+    // one people forget - leaving a pull that authenticates and then hangs.
+    vpc.addGatewayEndpoint("S3Endpoint", { service: ec2.GatewayVpcEndpointAwsService.S3 });
+
     // ---- Security monitoring: enabled by default (§10) ----------------------
     new cloudtrail.Trail(this, "Trail", {
       isMultiRegionTrail: true,
@@ -81,6 +118,7 @@ export class CustomerStack extends Stack {
     // ---- Compute ------------------------------------------------------------
     const services = new ServicesConstruct(this, "Services", {
       vpc,
+      vpcEndpointSecurityGroup,
       dataBucket: data.dataBucket,
       dbSecret: data.dbSecret,
       appDbSecret: data.appDbSecret,

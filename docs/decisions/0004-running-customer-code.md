@@ -46,17 +46,17 @@ So: three HTTP requests from inside a transform — fetch task credentials, fetc
 
 **A transform runs in a process that cannot obtain the platform's credentials.** Three parts, in the order they must be built.
 
-### 1. The runner is network-denied, and that is enforced outside the runner
+### 1. The runner's task role grants nothing — and this is the control
 
-Blocking `169.254.170.2` from inside the sandbox is not a control — the code being contained is the code that would have to respect it. It belongs in the deployment: a separate ECS task definition for transform execution, in a security group with no egress, with `AWS_EC2_METADATA_DISABLED` set as a belt-and-braces second layer rather than as the mechanism.
+Not "narrower than the worker" — nothing. Input Parquet is staged into the working directory by the *caller*, which holds the credentials; the output is read back the same way. The runner never touches S3, never touches Postgres, and has no role worth stealing.
 
-A transform needs no network. Its inputs arrive as files and its output is a file; that is already how `python_sandbox.py` works.
+**Corrected after building it** (`STATUS.md` §64): the first draft of this document made the network rule the control and the empty role the second layer. That is backwards. ECS delivers task credentials over **link-local** networking, which a security group does not filter — so no egress rule stops a transform *obtaining* credentials. Only their emptiness stops them mattering. The ordering decides which of the two must never be quietly relaxed, so it is worth being right about.
 
-### 2. The runner's task role grants nothing
+### 2. Egress is closed, and that is the blast radius
 
-Not "narrower than the worker" — nothing. Input Parquet is staged into the working directory by the *caller*, which holds the credentials; the output is read back from the working directory by the caller. The runner never touches S3, never touches Postgres, and has no role worth stealing.
+A transform needs no network: its inputs arrive as files and its output is a file, which is already how `python_sandbox.py` works. Closed egress does not prevent credential theft; it prevents anything stolen — or anything read — from leaving, in a product whose premise is that data stays inside the customer's boundary. `AWS_EC2_METADATA_DISABLED` sits behind both as a third layer that removes a confusing failure mode rather than as a mechanism.
 
-This is the part that makes the network rule a defence in depth rather than the only wall.
+**A no-egress task cannot start without help.** Fargate pulls the image and ships logs over the task ENI, so the stack also gains VPC endpoints for ECR, ECR Docker, CloudWatch Logs and S3 — about $21–24 a month per deployment. Without them the container never runs and CloudWatch shows an empty log stream.
 
 ### 3. Until both exist, Python stays off
 
