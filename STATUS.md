@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§51). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§52). Test counts below are from the last full regression run.
 
 ---
 
@@ -30,7 +30,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 ### 1. Database schema (migrations 0001–0031)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
-### 2. Control plane (`apps/control-plane`) - 45/45 tests
+### 2. Control plane (`apps/control-plane`) - 51/51 tests
 Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts, tears a stack down (§19), and since §48 serves the customer-facing onboarding flow that connects an account in the first place.
 
 ### 3. Infrastructure (`infra/cdk`) - synths clean, 87 resources
@@ -916,7 +916,25 @@ Four pins were below the first version publishing a cp313 wheel — `psycopg` 3.
 
 **One thing deliberately left alone:** `instance_store.py` calls `datetime.utcnow()`, which 3.13 deprecates loudly. Changing it makes the stored `updated_at` gain a `+00:00` offset - more correct, and a change to written data - so it belongs in a change that is about that, not in one about installing.
 
-**Current totals unchanged: API 388/388, worker 50/50, control-plane 45/45** — on both Pythons.
+**Then it failed again on the same machine, for a second reason.** `psycopg-binary==3.2.2` publishes a cp313 arm64 wheel, but tags it `macosx_14_0_arm64`; 3.2.4 is the first release tagged `macosx_11_0` and the first with a cp39 arm64 wheel at all. So the pin was invisible to an Apple Silicon Mac on macOS 13, and invisible to anyone who reached for `python3` — which on macOS is still CommandLineTools 3.9. Both produce the identical "no matching distribution" naming the wheel, so the second failure looked exactly like the first one not being fixed. `psycopg` is now **3.2.4** everywhere.
+
+**The rule that was wrong: "lowest version with a cp313 wheel" is not the same as "lowest version that installs".** A wheel exists per (interpreter, platform, minimum OS), and pip's "from versions:" list is already filtered by all three — so a release that does not suit *this* machine is indistinguishable from a release that was never published. The pins are now chosen as the lowest publishing wheels across cp312/cp313 on both linux and macOS arm64, with a deployment target below the current OS. The other three were checked against that rule and are fine as they stand: `greenlet` 3.1.0 (`macosx_11_0_universal2`), `duckdb` 1.1.1 and `pandas` 2.2.3.
+
+**Current totals unchanged: API 388/388, worker 50/50, control-plane 45/45** — on both Pythons, re-run on 3.13 after the psycopg bump (376 + 46 with MariaDB down, which skips 12 and 4).
+
+---
+
+### 52. `[object Object]` on the one screen with no support channel (this session)
+
+Someone walking the demo typed an account ID the schema did not like and the onboarding page said **`[object Object]`**. Two defects, and the second is the interesting one.
+
+**`ConnectIn.aws_account_id` carried `Field(pattern=r"^[0-9]{12}$")`.** So FastAPI rejected the request during validation, and its `detail` for that class of failure is a *list of error objects*, not a string — which the page renders straight into `textContent`. Meanwhile `detect_account` validates the same thing and raises "that does not look like a 12-digit AWS account ID". **The good message was unreachable, shadowed by a duplicate check one layer higher.** Validating in two places is not belt and braces when the outer one answers in a different shape: it silently wins, and it is the one that cannot explain itself.
+
+**The test asserted the status code and nothing else.** `test_a_bad_account_id_or_region_is_refused_before_aws_sees_it` checked `== 422` and passed in both worlds — the schema's 422 and the service's 422 are the same number. A refusal has two jobs and the test only ever checked one of them; `docs/deploying.md` level 1 exists precisely because that gap is invisible from the API and obvious in a browser, which is where it was in fact found.
+
+Fixed at both layers, because either alone leaves a hole: the pattern is off the field so the readable refusal is the only reachable one, and a `RequestValidationError` handler flattens FastAPI's list to one sentence — a missing field reaches that validator no matter what the models say, so the guarantee belongs in a handler rather than in each field. The page also stringifies a list-shaped `detail` defensively, since a page that renders `[object Object]` is broken regardless of who was right about the payload. Tests now assert the *shape* and the wording, not just the number. **Control plane 45 → 51.**
+
+Browser-verified against the demo: empty, short and non-numeric account IDs all render the sentence; a valid one still connects and opens step 4.
 
 ---
 

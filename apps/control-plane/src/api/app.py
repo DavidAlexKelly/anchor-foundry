@@ -25,6 +25,7 @@ import os
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
@@ -62,7 +63,13 @@ class StartOut(BaseModel):
 
 
 class ConnectIn(BaseModel):
-    aws_account_id: str = Field(pattern=r"^[0-9]{12}$")
+    # Deliberately unvalidated here. `detect_account` checks the same thing and
+    # says "that does not look like a 12-digit AWS account ID"; a `pattern=` on
+    # this field shadowed that, because FastAPI rejects the request before any
+    # of our code runs and answers with its own machine-shaped error. The
+    # customer typing into this box has no support channel, so the readable
+    # refusal has to be the only one they can reach.
+    aws_account_id: str
     aws_region: str
 
 
@@ -180,6 +187,25 @@ def create_app(
     def _unknown(_: Request, exc: KeyError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc)})
 
+    @app.exception_handler(RequestValidationError)
+    def _malformed(_: Request, exc: RequestValidationError) -> JSONResponse:
+        """Flatten FastAPI's validation errors to one sentence.
+
+        The default body is a list of error objects, which the page renders as
+        "[object Object]". Every refusal this app can emit is read by a
+        customer with no support channel and no console open, so `detail` is a
+        string here for the same reason it is everywhere else - one shape, so
+        one line of display code can be right about all of them.
+        """
+        parts: list[str] = []
+        for err in exc.errors():
+            where = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+            message = err.get("msg", "invalid value")
+            parts.append(f"{where}: {message}" if where else message)
+        return JSONResponse(
+            status_code=422, content={"detail": "; ".join(parts) or "malformed request"}
+        )
+
     return app
 
 
@@ -272,10 +298,21 @@ builds it — about fifteen minutes, most of it waiting.</p>
 
 <script>
 const token = new URLSearchParams(location.search).get("token");
+// FastAPI's `detail` is a string for our own refusals and a list of error
+// objects for request-validation failures. Rendering the second shape straight
+// into textContent produced "[object Object]" on screen - the one message a
+// customer with no support channel cannot act on.
+const errText = (body, r) => {
+  const d = body && body.detail;
+  if (typeof d === "string" && d) return d;
+  if (Array.isArray(d) && d.length) return d.map(e => e && e.msg ? e.msg : JSON.stringify(e)).join("; ");
+  if (d) return JSON.stringify(d);
+  return r.statusText || ("HTTP " + r.status);
+};
 const api = (path, opts) => fetch(path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token),
   Object.assign({ headers: { "content-type": "application/json" } }, opts)).then(async r => {
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body.detail || r.statusText);
+    if (!r.ok) throw new Error(errText(body, r));
     return body;
   });
 const $ = id => document.getElementById(id);

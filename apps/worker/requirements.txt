@@ -7,7 +7,7 @@
 # next person bumping it should expect that not to hold forever.
 dagster==1.11.16
 dagster-webserver==1.11.16
-psycopg[binary]==3.2.2
+psycopg[binary]==3.2.4
 PyMySQL==1.1.1
 duckdb==1.1.1
 pandas==2.2.3

@@ -244,6 +244,50 @@ def test_a_bad_account_id_or_region_is_refused_before_aws_sees_it(client: TestCl
                        ).status_code == 422
 
 
+@pytest.mark.parametrize("account_id", ["", "12345", "1234567890123", "12345678901a", " 123456789012"])
+def test_a_bad_account_id_is_refused_in_a_sentence_a_customer_can_read(
+    client: TestClient, account_id: str
+) -> None:
+    """Status codes were already right and the screen still said
+    "[object Object]".
+
+    `ConnectIn` used to carry `pattern=` on this field, so FastAPI rejected the
+    request itself and answered with a list of error objects; the page renders
+    `detail` as text. The check `detect_account` does says the readable thing,
+    but nothing could reach it. Asserting the *shape* of the refusal is the
+    only version of this test that fails when that regresses - the old one
+    asserted 422 and passed either way.
+    """
+    started = start(client)
+    r = client.post("/api/onboarding/connect",
+                    headers={"Authorization": f"Bearer {started['onboarding_token']}"},
+                    json={"aws_account_id": account_id, "aws_region": "eu-west-2"})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert isinstance(detail, str), f"a list here renders as [object Object]: {detail!r}"
+    assert "12-digit" in detail
+
+
+def test_every_refusal_is_a_sentence_including_a_malformed_request(
+    client: TestClient,
+) -> None:
+    """One shape for `detail`, app-wide, so the page has one thing to render.
+
+    A missing field reaches FastAPI's own validation no matter what the models
+    say, so the guarantee has to live in an exception handler rather than in
+    each field."""
+    started = start(client)
+    headers = {"Authorization": f"Bearer {started['onboarding_token']}"}
+    for path, body in [
+        ("/api/onboarding/connect", {}),
+        ("/api/onboarding/connect", {"aws_region": "eu-west-2"}),
+        ("/api/onboarding/launch-url", {}),
+    ]:
+        r = client.post(path, headers=headers, json=body)
+        assert r.status_code == 422, path
+        assert isinstance(r.json()["detail"], str), (path, r.json())
+
+
 def test_an_unsupported_region_is_refused_with_the_list(client: TestClient, aws: FakeAws) -> None:
     aws.assumable = True
     started = start(client)
