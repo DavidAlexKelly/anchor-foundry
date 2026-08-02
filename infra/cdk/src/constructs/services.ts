@@ -305,6 +305,8 @@ export class ServicesConstruct extends Construct {
         /** Mount the transform scratch filesystem. Only the worker does: it is
          * the side that stages a run's inputs and reads its result back. */
         mountScratch?: boolean;
+        /** Env this service needs and the others do not. */
+        extraEnv?: Record<string, string>;
       }
     ): ecs.FargateService => {
       const taskDef = new ecs.FargateTaskDefinition(this, `${name}TaskDef`, {
@@ -340,7 +342,7 @@ export class ServicesConstruct extends Construct {
       const container = taskDef.addContainer(name, {
         image: ecs.ContainerImage.fromRegistry(image),
         logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: name }),
-        environment: commonEnv,
+        environment: { ...commonEnv, ...(opts.extraEnv ?? {}) },
         secrets: name === "web" ? undefined : dbSecretEnv,
         command: opts.command,
       });
@@ -370,11 +372,59 @@ export class ServicesConstruct extends Construct {
       memory: 1024,
       port: 8000,
     });
+    // Everything anchor_worker/transform_dispatch.py needs to find the runner.
+    // Passed as configuration rather than discovered at run time: a worker that
+    // guessed its own cluster would guess wrong in a stack it does not own, and
+    // the failure would be a RunTask into somebody else's cluster.
+    const transformRunnerEnv = {
+      ANCHOR_TRANSFORM_SCRATCH: "/transform-scratch",
+      ANCHOR_TRANSFORM_CLUSTER: this.cluster.clusterName,
+      ANCHOR_TRANSFORM_TASK_DEFINITION: runnerTaskDef.taskDefinitionArn,
+      ANCHOR_TRANSFORM_SUBNETS: vpc
+        .selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS })
+        .subnetIds.join(","),
+      ANCHOR_TRANSFORM_SECURITY_GROUPS: this.transformRunnerSecurityGroup.securityGroupId,
+    };
     this.workerService = makeService("worker", `${props.workerImage}:${props.imageTag}`, workerTaskRole, {
       cpu: 1024,
       memory: 2048,
       mountScratch: true,
+      extraEnv: transformRunnerEnv,
     });
+
+    // ---- Permission to dispatch, and nothing more ---------------------------
+    // Scoped to one task definition and one cluster. A wildcard here would let
+    // the worker start any task in the account.
+    workerTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ecs:RunTask"],
+        resources: [runnerTaskDef.taskDefinitionArn],
+        conditions: { ArnEquals: { "ecs:cluster": this.cluster.clusterArn } },
+      })
+    );
+    workerTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        // The task's ARN is not known until RunTask returns, so this cannot be
+        // narrowed past the cluster - which the condition pins.
+        actions: ["ecs:DescribeTasks", "ecs:StopTask"],
+        resources: [`arn:aws:ecs:${Stack.of(this).region}:${Stack.of(this).account}:task/*`],
+        conditions: { ArnEquals: { "ecs:cluster": this.cluster.clusterArn } },
+      })
+    );
+    // **The one that would matter if it were wrong.** RunTask requires
+    // iam:PassRole for the roles in the task definition, and an unscoped
+    // PassRole is a privilege escalation, not a convenience: the worker could
+    // register a task definition naming any role in the account and start a
+    // container as it. Named exactly, so the only roles the worker can hand to
+    // a task are the runner's empty one and the execution role that pulls its
+    // image.
+    workerTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["iam:PassRole"],
+        resources: [runnerTaskRole.roleArn, runnerTaskDef.obtainExecutionRole().roleArn],
+        conditions: { StringEquals: { "iam:PassedToService": "ecs-tasks.amazonaws.com" } },
+      })
+    );
     // The worker stages a run's inputs and reads its result back, so it needs
     // the mount too. Granted from the service rather than by hand: CDK creates
     // the service's security group, and a hand-written rule would name a group

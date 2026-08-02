@@ -1205,6 +1205,26 @@ Re-run against four mutations, all now caught and each naming its own cause: an 
 
 ---
 
+### 67. Dispatch: the worker's half of the runner contract (this session)
+
+`anchor_worker/transform_dispatch.py`. Stage a run directory, `RunTask`, wait, read the result, clean up. Split into `stage`/`start`/`wait`/`collect` rather than one call, because those are the pieces ECS has and a caller that wants to record a task ARN against a run row can.
+
+**One filesystem, two paths — the bug this module is shaped to avoid.** The worker mounts the scratch access point at `/transform-scratch`, the runner mounts it at `/work`, so a run directory is one directory with two names and `ANCHOR_TRANSFORM_WORKDIR` must carry the *runner's*. Handing over the worker's path produces a container that starts, finds no job file, and reports it — a symptom that reads like a caller bug and is a mount bug. `RunHandle` therefore carries both names and a test asserts the override never contains the worker's root.
+
+**The exit code is not consulted.** §65 has the runner write `result.json` on failure *and* exit non-zero, deliberately in two places. This side reads the file: a result saying `failed` is `TransformFailed` carrying the author's own traceback; **no result file at all is `DispatchError`**, carrying whatever ECS gave as `stoppedReason`, because "OutOfMemoryError: Container killed due to memory usage" is the useful sentence and "your transform failed" would be a lie about whose problem it is. Mutation-tested: making a missing result file report as a failed transform fails exactly that test and nothing else.
+
+Also refused rather than papered over: an input alias that is not a plain identifier (it becomes both a file name and the name the transform's code binds — silently renaming it would bind a name the author never wrote), a result claiming `ok` with no output file (recording a successful run against a dataset version with no bytes is the quietly-wrong outcome), and a run that overruns, which is stopped rather than left burning a Fargate task. `run_transform` removes the run directory in a `finally` — scratch is one shared filesystem, and a failed run that leaves its inputs behind leaves the customer's data behind.
+
+**Testing.** Real `moto.server`, a real VPC and subnet, real RunTask/DescribeTasks/StopTask. Nothing here runs a container, so where ECS would start the runner the tests call `transform_runner.main()` on the staged directory — the actual entrypoint, so the files it reads and the result it writes are the ones the container would produce. Three mutations, each caught by one test: conflating the two failure kinds, handing over the worker's path, and cleaning up only on success. One branch is deliberately unproven and says so in the test module — `RunTask` returning 200 with an empty `tasks` list and a `failures` entry, which moto never produces; the handling stays because a caller waiting on a task ARN it never received is the exact failure this module exists to prevent.
+
+**Two moto quirks worth knowing** if these tests ever look strange: it computes Fargate placement from the *container's* cpu/memory rather than the task-level values, so the fixture's container definition carries them; and `describe_tasks` advances the task's lifecycle a step per call (RUNNING → DEACTIVATING → STOPPING → DEPROVISIONING → STOPPED), which is what lets a real polling loop terminate against it.
+
+**The infrastructure that makes it legal**, and one line of it is the security-relevant one. The worker gains `ecs:RunTask` on exactly the runner's task definition with an `ecs:cluster` condition, `DescribeTasks`/`StopTask` pinned to the same cluster, and **`iam:PassRole` naming exactly the runner's task role and execution role**. An unscoped `PassRole` is not a convenience — it lets the holder register a task definition naming any role in the account and start a container as it, which would make the runner's empty role, the whole control in decision 0004, beside the point. Three more checks in `transform-runner-check.ts` (11 total), each mutation-tested: `PassRole` widened to `*`, `RunTask` widened to `*`, and a missing env var each fail exactly one check.
+
+**Worker 55 → 67.** What remains is wiring this into `jobs/model_runs.py` so a Python model run actually takes this path instead of `python_sandbox.py`'s subprocess — a substitution at one call site, but one that changes where every existing Python transform runs, so it is its own step rather than a rider on this one.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

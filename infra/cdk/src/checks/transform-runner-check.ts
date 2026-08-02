@@ -205,6 +205,86 @@ check("the scratch volume is encrypted in transit", () => {
   }
 });
 
+// ---- the dispatching side ----------------------------------------------------
+/** Every policy statement attached to the one role whose logical id starts with `prefix`. */
+function statementsForRole(prefix: string): Record<string, unknown>[] {
+  const roleId = Object.keys(roles).find((id) => id.startsWith(prefix));
+  if (!roleId) throw new Error(`no role found with logical id starting ${prefix}`);
+  const statements = Object.values(policies)
+    .filter((policy) => JSON.stringify(policy.Properties?.Roles ?? []).includes(roleId))
+    .flatMap((policy) => (policy.Properties?.PolicyDocument?.Statement ?? []) as Record<string, unknown>[]);
+  if (statements.length === 0) {
+    throw new Error(`found no policy statements for ${prefix} - has the rendering changed?`);
+  }
+  return statements;
+}
+
+function actionsOf(statement: Record<string, unknown>): string[] {
+  const action = statement.Action;
+  return (Array.isArray(action) ? action : [action]).filter(
+    (a): a is string => typeof a === "string"
+  );
+}
+
+check("the worker may pass the runner's roles and no others", () => {
+  // The escalation, if this were wrong: RunTask needs iam:PassRole, and an
+  // unscoped one lets the worker register a task definition naming any role in
+  // the account and start a container as it - which would make the runner's
+  // empty role (the whole control in decision 0004) beside the point.
+  const passRole = statementsForRole("ServicesWorkerTaskRole").filter((s) =>
+    actionsOf(s).includes("iam:PassRole")
+  );
+  if (passRole.length === 0) {
+    throw new Error("the worker cannot pass any role, so RunTask will fail at dispatch time");
+  }
+  for (const statement of passRole) {
+    const resources = JSON.stringify(statement.Resource ?? "");
+    if (resources.includes('"*"') || resources === '"*"') {
+      throw new Error("the worker may pass any role in the account");
+    }
+    if (!resources.includes("TransformRunner")) {
+      throw new Error(`iam:PassRole names something other than the runner's roles: ${resources}`);
+    }
+  }
+});
+
+check("the worker may start the runner task and nothing else", () => {
+  const runTask = statementsForRole("ServicesWorkerTaskRole").filter((s) =>
+    actionsOf(s).includes("ecs:RunTask")
+  );
+  if (runTask.length !== 1) {
+    throw new Error(`expected exactly one ecs:RunTask statement, found ${runTask.length}`);
+  }
+  const resources = JSON.stringify(runTask[0].Resource ?? "");
+  if (resources.includes('"*"')) {
+    throw new Error("the worker may run any task definition in the account");
+  }
+  if (!runTask[0].Condition) {
+    throw new Error("ecs:RunTask is not pinned to a cluster");
+  }
+});
+
+check("the worker is told where the runner is", () => {
+  // Without these the dispatcher refuses at run time with "no transform runner
+  // configured" - correct, but only discovered when somebody runs a transform.
+  const taskDefs = template.findResources("AWS::ECS::TaskDefinition");
+  const worker = Object.entries(taskDefs).find(([id]) => id.startsWith("ServicesworkerTaskDef"));
+  if (!worker) throw new Error("no worker task definition found");
+  const environment = (worker[1].Properties?.ContainerDefinitions ?? [])
+    .flatMap((c: Record<string, unknown>) => (c.Environment as Record<string, unknown>[]) ?? []);
+  const names = new Set(environment.map((e: Record<string, unknown>) => e.Name as string));
+  const required = [
+    "ANCHOR_TRANSFORM_SCRATCH",
+    "ANCHOR_TRANSFORM_CLUSTER",
+    "ANCHOR_TRANSFORM_TASK_DEFINITION",
+    "ANCHOR_TRANSFORM_SUBNETS",
+    "ANCHOR_TRANSFORM_SECURITY_GROUPS",
+  ].filter((name) => !names.has(name));
+  if (required.length > 0) {
+    throw new Error(`the worker is missing: ${required.join(", ")}`);
+  }
+});
+
 check("the worker still has the permissions it needs", () => {
   // The counterweight: this check exists to stop the runner gaining
   // permissions, not to strip the worker of its own by accident.
