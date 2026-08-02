@@ -1185,6 +1185,26 @@ Naming it rather than improvising: the transport is the next decision, and picki
 
 ---
 
+### 66. The EFS scratch share, and the checks that turned out to be theatre (this session)
+
+§65's named gap, built. A transform's inputs and its output now travel over a shared filesystem: an `efs.FileSystem` with its own security group, an access point at `/runs` pinning uid/gid 1000 and mode 750, mounted at `/work` in the runner and `/transform-scratch` in the worker (`makeService` gained a `mountScratch` option rather than a second copy of the service definition).
+
+**Why a filesystem and not a bucket.** The runner's role grants nothing and its egress is closed, so it cannot reach S3 — deliberately, that is the whole of decision 0004. A mount works precisely because **the ECS agent performs it, not the container**: the runner authenticates to nothing, its role stays empty, and the property the decision rests on survives contact with the transport. The access point is what stops one run reading another's staging directory by walking up a level; transit encryption is set explicitly because it is *off* by default on an EFS volume configuration, which is the kind of default nobody notices.
+
+Egress grew one destination — TCP 2049 to the scratch security group, reciprocated as an ingress rule — and that is still not a route out: the only two things this group can reach are AWS endpoints inside the VPC and one filesystem.
+
+**Then mutation testing found a flaw in my own checks, which is the part worth recording.** §64's `transform-runner-check.ts` asserted that the runner's security group has no open egress. It read `Properties.SecurityGroupEgress` off the `AWS::EC2::SecurityGroup` resource. Adding a deliberate rule on port 8080 did not fail it. A throwaway probe printed the reason: **inline egress on the runner SG: NONE; standalone egress resources: 4**. An egress rule whose destination is *another security group* cannot be inlined — CloudFormation renders it as a separate `AWS::EC2::SecurityGroupEgress` resource — and every one of the runner's rules is of that kind. Both egress checks had been reading an empty array and passing on nothing since the day they were written. They were theatre, and they were theatre about the one property a reader of decision 0004 would most want assurance on.
+
+The fix is `egressRulesFor()`, which merges inline and standalone rules and **refuses to pass on zero of them** ("found no egress rules to check - has the rendering changed?"). That guard is the actual lesson: a check that reads a structure CDK is free to re-render must fail when it finds nothing, or the next re-rendering turns it silently green again.
+
+Re-run against four mutations, all now caught and each naming its own cause: an extra egress port (→ "can reach unexpected port(s): 8080"), a `0.0.0.0/0` rule on an *allowed* port 443 (→ "1 open egress rule(s)", correctly a different check from the port one), the container's mount point removed (→ "the runner container mounts nothing"), and both egress rules deleted. That last one exposed a smaller edge: a group with `allowAllOutbound: false` and no rules is not rendered empty — CDK inlines a placeholder to `255.255.255.255/32` so CloudFormation accepts it — so the check failed blaming "port 86", a rule nobody wrote. It now recognises the placeholder and says what it means: "has no egress rules at all - a task in it cannot pull its image or start".
+
+8 checks, all passing, and now demonstrably for a reason. `npm test` in `infra/cdk` runs them.
+
+**Still missing before Python transforms run:** worker-side dispatch that stages a job onto the scratch share, calls `RunTask` against the runner task definition, waits, and reads `result.json` — including what it does when there is no result file (§65's distinction, which only pays off if the caller honours it).
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

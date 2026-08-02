@@ -213,7 +213,7 @@ Tree, create/rename/delete/move, tabbed editors, unsaved-state indicators, and a
 
 Create from a branch, switch, list, delete. Commit to a branch. A diff view (the existing `services/code.py` diff logic already handles the trailing-newline case correctly — `STATUS.md` §46 — and should be reused, not rewritten). Fast-forward merge. **Depends on** 2.1.
 
-### 2.5 Transforms authoring — **L, spiked** (`docs/decisions/0004-running-customer-code.md`, `STATUS.md` §63: declarations read statically and tested; execution blocked on the runner task and empty role that decision requires)
+### 2.5 Transforms authoring — **L, three of four parts done** (`docs/decisions/0004-running-customer-code.md`; `STATUS.md` §63 declarations, §64 the runner task and empty role, §65 the container entrypoint, §66 the EFS scratch transport). **What remains is worker-side dispatch**: stage a job onto the scratch share, `RunTask` the runner task definition, wait, read `result.json` — and treat its *absence* as failed infrastructure rather than a failed transform, which is the distinction §65 built and only pays off if the caller honours it.
 
 The point of the whole section: code in a repository that declares the dataset it produces, and a build that runs it. Python transforms executing in the worker; the existing DuckDB execution path is the target, and the sandboxing question (running customer Python) is a real security design item, not an implementation detail — **flag it early, do not discover it at build time**.
 
