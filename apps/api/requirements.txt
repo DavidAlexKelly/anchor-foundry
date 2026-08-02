@@ -1,14 +1,19 @@
+# Python 3.12 and 3.13 are both supported: the images build on 3.12, and
+# 3.13 is what a fresh machine gets by default. psycopg-binary, greenlet and
+# duckdb are here at the lowest version each publishes a cp313 wheel for -
+# below those, `pip install` fails outright on 3.13 with a bare "no matching
+# distribution" that names the wheel rather than the Python version.
 fastapi==0.111.1
 uvicorn[standard]==0.30.3
 sqlalchemy==2.0.31
 pydantic==2.8.2
 pydantic-settings==2.3.4
 PyJWT[crypto]==2.9.0
-psycopg[binary]==3.2.1
+psycopg[binary]==3.2.2
 PyMySQL==1.1.1
 email-validator==2.2.0
-greenlet==3.0.3
-duckdb==1.0.0
+greenlet==3.1.0
+duckdb==1.1.1
 pytz==2024.1
 python-multipart==0.0.9
 boto3==1.34.144
