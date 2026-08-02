@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§62). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§63). Test counts below are from the last full regression run.
 
 ---
 
@@ -1126,6 +1126,26 @@ Workers are routed to the plain `editor.worker`. The languages offered - SQL, Py
 An unknown extension gets `plaintext` rather than a guess - mis-highlighted code reads as broken code. The editor is keyed by path, so switching files swaps the model rather than replaying new text into the old one, which would put a change in the undo stack of a file it did not come from.
 
 Browser-verified end to end: the editor mounts with SQL colouring, typing raises the commit bar and marks the file, committing clears it, and the new commit appears at the top of history with its diff. No console errors, no off-origin requests. **API unchanged at 468.**
+
+---
+
+### 63. Where customer code runs, and what it could reach (this session)
+
+Item 2.5's blocker, spiked before building the way 1.1 and 2.1 were. Written up as `docs/decisions/0004-running-customer-code.md`. It found something.
+
+**Stating the threat model changed the answer.** `python_sandbox.py` already says it is "not a hard multi-tenant security boundary", but not what it is not a boundary *against*. The author of a transform is a customer employee with editor access, writing in the customer's own deployment in the customer's own AWS account - not an anonymous attacker, and already entitled to the data in their project. So the bar is not "run hostile code safely"; it is **a transform must not reach anything its author could not already reach**. By that measure process isolation with resource caps is close to right. One thing is not.
+
+**The finding.** The sandbox builds the subprocess environment as an allowlist - `{"PATH", "HOME"}` - so no database URL and no AWS keys are inherited. Correct, and where the reasoning stopped. **In the deployed stack credentials do not arrive in the environment**: ECS delivers the task role over the network from `169.254.170.2`. Stripping `os.environ` does not touch it, and the same docstring already notes the sandbox "does not stop the transform from opening a network socket" - the two facts had never been put next to each other.
+
+The worker's task role holds `dataBucket.grantReadWrite` (every project, every workspace in that deployment) and `appDbSecret.grantRead`. The second is worse than it looks: that secret is `platform_app`, which RLS applies to - but `rls_worker_for_workspace` (db 0006) grants visibility to any connection that sets `app.service = 'worker'` and `app.workspace_id`. That escape hatch is sound *because only the worker holds those credentials*. Three HTTP requests from inside a transform - fetch task credentials, fetch the secret, connect - and workspace isolation is gone.
+
+**Not a live vulnerability**: Python transforms do not execute at all today, the API leaves them queued. Exactly the constraint that had to be settled before they run, which is what spiking is for.
+
+**Decided:** the runner gets its own ECS task definition with no egress and an empty task role. Inputs are staged into its working directory by the caller, which holds the credentials; the output is read back the same way. The runner never touches S3 or Postgres and has no role worth stealing, which makes the network rule defence in depth rather than the only wall. Until both exist, Python stays off. SQL is unaffected - DuckDB with `enable_external_access` off is a real boundary for what SQL can express.
+
+**Declarations are read statically, and that is part of the same decision.** Foundry evaluates a decorator at import time to find a transform's inputs and outputs; doing that here would mean *executing the file on the API's request path* to find out what it builds - the exact thing under discussion, before any sandbox is involved. `services/transform_declarations.py` parses with `ast` instead. Only literals are read: a computed output is refused rather than guessed, because a lineage graph that is right most of the time is worse than one that says it cannot read a file. SQL declares the same shape in its leading comment block, and only there - a `-- output:` inside a query is somebody explaining a column.
+
+The load-bearing test is a file whose import would `rmtree("/")` and which parses fine. **API 468 → 482.**
 
 ---
 

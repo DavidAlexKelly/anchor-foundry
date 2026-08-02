@@ -1,6 +1,6 @@
 # Anchor — Roadmap phase 2: Foundry-shaped applications
 
-_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§62 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
+_Phase 1 built six pillars and is complete: it lives in `docs/roadmap-phase-1-pillars.md`, and `STATUS.md` §21–§63 is the detail. **Cross-references elsewhere in the repo of the form "ROADMAP.md section N item M" mean that document, not this one.**_
 
 _This document is the plan for a different thing: making Anchor's surfaces work the way Palantir Foundry's do. It is written to be started from, so each item carries what Foundry actually does, what exists here today, what to build, and how you would know it worked._
 
@@ -213,7 +213,7 @@ Tree, create/rename/delete/move, tabbed editors, unsaved-state indicators, and a
 
 Create from a branch, switch, list, delete. Commit to a branch. A diff view (the existing `services/code.py` diff logic already handles the trailing-newline case correctly — `STATUS.md` §46 — and should be reused, not rewritten). Fast-forward merge. **Depends on** 2.1.
 
-### 2.5 Transforms authoring — **L**
+### 2.5 Transforms authoring — **L, spiked** (`docs/decisions/0004-running-customer-code.md`, `STATUS.md` §63: declarations read statically and tested; execution blocked on the runner task and empty role that decision requires)
 
 The point of the whole section: code in a repository that declares the dataset it produces, and a build that runs it. Python transforms executing in the worker; the existing DuckDB execution path is the target, and the sandboxing question (running customer Python) is a real security design item, not an implementation detail — **flag it early, do not discover it at build time**.
 
