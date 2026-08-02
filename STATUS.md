@@ -916,7 +916,11 @@ Four pins were below the first version publishing a cp313 wheel — `psycopg` 3.
 
 **One thing deliberately left alone:** `instance_store.py` calls `datetime.utcnow()`, which 3.13 deprecates loudly. Changing it makes the stored `updated_at` gain a `+00:00` offset - more correct, and a change to written data - so it belongs in a change that is about that, not in one about installing.
 
-**Current totals unchanged: API 388/388, worker 50/50, control-plane 45/45** — on both Pythons.
+**Then it failed again on the same machine, for a second reason.** `psycopg-binary==3.2.2` publishes a cp313 arm64 wheel, but tags it `macosx_14_0_arm64`; 3.2.4 is the first release tagged `macosx_11_0` and the first with a cp39 arm64 wheel at all. So the pin was invisible to an Apple Silicon Mac on macOS 13, and invisible to anyone who reached for `python3` — which on macOS is still CommandLineTools 3.9. Both produce the identical "no matching distribution" naming the wheel, so the second failure looked exactly like the first one not being fixed. `psycopg` is now **3.2.4** everywhere.
+
+**The rule that was wrong: "lowest version with a cp313 wheel" is not the same as "lowest version that installs".** A wheel exists per (interpreter, platform, minimum OS), and pip's "from versions:" list is already filtered by all three — so a release that does not suit *this* machine is indistinguishable from a release that was never published. The pins are now chosen as the lowest publishing wheels across cp312/cp313 on both linux and macOS arm64, with a deployment target below the current OS. The other three were checked against that rule and are fine as they stand: `greenlet` 3.1.0 (`macosx_11_0_universal2`), `duckdb` 1.1.1 and `pandas` 2.2.3.
+
+**Current totals unchanged: API 388/388, worker 50/50, control-plane 45/45** — on both Pythons, re-run on 3.13 after the psycopg bump (376 + 46 with MariaDB down, which skips 12 and 4).
 
 ---
 

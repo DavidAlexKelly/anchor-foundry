@@ -1,15 +1,23 @@
 # Python 3.12 and 3.13 are both supported: the images build on 3.12, and
 # 3.13 is what a fresh machine gets by default. psycopg-binary, greenlet and
-# duckdb are here at the lowest version each publishes a cp313 wheel for -
-# below those, `pip install` fails outright on 3.13 with a bare "no matching
-# distribution" that names the wheel rather than the Python version.
+# duckdb are here at the lowest version each publishes a wheel for every
+# supported interpreter *on Apple Silicon as well as linux* - below those,
+# `pip install` fails outright with a bare "no matching distribution" that
+# names the wheel rather than the reason.
+#
+# psycopg-binary is pinned above its own cp313 floor on purpose. 3.2.2 has a
+# cp313 arm64 wheel but tags it `macosx_14_0`, so it is invisible to a Mac on
+# macOS 13 and to any older interpreter; 3.2.4 is the first release tagged
+# `macosx_11_0` across cp39-cp313. The failure mode either way is a version
+# list that silently omits the pinned version, which reads as "that release
+# does not exist" rather than "not for this machine".
 fastapi==0.111.1
 uvicorn[standard]==0.30.3
 sqlalchemy==2.0.31
 pydantic==2.8.2
 pydantic-settings==2.3.4
 PyJWT[crypto]==2.9.0
-psycopg[binary]==3.2.2
+psycopg[binary]==3.2.4
 PyMySQL==1.1.1
 email-validator==2.2.0
 greenlet==3.1.0

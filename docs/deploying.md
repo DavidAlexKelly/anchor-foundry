@@ -14,13 +14,22 @@ class of problem before the next one costs you fifteen minutes.
 
 ## Python
 
-3.12 or 3.13. The service images build on 3.12; the pins are at the lowest
-versions that also publish 3.13 wheels, because 3.13 is what a fresh machine
-gets by default (`STATUS.md` §51). Anything older than 3.12 is untested.
+3.12 or 3.13, and **name the version explicitly when you create the venv**:
 
 ```bash
 python3.13 -m venv .venv-cp && .venv-cp/bin/pip install -r apps/control-plane/requirements-dev.txt
 ```
+
+`python3` on macOS is CommandLineTools 3.9, which this codebase does not
+support. It does not say so: the venv is created happily and the first failure
+is `pip` reporting "no matching distribution" for a pinned wheel — an error
+about a *package version*, for a problem with the *interpreter*. If you see a
+"from versions:" list that skips the pinned version, check
+`.venv-*/bin/python --version` before touching the pin (`STATUS.md` §51).
+
+The service images build on 3.12. The pins sit at the lowest version each
+native package publishes wheels for across both supported interpreters, on
+linux **and** Apple Silicon. Anything older than 3.12 is untested.
 
 ---
 
