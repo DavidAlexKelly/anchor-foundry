@@ -12,6 +12,18 @@ class of problem before the next one costs you fifteen minutes.
 
 ---
 
+## Python
+
+3.12 or 3.13. The service images build on 3.12; the pins are at the lowest
+versions that also publish 3.13 wheels, because 3.13 is what a fresh machine
+gets by default (`STATUS.md` §51). Anything older than 3.12 is untested.
+
+```bash
+python3.13 -m venv .venv-cp && .venv-cp/bin/pip install -r apps/control-plane/requirements-dev.txt
+```
+
+---
+
 ## Level 1 — the whole onboarding flow, no AWS account
 
 Proves the flow, the copy, the refusals and the hand-off. Proves nothing about

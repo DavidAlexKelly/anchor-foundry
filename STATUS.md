@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§50). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§51). Test counts below are from the last full regression run.
 
 ---
 
@@ -901,6 +901,22 @@ One bug the browser caught immediately, and worth keeping because it is this cod
 **Testing.** `test_vendor_bootstrap.py`, 10 tests against a fake gateway: a first run creating everything, the environment block being the *whole* configuration (anything missing is something somebody has to work out by hand), a second run creating nothing while still reporting everything, the template and role policy being rewritten anyway, both policies' scopes, trust defaulting to the account and narrowing on request, JSON-serialisability of what goes to IAM, and the output naming what is still manual.
 
 **Current totals: control-plane 45/45** (35 + 10), **API 388/388**, **worker 50/50** (both untouched).
+
+---
+
+### 51. Python 3.13 (this session)
+
+Found the way these things are always found: somebody cloned the repo on a current machine and `pip install` died on `psycopg-binary==3.2.1`, with an error naming a wheel rather than a Python version. **3.13 is what a fresh machine gets by default now**, and every native pin here predates it.
+
+Four pins were below the first version publishing a cp313 wheel — `psycopg` 3.2.1→3.2.2, `greenlet` 3.0.3→3.1.0, `duckdb` 1.0.0→1.1.1, `pandas` 2.2.2→2.2.3 — each moved to exactly that version and no further, because the point is to install, not to be current.
+
+**Dagster was not a pin bump.** 1.7.x declares `Requires-Python <3.13`, so it cannot be installed there at all; the first release that can is 1.11. That is four minor versions of an orchestration framework, and it is the only change here with real risk. It needed **no code change**, for a reason worth writing down: this worker's entire Dagster surface is `Definitions`, `ScheduleDefinition`, `@job`, `@op`, `OpExecutionContext` and `ConfigurableResource`, all still current in 1.11 — a small surface is what made a four-version jump a requirements edit. Whoever bumps it next should not assume that holds.
+
+**Both versions are supported, and both were run.** The images stay on `python:3.12-slim`; nothing about the deployed stack changes. All three suites were run on **3.12 and 3.13** with the new pins - 388 API, 50 worker, 45 control-plane on each - and the DuckDB bump got a browser pass as well (charts, the Code pillar, the map), since 1.0→1.1 is the one change with query-behaviour surface rather than just packaging.
+
+**One thing deliberately left alone:** `instance_store.py` calls `datetime.utcnow()`, which 3.13 deprecates loudly. Changing it makes the stored `updated_at` gain a `+00:00` offset - more correct, and a change to written data - so it belongs in a change that is about that, not in one about installing.
+
+**Current totals unchanged: API 388/388, worker 50/50, control-plane 45/45** — on both Pythons.
 
 ---
 

@@ -2,13 +2,13 @@
 name = "anchor-worker"
 version = "0.1.0"
 description = "Anchor background worker: Dagster jobs for cleanup, sync, and pipelines."
-requires-python = ">=3.12"
+requires-python = ">=3.12"   # 3.12 and 3.13; see requirements.txt
 dependencies = [
-    "dagster==1.7.12",
-    "psycopg[binary]==3.2.1",
+    "dagster==1.11.16",
+    "psycopg[binary]==3.2.2",
     "PyMySQL==1.1.1",
-    "duckdb==1.0.0",
-    "pandas==2.2.2",
+    "duckdb==1.1.1",
+    "pandas==2.2.3",
     "pytz==2024.1",
     "boto3==1.34.144",
     "croniter==2.0.5",

@@ -1,9 +1,16 @@
-dagster==1.7.12
-dagster-webserver==1.7.12
-psycopg[binary]==3.2.1
+# Python 3.12 and 3.13 are both supported. Dagster is the reason this is not
+# a one-line bump: 1.7.x declares Requires-Python <3.13 and simply cannot be
+# installed there, so 3.13 support meant 1.7 -> 1.11, four minor versions of
+# an orchestration framework. It needed no code change - this worker's whole
+# Dagster surface is Definitions, ScheduleDefinition, @job, @op,
+# OpExecutionContext and ConfigurableResource, all current in 1.11 - but the
+# next person bumping it should expect that not to hold forever.
+dagster==1.11.16
+dagster-webserver==1.11.16
+psycopg[binary]==3.2.2
 PyMySQL==1.1.1
-duckdb==1.0.0
-pandas==2.2.2
+duckdb==1.1.1
+pandas==2.2.3
 pytz==2024.1
 boto3==1.34.144
 croniter==2.0.5
