@@ -23,7 +23,7 @@ Endpoints:
   POST   /_bulk                   update + doc_as_upsert only
   POST   /{index}/_delete_by_query
   POST   /{index}/_search       term/terms/range/multi_match in filter/must/
-                                should (+minimum_should_match), sorted+paged
+                                should (+minimum_should_match)/must_not, sorted+paged
   GET    /{index}/_doc/{id}
   POST   /{index}/_update/{id}
   POST   /__reset                 test helper: forget every index
@@ -83,8 +83,22 @@ def _match(source: dict, clause: dict) -> bool:
             if field.endswith(".*"):
                 nested = source.get(field[:-2]) or {}
                 haystack.extend(str(v) for v in nested.values())
+            elif "." in field:
+                # A concrete nested field ("properties.status"), which the
+                # object-set gateway sends. Real OpenSearch resolves the path;
+                # this used to read it as a top-level key and match nothing.
+                current: object = source
+                for part in field.split("."):
+                    current = (current or {}).get(part) if isinstance(current, dict) else None
+                haystack.append("" if current is None else str(current))
             else:
                 haystack.append(str(source.get(field, "")))
+        if spec.get("type") == "phrase_prefix":
+            # Narrowed on purpose: real OpenSearch prefixes the *last term*
+            # after tokenising, so "clos" matches "closed" and also matches
+            # "site closed". Whole-value prefix is the part both stores can
+            # agree on, and the part object_sets.matches defines.
+            return any(value.lower().startswith(needle) for value in haystack)
         return any(needle in value.lower() for value in haystack)
     if "match_all" in clause:
         return True
@@ -107,6 +121,10 @@ def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
         bool_query = query["bool"]
         clauses = list(bool_query.get("filter", [])) + list(bool_query.get("must", []))
         should = list(bool_query.get("should", []))
+        # must_not is honoured for the same reason minimum_should_match is: the
+        # object-set gateway sends it for `neq`, and a fixture that ignored it
+        # would report every document as matching and call that a pass.
+        must_not = list(bool_query.get("must_not", []))
         # minimum_should_match is honoured rather than assumed: the gateway's
         # link traversal sends two should-clauses expecting *either* to
         # qualify, and a fixture that quietly required both would pass the
@@ -123,12 +141,20 @@ def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
                 return True
     else:
         clauses = [query]
+        must_not = []
 
         def enough(source: dict) -> bool:
             return True
+    def allowed(source: dict) -> bool:
+        return not any(_match(source, c) for c in must_not)
+
     if not clauses:
-        return [(i, s) for i, s in docs if enough(s)]
-    return [(i, s) for i, s in docs if all(_match(s, c) for c in clauses) and enough(s)]
+        return [(i, s) for i, s in docs if enough(s) and allowed(s)]
+    return [
+        (i, s)
+        for i, s in docs
+        if all(_match(s, c) for c in clauses) and enough(s) and allowed(s)
+    ]
 
 
 class Handler(BaseHTTPRequestHandler):

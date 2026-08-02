@@ -38,6 +38,8 @@ from .routes import models as model_routes
 from .routes import objects as object_routes
 from .routes import org as org_routes
 from .routes import projects as project_routes
+from .routes import repositories as repository_routes
+from .routes import resources as resource_routes
 from .routes import workspaces as workspace_routes
 
 
@@ -91,7 +93,13 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000"],
-        allow_credentials=False,  # bearer tokens, not cookies
+        # Stays False now that a session cookie exists, and matters more for
+        # it: the browser session is same-origin (CloudFront in production,
+        # Next's /api rewrite in dev), so no legitimate caller needs a
+        # credentialed cross-origin request - and refusing them is what makes
+        # the X-Anchor-Session header a real CSRF barrier rather than a
+        # convention (middleware/auth.py).
+        allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
@@ -169,6 +177,9 @@ def create_app() -> FastAPI:
     app.include_router(org_routes.router, prefix=prefix)
     app.include_router(workspace_routes.router, prefix=prefix)
     app.include_router(project_routes.router, prefix=prefix)
+    app.include_router(resource_routes.router, prefix=prefix)
+    app.include_router(resource_routes.resolve_router, prefix=prefix)
+    app.include_router(repository_routes.router, prefix=prefix)
     app.include_router(connection_routes.router, prefix=prefix)
     app.include_router(dataset_routes.router, prefix=prefix)
     app.include_router(model_routes.router, prefix=prefix)

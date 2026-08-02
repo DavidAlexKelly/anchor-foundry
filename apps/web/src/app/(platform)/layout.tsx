@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { api } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
+import { clearSignedIn, isSignedIn, loginHrefFor } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
@@ -13,18 +13,21 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
   const pathname = usePathname();
 
   useEffect(() => {
-    if (!getToken()) router.replace("/login");
-  }, [router]);
+    if (!isSignedIn()) router.replace(loginHrefFor(pathname, window.location.search));
+  }, [router, pathname]);
 
-  const me = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: !!getToken() });
+  const me = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: isSignedIn() });
 
   async function signOut() {
     try {
-      await api.logout(); // audit the event; token invalidation is client-side (§9)
+      // Clears the httpOnly cookie as well as auditing - this call is now
+      // the only thing that *can* end the session, since the credential is
+      // no longer reachable from here.
+      await api.logout();
     } catch {
-      /* signing out locally regardless */
+      /* a failed audit must not strand somebody signed in */
     }
-    clearToken();
+    clearSignedIn();
     router.replace("/login");
   }
 

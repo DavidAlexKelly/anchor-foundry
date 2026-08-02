@@ -219,3 +219,33 @@ def test_data_actions_audited(client: TestClient, fx: Fixture) -> None:
     r = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
     actions = {e["action"] for e in r.json()}
     assert {"dataset.upload", "dataset.query", "dataset.export", "dataset.delete"} <= actions
+
+
+def test_a_dataset_whose_file_is_missing_says_so(
+    client: TestClient, fx: Fixture, storage: LocalStorageGateway
+) -> None:
+    """The row exists and its bytes do not - storage cleared under a dev
+    machine, a lifecycle rule, a database restored against the wrong bucket.
+    It used to be a 500 and a traceback, which says nothing about which of
+    those happened; the dataset application turned that into the whole screen
+    rather than one row in a list."""
+    r = upload(client, fx, fx.editor_sub, name=f"Vanishing {fx.tag}")
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+
+    # Reach into the storage root the way test_delete_removes_row_and_files
+    # does, rather than asking the database for a key - the point here is what
+    # happens when the bytes are gone, not where they were.
+    parquet = [p for p in storage._root.rglob("data.parquet") if dataset_id in str(p)]
+    assert parquet, "the upload should have written a parquet file"
+    parquet[0].unlink()
+
+    got = client.get(
+        f"{base(fx)}/{dataset_id}/preview", headers=hdr(fx.viewer_sub)
+    )
+    assert got.status_code == 409, got.text
+    detail = got.json()["detail"]
+    assert isinstance(detail, str)
+    assert "missing from storage" in detail
+    # The metadata is still readable, which is what the message promises.
+    assert client.get(f"{base(fx)}/{dataset_id}", headers=hdr(fx.viewer_sub)).status_code == 200

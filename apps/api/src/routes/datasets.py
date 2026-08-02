@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
+from ..lib.errors import ConflictError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import expectations
@@ -378,7 +379,20 @@ async def delete_dataset(
 async def _parquet_path(access: ProjectAccess, dataset_id: UUID) -> tuple[str, dict[str, Any]]:
     async with user_connection(access.auth.user_id) as conn:
         row = await ds_service.get(conn, access.project_id, dataset_id)
-    path = await anyio.to_thread.run_sync(_storage.local_path, str(row["s3_location"]))
+    try:
+        path = await anyio.to_thread.run_sync(_storage.local_path, str(row["s3_location"]))
+    except FileNotFoundError as exc:
+        # The row exists and its bytes do not. Rare, and entirely knowable:
+        # storage cleared under a dev machine, a bucket lifecycle rule, a
+        # restored database paired with the wrong bucket. It used to surface as
+        # a 500 and a traceback, which tells whoever hit it nothing about which
+        # of those happened - and the dataset application made that the whole
+        # screen rather than one row in a list.
+        raise ConflictError(
+            "this dataset's underlying file is missing from storage, so its rows "
+            "cannot be read. The dataset's metadata and history are intact; "
+            "rebuilding or re-uploading it will restore the data."
+        ) from exc
     return path, row
 
 

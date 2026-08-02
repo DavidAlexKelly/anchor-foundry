@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Overridable for tests; production derives from region + pool id.
     cognito_jwks_url: str = ""
     cognito_issuer: str = ""
+    # Session cookie (§9, and STATUS.md §55). `Secure` is on unless explicitly
+    # turned off, because the failure modes are asymmetric: a Secure cookie on
+    # http://localhost is a dev annoyance you notice in seconds, and a
+    # non-Secure cookie in production is a session token on the wire.
+    session_cookie_secure: bool = True
 
     @model_validator(mode="after")
     def _assemble_database_url(self) -> "Settings":

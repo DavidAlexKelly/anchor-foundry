@@ -115,6 +115,33 @@ class InstanceStoreGateway(Protocol):
         offset: int,
     ) -> tuple[list[dict[str, Any]], int]: ...
 
+    async def evaluate_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: "tuple[Any, ...]",
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """One page of a filtered set, and how many are in it (roadmap 1.2).
+
+        The total is the whole set, not the page - "127 sites match" is the
+        answer a Workshop app needs and the one a page of rows cannot give.
+        """
+        ...
+
+
+def _text_value(value: Any) -> str:
+    """The text form used for filter comparison. Deliberately the same
+    rule as `join_key` and `object_sets._text`: one definition of what a
+    value *is*, so a filter and a link agree about it."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
 
 def join_key(value: Any) -> str | None:
     """The text form of a join value, shared by both stores so a link
@@ -409,6 +436,76 @@ class OpenSearchInstanceStore:
         ]
         return rows, int(resp["hits"]["total"]["value"])
 
+    async def evaluate_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Roadmap 1.2. Filters become query clauses rather than a post-filter
+        over a page, which is the whole reason this is server-side.
+
+        Properties are indexed as text, so ordered comparisons run against the
+        same text the equality operators use - consistent with
+        `object_sets.matches`, and consistent between the two stores, which
+        matters more than either being individually cleverer.
+        """
+        limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
+        offset = max(0, offset)
+        if offset + limit > MAX_RESULT_WINDOW:
+            raise ValueError(
+                f"pagination past {MAX_RESULT_WINDOW:,} rows needs search_after, not offset - "
+                "not implemented here"
+            )
+
+        must: list[dict[str, Any]] = []
+        must_not: list[dict[str, Any]] = []
+        for f in filters:
+            field = f"properties.{f.property}"
+            if f.op == "eq":
+                must.append({"term": {field: _text_value(f.value)}})
+            elif f.op == "neq":
+                must_not.append({"term": {field: _text_value(f.value)}})
+            elif f.op == "in":
+                must.append({"terms": {field: [_text_value(v) for v in f.value]}})
+            elif f.op == "starts_with":
+                must.append({
+                    "multi_match": {
+                        "query": _text_value(f.value),
+                        "fields": [field],
+                        "type": "phrase_prefix",
+                    }
+                })
+            else:  # pragma: no cover - object_sets.parse refuses anything else
+                raise ValueError(f"unsupported object-set operator {f.op!r}")
+
+        clauses: dict[str, Any] = {
+            "filter": [{"term": {"object_type_id": str(object_type_id)}}, *must]
+        }
+        if must_not:
+            clauses["must_not"] = must_not
+        body = {
+            "query": {"bool": clauses},
+            "sort": [{"updated_at": "desc"}],
+            "from": offset,
+            "size": limit,
+        }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        rows = [
+            {
+                "id": h["_id"],
+                "object_type_id": h["_source"]["object_type_id"],
+                "primary_key": h["_source"]["primary_key"],
+                "properties": h["_source"]["properties"],
+                "updated_at": h["_source"]["updated_at"],
+            }
+            for h in resp["hits"]["hits"]
+        ]
+        return rows, int(resp["hits"]["total"]["value"])
+
     async def find_by_property(
         self,
         *,
@@ -653,6 +750,28 @@ class PostgresInstanceStore:
         )
 
 
+    async def evaluate_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """`search_prefix` ignored, as everywhere else on this store: Postgres
+        scopes by RLS and object_type_id."""
+        from . import instances as instances_service
+
+        return await instances_service.evaluate_object_set(
+            self._conn,
+            object_type_id=object_type_id,
+            filters=filters,
+            limit=limit,
+            offset=offset,
+        )
+
+
 async def backfill(
     conn: "AsyncConnection",
     gateway: "InstanceStoreGateway",
@@ -728,3 +847,4 @@ async def backfill(
             synced_at=newest[(object_type_id, source_id)],
         )
     return {"instances": copied, "sources": len(grouped), "action_runs_remapped": remapped}
+

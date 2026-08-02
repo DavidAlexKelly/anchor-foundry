@@ -2,14 +2,18 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 import { bootstrap } from "@/lib/api";
-import { beginLogin, cognitoConfig, devAuthEnabled, setToken } from "@/lib/auth";
+import { beginLogin, cognitoConfig, devAuthEnabled, establishSession, safeReturnPath } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
+  // Set by the route guards when they bounce an unauthenticated request. A
+  // shared /r/{id} link is always loaded cold, so losing it here would make
+  // resource links useless to whoever they were sent to.
+  const nextPath = safeReturnPath(useSearchParams().get("next")) ?? "/home";
   const [error, setError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -41,13 +45,23 @@ export default function LoginPage() {
     }
   }
 
-  function onDevSignIn() {
+  async function onDevSignIn() {
     if (!devToken.trim()) {
       setError("Paste an access token first");
       return;
     }
-    setToken(devToken.trim());
-    router.replace("/home");
+    setBusy(true);
+    setError(null);
+    try {
+      // The token goes to the API and comes back as a cookie; it is never
+      // stored here. Same path the hosted UI takes, so dev and production
+      // cannot diverge in how a session is established.
+      await establishSession(devToken.trim());
+      router.replace(nextPath);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign-in failed");
+      setBusy(false);
+    }
   }
 
   return (
@@ -116,5 +130,16 @@ export default function LoginPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+// useSearchParams needs a Suspense boundary or `next build` fails when it
+// prerenders this route - the callback page has the same wrapper for the same
+// reason.
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="state">Loading…</div>}>
+      <LoginInner />
+    </Suspense>
   );
 }

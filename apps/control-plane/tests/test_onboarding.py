@@ -193,6 +193,22 @@ def test_the_operator_route_is_not_open(client: TestClient) -> None:
     assert r.status_code == 401
 
 
+def test_registering_the_same_slug_twice_is_a_conflict_not_a_crash(
+    client: TestClient,
+) -> None:
+    """An operator re-running the command after a restart used to get a 500
+    and a traceback. It is an ordinary thing to type, so it gets an ordinary
+    refusal - and stays non-idempotent, because re-minting the token would
+    invalidate a link the customer may already be holding."""
+    org = slug()
+    body = {"org_slug": org, "org_name": "Twice", "contact_email": "ops@acme-logistics.example"}
+    headers = {"Authorization": f"Bearer {ADMIN}"}
+    assert client.post("/api/onboardings", headers=headers, json=body).status_code == 201
+    again = client.post("/api/onboardings", headers=headers, json=body)
+    assert again.status_code == 409
+    assert org in again.json()["detail"]
+
+
 def test_a_token_read_never_returns_the_external_id(
     client: TestClient, registry: StackRegistry
 ) -> None:

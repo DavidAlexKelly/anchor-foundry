@@ -292,3 +292,87 @@ async def find_by_property(
         params,
     )
     return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0
+
+
+async def evaluate_object_set(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    filters: tuple[Any, ...],
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """A filtered set and its size, Postgres edition (roadmap 1.2).
+
+    ``jsonb_extract_path_text`` for the same reason ``find_by_property`` uses
+    it: the property name is a *bind parameter*, never concatenated into SQL.
+    A set definition is written by whoever builds an app, so the property name
+    is user input, and the one place this could go wrong is the one place it
+    must not.
+
+    Comparison is text-to-text, matching ``object_sets.matches`` and the
+    OpenSearch store. Ordered operators cast both sides to double precision and
+    fall back to no-match on a value that will not cast, so one unparseable row
+    narrows the set rather than failing the query - the same choice
+    ``object_sets._matches_one`` makes, made the same way in both stores.
+    """
+    where = ["i.object_type_id = :tid"]
+    params: dict[str, Any] = {"tid": str(object_type_id)}
+
+    for index, f in enumerate(filters):
+        prop = f"p{index}"
+        val = f"v{index}"
+        params[prop] = f.property
+        extract = f"jsonb_extract_path_text(i.properties, :{prop})"
+        if f.op == "eq":
+            where.append(f"{extract} = :{val}")
+            params[val] = _filter_text(f.value)
+        elif f.op == "neq":
+            # NULL is not "different from x" in SQL's three-valued logic, but a
+            # property that is absent *is* different from x to anybody reading
+            # the app. coalesce makes the answer the one they expect.
+            where.append(f"coalesce({extract}, '') <> :{val}")
+            params[val] = _filter_text(f.value)
+        elif f.op == "in":
+            where.append(f"{extract} = ANY(:{val})")
+            params[val] = [_filter_text(v) for v in f.value]
+        elif f.op == "starts_with":
+            # Anchored, so the index can be used and so this means the same
+            # thing as OpenSearch's phrase_prefix.
+            where.append(f"{extract} ILIKE :{val}")
+            params[val] = f"{_escape_like(_filter_text(f.value))}%"
+        else:  # pragma: no cover - object_sets.parse refuses anything else
+            raise ValueError(f"unsupported object-set operator {f.op!r}")
+
+    predicate = " AND ".join(where)
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
+          FROM object_instances i
+         WHERE {predicate}
+         ORDER BY i.updated_at DESC, i.id
+         LIMIT :limit OFFSET :offset
+        """,
+        {**params, "limit": max(1, min(limit, INSTANCE_PAGE_SIZE)), "offset": max(0, offset)},
+    )
+    total_row = await fetch_one(
+        conn,
+        f"SELECT count(*) AS n FROM object_instances i WHERE {predicate}",
+        params,
+    )
+    return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0
+
+
+def _filter_text(value: Any) -> str:
+    """One definition of "the text of a value", shared with the OpenSearch
+    store and with object_sets."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _escape_like(term: str) -> str:
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

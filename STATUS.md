@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§52). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§60). Test counts below are from the last full regression run.
 
 ---
 
@@ -27,10 +27,10 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 
 ## What's done
 
-### 1. Database schema (migrations 0001–0031)
+### 1. Database schema (migrations 0001–0033)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
-### 2. Control plane (`apps/control-plane`) - 51/51 tests
+### 2. Control plane (`apps/control-plane`) - 52/52 tests
 Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts, tears a stack down (§19), and since §48 serves the customer-facing onboarding flow that connects an account in the first place.
 
 ### 3. Infrastructure (`infra/cdk`) - synths clean, 87 resources
@@ -935,6 +935,163 @@ Someone walking the demo typed an account ID the schema did not like and the onb
 Fixed at both layers, because either alone leaves a hole: the pattern is off the field so the readable refusal is the only reachable one, and a `RequestValidationError` handler flattens FastAPI's list to one sentence — a missing field reaches that validator no matter what the models say, so the guarantee belongs in a handler rather than in each field. The page also stringifies a list-shaped `detail` defensively, since a page that renders `[object Object]` is broken regardless of who was right about the payload. Tests now assert the *shape* and the wording, not just the number. **Control plane 45 → 51.**
 
 Browser-verified against the demo: empty, short and non-numeric account IDs all render the sentence; a valid one still connects and opens step 4.
+
+**Same walkthrough, same class of defect one route over.** Re-running `POST /api/onboardings` with a slug already in the registry returned **500 and a traceback**: `register_customer` raises `ValueError: customer 'demo-co' is already registered` and the route did not catch it. It is an ordinary thing for an operator to type — the registry is in Postgres, so restarting the demo does not clear it — and now answers **409** with that sentence. Deliberately *not* made idempotent: re-registering would have to mint a fresh token, invalidating a link the customer may already be holding, possibly mid-provision. Re-issuing a lost link is a different operation and should be named like one.
+
+Both defects are the same shape — a real refusal already existed, phrased for a human, and the HTTP layer replaced it with something machine-shaped on the way out. **Control plane 45 → 52.**
+
+---
+
+### 53. The resource registry (this session)
+
+First item of the phase-2 roadmap, and the precondition for everything after it: Foundry's unit of navigation is the *resource*, and a schema with six unrelated kind tables cannot answer "what is in this project?". `resource_counts` on the project endpoint was six separate `COUNT(*)`s, which is the shape of a missing table.
+
+**Migration 0032 adds `resources`** - identity, location, name, lifecycle - and a `resource_id` on each of the six kind tables. It is a registry, not a rewrite: `datasets` still owns everything true of a dataset and nothing else. The alternative, one table with a jsonb blob per kind, trades six verified schemas for one unverifiable one and leaves the schema tests nothing to check.
+
+**Two kinds do not live in a project, and the registry says so.** `object_types` are workspace-wide - no `project_id` column at all, which is what made the first-run checklist tick a step in an empty project (§44) - and `connections` are workspace-wide when `scope = 'workspace'`. So `project_id` is nullable and means what it says: NULL is a resource belonging to the workspace, not a resource whose project is unknown. Forcing every kind into a project would have made the registry lie about two of them on day one. The listing endpoint keeps them out by default and returns them only for a caller that asks, with `project_id: null` so the UI can say which scope a row came from.
+
+**Registration is structural, not a convention.** A BEFORE INSERT trigger creates the registry row and fills in `resource_id`; `NOT NULL` on that column means a kind row without a registry row cannot be written at all. Nothing in the API had to change to register anything - the datasets endpoint still knows nothing about the registry and the registry is still right. That was the point: partial adoption of a registry is worse than none, because the browser is then confidently incomplete rather than obviously empty.
+
+**One writer for the name.** The kind table stays the source of truth; triggers mirror name and description into the registry, guarded by `IS DISTINCT FROM` so an unrelated column change does not churn the `updated_at` the browser sorts on. Two writable copies of a name is a guarantee of drift. One generic trigger function serves all six kinds, reading the row through `to_jsonb` rather than naming columns - the six tables disagree about which columns they have (`object_types` calls its name `display_name`, `connections` has no description, `models` have no `workspace_id`), and six near-identical functions would drift the moment one kind gained a column.
+
+**The backfill is in the migration**, not a follow-up script, for the same reason. 12,025 existing rows registered, verified per kind against the source tables with zero orphans. The id is generated on the *source* side first, so correlating a registry row back to the row it describes is a column comparison rather than a clever trick that has to be trusted - the first attempt correlated by `row_number()` and was thrown away for being unverifiable.
+
+**RLS matters more here, not less:** this table holds resource *names* across every project in a workspace, which is precisely the metadata a project boundary exists to keep private, and a leak would be uniform across every kind at once. The policy mirrors the connections one, because the nullable `project_id` has the same meaning in both places.
+
+Tests assert the invariant rather than the endpoint - rows are created through the existing per-kind endpoints and the registry is checked to have noticed, which is the only version that fails if a trigger is dropped - plus a whole-database check that no kind table has an unregistered row, which is what will fail when a future migration adds a kind table and forgets to wire it up. **API 388 → 400** (376 → 388 with MariaDB down); worker unchanged at 50, which is the answer to "did adding a trigger to six hot tables break anything".
+
+---
+
+### 54. The resource browser and the application shell (this session)
+
+Phase-2 items 0.2 and 0.3, built together because neither is worth much alone: the browser is a list of links to applications, and the shell is what those links open.
+
+**The project page is now a directory rather than a menu.** The six pillar cards were a menu of *types*; the browser lists the resources themselves with the type as a column, sorted by what changed most recently, with per-kind filter chips carrying live counts, substring search, and paging. The pillar pages stay in the sidebar - deleting them would strand anyone who navigates that way, and keeping them as a second implementation of the same list is what would cause drift, so they remain the per-kind views they always were.
+
+**Workspace-level resources are opt-in and labelled.** Object types and workspace-scoped connections have no project, so the browser shows them only when asked and marks each row `workspace`. Defaulting them in would repeat §44's mistake in a more visible place.
+
+**`/r/{id}` is a route group outside `(platform)`**, so an application gets the whole viewport with no topbar or project sidebar - the point of the phase. A shared `ApplicationShell` carries the breadcrumb, the name and the kind; per-kind applications are later items, and until each lands its entry renders the resource's own summary plus a link to the pillar page that handles it today. That is not a placeholder for the shell: resolution, breadcrumbs, the tab and the stable link all work, and it names the roadmap item rather than saying "coming soon".
+
+**The browser found the bug the tests could not.** Rows open in a new tab, and the new tab landed on `/login`. The session token lives in `sessionStorage`, which is **per-tab** - and Chrome does not clone it into a tab opened from a link, with or without `rel="noopener"` (both were tested; `noopener` was dropped anyway, since it guards against an untrusted page reaching `window.opener` and this is our own origin). **Per-tab token storage is structurally incompatible with a multi-tab, resource-centric product**, which is what this phase makes Anchor into.
+
+Fixed as far as it can be without changing the security posture: the route guards now carry the requested path into `/login?next=…`, the dev sign-in honours it, and the hosted-UI round trip carries it through `sessionStorage` so a *shared* link survives a cold load and returns the reader to the resource. `safeReturnPath` refuses anything that is not a same-origin path - an absolute URL or a protocol-relative `//host` would make the login page an open redirect. Verified end to end in a browser: a cold context opening `/r/{id}` is bounced, signs in, and lands back on the resource.
+
+**What that leaves open is a decision, not a bug:** every new tab still costs an authentication round trip. Choosing between shared storage, an httpOnly cookie session brokered by the API (which `lib/auth.ts` already flags as the stronger design), and living with the redirect is a change to the platform's security posture, so it is the owner's call rather than a detail to settle in a UI commit.
+
+Browser-verified: chips and counts, kind filtering, the workspace-level toggle (24 scope markers on, 0 off), the shell with zero platform chrome, a real "this resource is not here" page for an unknown id, and no console errors. **API 400 → 403** (388 → 391 with MariaDB down).
+
+---
+
+### 55. An httpOnly session, because per-tab storage could not survive the phase (this session)
+
+§54 ended on a decision rather than a bug: with the token in `sessionStorage`, every resource tab cost an authentication round trip. The owner chose the httpOnly-cookie session that `lib/auth.ts` had been flagging as the stronger design since it was written.
+
+**The token no longer exists in JavaScript.** `POST /api/auth/session` takes a token, verifies it through exactly the path every other route uses, and answers with nothing but a `Set-Cookie` - httpOnly, `SameSite=Lax`, `Secure`, session-scoped. The direction is the point: a credential that only ever travels inward cannot be exfiltrated by a script that gets to run on this origin. An XSS can still *act* as the user while the page is open; nothing short of removing the browser from the loop prevents that. What it can no longer do is walk away with something that outlives the page.
+
+**CSRF is handled by a header, not only by SameSite.** A cookie is attached to any request to this origin, including one another site caused, so cookie authentication is accepted only when the request also carries `X-Anchor-Session`. Cross-site markup cannot set headers, and a cross-origin `fetch` that sets one triggers a preflight this API does not answer - `allow_credentials=False` and no named origins, which is now load-bearing rather than incidental. `SameSite=Lax` is the second layer.
+
+**The `Authorization` header still wins.** Extraction tries the header first and the cookie second, so every non-browser caller - the tests, the worker, anything holding a token deliberately - is untouched. The cookie is purely an addition for the browser.
+
+**One thing broke on the way and is worth recording.** The session route first tried to reuse `get_current_user` by rewriting the request's headers in place. Starlette caches `request.headers` on first access, so it silently did nothing and the endpoint 401'd on a token it had just been handed. The fix was the structure the reuse was reaching for anyway: `authenticate_token(token)` split out of the dependency, called directly by the route and through `_extract_bearer` by everything else. Same verification, one implementation.
+
+**`SESSION_COOKIE_SECURE` defaults to true and is turned off explicitly** by the test suite and the dev server, both of which speak http. The default is not `False`-for-convenience because the failure modes are asymmetric: a Secure cookie on `http://localhost` is a dev annoyance noticed in seconds, and a non-Secure cookie in production is a session token on the wire.
+
+`localStorage` keeps one non-secret flag, `anchor.signed_in`, so the route guards can render or redirect without waiting on a request. Being wrong about it costs a redirect, not access - the API's 401 is what decides.
+
+Browser-verified: `document.cookie` is empty and `sessionStorage` holds no token; the cookie reports `httpOnly: true`, `sameSite: Lax`; a ctrl-clicked tab and a fresh typed-in tab both load the resource with no sign-in; signing out clears the cookie and the next tab to act is bounced to `/login?next=…`. **API 403 → 409** (391 → 397 with MariaDB down); worker 50 unchanged.
+
+---
+
+### 56. The dataset application (this session)
+
+Phase-2 item 3.1, and item 3.2 folded into it. Sequenced first among the applications on purpose: every answer it shows already existed, so it proves the application shell against endpoints known to work rather than co-developing an app and its backend.
+
+**Five tabs over one resource** - Preview, Schema, History, Lineage, Details - replacing a list page, a row expander and two dialogs. Schema is where column profiling finally belongs (item 3.2): nulls, null rate, distinct count, min and max per column, computed once per version and cached on the version row (§22), so the tab costs nothing after the first open. History reads the version list and shows the row-count delta between consecutive versions, which is the question anybody opening a history actually has. Lineage reuses `PipelineGraphView` and the same focused-pipeline endpoint the old dialog used - one renderer, still only one.
+
+**The tab is in the URL** (`?tab=schema`), so a link to a dataset's schema is a different link from one to its rows. `router.replace` rather than `push`: flicking between tabs should not bury the page the reader came from under a stack of back-button steps. Verified by deep link and by reload.
+
+**`resolve` now returns `kind_id`.** `/r/{id}` knew *what* a resource was and could call nothing about it - every per-kind endpoint is keyed by the row's id in its own table, not by the resource id. Two id spaces, both needed: the resource id survives renames and is what links carry; the kind id is what `/datasets/{id}` takes. Six LEFT JOINs on a unique index, one of which matches.
+
+**A 500 the application turned into the whole screen.** A dataset whose Parquet file is missing - storage cleared under a dev machine, a lifecycle rule, a database restored against the wrong bucket - raised `FileNotFoundError` out of the storage gateway and surfaced as `Internal Server Error`. That was survivable as one broken row in a list and is not survivable as an application's entire content. It is now a 409 saying the file is missing, that the metadata and history are intact, and that rebuilding or re-uploading restores it - three facts the reader needs and a traceback contains none of. Found by opening a real dataset in a real browser; the API tests had never deleted a file behind a live row.
+
+Browser-verified: all five tabs, a 60-row upload previewing in full, profiling with correct types and distinct counts, deep links opening the named tab, tab surviving reload, and the missing-file refusal rendering as a sentence. **API 409 → 411** (397 → 399 here, MariaDB down): one test that the two id spaces are distinct and that the kind id works against that kind's endpoints, one that a dataset whose file has been deleted refuses in a sentence.
+
+---
+
+### 57. What a Workshop module is, on disk (this session)
+
+Phase-2 item 1.1, the spike that blocks 1.2–1.5. Written up as `docs/decisions/0002-workshop-module-format.md`; the summary is that a module becomes one document with three parts - `layout`, `variables`, `events` - and Craft.js keeps the first and loses the other two.
+
+**What the spike found, by reading a real saved app.** A parameter is declared as a *side effect of placing a widget*: a Filter node with `props.name = "region"` is the only place `region` comes into existence. A consumer binds to it with `filterParameter: "region"` - a string that happens to match. Nothing links them, so renaming the filter leaves the map asking for a parameter nobody sets, silently and forever, because a missing parameter reads as "no filter" (deliberately, so an app is not empty on first load). **The map then shows more rows than it should.** That is not a bug to fix in place; it is what an implicit, untyped, string-keyed namespace does, and it is exactly what Workshop variables are not.
+
+**Decisions.** Variables are declared with an opaque id, a kind and a label; widgets reference the id, so renaming is free, deletion can be refused with "used by 2 widgets", and kinds can be checked. Ids are **not derived from the label** - a derived id is a rename waiting to break every reference, which is the failure being removed. Values stay runtime-only, as they already are: a saved app is not a saved session. Events live beside the layout rather than inside a widget's props, because an event routinely spans widgets and nesting it makes a table's behaviour depend on a node the table cannot see.
+
+**Conversion is one-shot, in Python, and keeps the original.** Lazy conversion was rejected because apps nobody opens stay v1 forever and every reader then carries both formats indefinitely. A Node script running the renderer's own converter was rejected on evidence: this repo has no TypeScript test runner, so that converter would be the one piece of format-critical logic with no automated test. `services/canvas.py` still does not interpret definitions - `workshop_format.py` is a format tool imported by the migration and its tests and by nothing serving a request.
+
+**A broken binding is recorded, not repaired.** A reference to a parameter nothing declares is left exactly as it is and listed under `broken_bindings`. The app is already wrong; a converter that quietly tidied the document would destroy the only evidence of it.
+
+**Real data found the defect the fixture could not.** The fixture was copied out of the development database, so it looked authoritative - but every node in it had `type: {"resolvedName": …}`. Running the converter across all 163 saved apps failed on the first one containing a plain element, where Craft.js writes `type: "div"`, a bare string. One `AttributeError`, thirty seconds in, on data no hand-written fixture would have contained. Fixed and given its own test.
+
+Proof, beyond the unit tests: conversion run over **every canvas app in the database** - 163 apps, 92 still in v1 - asserting the layout survives apart from reference props, that converting twice equals converting once, and that no rewritten reference dangles. All passed; 27 variables extracted, zero broken bindings in real data. **API 411 → 427.**
+
+---
+
+### 58. Object sets, and two ways a set can mean two things (this session)
+
+The half of phase-2 item 1.2 the roadmap calls the thing that "decides whether Workshop parity is real": a set is a **query**, evaluated where the data is. Canvas filters a page of at most 200 rows in the browser (§36), which is fine for narrowing what is already on screen and cannot answer "how many match" or "give me the next page of the filtered set" - the two questions every Workshop widget asks.
+
+**A definition, not a result.** A variable holds the *description* of a set - one object type plus filters - which is small, serialisable and identical for every viewer. Rows come from evaluating it. Storing rows would make a saved app a saved session, which decision 0002 rules out.
+
+**`POST /workspaces/{ws}/object-sets/evaluate`**, viewer floor, returns a page plus the size of the whole set. Implemented in *both* stores - Postgres in SQL, OpenSearch in its query DSL - behind the existing gateway Protocol, with the object type verified to be in the workspace before it is used (an id in a request body is never trusted to be in scope).
+
+**The cross-store test was the point, and it earned its keep twice.** `object_sets.matches` is the written-down definition of "does this row match"; the same rows and filters go through it, through Postgres and through OpenSearch, and all three must agree. Two disagreements fell out on the first run, both in code I had just written:
+
+- **Ordered comparison.** Properties are stored untyped - jsonb in Postgres, a dynamically-mapped text field in OpenSearch - so `capacity > 40` means 250 > 40 on one store (which can cast) and `"250" < "40"` on the other (which compares indexed text). **`gt`/`gte`/`lt`/`lte` are now refused**, in a sentence that says why, rather than picked: a numeric-only reading breaks dates and codes, a lexicographic one is indefensible to anyone filtering a number, and the right answer is to honour the declared property type (`object_type_properties.data_type`, db 0026) and index accordingly - a mapping change with a backfill behind it, which is its own item.
+- **Substring versus prefix.** The first implementation paired Postgres `ILIKE '%x%'` with OpenSearch `phrase_prefix`, so "los" matched "closed" on one store and not the other. The operator is now **`starts_with`** on both, which is also the only version that can use an index - a substring match is a wildcard query, fine on a hundred rows and pathological on a million, which is the exact cost server-side evaluation exists to avoid.
+
+Neither would have been visible from one store. Both would have surfaced as an app giving different answers in staging and production.
+
+**The OpenSearch fixture grew twice to keep its promise** of covering every call the gateway makes: it ignored `must_not` (so `neq` looked like it matched everything and passed), and it read `properties.status` as a top-level key rather than a path, so it matched nothing at all.
+
+Not done here, and named rather than implied: aggregations (what Metric Cards need, roadmap 1.5 - they need a second implementation in both stores plus aggregation support in the fixture), search-around, derived variables and the builder's variables panel. **API 427 → 435.**
+
+---
+
+### 59. Multi-file repositories, on Postgres (this session)
+
+Phase-2 item 2.1, the spike blocking 2.2–2.8. Written up as `docs/decisions/0003-repository-storage.md`, stored by migration 0033, implemented in `services/repositories.py`.
+
+**It had to reconcile with decision 0001**, which said the Code pillar is a *projection* of `model_versions`. A multi-file repository cannot be one. The reconciliation is one-directional: repositories are where code is **authored**; publishing creates a model version that **copies the source in**; `model_versions.code` remains the immutable record of what ran. So 0001 is superseded in one direction only, and the constraint it was built around - `model_runs.model_version` resolving to exactly one piece of code, forever (db 0024) - is untouched. The copy is not redundancy: a version's code has to be readable without resolving a commit that may since have been on a deleted branch.
+
+**Git's data model without git, and without trees.** Content-addressed blobs, so a file unchanged across a hundred commits is one row. But a commit carries a **flat `{path: sha}` manifest** of the whole snapshot rather than nested tree objects. Git splits snapshots into trees so a deep repository can share unchanged subtrees; a transforms repository here is tens of files, and the flat form makes a diff a dict comparison, a checkout one join, and a commit **verifiable by reading it** - which matters for the part of the system that decides what code ran. The cost, paths repeated per commit, is written down along with when to come back to it.
+
+**Fast-forward only.** Merging text in a browser is a product in itself, and its blast radius is production transforms. A rejected move names the branch and its head, because accepting it discards commits silently - which is what the rule exists to prevent.
+
+**Blobs are keyed by `(workspace_id, sha256)`, not by hash alone.** A shared blob table would make "does this hash exist?" a cross-tenant question, and existence is information. Costs storage; buys the isolation property the platform rests on.
+
+**Deleting a branch never deletes commits** - they are still referenced by anything published from them, and `ON DELETE RESTRICT` on both `parent_id` and `model_versions.source_commit_id` makes that structural rather than a convention. Unreferenced commits are garbage, not errors; collecting them is named as a separate decision rather than designed here.
+
+Two things the tests taught, both about the test rather than the code: `pytest-asyncio` is not installed (the suite uses anyio, whose plugin handles async fixtures directly), and a commit created inside the fixture's open transaction is invisible to a second connection - so the pinning test does its work on one connection, with a savepoint so the deliberately-refused DELETE does not poison the surrounding transaction.
+
+**API 435 → 454.**
+
+---
+
+### 60. The repository HTTP surface (this session)
+
+§59 built the store; this gives it a door, and gives `code_repos` the first writer it has had. The table has been in the schema since migration 0003 and empty in every deployment - decision 0001 declined to build a git server and left it with nothing to do - which is the state §46 flagged as "a table with no writer". Shipping a storage layer and stopping would have repeated it.
+
+Create and list repositories, commit a snapshot, read a tree at a branch or a commit, list and create branches, delete a branch, walk history, diff two commits. Viewer reads, editor writes. Publishing a transform from a commit is deliberately *not* here: that is a separate act with its own review gate (§47).
+
+**A new repository appears in the project browser and resolves at `/r/{id}` without this code knowing either exists** - db 0032's trigger registers it. That is the registry invariant paying off rather than being maintained: the route never mentions `resources`, and a test asserts the resource resolves with `kind: "code_repo"` and the right `kind_id`.
+
+Two bugs, both found by the tests and both worth recording.
+
+**`AmbiguousParameter`, the same family as §46.** `create_repository` built the vestigial `s3_prefix` column with `'repos/' || :pid || '/' || :slug`, so the same bind was a uuid column value in one place and a string operand in another and Postgres refused to deduce a type. Built in Python now. (The column itself is vestigial - it was for the bare git repository on S3 that decision 0001 rejected - and is filled with a derived value rather than dropped, because dropping a column the schema verifier asserts is a claim about the spec rather than about a feature.)
+
+**A brand-new repository 404'd on its own default branch.** Branches are created by the first commit, so a repository nobody has committed to has no branch row at all, and `resolve_ref` treated that as "no such branch". An editor cannot open a repository it is told does not exist. The distinction now lives in the signature: a caller that *names* a branch gets a 404 for a typo; a caller falling back to the default gets an empty repository, because that is what it is.
+
+**API 454 → 468.**
 
 ---
 

@@ -128,7 +128,17 @@ def create_app(
     @app.post("/api/onboardings", response_model=StartOut, status_code=201,
               dependencies=[Depends(_require_admin)])
     def start(body: StartIn) -> StartOut:
-        started = service().start(body.org_slug, body.org_name, str(body.contact_email))
+        try:
+            started = service().start(body.org_slug, body.org_name, str(body.contact_email))
+        except ValueError as exc:
+            # A slug already in the registry is an ordinary thing for an
+            # operator to type, not a fault: 409 with the reason, rather than
+            # a 500 and a traceback in the log. Deliberately *not* idempotent
+            # - re-registering would have to mint a fresh token, which
+            # invalidates the link the customer may already be holding and
+            # could land mid-provision. Re-issuing a lost link is a different
+            # operation and should be named like one.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         token = started["onboarding_token"]
         return StartOut(
             org_slug=started["org_slug"],

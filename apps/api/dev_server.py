@@ -27,6 +27,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Local dev is http://localhost, where a Secure cookie is never sent.
+os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
 os.environ.setdefault("COGNITO_CLIENT_ID", "dev-client")
 os.environ.setdefault("COGNITO_ISSUER", "https://dev-issuer.local")
 

@@ -82,6 +82,109 @@ export interface ProjectDetail extends ProjectSummary {
   resource_counts: ResourceCounts;
 }
 
+/** The resource registry (db migration 0032). One row per resource, whatever
+ * kind it is - the list a project browser reads, and the thing a /r/{id} link
+ * resolves against. */
+export type ResourceKind =
+  | "connection"
+  | "dataset"
+  | "model"
+  | "object_type"
+  | "canvas_app"
+  | "code_repo";
+
+export interface Resource {
+  id: string;
+  workspace_id: string;
+  /** Null for resources that belong to the workspace rather than to a
+   * project: object types, and workspace-scoped connections. */
+  project_id: string | null;
+  kind: ResourceKind;
+  name: string;
+  description: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResourceList {
+  resources: Resource[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Every kind is present, including the ones with nothing in them, so a
+ * caller never has to tell "none of these" from "no such kind". */
+export type ResourceKindCounts = Record<ResourceKind, number>;
+
+/** What `/resources/{id}` returns: the resource plus enough of where it lives
+ * to draw a breadcrumb without a second round trip. A trashed resource
+ * resolves and says so rather than 404ing - answering "no such thing" for
+ * something that demonstrably existed sends whoever followed the link looking
+ * for a typo. */
+export interface ResolvedResource extends Resource {
+  workspace_slug: string;
+  workspace_name: string;
+  project_slug: string | null;
+  project_name: string | null;
+  trashed: boolean;
+  /** The row's id in its own table (`datasets.id`, `models.id`, …). The
+   * resource id identifies *what* this is; every per-kind endpoint is keyed by
+   * this one, so an application needs both. */
+  kind_id: string;
+}
+
+// ---- Workshop module format (docs/decisions/0002-workshop-module-format.md)
+/** A saved app is one document with three parts. `format: 2` is the marker; a
+ * v1 document is a bare Craft.js node map with `ROOT` at the top level and no
+ * wrapper at all. */
+export interface WorkshopModule {
+  format: 2;
+  /** The Craft.js node tree, unchanged from v1 apart from reference props,
+   * which now hold variable ids rather than parameter names. */
+  layout: Record<string, unknown>;
+  variables: Record<string, WorkshopVariable>;
+  events: Record<string, WorkshopEvent>;
+  /** References to a parameter nothing declares, found during conversion.
+   * Recorded rather than repaired: the binding has silently read as "no
+   * filter" for as long as it existed, and quietly tidying it away would
+   * destroy the only evidence that the app is wrong. */
+  broken_bindings?: { node: string; prop: string; parameter: string }[];
+}
+
+/** Reserved now, built in roadmap item 1.2. `object_set` is the one that
+ * carries the weight and the one that needs server-side evaluation. */
+export type WorkshopVariableKind =
+  | "string"
+  | "number"
+  | "boolean"
+  | "date"
+  | "timestamp"
+  | "array"
+  | "single_object"
+  | "object_set";
+
+export interface WorkshopVariable {
+  /** Opaque and stable. Deliberately not derived from the label - a derived id
+   * is a rename waiting to break every reference. */
+  id: string;
+  kind: WorkshopVariableKind;
+  label: string;
+  /** What this was called when it was a string-keyed parameter, so a converted
+   * app can still be read against the v1 document it came from. */
+  legacy_name?: string;
+}
+
+/** Trigger to ordered effects. Effects run in configured order and do not wait
+ * on downstream recomputation; setting a variable copies the value
+ * immediately, so the next effect sees it. Built in item 1.3. */
+export interface WorkshopEvent {
+  id: string;
+  trigger: { node: string; on: string };
+  effects: { type: string; [key: string]: unknown }[];
+}
+
 export interface ProjectMember {
   id: string;
   role: ProjectRole;
@@ -297,6 +400,20 @@ export interface DatasetHealth {
   status: "pass" | "warn" | "fail" | "none";
   evaluated_at: string | null;
   results: ExpectationResult[];
+}
+
+/** One committed version of a dataset. The row a "time travel" view browses,
+ * and the reason a record of what a dataset *was* does not change when the
+ * dataset does. */
+export interface DatasetVersion {
+  id: string;
+  version_number: number;
+  row_count: number;
+  table_schema: { name: string; data_type: string }[];
+  /** What produced it: an upload, a sync, a model run. Null for versions
+   * written before this was recorded. */
+  produced_by_kind: string | null;
+  created_at: string;
 }
 
 export interface TabularResult {

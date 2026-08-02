@@ -37,6 +37,7 @@ from ..services import audit
 from ..services import datasets as dataset_service
 from ..lib.errors import NotFoundError
 from ..services import instance_store
+from ..services import object_sets
 from ..services import instances as instances_service
 from ..services import ontology as ontology_service
 from ..services.dataset_engine import DatasetEngineError
@@ -1157,3 +1158,56 @@ async def clear_source_schedule(
             user_agent=request.headers.get("user-agent"),
         )
     return SourceScheduleOut(**row)
+
+
+# ---- object sets (roadmap phase 2, item 1.2) --------------------------------
+class ObjectSetIn(BaseModel):
+    """A set *definition*, not a set. What a Workshop variable holds is the
+    description - type plus filters - which is small, serialisable and the same
+    for every viewer; the rows come from evaluating it."""
+
+    definition: dict[str, Any]
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+
+
+class ObjectSetOut(BaseModel):
+    instances: list[InstanceOut]
+    # The size of the whole set, not of this page. "127 sites match" is the
+    # answer a Workshop app needs and the one a page of rows cannot give.
+    total: int
+    limit: int
+    offset: int
+
+
+@router.post("/object-sets/evaluate", response_model=ObjectSetOut)
+async def evaluate_object_set(
+    body: ObjectSetIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetOut:
+    """Evaluate an object-set variable (roadmap 1.2).
+
+    A read, at the same floor as every other instance read. Filtering happens
+    here rather than in the browser because a page of at most 200 rows cannot
+    answer "how many match" or "show me the next page of the filtered set" -
+    which is the whole reason object sets are a server concept.
+    """
+    definition = object_sets.parse(body.definition)
+    async with user_connection(access.auth.user_id) as conn:
+        # Confirms the type is in this workspace before it is used as a filter
+        # - an id from a request body is never trusted to be in scope (§10).
+        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        rows, total = await instance_store.store_for(conn).evaluate_object_set(
+            search_prefix=prefix,
+            object_type_id=definition.object_type_id,
+            filters=definition.filters,
+            limit=body.limit,
+            offset=body.offset,
+        )
+    return ObjectSetOut(
+        instances=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],
+        total=total,
+        limit=body.limit,
+        offset=body.offset,
+    )
