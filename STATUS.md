@@ -30,7 +30,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 ### 1. Database schema (migrations 0001–0031)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
-### 2. Control plane (`apps/control-plane`) - 51/51 tests
+### 2. Control plane (`apps/control-plane`) - 52/52 tests
 Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts, tears a stack down (§19), and since §48 serves the customer-facing onboarding flow that connects an account in the first place.
 
 ### 3. Infrastructure (`infra/cdk`) - synths clean, 87 resources
@@ -935,6 +935,10 @@ Someone walking the demo typed an account ID the schema did not like and the onb
 Fixed at both layers, because either alone leaves a hole: the pattern is off the field so the readable refusal is the only reachable one, and a `RequestValidationError` handler flattens FastAPI's list to one sentence — a missing field reaches that validator no matter what the models say, so the guarantee belongs in a handler rather than in each field. The page also stringifies a list-shaped `detail` defensively, since a page that renders `[object Object]` is broken regardless of who was right about the payload. Tests now assert the *shape* and the wording, not just the number. **Control plane 45 → 51.**
 
 Browser-verified against the demo: empty, short and non-numeric account IDs all render the sentence; a valid one still connects and opens step 4.
+
+**Same walkthrough, same class of defect one route over.** Re-running `POST /api/onboardings` with a slug already in the registry returned **500 and a traceback**: `register_customer` raises `ValueError: customer 'demo-co' is already registered` and the route did not catch it. It is an ordinary thing for an operator to type — the registry is in Postgres, so restarting the demo does not clear it — and now answers **409** with that sentence. Deliberately *not* made idempotent: re-registering would have to mint a fresh token, invalidating a link the customer may already be holding, possibly mid-provision. Re-issuing a lost link is a different operation and should be named like one.
+
+Both defects are the same shape — a real refusal already existed, phrased for a human, and the HTTP layer replaced it with something machine-shaped on the way out. **Control plane 45 → 52.**
 
 ---
 

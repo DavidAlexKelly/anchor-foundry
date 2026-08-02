@@ -94,10 +94,14 @@ class DemoProvisioner:
                 "status": status, "reason": "",
             })
             time.sleep(0.6)
-        outputs = {"PlatformDomain": "d3xample.cloudfront.net", "UserPoolId": "eu-west-2_demo"}
+        # `.invalid` is reserved and can never resolve, which is the point: the
+        # flow ends in a link somebody will click, and a made-up subdomain of a
+        # real CDN domain (cloudfront.net, as this used to be) is one AWS
+        # allocation away from sending them to a stranger's site.
+        outputs = {"PlatformDomain": "demo-stack.anchor.invalid", "UserPoolId": "eu-west-2_demo"}
         self._registry.set_status(
             org_slug, StackStatus.READY,
-            platform_url="https://d3xample.cloudfront.net", outputs=outputs,
+            platform_url="https://demo-stack.anchor.invalid", outputs=outputs,
         )
         return outputs
 
