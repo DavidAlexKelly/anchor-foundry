@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§64). Test counts below are from the last full regression run.
+**Last updated:** end of this session (phase-1 roadmap items, now archived at `docs/roadmap-phase-1-pillars.md` — every "`ROADMAP.md` section N item M" reference below means that document, not the phase-2 plan that now occupies `ROADMAP.md`: Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 + the vendor bootstrap — see §21–§65). Test counts below are from the last full regression run.
 
 ---
 
@@ -1164,6 +1164,24 @@ The infrastructure decision 0004 requires, and one thing §63 got the wrong way 
 **The checks were mutation-tested rather than trusted.** Granting the runner the data bucket and opening its egress makes exactly those two fail, with the count in the message; reverting makes them pass. A check that cannot fail is theatre. `npm test` in `infra/cdk` now runs them, where it previously exited 1 with "no test specified".
 
 Still missing before Python transforms run: the worker has no code that calls `RunTask` against this definition, and `transform_runner` does not exist as a module. The task definition names it, so the container would fail loudly rather than run something unintended.
+
+---
+
+### 65. The transform runner module, and the gap it exposed (this session)
+
+§64 built the task definition and named a module that did not exist. This is that module - the container entrypoint customer transform code runs as, in a container with no egress and a task role that grants nothing.
+
+**Everything it can reach is in its working directory, because that is all there is.** No S3 client, no database connection, nothing worth having credentials for. A test asserts it imports neither boto3 nor psycopg nor requests - not style policing: a client for any of them could only fail confusingly in that container, and its appearance would be a sign somebody had started to undo decision 0004.
+
+**The design point is what `result.json` means.** It is written when the transform fails and *not* written when the run never got off the ground. A task that was never staged, ran out of memory or was killed leaves no result file, and that absence is how the caller tells "your SQL has a typo" from "the platform did not manage to run anything" - different problems, different owners, and a caller that could not distinguish them would report the wrong one to the wrong person. `read_job` therefore sits deliberately *outside* the try block that writes failures.
+
+Execution reuses the contract `python_sandbox.py` established (inputs as DataFrames bound to their alias, result assigned to `output`), so the two paths do not disagree about what a transform is.
+
+**The gap this exposed, and it is a real one.** With an empty task role and no egress, *how do inputs get in and outputs get out?* Not S3 - the runner cannot reach it, by design. The answer is a shared filesystem mounted by the infrastructure rather than by code holding credentials: an EFS access point, mounted into both the worker and the runner, with the ECS agent doing the mount. That preserves the empty role exactly - the container never authenticates to anything - and it is a filesystem, a mount target per subnet and a security group rule that do not exist yet.
+
+Naming it rather than improvising: the transport is the next decision, and picking it while writing the runner would have meant deciding infrastructure inside a module that must not know any exists.
+
+**Worker 50 → 55.** Still missing before Python transforms run: the EFS transport above, and worker-side dispatch that calls `RunTask` and waits.
 
 ---
 
