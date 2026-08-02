@@ -364,3 +364,64 @@ def test_the_page_renders_for_a_valid_link_and_not_otherwise(client: TestClient)
     assert "Acme Logistics" in ok.text
     assert "Launch in AWS" in ok.text
     assert client.get("/onboarding?token=nope").status_code == 404
+
+
+# ---- failure recovery (ROADMAP section 7 item 4) -----------------------------
+def test_a_failed_deploy_explains_itself_and_offers_a_retry(
+    client: TestClient, aws: FakeAws, provisioner: FakeProvisioner
+) -> None:
+    """A wall of CloudFormation events is not an explanation. Each failure
+    comes back with the one action that resolves it, and a failed stack is
+    retryable - `provision` refuses while one is running or already ready, and
+    failed is neither."""
+    provisioner.explode = True
+    aws.events = [
+        {"timestamp": "2026-01-01T10:00:04", "logical_id": "Search",
+         "resource_type": "AWS::OpenSearchService::Domain", "status": "CREATE_FAILED",
+         "reason": "Resource creation cancelled"},
+        {"timestamp": "2026-01-01T10:00:03", "logical_id": "Migration",
+         "resource_type": "AWS::CloudFormation::CustomResource", "status": "CREATE_FAILED",
+         "reason": "Unable to import module 'lambda_handler': no pq wrapper available"},
+        {"timestamp": "2026-01-01T10:00:01", "logical_id": "Vpc",
+         "resource_type": "AWS::EC2::VPC", "status": "CREATE_COMPLETE", "reason": ""},
+    ]
+    session = connected(client, aws)
+    client.post("/api/onboarding/provision", headers=session["headers"])  # type: ignore[arg-type]
+
+    status = client.get("/api/onboarding", headers=session["headers"]).json()  # type: ignore[arg-type]
+    assert status["stack_status"] == "failed"
+    assert status["retryable"] is True
+    failures = {f["logical_id"]: f for f in status["failures"]}
+    assert set(failures) == {"Search", "Migration"}, "successful events are not failures"
+    assert "earliest CREATE_FAILED" in failures["Search"]["hint"]
+    assert "Docker" in failures["Migration"]["hint"]
+
+
+def test_a_failure_with_no_known_cause_still_reports_the_reason(
+    client: TestClient, aws: FakeAws, provisioner: FakeProvisioner
+) -> None:
+    """An unrecognised failure gets no invented advice - the reason CloudFormation
+    gave is better than a guess dressed as guidance."""
+    provisioner.explode = True
+    aws.events = [
+        {"timestamp": "2026-01-01T10:00:02", "logical_id": "Alb",
+         "resource_type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+         "status": "CREATE_FAILED", "reason": "Something nobody has seen before"},
+    ]
+    session = connected(client, aws)
+    client.post("/api/onboarding/provision", headers=session["headers"])  # type: ignore[arg-type]
+    failure = client.get("/api/onboarding", headers=session["headers"]).json()["failures"][0]  # type: ignore[arg-type]
+    assert failure["reason"] == "Something nobody has seen before"
+    assert failure["hint"] == ""
+
+
+def test_a_retry_after_a_failure_is_allowed(
+    client: TestClient, aws: FakeAws, provisioner: FakeProvisioner
+) -> None:
+    provisioner.explode = True
+    session = connected(client, aws)
+    client.post("/api/onboarding/provision", headers=session["headers"])  # type: ignore[arg-type]
+    provisioner.explode = False
+    again = client.post("/api/onboarding/provision", headers=session["headers"])  # type: ignore[arg-type]
+    assert again.status_code == 200 and again.json()["started"] is True
+    assert client.get("/api/onboarding", headers=session["headers"]).json()["stack_status"] == "ready"  # type: ignore[arg-type]

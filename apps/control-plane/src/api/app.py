@@ -28,9 +28,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
-from ..onboarding.service import OnboardingConfig, OnboardingService, hash_token
-from ..provisioner.provisioner import Boto3Gateway, Provisioner, SubprocessCdkRunner
-from ..registry.registry import CustomerRecord, KmsSecretsCodec, StackRegistry
+from ..onboarding.service import OnboardingService, hash_token
+from ..registry.registry import CustomerRecord, StackRegistry
 
 # Injected by create_app; module-level so the route dependencies can reach it
 # the same way the product API's route modules do.
@@ -186,29 +185,13 @@ def create_app(
 
 def create_production_app() -> FastAPI:
     """Wire the real gateways. Kept apart from `create_app` so tests can build
-    the app with fakes and never touch boto3."""
-    from pathlib import Path
+    the app with fakes and never touch boto3; the wiring itself lives in
+    `onboarding/wiring.py` because the operator CLI needs exactly the same
+    thing and two copies would drift."""
+    from ..onboarding.wiring import service_from_env
 
-    dsn = os.environ["CONTROL_PLANE_DATABASE_URL"]
-    codec = KmsSecretsCodec(
-        os.environ["ONBOARDING_KMS_KEY_ID"],
-        os.environ.get("AWS_REGION", "eu-west-2"),
-    )
-    reg = StackRegistry(dsn, codec)
-    reg.ensure_schema()
-    aws = Boto3Gateway()
-    provisioner = Provisioner(
-        reg,
-        aws,
-        SubprocessCdkRunner(Path(os.environ.get("CDK_DIR", "infra/cdk"))),
-        os.environ["VENDOR_ECR_REGISTRY"],
-    )
-    config = OnboardingConfig(
-        template_url=os.environ["BOOTSTRAP_TEMPLATE_URL"],
-        control_plane_role_arn=os.environ["CONTROL_PLANE_ROLE_ARN"],
-        image_tag=os.environ.get("PLATFORM_IMAGE_TAG", "latest"),
-    )
-    return create_app(OnboardingService(reg, aws, provisioner, config), reg)
+    reg, service = service_from_env()
+    return create_app(service, reg)
 
 
 _PAGE = """<!doctype html>
@@ -237,6 +220,9 @@ _PAGE = """<!doctype html>
  ul { list-style:none; padding:0; margin:8px 0 0 } li { padding:3px 0; font-size:13.5px }
  .ok::before { content:"✓ "; color:var(--accent) } .bad::before { content:"✕ "; color:var(--bad) }
  .remedy { color:var(--bad); font-size:12.5px; margin-left:14px }
+ ul.blockers { border-left:3px solid var(--bad); background:#fff; padding:10px 12px; margin:10px 0;
+               border:1px solid var(--line); border-left-width:3px; border-radius:6px }
+ ul.blockers li { padding:4px 0 }
  pre { background:#0f1714; color:#d7e2db; padding:10px; border-radius:6px; overflow:auto; max-height:260px;
        font-size:12px; line-height:1.45 }
  .err { color:var(--bad); font-size:13px; margin-top:8px }
@@ -280,6 +266,7 @@ builds it — about fifteen minutes, most of it waiting.</p>
 <section class="step" id="s5" data-state="waiting"><h2><span class="num">5</span>Building</h2>
   <p class="soft" id="stack-status">Not started.</p>
   <pre id="events">—</pre>
+  <div id="failures"></div>
   <div id="done"></div>
 </section>
 
@@ -345,6 +332,24 @@ async function poll() {
     if (s.events && s.events.length) {
       $("events").textContent = s.events.map(e =>
         `${e.timestamp.slice(11,19)}  ${e.status.padEnd(20)} ${e.logical_id} ${e.reason || ""}`).join("\\n");
+    }
+    // A failed deploy explains itself and offers the retry, rather than
+    // leaving somebody to read CloudFormation events for the cause.
+    if (s.failures && s.failures.length) {
+      $("failures").innerHTML =
+        "<ul class='blockers'>" + s.failures.map(f =>
+          `<li><strong>${f.logical_id}</strong> — ${f.reason || f.status}` +
+          (f.hint ? `<div class="remedy">${f.hint}</div>` : "") + "</li>").join("") + "</ul>" +
+        (s.retryable ? "<button id='retry'>Try again</button>" : "");
+      const retry = $("retry");
+      if (retry) retry.onclick = async () => {
+        retry.disabled = true;
+        $("failures").innerHTML = "";
+        try { await api("/api/onboarding/provision", { method: "POST" }); }
+        catch (e) { $("provision-msg").textContent = e.message; }
+      };
+    } else if (s.stack_status !== "failed") {
+      $("failures").innerHTML = "";
     }
     if (s.stack_status === "ready" && s.platform_url) {
       state("s5", "done");

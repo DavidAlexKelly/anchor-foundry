@@ -632,3 +632,22 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--line); border-left: 3px solid var(--brass, #b07d2b);
   border-radius: var(--radius); color: var(--ink-soft); font-size: 12.5px; }
 .code-detail input[type="text"] { width: 100%; margin: 6px 0; }
+
+/* ---- first-run checklist (deployment item 3) ----------------------------- */
+.first-run { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px 20px; margin-bottom: 18px; box-shadow: var(--shadow-card); }
+.first-run-head { display: flex; align-items: baseline; justify-content: space-between; }
+.first-run h2 { margin: 0 0 2px; font-size: 17px; }
+.first-run .sub { margin: 0 0 10px; }
+.first-run ol { list-style: none; counter-reset: step; margin: 0; padding: 0; display: grid; gap: 6px; }
+.first-run li { counter-increment: step; }
+.first-run li a { display: grid; grid-template-columns: 26px 1fr; gap: 2px 10px; align-items: baseline;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius);
+  text-decoration: none; color: var(--ink); }
+.first-run li a:hover { border-color: var(--line-strong); background: var(--accent-wash); }
+.first-run li a::before { content: counter(step); grid-row: span 2; display: flex; width: 22px; height: 22px;
+  border-radius: 50%; border: 1px solid var(--line-strong); color: var(--ink-soft);
+  align-items: center; justify-content: center; font-size: 12px; }
+.first-run li.done a::before { content: "✓"; background: var(--accent); border-color: var(--accent); color: #fff; }
+.first-run li.done strong { color: var(--ink-soft); font-weight: 500; }
+.first-run li span { color: var(--ink-soft); font-size: 12.5px; }

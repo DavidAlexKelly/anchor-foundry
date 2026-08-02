@@ -2,7 +2,7 @@
 
 _A Palantir Foundry competitor that deploys into the customer's own AWS account. Built from the spec at `foundry_competitor.md`, layer by layer, each layer fully tested before the next began._
 
-**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 2 — see §21–§48). Test counts below are from the last full regression run.
+**Last updated:** end of this session (`ROADMAP.md` Connections 1–3, 5, 6, 7; Datasets 1–3, 5, 6; Models 1–3, 5, 7; Objects 1–5; Canvas 1–4, 6; Code 1–4; Deployment 1–4 — see §21–§49). Test counts below are from the last full regression run.
 
 ---
 
@@ -30,7 +30,7 @@ Everything is real, tested, and runnable locally against a live Postgres instanc
 ### 1. Database schema (migrations 0001–0031)
 Full hierarchy (Organisation → Workspace → Project → resources), RLS on every table, audit log, permissions views. Three RLS policy recursion bugs were found and fixed via SECURITY DEFINER helper functions (0008, 0009) - a real, subtle Postgres gotcha (a policy that subselects its own table, or two tables whose policies subselect each other, causes "infinite recursion detected in policy" at runtime, not at migration time).
 
-### 2. Control plane (`apps/control-plane`) - 32/32 tests
+### 2. Control plane (`apps/control-plane`) - 35/35 tests
 Registers customer AWS accounts, assumes roles via external ID, runs CDK deploys, polls CloudFormation to terminal state, supports version pinning for fleet rollouts, tears a stack down (§19), and since §48 serves the customer-facing onboarding flow that connects an account in the first place.
 
 ### 3. Infrastructure (`infra/cdk`) - synths clean, 87 resources
@@ -859,6 +859,28 @@ No code, no tests: this item is a decision. **Totals unchanged: API 352/352, wor
 **Testing.** `test_onboarding.py`, 19 tests against the real registry with AWS and the provisioner faked: the launch URL carrying both parameters and URL-encoding the external ID, the derived ARN, one link reaching exactly one onboarding, the flat 404, the operator route refusing an absent or wrong token, the external ID never appearing in a token-authenticated read, detection before and after the template is run, bad account IDs and unsupported regions refused before AWS sees them, preflight passing and failing with remedies, provisioning refused on a failing check, running once, reporting its failure, and stack events reaching the status payload. Verified in a browser end to end against a scripted fake account: not-connected → connected → preflight failing with the `cdk bootstrap` command on screen and the button disabled → preflight passing → provisioned, with events tailing and the hand-off link live.
 
 **Current totals: control-plane 32/32** (13 + 19), **API 388/388**, **worker 50/50** (both untouched).
+
+---
+
+### 49. The rest of section 7: a CLI, an image, a runbook, a checklist, and a failure that explains itself (this session)
+
+Items 1, 3 and 4, finishing the deployment section §48 opened.
+
+**Item 1 — operator ergonomics.** `python -m src.cli` gained `onboard` (register a customer, print their link), `provision` (detect → preflight → deploy, streaming CloudFormation events to stdout), `status`, `serve` (the customer-facing app) and `demo`. It had exactly one command before this: `deprovision`. A control plane that could destroy a customer's stack but not create one was the sharpest single fact about how this got deployed. Both paths — CLI and page — run the same `OnboardingService`, so they preflight identically and refuse identically; a CLI that drifted would eventually provision something the page would have refused.
+
+**The control plane can now be run at all.** It had no Dockerfile: the other three services have one each, and it never needed one until §48 gave it a web surface. Its image carries **Node and the CDK CLI plus `infra/cdk` itself**, because `cdk deploy` is a subprocess — a control plane that can take an order and not fill it is not one.
+
+**`docs/deploying.md` is the runbook that did not exist**, written as three test levels rather than a list of commands: the whole onboarding flow with **no AWS at all** (`cli demo`, which scripts an account that starts un-assumable so the failure screens can be walked before anybody spends fifteen minutes), one stack **by hand**, and the real thing **through the page**. It names what level 3 exercises for the first time: `stack_events`, `cdk_bootstrap_version` and `elastic_ip_headroom` have only ever run against fakes, so that is where to expect the first real-AWS surprise — most likely a permission the bootstrap role lacks.
+
+**Item 3 — the first-run checklist**, on the project overview: bring data in → transform it → give it a shape → build something on it. **Every item is derived, not stored**: it is true when the thing it names exists, so nothing is ticked by hand, nothing goes stale, and a project somebody else set up shows the right state to whoever opens it next. It retires itself once all four are done.
+
+One bug the browser caught immediately, and worth keeping because it is this codebase's recurring shape: the "give it a shape" step first used `resource_counts.objects`, and **object types are workspace-wide**. A brand-new project in this dev workspace opened with that step already ticked by 26 types somebody else had made — a green tick claiming work nobody had done. It now counts the project's *object type sources*, which is what actually belongs to the project. The screenshot of the fix shows "2 of 4" next to a sidebar reading "Objects 26", which is the whole argument in one frame.
+
+**Item 4 — failure recovery.** A failed deploy now returns its failures in plain English with the one action that resolves each, and offers a retry. The hints are the failures this build actually hit (§17, §20): a cancelled resource pointing at the *earlier* failure that really caused it, the migration Lambda's "no pq wrapper available", an image built for the wrong architecture, no Elastic IPs, a dependent object blocking a delete, a missing bootstrap-role permission. **An unrecognised failure gets no invented advice** — CloudFormation's own reason beats a guess dressed as guidance.
+
+**Testing.** `test_onboarding.py` grew to 22 (the three failure-recovery tests). Verified in a browser: the documented level-1 walkthrough end to end against `cli demo`, and — against `cli demo --fail` — the failure block naming the real cause with a working Try again. The checklist was verified by creating each resource in turn and watching the count move without anything being clicked.
+
+**Current totals: control-plane 35/35** (32 + 3), **API 388/388**, **worker 50/50** (both untouched).
 
 ---
 

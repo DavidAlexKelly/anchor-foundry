@@ -281,6 +281,52 @@ class OnboardingService:
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
 
+    # ---- failure, in words (ROADMAP section 7 item 4) -----------------------
+    # Each entry is a failure this build has actually hit, and the one action
+    # that resolves it. A wall of CloudFormation events is not an explanation:
+    # somebody reading `CREATE_FAILED  Search  Resource creation cancelled` for
+    # the first time has no way to know that the *previous* failure is what
+    # cancelled it, or that a stuck OpenSearch domain has to be deleted by hand
+    # before a retry can work (`STATUS.md` §17, §20).
+    _HINTS: tuple[tuple[str, str], ...] = (
+        ("Resource creation cancelled",
+         "This one was cancelled because something else failed first - look for the "
+         "earliest CREATE_FAILED above, which is the real cause."),
+        ("no pq wrapper available",
+         "The migration Lambda was bundled for the wrong architecture. Rebuild with "
+         "Docker running and try again."),
+        ("exec format error",
+         "An image was built for the wrong architecture. Rebuild all three with "
+         "`docker build --platform=linux/amd64` on the build command itself - the "
+         "Dockerfile pin alone is not enough."),
+        ("AddressLimitExceeded",
+         "The account is out of Elastic IPs in this region. Release one or raise the "
+         "quota; the NAT gateway needs exactly one."),
+        ("has a dependent object",
+         "Something CloudFormation could not delete is holding a security group or "
+         "subnet - usually an RDS instance skipped by deletion protection, or an "
+         "OpenSearch domain that was never told to delete. Both have to go by hand "
+         "before a retry."),
+        ("is not authorized to perform",
+         "The bootstrap role is missing a permission. Re-run the bootstrap template - "
+         "it may predate the permission this deploy needs."),
+    )
+
+    def failures(self, events: list[dict[str, str]]) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
+        for event in events:
+            if "FAILED" not in event.get("status", ""):
+                continue
+            reason = event.get("reason", "")
+            hint = next((h for needle, h in self._HINTS if needle in reason), "")
+            out.append({
+                "logical_id": event.get("logical_id", ""),
+                "status": event["status"],
+                "reason": reason,
+                "hint": hint,
+            })
+        return out
+
     # ---- status, throughout -------------------------------------------------
     def status(self, org_slug: str, *, with_events: bool = True) -> dict[str, Any]:
         record = self._registry.get(org_slug)
@@ -309,4 +355,10 @@ class OnboardingService:
             "outputs": record.outputs,
             "error": job.error if job else None,
             "events": events,
+            # Only the failures, in plain English, so the page does not ask
+            # somebody to read a stack trace to find out what to do next.
+            "failures": self.failures(events),
+            # A failed deploy is retryable: `provision` refuses while one is
+            # running or already ready, and FAILED is neither.
+            "retryable": record.stack_status is StackStatus.FAILED,
         }

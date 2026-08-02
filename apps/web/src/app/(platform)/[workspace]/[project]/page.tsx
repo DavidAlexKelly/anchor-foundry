@@ -2,8 +2,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, objects as objectsApi } from "@/lib/api";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
+import { FirstRunChecklist } from "@/components/first-run";
 
 const SUMMARY: { key: "connections" | "datasets" | "models" | "objects" | "canvas" | "code"; label: string; blurb: string }[] = [
   { key: "connections", label: "Connections", blurb: "Links to your source systems" },
@@ -21,6 +22,14 @@ export default function ProjectOverview() {
   const detail = useQuery({
     queryKey: ["project", workspace?.id, project?.id],
     queryFn: () => api.project(workspace!.id, project!.id),
+    enabled: !!workspace && !!project,
+  });
+
+  // Project-scoped, unlike `resource_counts.objects` - see the note in
+  // first-run.tsx about why the checklist cannot use the workspace-wide count.
+  const sources = useQuery({
+    queryKey: ["object-type-sources", workspace?.id, project?.id],
+    queryFn: () => objectsApi.listSources(workspace!.id, project!.id),
     enabled: !!workspace && !!project,
   });
 
@@ -42,14 +51,15 @@ export default function ProjectOverview() {
         )}
       </div>
 
-      {total === 0 && (
-        <div className="empty">
-          <h2>An empty project is a starting line</h2>
-          <p>
-            There&apos;s no forced flow here. Connect a source, upload a file into
-            Datasets, or sketch your first object type - start wherever your work starts.
-          </p>
-        </div>
+      {/* Derived from what exists, so it is right for whoever opens the
+          project next - including somebody who did not set it up. */}
+      {counts && sources.data && (
+        <FirstRunChecklist
+          counts={counts}
+          objectSources={sources.data.length}
+          workspaceSlug={params.workspace}
+          projectSlug={params.project}
+        />
       )}
 
       {counts && total !== 0 && (
