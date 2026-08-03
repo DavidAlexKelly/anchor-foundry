@@ -1299,7 +1299,25 @@ Roadmap item 1.2's server half. `services/workshop_variables.py` validates a mod
 
 **Verified in a real browser** against a converted app: the widgets render (a builder handed the whole v2 document would render nothing), Save works, and the document comes back still `format: 2` with its variables intact. **527 API tests green.**
 
-**What is still missing from item 1.2** is the variables panel itself — create, rename, retype, see usages. `usagesOf` is written and unused; the server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement.
+**What is still missing from item 1.2** is the variables panel itself — create, rename, retype, see usages. `usagesOf` is written and unused; the server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement. (Built in §72.)
+
+---
+
+### 72. The variables panel (this session)
+
+The last piece of item 1.2's builder work. A tab beside the widget settings: create, rename, retype, set a default, build a derivation, delete.
+
+**Renaming is the whole point of the format, so the panel says so.** The field is labelled "Label"; the id sits under it as unchangeable fact — `id v_pbez9mvg — never changes, so renaming is free`. Canvas's parameters were string keys, and renaming one silently unbound every widget reading it; here the id is what widgets point at and the label is free to change.
+
+**Two refusals, and the panel is the affordance rather than the enforcement.** Deleting a variable something binds to is refused *before* the button does anything, naming what uses it: *"Region is used by 2 things (bar1.filterParameter, table1.filterParameter). Unbind it there first."* Saving a cycle is refused by the server, and the top bar now surfaces that instead of going quiet — *"these variables depend on each other in a loop: Full greeting, Greeting prefix"*. Both verified in a real browser. The server is still what enforces both; the panel exists so somebody does not walk into a 422 after doing the work.
+
+**Layout and variables save together, and that is a real constraint.** Craft.js owns the layout and the panel owns the variables, so `moduleFrom` takes both and carries across whatever it was not given. A save with only one half would silently discard the other's edits — and the variables state is reseeded only when a new *version* arrives, so a background refetch cannot throw away typing.
+
+**Small choices with reasons.** The transform picker omits `object_property` and `object_set_aggregation` — the API refuses them until they are built, and offering a choice that fails on save is worse than not offering it. The input picker omits the variable being edited, so "a variable may not read itself" is a refusal nobody can walk into. Changing a transform clears its inputs rather than carrying them, because three inputs meant as condition/then/else are not three parts of a join. And the value shown is labelled "as last saved", because it comes from the server reading the *saved* document — it cannot show a derivation nobody has saved, and implying otherwise would be worse than showing nothing.
+
+**The one thing genuinely mirrored** is `REFERENCE_PROPS`, which decides what the API refuses and, separately, what the builder shows as a usage. Drift makes the *builder* wrong — it would offer to delete a variable a widget binds to, and the save would then be refused with a message the panel had just implied was impossible. A test asserts the two lists match by parsing the TypeScript, the same mechanical shape `test_property_types.py` uses. That list grows widget by widget through item 1.5, which is exactly when one copy gets updated and the other does not.
+
+**528 API tests green.** The panel itself has no unit tests — this repo still has no TypeScript test runner, which decision 0002 already named as the reason it chose a Python converter. The browser verification is the coverage: create a variable, derive a second from it, save, and confirm the document comes back with the derivation, the converted variable, and the layout all intact.
 
 ---
 

@@ -329,3 +329,32 @@ def test_a_v1_definition_is_left_alone() -> None:
 
 def test_a_v2_document_with_no_variables_is_fine() -> None:
     assert wv.validate_module(module({})) == {}
+
+
+# ---- the one thing mirrored between two runtimes ------------------------------
+def test_the_reference_prop_list_agrees_with_the_browser_s_copy() -> None:
+    """`REFERENCE_PROPS` exists twice: here, where it decides what the API
+    refuses, and in `lib/workshop-module.ts`, where it decides what the builder
+    *shows* as a usage.
+
+    Drift makes the builder wrong rather than the document wrong - it would
+    offer to delete a variable a widget binds to, and the save would then be
+    refused by the server with a message the panel had just implied was
+    impossible. Asserted mechanically, the same way `test_property_types.py`
+    asserts its mirrored file, because this list is short and will grow widget
+    by widget through item 1.5 - which is exactly when one copy gets updated
+    and the other does not.
+    """
+    import re
+
+    web = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "lib", "workshop-module.ts",
+    )
+    source = open(web).read()
+    block = re.search(r"export const REFERENCE_PROPS = \[(.*?)\]", source, re.S)
+    assert block, "REFERENCE_PROPS not found in workshop-module.ts - has it been renamed?"
+    in_browser = tuple(re.findall(r'"([^"]+)"', block.group(1)))
+    assert in_browser == wv.REFERENCE_PROPS, (
+        f"browser has {in_browser}, API has {wv.REFERENCE_PROPS}"
+    )
