@@ -150,9 +150,21 @@ export function useCanvasParameter(name: string | null | undefined): unknown {
 export interface CanvasPageState {
   current: string | null;
   go: (nodeId: string) => void;
+  /** The overlay covering the page, if any. Held apart from `current` because
+   * an overlay does not replace the page - closing one returns you to what was
+   * underneath, which a single "where am I" value cannot express. */
+  overlay: string | null;
+  openOverlay: (nodeId: string) => void;
+  closeOverlay: () => void;
 }
 
-const PageContext = createContext<CanvasPageState>({ current: null, go: () => {} });
+const PageContext = createContext<CanvasPageState>({
+  current: null,
+  go: () => {},
+  overlay: null,
+  openOverlay: () => {},
+  closeOverlay: () => {},
+});
 
 export const CanvasPageProvider = PageContext.Provider;
 

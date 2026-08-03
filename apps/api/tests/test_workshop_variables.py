@@ -710,3 +710,54 @@ def test_the_two_effects_still_waiting_on_something_say_so() -> None:
         with pytest.raises(we.EventError, match="not built yet"):
             we.parse({"e_1": event("e_1", effects=[{"type": kind, "config": {}}])},
                      layout={"btn": node({})})
+
+
+# ---- overlays (roadmap phase 2, item 1.4) ------------------------------------
+def overlay_node(title: str = "Overlay") -> dict:
+    return {"type": {"resolvedName": "CanvasOverlay"}, "props": {"title": title}, "nodes": []}
+
+
+def test_overlays_are_read_from_the_layout_like_pages() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["p_a", "o_a", "tbl"]},
+        "p_a": page_node("A"), "o_a": overlay_node("Detail"), "tbl": node({}),
+    }
+    assert we.pages(layout) == ["p_a"]
+    assert we.overlays(layout) == ["o_a"]
+
+
+def test_navigate_accepts_an_overlay_as_well_as_a_page() -> None:
+    """One effect, two destinations. What differs is what the browser does:
+    a page replaces, an overlay covers and can be closed back."""
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["p_a", "o_a", "btn"]},
+        "p_a": page_node("A"), "o_a": overlay_node("Detail"), "btn": node({}),
+    }
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "navigate", "config": {"page": "o_a"}}])},
+        layout=layout,
+    )
+    assert events["e_1"].effects[0].config["page"] == "o_a"
+
+
+def test_closing_an_overlay_is_its_own_effect() -> None:
+    """Not "navigate to nothing": closing returns you to the page underneath,
+    which navigate has no way to name."""
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "close_overlay", "config": {}}])},
+        layout={"btn": node({})},
+    )
+    assert events["e_1"].effects[0].type == "close_overlay"
+
+
+def test_navigating_to_a_plain_widget_still_names_both_kinds() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["p_a", "tbl"]},
+        "p_a": page_node("A"), "tbl": node({}),
+    }
+    with pytest.raises(we.EventError, match="page or an overlay"):
+        we.parse(
+            {"e_1": event("e_1", node="tbl", effects=[
+                {"type": "navigate", "config": {"page": "tbl"}}])},
+            layout=layout,
+        )

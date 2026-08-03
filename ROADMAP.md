@@ -130,7 +130,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.1.
 
-### 1.3 Events — **M, the model and the first trigger are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals). **What remains**: more trigger sources (a Button Group widget, dropdown select/deselect), and the three effects refused with a reason — `navigate` waits on 1.4's pages and overlays, `run_action` on binding an action's parameters to variables, `export` on a download surface the viewer route lacks.
+### 1.3 Events — **M, the model and the first trigger are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals). **What remains**: more trigger sources (a Button Group widget, dropdown select/deselect), and the two effects still refused with a reason — `run_action` waits on binding an action's parameters to variables, `export` on a download surface the viewer route lacks. (`navigate` was the third; 1.4 built it, and `close_overlay` alongside it.)
 
 **What Foundry does.** Events trigger behaviour when a user acts. They fire from many widgets — Button Group, Object Table on row selection, String Dropdown on select/deselect, Tabs. A button's **On click** can trigger an action, trigger a set of events, open a URL, or begin an export; when it triggers an action you can additionally fire events at points in the action lifecycle (on submission start, on successful completion). Events execute **sequentially in configured order**, but do not wait for the downstream computation of previous events. Setting a variable copies the value immediately, so the next event sees it.
 
@@ -138,13 +138,19 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.2.
 
-### 1.4 Layouts — **L, pages and tabs done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, and current-page-as-runtime-state). **What remains**: sections (columns, rows, toolbars), overlays, the Layout sidebar, drag-to-resize, and responsive rules. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
+### 1.4 Layouts — **L, pages, tabs, sections and overlays done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`). **What remains**: the Layout sidebar, drag-to-resize, and toolbar sections. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
 
 **What Foundry does.** A module has a **header** (persistent toolbar for module-wide title, tabs and buttons), **pages**, **sections**, and **overlays**. A default page starts as two vertically divided sections. Sections subdivide a page and can be configured as columns, rows, tabs or toolbars, each containing widgets or further layout. Overlays are contextual layers over a page — modals and drawers — for content that should not navigate you away. A **Tabs widget** triggers events to navigate between pages and overlays. Layout elements are edited from a Layout sidebar panel or by selecting them in the module view.
 
-**What exists today.** One page, free-form drag-and-drop, no header, no sections, no overlays.
+**What exists today.** Pages, a Tabs widget, sections as columns or rows with proportional widths, and overlays as modals or drawers. No header, no Layout sidebar, no drag-to-resize.
 
 **Build.** The layout tree from 1.1 with those node types; the Layout sidebar; drag-to-resize sections; the Tabs widget wired to the event system. Responsive rules per section type.
+
+*Deviation, deliberate: **drag-to-resize is not built and a section's proportions are typed instead.** A drag handle is an affordance over the same numbers, and building it first would have meant a layout nobody could describe in the saved document. The numbers are there now (`weights: "1,2"`), so the handle can arrive without a format change.*
+
+*Deviation: **a toolbar is not a section type.** Foundry lists columns, rows, tabs and toolbars; a tabbed section is the Tabs widget over pages, which is the same idea one level up, and a toolbar is a row with different padding rather than a different concept. Naming them separately would have made three of the four the same code with a label.*
+
+*Correction to 1.3's list of blocked effects: `navigate` is built and takes a page **or** an overlay, and **`close_overlay` was added as a fourth effect**. It is not "navigate to nothing" — closing an overlay returns you to the page underneath, which navigate has no way to name.*
 
 **Watch for.** This is the item where "as close to Workshop's UI as possible" costs the most and pays the most — a Workshop user opening Anchor recognises the three-panel shell (Layout/Variables sidebar, canvas, widget configuration) before they recognise any individual widget.
 

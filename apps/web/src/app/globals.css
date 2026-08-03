@@ -1115,7 +1115,9 @@ button { font: inherit; cursor: pointer; }
   padding: 5px 9px; text-align: left; border-bottom: 1px solid var(--line);
   white-space: nowrap;
 }
-.repo-preview-table th { position: sticky; top: 0; background: var(--surface); font-weight: 600; }
+/* --panel, not --surface: there is no --surface, and an undefined custom
+   property leaves the header transparent, so rows scroll underneath it. */
+.repo-preview-table th { position: sticky; top: 0; background: var(--panel); font-weight: 600; }
 .repo-preview-table th .soft { display: block; font-weight: 400; font-size: 10.5px; }
 .repo-preview-table td { font-family: var(--font-mono); }
 
@@ -1194,3 +1196,46 @@ button { font: inherit; cursor: pointer; }
 }
 .canvas-tab:hover { color: var(--ink); }
 .canvas-tab.on { color: var(--ink); border-bottom-color: var(--accent-deep); font-weight: 600; }
+
+/* ---- sections (ROADMAP phase 2, 1.4) -------------------------------------- */
+.canvas-section { min-width: 0; }
+.canvas-section-parts { display: flex; min-width: 0; }
+.canvas-section--columns > .canvas-section-parts { flex-direction: row; }
+.canvas-section--rows > .canvas-section-parts { flex-direction: column; }
+.canvas-section-part { min-width: 0; }
+.canvas-section-label {
+  font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-soft); margin: 0 0 4px; cursor: pointer;
+}
+/* The responsive rule the roadmap asks for, per section type: a column
+   section stops being columns rather than becoming three unreadable ones.
+   Rows are already a stack, so they need no rule. */
+@media (max-width: 900px) {
+  .canvas-section--columns > .canvas-section-parts { flex-direction: column; }
+}
+
+/* ---- overlays (ROADMAP phase 2, 1.4) -------------------------------------- */
+.canvas-shell .canvas-overlay {
+  border: 1px dashed var(--brass); border-radius: var(--radius); padding: 10px;
+  display: grid; gap: 10px;
+}
+.canvas-overlay-head { display: flex; align-items: center; justify-content: space-between; }
+.canvas-scrim {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35);
+  display: flex; align-items: center; justify-content: center; z-index: 40;
+}
+/* A raised panel, not the builder's dashed placeholder - the dashed border
+   above marks "this node is an overlay" while arranging the page, and an app
+   in front of a viewer should show no trace of it. */
+.canvas-scrim .canvas-overlay {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px; display: grid; gap: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  max-height: 80vh; overflow: auto;
+}
+.canvas-scrim .canvas-overlay--modal { width: min(680px, 92vw); }
+/* A drawer is the same layer pinned to one edge and full height, not a
+   different component. */
+.canvas-scrim:has(.canvas-overlay--drawer) { justify-content: flex-end; align-items: stretch; }
+.canvas-scrim .canvas-overlay--drawer {
+  width: min(460px, 92vw); max-height: none; border-radius: 0;
+}

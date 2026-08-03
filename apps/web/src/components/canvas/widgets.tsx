@@ -531,7 +531,7 @@ export function CanvasObjectTable({
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId } = useCanvasEnv();
-  const eventContext = useEventContext();
+  const eventContext = useEventContext(undefined, useOverlayIds());
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
@@ -1806,6 +1806,172 @@ CanvasMetricCard.craft = {
   related: { settings: MetricCardSettings },
 };
 
+/** Which top-level nodes are overlays rather than pages.
+ *
+ * Read from the tree, like the page list, rather than passed down: a widget
+ * firing a `navigate` has no other way to know whether its target covers the
+ * page or replaces it, and a second stored copy of that fact would disagree
+ * with the tree the first time somebody changed a node's type.
+ */
+function useOverlayIds(): Set<string> {
+  const { query } = useEditor();
+  try {
+    const ids = (query.node("ROOT").get().data.nodes ?? []) as string[];
+    return new Set(ids.filter((id) => query.node(id).get()?.data?.name === "CanvasOverlay"));
+  } catch {
+    return new Set();
+  }
+}
+
+/** The children of a canvas node, one entry per child widget.
+ *
+ * Craft.js hands a canvas node its children as a *single* Fragment holding one
+ * element per child, and `React.Children.toArray` does not look inside a
+ * Fragment - so the obvious `toArray(children)` returns a one-element array no
+ * matter how many widgets the section contains. A section built on it laid
+ * everything out in one column and looked, from the outside, like a section
+ * that simply did not work; nothing errored. Unwrap the Fragment, once, here.
+ */
+function childList(children: React.ReactNode): React.ReactNode[] {
+  const top = React.Children.toArray(children);
+  const only = top.length === 1 ? top[0] : null;
+  if (React.isValidElement(only) && only.type === React.Fragment) {
+    return React.Children.toArray((only.props as { children?: React.ReactNode }).children);
+  }
+  return top;
+}
+
+/** A section: the thing that stops an app being one column (roadmap 1.4).
+ *
+ * Foundry's sections subdivide a page as columns, rows, tabs or toolbars.
+ * Columns and rows are here; a tabbed section is the Tabs widget over pages,
+ * which is the same idea one level up, and a toolbar is a row with different
+ * padding rather than a different concept.
+ *
+ * **Widths are proportions, not pixels.** A section's children share the space
+ * by weight, so a two-column split stays a two-column split on a narrower
+ * screen instead of overflowing. Drag-to-resize is a UI affordance over these
+ * same numbers and is not built - the numbers are, so an app can be laid out
+ * today and the handle can arrive later without a format change.
+ *
+ * **Below a threshold, columns stack.** A three-column section on a phone is
+ * three unreadable columns; the roadmap asks for responsive rules per section
+ * type, and for a column section the rule is "stop being columns".
+ */
+export function CanvasSection({
+  direction = "columns",
+  weights = "",
+  gap = 12,
+  children,
+}: {
+  direction?: "columns" | "rows";
+  /** Comma-separated proportions, one per child: "2,1" is two-thirds and a
+   * third. Blank, or short, means equal - a section should lay out sensibly
+   * before anybody has configured it. */
+  weights?: string;
+  gap?: number;
+  children?: React.ReactNode;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const parts = childList(children);
+  const parsed = String(weights || "")
+    .split(",")
+    .map((w) => Number(w.trim()))
+    .filter((w) => Number.isFinite(w) && w > 0);
+
+  return (
+    <div
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-section canvas-section--${direction}`}
+    >
+      {/* A section fills itself with its children, so in the builder there is
+          otherwise nowhere to click that is the section rather than a widget
+          inside it - and its settings (proportions, direction, gap) would be
+          unreachable. The label is that click target, and says what the
+          section is doing, the way a page's label does. */}
+      {mode === "edit" && (
+        <p className="canvas-section-label">
+          {direction === "columns" ? "Columns" : "Rows"}
+          {parsed.length > 1 ? ` · ${parsed.join(":")}` : ""}
+        </p>
+      )}
+      <div className="canvas-section-parts" style={{ gap }}>
+        {parts.map((child, index) => (
+          <div
+            key={index}
+            className="canvas-section-part"
+            // `flex-grow` rather than a width: the children then share whatever
+            // is left after gaps, so the arithmetic does not have to know how
+            // many gaps there are.
+            style={{ flexGrow: parsed[index] ?? 1, flexBasis: 0, minWidth: 0 }}
+          >
+            {child}
+          </div>
+        ))}
+        {parts.length === 0 && (
+          <p className="canvas-widget-empty">Section - drop widgets in to split the page</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SectionSettings() {
+  const {
+    direction,
+    weights,
+    gap,
+    actions: { setProp },
+  } = useNode((node) => ({
+    direction: node.data.props.direction,
+    weights: node.data.props.weights,
+    gap: node.data.props.gap,
+  }));
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Arrange as</span>
+        <select
+          value={direction ?? "columns"}
+          onChange={(e) => setProp((p: { direction: string }) => (p.direction = e.target.value))}
+        >
+          <option value="columns">Columns</option>
+          <option value="rows">Rows</option>
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Proportions</span>
+        <input
+          value={weights ?? ""}
+          placeholder="equal"
+          onChange={(e) => setProp((p: { weights: string }) => (p.weights = e.target.value))}
+        />
+        <span className="field-hint">
+          One number per widget, e.g. 2,1 for two-thirds and a third
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Gap</span>
+        <input
+          type="number"
+          value={gap ?? 12}
+          onChange={(e) => setProp((p: { gap: number }) => (p.gap = Number(e.target.value)))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasSection.craft = {
+  displayName: "Section",
+  props: { direction: "columns", weights: "", gap: 12 },
+  isCanvas: true,
+  related: { settings: SectionSettings },
+};
+
 /** A page (roadmap 1.4).
  *
  * A page is a **node in the layout tree**, not a separate document. That keeps
@@ -1893,6 +2059,104 @@ CanvasPage.craft = {
   related: { settings: PageSettings },
 };
 
+/** An overlay: a layer over the page rather than a page you go to.
+ *
+ * Foundry's modals and drawers, for content that should not navigate you away.
+ * The same kind of node as a page, so `navigate` targets either and the
+ * difference is what the browser does with it - and the difference matters:
+ * closing an overlay returns you to the page underneath, which "navigate to
+ * a page" has no way to express.
+ *
+ * **In the builder it renders inline**, like a page, so it is editable and
+ * visible. It only becomes a layer in the running app.
+ */
+export function CanvasOverlay({
+  title = "Overlay",
+  variant = "modal",
+  children,
+}: {
+  title?: string;
+  variant?: "modal" | "drawer";
+  children?: React.ReactNode;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { overlay, closeOverlay } = useCanvasPage();
+  const open = overlay === nodeId;
+
+  if (mode === "run" && !open) return null;
+
+  const body = (
+    <section
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-overlay canvas-overlay--${variant}`}
+      role={mode === "run" ? "dialog" : undefined}
+      aria-modal={mode === "run" ? true : undefined}
+      aria-label={title}
+    >
+      <div className="canvas-overlay-head">
+        <strong>{title}</strong>
+        {mode === "run" && (
+          <button type="button" className="btn quiet" onClick={closeOverlay}>
+            Close
+          </button>
+        )}
+        {mode === "edit" && <span className="soft">overlay</span>}
+      </div>
+      {children}
+    </section>
+  );
+
+  if (mode !== "run") return body;
+  return (
+    // The scrim closes it. An overlay you can only leave through its own
+    // button is one a viewer gets stuck in the moment that button is off
+    // screen.
+    <div className="canvas-scrim" onClick={closeOverlay}>
+      <div onClick={(e) => e.stopPropagation()}>{body}</div>
+    </div>
+  );
+}
+
+function OverlaySettings() {
+  const {
+    title,
+    variant,
+    actions: { setProp },
+  } = useNode((node) => ({ title: node.data.props.title, variant: node.data.props.variant }));
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Shows as</span>
+        <select
+          value={variant ?? "modal"}
+          onChange={(e) => setProp((p: { variant: string }) => (p.variant = e.target.value))}
+        >
+          <option value="modal">Modal (centred)</option>
+          <option value="drawer">Drawer (from the side)</option>
+        </select>
+      </label>
+    </>
+  );
+}
+
+CanvasOverlay.craft = {
+  displayName: "Overlay",
+  props: { title: "Overlay", variant: "modal" },
+  isCanvas: true,
+  related: { settings: OverlaySettings },
+};
+
 /** Tabs: one button per page, navigating through the event system.
  *
  * It does not call `go` directly. A tab click fires the module's `click`
@@ -1909,7 +2173,7 @@ export function CanvasTabs() {
   } = useNode();
   const { query } = useEditor();
   const { current, go } = useCanvasPage();
-  const eventContext = useEventContext();
+  const eventContext = useEventContext(undefined, useOverlayIds());
   const { events: moduleEvents } = useCanvasVariables();
 
   const pages: { id: string; title: string }[] = [];
@@ -1962,6 +2226,8 @@ CanvasTabs.craft = { displayName: "Tabs", props: {} };
 
 export const CANVAS_RESOLVER = {
   CanvasPage,
+  CanvasOverlay,
+  CanvasSection,
   CanvasTabs,
   CanvasContainer,
   CanvasText,
@@ -1976,6 +2242,8 @@ export const CANVAS_RESOLVER = {
 
 export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: string }[] = [
   { key: "CanvasPage", label: "Page", hint: "A screen of the app; Tabs move between them" },
+  { key: "CanvasSection", label: "Section", hint: "Split a page into columns or rows" },
+  { key: "CanvasOverlay", label: "Overlay", hint: "A modal or drawer over the page" },
   { key: "CanvasTabs", label: "Tabs", hint: "One button per page" },
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },

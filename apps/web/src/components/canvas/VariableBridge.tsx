@@ -93,10 +93,25 @@ export function VariableBridge({
   // lifetime of the variable values beside it, and a separate provider would
   // be a second thing to mount in both routes and forget in one.
   const [page, setPage] = useState<string | null>(null);
+  const [overlay, setOverlay] = useState<string | null>(null);
 
   return (
     <CanvasVariableProvider value={{ declared, events, resolved, pending }}>
-      <CanvasPageProvider value={{ current: page, go: setPage }}>
+      <CanvasPageProvider
+        value={{
+          current: page,
+          // Navigating to a page closes whatever was covering it: an overlay
+          // left open over a page you did not open it from is a layer with no
+          // way back.
+          go: (id) => {
+            setOverlay(null);
+            setPage(id);
+          },
+          overlay,
+          openOverlay: setOverlay,
+          closeOverlay: () => setOverlay(null),
+        }}
+      >
         {children}
       </CanvasPageProvider>
     </CanvasVariableProvider>

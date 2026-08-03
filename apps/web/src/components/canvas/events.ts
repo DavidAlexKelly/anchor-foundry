@@ -43,6 +43,13 @@ export interface EventContext {
    * which case a navigate effect is skipped rather than throwing — see the
    * note on unknown effects below. */
   goToPage?: (nodeId: string) => void;
+  /** Open a node as an overlay over the current page, and close it again. */
+  openOverlay?: (nodeId: string) => void;
+  closeOverlay?: () => void;
+  /** Which node ids are overlays rather than pages. `navigate` accepts either
+   * and this is how it tells them apart - read from the tree by the caller,
+   * because the effect itself has no view of the layout. */
+  overlayIds?: Set<string>;
   /** Applies every variable write from this run, once, at the end. Called with
    * the accumulated map rather than per effect so one click is one render. */
   setVariables: (values: Record<string, unknown>) => void;
@@ -88,12 +95,18 @@ export function interpolate(template: string, payload: Record<string, unknown>):
  * which is exactly why the capability must not be absent by accident. One
  * hook, so there is nothing to forget.
  */
-export function useEventContext(payload?: Record<string, unknown>): EventContext {
+export function useEventContext(
+  payload?: Record<string, unknown>,
+  overlayIds?: Set<string>,
+): EventContext {
   const { setMany } = useCanvasParameters();
-  const { go } = useCanvasPage();
+  const { go, openOverlay, closeOverlay } = useCanvasPage();
   return {
     setVariables: setMany,
     goToPage: go,
+    openOverlay,
+    closeOverlay,
+    overlayIds,
     openUrl: (url: string) => window.open(url, "_blank", "noopener,noreferrer"),
     payload,
   };
@@ -124,7 +137,11 @@ export function run(
           typeof raw === "string" ? interpolate(raw, { ...payload, ...written }) : raw;
       } else if (effect.type === "navigate") {
         const target = String(config.page ?? "");
-        if (target && context.goToPage) context.goToPage(target);
+        if (!target) continue;
+        if (context.overlayIds?.has(target)) context.openOverlay?.(target);
+        else context.goToPage?.(target);
+      } else if (effect.type === "close_overlay") {
+        context.closeOverlay?.();
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })

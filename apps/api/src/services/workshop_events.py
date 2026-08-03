@@ -38,7 +38,7 @@ from typing import Any
 TRIGGERS = ("click", "row_select", "change")
 
 # Effects that run entirely in the browser.
-EFFECTS = ("set_variable", "open_url", "navigate")
+EFFECTS = ("set_variable", "open_url", "navigate", "close_overlay")
 
 # Named, refused, and each blocked on something real rather than on effort:
 # `run_action` needs the action's parameters bound to variables, which is its
@@ -53,6 +53,18 @@ PLANNED_EFFECTS = ("run_action", "export")
 # layout tree* rather than a separate document, so the builder keeps editing
 # one tree and decision 0002's "the layout is a Craft.js tree" stays true.
 PAGE_WIDGET = "CanvasPage"
+
+# An overlay is a layer *over* a page rather than a page you go to - Foundry's
+# modals and drawers, for content that should not navigate you away. It is the
+# same kind of node as a page, so `navigate` accepts either and the difference
+# is what the browser does with it: a page replaces, an overlay covers and can
+# be closed back to what was underneath.
+OVERLAY_WIDGET = "CanvasOverlay"
+
+# Effects that close what a navigate opened. Separate from `navigate` rather
+# than "navigate to nothing", because closing an overlay returns you to the
+# page you were on - which navigate has no way to name.
+CLOSE_EFFECT = "close_overlay"
 
 # A url effect may only send somebody somewhere a browser treats as a document.
 # `javascript:` is the one that matters - an app author is not necessarily
@@ -82,7 +94,7 @@ class Event:
     effects: tuple[Effect, ...] = ()
 
 
-def pages(layout: Any) -> list[str]:
+def pages(layout: Any, *, widget: str = PAGE_WIDGET) -> list[str]:
     """Node ids of every page in a layout, in the order the tree lists them.
 
     Read from the layout rather than stored beside it, for the reason
@@ -104,9 +116,14 @@ def pages(layout: Any) -> list[str]:
             continue
         node_type = node.get("type")
         name = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type
-        if name == PAGE_WIDGET:
+        if name == widget:
             found.append(str(node_id))
     return found
+
+
+def overlays(layout: Any) -> list[str]:
+    """Node ids of every overlay, same reading as `pages`."""
+    return pages(layout, widget=OVERLAY_WIDGET)
 
 
 def parse(
@@ -129,7 +146,8 @@ def parse(
         raise EventError(f"a module may declare at most {MAX_EVENTS} events")
 
     nodes = set(layout) if isinstance(layout, dict) else None
-    page_ids = set(pages(layout))
+    # A navigate may target either; what differs is what the browser does.
+    page_ids = set(pages(layout)) | set(overlays(layout))
     declared = variables or {}
 
     events: dict[str, Event] = {}
@@ -220,7 +238,8 @@ def _parse_effect(
             # page - it is a click that would do nothing, and saying so here is
             # the only moment anybody can fix it.
             raise EventError(
-                f"event {eid!r} navigates to {target!r}, which is a widget rather than a page"
+                f"event {eid!r} navigates to {target!r}, which is a widget rather than a "
+                "page or an overlay"
             )
     elif kind == "open_url":
         url = config.get("url")
