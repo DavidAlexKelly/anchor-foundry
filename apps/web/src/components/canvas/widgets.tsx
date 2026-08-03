@@ -2301,12 +2301,146 @@ export function CanvasTabs() {
 
 CanvasTabs.craft = { displayName: "Tabs", props: {} };
 
+/** A button: the event system's primary trigger surface (roadmap 1.5, and the
+ * trigger source 1.3 was missing).
+ *
+ * **One button is one node, and Foundry's "Button Group" is a row of them in
+ * a Section.** A trigger is `(node, on)` — so a group holding several buttons
+ * would need a third part naming *which* button, in every event, in the saved
+ * format, to express something the layout already expresses. The row is the
+ * grouping; the node is the button.
+ *
+ * **A button with nothing wired to it does nothing, and says so in the
+ * builder.** Unlike Tabs, there is no default meaning to fall back on: a tab
+ * self-evidently goes to its page, while a button could mean anything. Silence
+ * would be indistinguishable from a broken click, so the builder labels it.
+ *
+ * **`enabledVariable` is what makes it a widget rather than a control.** The
+ * rule for every widget in item 1.5 is that it consumes input variables and
+ * emits output variables: this one consumes a variable to decide whether it
+ * can be pressed at all — "Clear selection", greyed out until something is
+ * selected — and emits whatever its events write.
+ */
+export function CanvasButton({
+  label = "Button",
+  style = "primary",
+  enabledVariable = null,
+}: {
+  label?: string;
+  style?: "primary" | "quiet" | "danger";
+  /** A variable that must be truthy for the button to be pressable. Unset
+   * means always pressable — an app whose buttons are all dead until somebody
+   * declares a variable would look broken. */
+  enabledVariable?: string | null;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { resolved, events: moduleEvents } = useCanvasVariables();
+  const eventContext = useEventContext(undefined, useOverlayIds());
+
+  const wired = eventsFor(moduleEvents, nodeId, "click");
+  const gate = enabledVariable ? resolved[enabledVariable] : undefined;
+  // Only an explicitly falsy value disables. `undefined` is "not resolved
+  // yet", which must not read as "not allowed" - a button that is dead until
+  // the first resolve lands is a button people click twice.
+  const disabled =
+    mode === "edit" || (!!enabledVariable && gate !== undefined && !gate);
+
+  return (
+    <span ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-button-wrap">
+      <button
+        type="button"
+        className={`btn${style === "primary" ? "" : ` ${style}`}`}
+        disabled={disabled}
+        onClick={() => {
+          if (mode === "edit") return;
+          if (wired.length > 0) runEvents(wired, eventContext);
+        }}
+      >
+        {interpolate(label ?? "", resolved)}
+      </button>
+      {mode === "edit" && wired.length === 0 && (
+        <span className="canvas-widget-empty"> nothing wired to this click yet</span>
+      )}
+    </span>
+  );
+}
+
+function ButtonSettings() {
+  const {
+    label,
+    style,
+    enabledVariable,
+    actions: { setProp },
+  } = useNode((node) => ({
+    label: node.data.props.label,
+    style: node.data.props.style,
+    enabledVariable: node.data.props.enabledVariable,
+  }));
+  const { declared } = useCanvasVariables();
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          value={label ?? ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+        <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Style</span>
+        <select
+          value={style ?? "primary"}
+          onChange={(e) => setProp((p: { style: string }) => (p.style = e.target.value))}
+        >
+          <option value="primary">Primary</option>
+          <option value="quiet">Quiet</option>
+          <option value="danger">Danger</option>
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Pressable when</span>
+        <select
+          value={enabledVariable ?? ""}
+          onChange={(e) =>
+            setProp(
+              (p: { enabledVariable: string | null }) =>
+                (p.enabledVariable = e.target.value || null),
+            )
+          }
+        >
+          <option value="">Always</option>
+          {Object.values(declared).map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">
+          The button is greyed out while this variable is empty or false
+        </span>
+      </label>
+    </>
+  );
+}
+
+CanvasButton.craft = {
+  displayName: "Button",
+  props: { label: "Button", style: "primary", enabledVariable: null },
+  related: { settings: ButtonSettings },
+};
+
 export const CANVAS_RESOLVER = {
   CanvasHeader,
   CanvasPage,
   CanvasOverlay,
   CanvasSection,
   CanvasTabs,
+  CanvasButton,
   CanvasContainer,
   CanvasText,
   CanvasParameterControl,
@@ -2324,6 +2458,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasSection", label: "Section", hint: "Split a page into columns or rows" },
   { key: "CanvasOverlay", label: "Overlay", hint: "A modal or drawer over the page" },
   { key: "CanvasTabs", label: "Tabs", hint: "One button per page" },
+  { key: "CanvasButton", label: "Button", hint: "Runs the events wired to its click" },
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },

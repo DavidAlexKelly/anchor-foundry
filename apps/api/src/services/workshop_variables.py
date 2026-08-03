@@ -75,7 +75,13 @@ MAX_CONCAT_PARTS = 20
 # Props whose value is a variable id. The vocabulary grows widget by widget in
 # item 1.5; what matters here is that it is a *list*, so usage scanning has one
 # definition rather than each caller guessing.
-REFERENCE_PROPS = ("filterParameter", "searchParameter", "variable", "objectSetVariable")
+REFERENCE_PROPS = (
+    "filterParameter",
+    "searchParameter",
+    "variable",
+    "objectSetVariable",
+    "enabledVariable",
+)
 
 
 class VariableError(ValueError):

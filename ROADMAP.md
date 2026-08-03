@@ -130,7 +130,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.1.
 
-### 1.3 Events — **M, the model and the first trigger are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals). **What remains**: more trigger sources (a Button Group widget, dropdown select/deselect), and the two effects still refused with a reason — `run_action` waits on binding an action's parameters to variables, `export` on a download surface the viewer route lacks. (`navigate` was the third; 1.4 built it, and `close_overlay` alongside it.)
+### 1.3 Events — **M, the model and three trigger sources are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals; §77: tabs; §81: a button's click, the primary trigger surface). **What remains**: dropdown select/deselect as a trigger, and the two effects still refused with a reason — `run_action` waits on binding an action's parameters to variables, `export` on a download surface the viewer route lacks. (`navigate` was the third; 1.4 built it, and `close_overlay` alongside it.)
 
 **What Foundry does.** Events trigger behaviour when a user acts. They fire from many widgets — Button Group, Object Table on row selection, String Dropdown on select/deselect, Tabs. A button's **On click** can trigger an action, trigger a set of events, open a URL, or begin an export; when it triggers an action you can additionally fire events at points in the action lifecycle (on submission start, on successful completion). Events execute **sequentially in configured order**, but do not wait for the downstream computation of previous events. Setting a variable copies the value immediately, so the next event sees it.
 
@@ -161,6 +161,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 ### 1.5 The widget library — **XL, and incremental**
 
 Anchor has eight: Container, Text, Filter, Dataset table, Object table, Map, Chart, Action form.
+Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button and Metric Card is done (§74).
 
 Build toward Foundry's set, in the order below (roughly descending value per unit of work):
 
@@ -168,9 +169,9 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 |---|---|---|
 | 1 | **Filter List** | The canonical Workshop widget. Property-aware filters over an object set, emitting an object set variable. Anchor's Filter emits a scalar — this is a rewrite, not an extension |
 | 1 | **Object Table** (upgrade) | Row selection emitting single-object and object-set variables; column config; sorting; server-side paging |
-| 1 | **Button Group** | The event system's primary trigger surface |
-| 1 | **Metric Card** | A configurable card highlighting a key metric; the natural consumer of object-set aggregation |
-| 2 | **Tabs** | Navigation between pages and overlays |
+| 1 | ~~**Button Group**~~ | **Done** (`STATUS.md` §81) as a **Button**: one button is one node, and a group is a row of them in a Section. A trigger is `(node, on)`, so a multi-button node would need every event to name *which* button — a format change to express what the layout already expresses |
+| 1 | ~~**Metric Card**~~ | **Done** (`STATUS.md` §74) |
+| 2 | ~~**Tabs**~~ | **Done** (`STATUS.md` §77), and it navigates through the event system rather than around it |
 | 2 | **Charts** (upgrade) | Object-set input rather than dataset-only; drill-down emitting a filtered set |
 | 2 | **Map** (upgrade) | Object-set input; selection emitting a set. The clustering and pan work (`STATUS.md` §37) carries over |
 | 2 | **Inline Action Form** | Editing objects from inside the app; upgrade of the existing Action form |

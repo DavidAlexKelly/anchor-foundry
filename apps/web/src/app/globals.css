@@ -1228,6 +1228,9 @@ button { font: inherit; cursor: pointer; }
 .canvas-header--sticky { position: sticky; top: 0; z-index: 20; }
 .canvas-header-title { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 700; }
 
+.canvas-button-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.canvas-button-wrap .canvas-widget-empty { margin: 0; }
+
 /* ---- sections (ROADMAP phase 2, 1.4) -------------------------------------- */
 .canvas-section { min-width: 0; }
 .canvas-section-parts { display: flex; min-width: 0; }

@@ -87,6 +87,7 @@ export const REFERENCE_PROPS = [
   "searchParameter",
   "variable",
   "objectSetVariable",
+  "enabledVariable",
 ] as const;
 
 export interface Usage {

@@ -811,3 +811,27 @@ def test_navigating_to_a_header_is_refused() -> None:
             {"e_1": event("e_1", effects=[{"type": "navigate", "config": {"page": "h"}}])},
             layout=layout,
         )
+
+
+# ---- the Button widget (roadmap 1.5, and 1.3's missing trigger source) --------
+def test_a_button_gated_on_a_variable_counts_as_a_usage() -> None:
+    """`enabledVariable` is a reference like any other, so deleting the
+    variable a button is gated on is refused rather than quietly making the
+    button permanently pressable."""
+    layout = {"btn": {"type": {"resolvedName": "CanvasButton"},
+                      "props": {"label": "Clear", "enabledVariable": "v_selected"},
+                      "nodes": []}}
+    declared = wv.parse({"v_selected": var("v_selected", label="Selected")})
+    found = wv.usages(layout, declared)
+    assert found["v_selected"] == [{"node": "btn", "prop": "enabledVariable"}]
+    assert wv.validate_module(
+        module({"v_selected": var("v_selected", label="Selected")}, layout)
+    ) != {}
+
+
+def test_a_button_gated_on_a_variable_nothing_declares_is_refused() -> None:
+    layout = {"btn": {"type": {"resolvedName": "CanvasButton"},
+                      "props": {"label": "Clear", "enabledVariable": "v_gone"},
+                      "nodes": []}}
+    with pytest.raises(wv.VariableError, match="does not declare"):
+        wv.validate_module(module({}, layout))

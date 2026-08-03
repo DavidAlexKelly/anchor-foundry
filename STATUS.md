@@ -1507,6 +1507,26 @@ Verified in a browser: the header renders above the page in the running app with
 
 ---
 
+### 81. The Button: the event system's primary trigger surface (this session)
+
+Roadmap 1.5's third priority-1 widget, and the trigger source 1.3 was missing. A button runs whatever events are wired to its click.
+
+**One button is one node, and Foundry's "Button Group" is a row of them in a Section.** A trigger is `(node, on)`. A node holding several buttons would need a third part naming *which* button — in every event, in the saved format — to express something the layout already expresses. The row is the grouping; the node is the button. This is the same test §80 applied to the header and §78 applied to toolbar sections: a new concept has to earn itself against what the format already says.
+
+**`enabledVariable` is what makes it a widget rather than a control.** Item 1.5's rule is that a widget consumes input variables and emits output variables; this one consumes a variable to decide whether it can be pressed at all — "Clear Aberdeen Yard (open)", greyed out until something is selected — and emits whatever its events write. It is a reference prop, so deleting the variable a button is gated on is refused like any other usage rather than quietly making the button permanently live.
+
+**Only an explicitly falsy value disables it.** `undefined` means "not resolved yet", and a button dead until the first resolve lands is a button people click twice. Unset means always pressable, for the same reason: an app whose buttons are all dead until somebody declares a variable looks broken.
+
+**A button with nothing wired says so, in the builder.** Unlike Tabs there is no default meaning to fall back on — a tab self-evidently goes to its page, a button could mean anything — so silence would be indistinguishable from a broken click.
+
+**What the browser check found: the modal was right and the check was wrong.** The first run tried to click the header's button while the overlay was open and Playwright reported the scrim intercepting it — which is a modal doing its job. The demo module now has two buttons, and both are better for it: the header's clears the selection, the modal's own clears *and* closes, which is the `close_overlay` effect a modal's action needs and a button on the page beneath cannot reach.
+
+Verified in a browser: the header button starts gated shut, opens when a row is selected, and its label interpolates the selection; the header button is genuinely unreachable behind the scrim (asserted with `elementFromPoint`, not assumed); the modal's button runs both its effects in order; and once the modal is gone the header's button clears the variable and gates itself shut again.
+
+**577 API tests green**, 2 new for the button's gate. Both mutation-tested, along with the mirrored `REFERENCE_PROPS` list: dropping `enabledVariable` from the server's copy fails three tests, and dropping it from the browser's copy fails the mirror test that exists for exactly this.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
