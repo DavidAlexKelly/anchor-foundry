@@ -1259,6 +1259,30 @@ Roadmap item 2.6. `POST .../repositories/{id}/preview` takes a path and **the ed
 
 ---
 
+### 70. The typed variable graph (this session)
+
+Roadmap item 1.2's server half. `services/workshop_variables.py` validates a module's variables, computes derived ones in dependency order, and answers "what would break if I deleted this" by reading the document.
+
+**Read this section knowing what it is not.** Nothing produces a `format: 2` document yet. Item 1.1 was the *spike* — decision 0002, the converter, and its tests — and the one-shot conversion it designed has not been run; the builder still saves a bare Craft.js map. So this is a validated layer with an endpoint and no producer. Deliberate order (the format is the thing most expensive to get wrong, so its rules exist before anything writes to it), but it means **the refusals below are proven by tests and have never refused a real save**. The conversion and a builder that speaks v2 are the next step, and until then a v1 definition passes through the save path untouched — a test asserts that, because refusing one would break every app that exists.
+
+**Three refusals, each removing a failure Canvas commits today** (decision 0002, "what exists today, precisely"):
+
+- **A binding to a variable nothing declares.** Today that reads as "no filter", so the widget shows *more* rows than it should — silently, forever, and looking like data rather than like a bug. It is now a save that does not happen, and the refusal says "the widget would quietly show everything" rather than naming a constraint.
+- **Deleting a variable something uses.** `usages()` reads the layout, so "used by 2 widgets" is answerable. A derivation counts as a usage too — deleting an input out from under one is the same mistake, and naming only the widget case would make the refusal look arbitrary.
+- **A derivation cycle.** The precedent is Models item 7 (§30); the reason is sharper here because there is no run loop to notice — a cycle is either an infinite recompute in the browser or a value depending on its own previous value. Reported by *label*, sorted, because the person reading named the variables and has never seen `v_7f3a1c`.
+
+**Two semantics that two implementations would get quietly different**, which is why they have tests naming the reasoning rather than the behaviour. `if_else` does not use Python truthiness: `0` and `""` are values somebody typed, and treating them as absence would make a numeric filter of zero behave as though the filter were off — only `None` and `false` are false. And `cast` *refuses* what it cannot convert rather than returning nothing, because a blank card sends the reader to look at the widget instead of at the variable feeding it.
+
+**Why evaluation is a server round trip**, given the transforms are pure and the values are shown in the browser. This repo already carries five files mirrored between two runtimes and a standing note that a sixth should become a shared package instead. A TypeScript copy of `if_else`'s truthiness and `cast`'s refusals would be that sixth, and those are precisely the semantics that drift invisibly. The cost is close to zero where it matters — derived values change when their inputs change, which is the same moment the app is already asking the server to re-evaluate an object set, so it rides along with a call that was happening anyway. The honest exception is a text input, where every debounced keystroke now costs a request a local computation would not.
+
+**Where validation lives.** In the route, not in `services/canvas.py`, which stores an opaque blob and does not interpret it — a property decision 0002 records as worth keeping. The API refuses the document; the storage layer stays uninterested in what is inside it.
+
+`object_property` and `object_set_aggregation` are declared and refused with "not built yet": both read the instance store, so they are a round trip rather than a pure function, and quietly returning `None` for them would make every caller guess which of its results were real.
+
+**24 service tests + 5 route tests**, all green with 79 across the canvas/workshop files. Three mutations, each caught: cycles not refused, dangling bindings allowed, and `if_else` switched to Python truthiness.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

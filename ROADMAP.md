@@ -106,7 +106,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Prove it.** Round-trip an existing canvas app through the new format and render it unchanged.
 
-### 1.2 Variables — **L, part done** (`STATUS.md` §58: object-set evaluation shipped; the builder panel and derived variables remain)
+### 1.2 Variables — **L, part done** (`STATUS.md` §58 object-set evaluation, §70 the typed variable graph: derivations, cycle refusal, usage-aware deletion, and an evaluation endpoint. **The builder panel remains, and so does the thing it needs first** — nothing produces a `format: 2` document yet: 1.1 was the spike, its one-shot conversion has not been run, and the builder still saves a bare Craft.js map. The conversion and a v2-speaking builder are the next step; until then §70's refusals are proven by tests and have never refused a real save.)
 
 **What Foundry does.** Typed variables are the wiring. Types: **object set**, **single object**, string, numeric, boolean, date/timestamp, array (of boolean, date, numeric, geopoint, geoshape, string, timestamp or struct), and object-set-filter variables. Object set variables are initialised from an object type or another object set, then optionally filtered by property values or Filter variables, or **pivoted to linked objects via a Search Around**. Variables also support **transformations**: string concatenation, if/else, casting between primitives, `is empty`/`is not empty`, `object property` (a property of a single object), and `object set aggregation` (an aggregate over a property of a set) — and transformations chain, referencing earlier ones.
 
