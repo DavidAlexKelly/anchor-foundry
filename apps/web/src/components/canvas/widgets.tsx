@@ -1547,6 +1547,156 @@ CanvasActionForm.craft = {
   related: { settings: ActionFormSettings },
 };
 
+/** A Metric Card: one number over an object set (roadmap 1.5).
+ *
+ * The widget Workshop apps lead with, and the one that makes an object set
+ * worth having as a shared thing: the card, the table and the chart all read
+ * *the same* variable, so "127 sites" and the rows under it cannot disagree.
+ *
+ * Only `count` and `count_distinct` are offered, because those are the two the
+ * two stores answer identically over untyped properties - see
+ * `services/object_sets.py`. A sum would be right on one deployment and absent
+ * on another.
+ */
+export function CanvasMetricCard({
+  objectSetVariable = null,
+  aggregation = "count",
+  property = null,
+  label = "",
+}: {
+  objectSetVariable?: string | null;
+  aggregation?: "count" | "count_distinct";
+  property?: string | null;
+  label?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+
+  const metric = useQuery({
+    queryKey: [
+      "canvas-metric", objectSetVariable, JSON.stringify(setDefinition ?? null),
+      aggregation, property,
+    ],
+    queryFn: () =>
+      objApi.aggregateObjectSet(workspaceId, setDefinition, {
+        aggregation,
+        property: property ?? undefined,
+      }),
+    enabled: !!objectSetVariable && !!setDefinition,
+  });
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      <div className="metric-card">
+        <span className="metric-label">{label || "Metric"}</span>
+        {!objectSetVariable ? (
+          <p className="canvas-widget-empty">Pick an object set variable in Settings</p>
+        ) : variablesPending || metric.isPending ? (
+          // Not "0". A card that showed a number it did not have would be
+          // believed, and nobody re-reads a figure that looked fine.
+          <span className="metric-value soft">…</span>
+        ) : metric.isError ? (
+          <p className="canvas-widget-empty">{(metric.error as Error).message}</p>
+        ) : (
+          <span className="metric-value">{metric.data!.value.toLocaleString()}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MetricCardSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
+  const {
+    objectSetVariable, aggregation, property, label,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    aggregation: node.data.props.aggregation,
+    property: node.data.props.property,
+    label: node.data.props.label,
+  }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  // Which type the chosen set draws from, so the property picker offers that
+  // type's properties rather than a free-text box that fails at read time.
+  const typeId = (resolved[objectSetVariable as string] as { object_type_id?: string } | undefined)
+    ?.object_type_id;
+  const detail = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          value={label ?? ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Object set variable</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Shows</span>
+        <select
+          value={aggregation ?? "count"}
+          onChange={(e) =>
+            setProp((p: { aggregation: string }) => (p.aggregation = e.target.value))
+          }
+        >
+          <option value="count">How many</option>
+          <option value="count_distinct">How many distinct values</option>
+        </select>
+        <span className="field-hint">
+          Sums and averages need typed properties — see the ontology roadmap
+        </span>
+      </label>
+      {aggregation === "count_distinct" && (
+        <label className="field">
+          <span className="field-label">Of property</span>
+          <select
+            value={property || ""}
+            onChange={(e) =>
+              setProp((p: { property: string | null }) => (p.property = e.target.value || null))
+            }
+          >
+            <option value="">Choose…</option>
+            {detail.data?.properties.map((prop) => (
+              <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+    </>
+  );
+}
+
+CanvasMetricCard.craft = {
+  displayName: "Metric card",
+  props: { objectSetVariable: null, aggregation: "count", property: null, label: "" },
+  related: { settings: MetricCardSettings },
+};
+
 export const CANVAS_RESOLVER = {
   CanvasContainer,
   CanvasText,
@@ -1555,6 +1705,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectTable,
   CanvasChart,
   CanvasMap,
+  CanvasMetricCard,
   CanvasActionForm,
 };
 
@@ -1566,6 +1717,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
+  { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },
   { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
 ];
 

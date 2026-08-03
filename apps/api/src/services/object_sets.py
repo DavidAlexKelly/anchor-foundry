@@ -65,6 +65,47 @@ ORDERED_OPERATORS = ("gt", "gte", "lt", "lte")
 # Operators whose value is a list rather than a scalar.
 LIST_OPERATORS = ("in",)
 
+# What a Metric Card can ask of a set (roadmap 1.5).
+#
+# Both of these are *text-identity* operations - how many documents, and how
+# many distinct values of one property - so Postgres and OpenSearch agree
+# without either of them knowing what the property's type is. Postgres counts
+# distinct `jsonb_extract_path_text`; OpenSearch runs a cardinality aggregation
+# on the `.keyword` subfield the index mapping declares explicitly. Same
+# question, same answer.
+AGGREGATIONS = ("count", "count_distinct")
+
+# `sum`, `avg`, `min` and `max` are **not** here, and it is the same reason
+# ordered operators are not: instance properties are stored untyped, so
+# summing one means deciding what "3" and "10" are without being told. Postgres
+# would cast; OpenSearch cannot aggregate numerically over a text-mapped field
+# at all. Shipping it would mean a Metric Card whose number is right on one
+# deployment and absent on another - which is worse than a card that says the
+# platform cannot answer yet.
+#
+# The fix is the same one too, and doing it once unlocks both: honour the
+# *declared* property type (object_type_properties.data_type, db 0026) in the
+# index mapping, with a backfill behind it.
+NUMERIC_AGGREGATIONS = ("sum", "avg", "min", "max")
+
+
+def parse_aggregation(name: str, property_name: str | None) -> tuple[str, str | None]:
+    """Validate an aggregation, refusing in a sentence."""
+    if name in NUMERIC_AGGREGATIONS:
+        raise ValueError(
+            f"{name} is not supported yet: instance properties are stored untyped, so "
+            f"a {name} would mean one thing on Postgres and nothing at all on "
+            "OpenSearch. count and count_distinct answer the same question about how "
+            "many, and agree on both."
+        )
+    if name not in AGGREGATIONS:
+        raise ValueError(
+            f"unknown aggregation {name!r}; expected one of {', '.join(AGGREGATIONS)}"
+        )
+    if name == "count_distinct" and not property_name:
+        raise ValueError("count_distinct needs a property to count distinct values of")
+    return name, property_name if name == "count_distinct" else None
+
 MAX_FILTERS = 20
 
 

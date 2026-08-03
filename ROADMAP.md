@@ -124,7 +124,9 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Prove it.** A filter list narrowing an object set that an object table and a chart both read, live, with a metric card showing an aggregation over the same set. Change the filter; all three update; no page reload.
 
-*Status: the filter → set → object table half is done and verified (§73). The chart and the metric card are widget work — neither reads a variable yet, and the metric card additionally needs `object_set_aggregation` — so they land with item 1.5 rather than here.*
+*Status: filter → set → object table → metric card is done and verified (§73, §74) — change the filter and the table and the card move together, reading one set. The chart is the remaining piece and lands with item 1.5.*
+
+*One correction to an earlier assumption recorded here: the metric card did **not** need `object_set_aggregation` as a variable transform. It needs an aggregation endpoint, which is what §74 built; making the variable evaluator reach the instance store would have changed `evaluate()`'s contract for every caller to no benefit.*
 
 **Depends on** 1.1.
 

@@ -1341,7 +1341,29 @@ The half item 1.2 calls "the item that decides whether Workshop parity is real".
 
 **Proved in a browser** against real data: a CSV of five sites, an object type over it, a real sync, then an app whose filter narrows a set the table reads. Opens showing 5; type "north" and it shows 3, naming what narrowed it (`where region = north`); clear it and 5 return. No reload, no console errors. **538 API tests green**, 10 of them new for object-set variables.
 
-**Still open in 1.2:** `object_property` and `object_set_aggregation`, which need a round trip against the instance store rather than a pure function, and are what a Metric Card will want (item 1.5).
+**Still open in 1.2:** `object_property` and `object_set_aggregation` as *variable transforms*, which would need the variable evaluator to reach the instance store. §74 shows a Metric Card does not need that.
+
+---
+
+### 74. Aggregating a set, and the Metric Card that shows it (this session)
+
+Item 1.5's first widget, and the one that makes an object set worth having as a shared thing: **the card and the table read the same variable**, so "3 sites" and the three rows under it cannot disagree.
+
+**Two aggregations, and the line between them is principled.** `count` and `count_distinct` ship; `sum`, `avg`, `min` and `max` are refused with a sentence. The reason is the one that already refuses ordered operators: instance properties are stored untyped, so summing one means deciding what "3" and "10" are without being told. Postgres would cast; OpenSearch cannot aggregate numerically over a text-mapped field at all. **A card whose number is right on one deployment and absent on another is worse than one that says the platform cannot answer yet.** The two that ship are *text-identity* operations — how many documents, how many distinct values — so both stores agree without either knowing a property's type. The fix for the rest is the same single piece of work: honour the declared property type (db 0026) in the index mapping, with a backfill behind it.
+
+**Not a variable transform, and this is a correction to what §73 implied.** A Metric Card does not need `object_set_aggregation` as a *variable*; it needs an aggregation, which is an endpoint. Making the variable evaluator reach the instance store would turn `evaluate()` from a pure function into an async store-dependent one for every caller, to no benefit here. `/object-sets/aggregate` takes the resolved set definition, exactly as the table does with `/evaluate`.
+
+**Separate from `/evaluate` rather than a flag on it.** They are different questions with different costs: a page of rows, or a number over every row. A card that got its number by paging would be wrong the moment a set outgrew a page — which is exactly when the number starts mattering. A test asserts a set of 5 pages 2 and counts 5.
+
+**One definition of the set, in both stores.** The filter-clause builders were extracted (`_set_clauses` in OpenSearch, `_set_predicate` in Postgres) so paging and aggregating share them. Two copies would be two definitions of what a set *is*, and the first time they drifted a Metric Card would count rows the table beside it does not show.
+
+**The fixture server gained cardinality**, implemented exactly rather than approximately — OpenSearch's cardinality is approximate above ~40k distinct values, and a fixture copying that would be imitating an error budget it cannot reproduce. Its existing caveat still stands and is now load-bearing here: it has no analysers, so `properties.x.keyword` and `properties.x` are the same value to it, and whether the real mapping's keyword subfield exists is still something only a real cluster can confirm.
+
+**4 cross-store cases** assert Postgres and OpenSearch produce the same number for count and count_distinct, filtered and unfiltered — different mechanisms, one answer, or an app's headline figure would depend on which store the deployment runs.
+
+**547 API tests green.** Verified in a browser beside §73's table: opens at 5 with the card reading 5; type "north" and both go to 3; clear it and both return to 5.
+
+**What is left in 1.5** for this thread: the chart reading a set (a grouped count is cross-store safe the same way; a measure is not, for the same reason as above).
 
 ---
 

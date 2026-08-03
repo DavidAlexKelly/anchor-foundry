@@ -583,6 +583,18 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ definition, ...opts }),
     }),
+  /** One number over a whole set — what a Metric Card shows. Separate from
+   * `evaluateObjectSet` because a number over every row and a page of rows are
+   * different questions with different costs. */
+  aggregateObjectSet: (
+    wid: string,
+    definition: unknown,
+    opts: { aggregation?: string; property?: string } = {},
+  ) =>
+    request<{ value: number; aggregation: string; property: string | null }>(
+      `/workspaces/${wid}/object-sets/aggregate`,
+      { method: "POST", body: JSON.stringify({ definition, ...opts }) },
+    ),
   /** Workspace-wide instance search across every object type at once. */
   explore: (
     wid: string,

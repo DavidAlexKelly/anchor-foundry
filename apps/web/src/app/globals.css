@@ -1156,3 +1156,12 @@ button { font: inherit; cursor: pointer; }
   border-left: 2px solid var(--brass); background: var(--surface-2, rgba(0, 0, 0, 0.02));
 }
 .btn.danger { color: var(--danger); }
+
+/* ---- metric card (ROADMAP phase 2, 1.5) ----------------------------------- */
+.metric-card { display: grid; gap: 2px; padding: 4px 2px; }
+.metric-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+.metric-value { font-size: 30px; font-weight: 600; line-height: 1.1; }
+.metric-value.soft { color: var(--ink-soft); font-weight: 400; }
