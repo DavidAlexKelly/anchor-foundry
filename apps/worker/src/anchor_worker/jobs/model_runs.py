@@ -17,7 +17,10 @@ Three steps, run in sequence:
      (a firing above, or the API leaving a Python run 'queued' since it
      never executes those inline), runs the transform and records the
      result: SQL through the same sandboxed-DuckDB path the API uses
-     in-process; Python through python_sandbox's subprocess isolation.
+     in-process; Python through transform_dispatch, which sends it to the
+     isolated runner task where one is configured and falls back to
+     python_sandbox's subprocess where none is (local development). That
+     choice lives in `transform_dispatch.isolation_mode`, not here.
 
 Both discover candidates via a SECURITY DEFINER function (workspace-blind
 enumeration across every workspace) and re-verify/act on each one through a
@@ -43,7 +46,7 @@ from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
 from .. import dataset_engine as engine
-from ..python_sandbox import run_python_transform
+from ..transform_dispatch import run_python_transform
 from ..resources import PlatformDatabase
 from ..storage import gateway_from_env, slugify, storage_prefix
 

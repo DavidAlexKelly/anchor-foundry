@@ -229,13 +229,21 @@ def wait(
     handle: RunHandle,
     *,
     client: Any = None,
-    timeout_s: float = DEFAULT_TIMEOUT_S,
-    poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
+    timeout_s: float | None = None,
+    poll_interval_s: float | None = None,
 ) -> str:
     """Block until the task stops. Returns ECS's `stoppedReason`, which is the
-    only diagnosis available when the run left no result file."""
+    only diagnosis available when the run left no result file.
+
+    The two limits default to the module constants *at call time*, not in the
+    signature: a default argument binds when the function is defined, so a
+    caller or a test that changed the constant would have changed nothing and
+    not been told.
+    """
     if handle.task_arn is None:
         raise DispatchError("this run was never started")
+    timeout_s = DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
+    poll_interval_s = DEFAULT_POLL_INTERVAL_S if poll_interval_s is None else poll_interval_s
     client = client or _ecs_client()
     cluster = _required(CLUSTER_ENV)
     deadline = time.monotonic() + timeout_s
@@ -311,8 +319,8 @@ def run_transform(
     output_path: str,
     client: Any = None,
     root: str | None = None,
-    timeout_s: float = DEFAULT_TIMEOUT_S,
-    poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
+    timeout_s: float | None = None,
+    poll_interval_s: float | None = None,
 ) -> dict:
     handle = stage(job, root=root)
     try:
@@ -323,3 +331,64 @@ def run_transform(
         return collect(handle, output_path=output_path, stopped_reason=reason)
     finally:
         cleanup(handle)
+
+
+# ---- which of the two Python paths a deployment uses -------------------------
+_CONFIG_ENV = (CLUSTER_ENV, TASK_DEFINITION_ENV, SUBNETS_ENV, SECURITY_GROUPS_ENV)
+
+
+def isolation_mode() -> str:
+    """`"runner"` or `"subprocess"` - where this worker's Python transforms run.
+
+    All four settings or none. **A half-configured worker is refused rather
+    than quietly downgraded**: somebody who set three of these meant to use the
+    runner, and falling back to `python_sandbox` would silently run customer
+    code under process isolation that §63 is explicit is not a security
+    boundary. A deployment that thought it had the isolation and did not is a
+    worse outcome than a worker that will not start a transform.
+    """
+    present = [name for name in _CONFIG_ENV if os.environ.get(name)]
+    if len(present) == len(_CONFIG_ENV):
+        return "runner"
+    if not present:
+        return "subprocess"
+    missing = [name for name in _CONFIG_ENV if not os.environ.get(name)]
+    raise DispatchError(
+        "this worker is half-configured for the transform runner - "
+        f"set {', '.join(missing)} or unset {', '.join(present)}, because running "
+        "customer Python in the worker's own process is not the isolation the "
+        "other setting asks for"
+    )
+
+
+def run_python_transform(input_paths: dict[str, str], code: str, dest_parquet: str):
+    """The single place that decides where customer Python runs, with the
+    signature `python_sandbox.run_python_transform` already had so the model
+    run path does not care which it got.
+
+    Errors are normalised to `DatasetEngineError` - the model run records one
+    message either way - but an infrastructure failure is prefixed so the
+    sentence says whose problem it is. That is weaker than §67's exception
+    types, and deliberately: `model_runs.status` has no value between
+    'succeeded' and 'failed', so today the distinction survives in the text and
+    nowhere else.
+    """
+    from .dataset_engine import ColumnSchema, DatasetEngineError
+
+    if isolation_mode() == "subprocess":
+        from .python_sandbox import run_python_transform as in_process
+
+        return in_process(input_paths, code, dest_parquet)
+
+    try:
+        payload = run_transform(
+            TransformJob(code=code, inputs=dict(input_paths)), output_path=dest_parquet
+        )
+    except TransformFailed as exc:
+        raise DatasetEngineError(exc.error[:500]) from exc
+    except DispatchError as exc:
+        raise DatasetEngineError(f"the platform could not run this transform: {exc}") from exc
+    schema = [
+        ColumnSchema(name=c["name"], data_type=c["data_type"]) for c in payload.get("schema", [])
+    ]
+    return schema, int(payload.get("row_count", 0))

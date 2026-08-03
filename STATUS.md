@@ -1225,6 +1225,20 @@ Also refused rather than papered over: an input alias that is not a plain identi
 
 ---
 
+### 68. The substitution: customer Python actually moves into the runner (this session)
+
+`jobs/model_runs.py` now imports `run_python_transform` from `transform_dispatch` rather than `python_sandbox`. One line at the call site; the decision lives in `transform_dispatch.isolation_mode()`, with the same signature and return shape as before so the model run path cannot tell which it got.
+
+**All four settings or none, and a half-configured worker is refused.** This is the only interesting decision in the item. The obvious design — use the runner when configured, fall back when not — silently downgrades a deployment that lost an environment variable back to `python_sandbox`, which its own docstring is explicit is process isolation and *not* a security boundary. A deployment that believed it had the isolation and did not is worse than a worker that will not start a transform, so three-of-four raises and names what is missing. None-of-four is local development and falls back, which is what every Python transform has done until now.
+
+**Where the §67 distinction stops.** `model_runs.status` has no value between 'succeeded' and 'failed', so an infrastructure failure is recorded as a failed run with a message beginning "the platform could not run this transform: …", and a failed transform carries the author's own traceback. The distinction survives in the text and nowhere else. That is a real limitation, not a design: expressing it properly means a status value and a UI that shows it, which is a migration and a screen, not a rider on this.
+
+**Verified.** The 18 existing model-run tests pass unchanged (they exercise the fallback path, since this sandbox has no ECS). The runner path through the same function is covered directly: `AWS_ENDPOINT_URL_ECS` points boto3 at moto — a real service endpoint from the environment, the same mechanism a deployment uses to pick a region — so `run_python_transform` runs for real with no injected client. Two mutations, each caught by one test: a half-configured worker downgrading silently, and an infrastructure failure losing its attribution.
+
+**One thing this found in my own code.** `wait()` took `poll_interval_s: float = DEFAULT_POLL_INTERVAL_S`, and a test that set `dispatch.DEFAULT_POLL_INTERVAL_S = 0` changed nothing — a default argument binds when the function is defined, not when it is called. The test passed either way and took 49 seconds doing it; the giveaway was the clock, not a failure. Both limits now default to `None` and read the constant at call time (4 seconds). Same family as the Starlette header-cache mistake in §57: a change that appeared to take effect and did not.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

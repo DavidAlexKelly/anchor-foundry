@@ -352,3 +352,120 @@ def test_a_run_does_not_leave_the_customer_s_data_on_the_share(ecs, scratch, tmp
     assert staged, "run_transform did not stage anything"
     assert not os.path.exists(staged[0].work_dir)
     assert os.listdir(scratch) == []
+
+
+# ---- which of the two Python paths a deployment uses -------------------------
+def test_a_worker_with_no_runner_configured_uses_the_subprocess(monkeypatch) -> None:
+    """Local development has no ECS. Falling back is correct there and is the
+    behaviour every Python transform has had until now."""
+    for name in (
+        dispatch.CLUSTER_ENV,
+        dispatch.TASK_DEFINITION_ENV,
+        dispatch.SUBNETS_ENV,
+        dispatch.SECURITY_GROUPS_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+    assert dispatch.isolation_mode() == "subprocess"
+
+
+def test_a_fully_configured_worker_uses_the_runner(ecs) -> None:
+    assert dispatch.isolation_mode() == "runner"
+
+
+def test_a_half_configured_worker_is_refused_rather_than_downgraded(ecs, monkeypatch) -> None:
+    """The load-bearing one of these three. Somebody who set three of the four
+    meant to use the runner; falling back would run customer Python under
+    process isolation that `python_sandbox` itself says is not a security
+    boundary, in a deployment that believed it had the real thing."""
+    monkeypatch.delenv(dispatch.SUBNETS_ENV)
+    with pytest.raises(dispatch.DispatchError) as raised:
+        dispatch.isolation_mode()
+    message = str(raised.value)
+    assert "half-configured" in message
+    assert dispatch.SUBNETS_ENV in message, "the refusal must name what is missing"
+
+
+def test_the_model_run_path_reaches_the_same_function(scratch) -> None:
+    """`jobs/model_runs.py` imports this name, not python_sandbox's. If the two
+    ever disagree about their signature the model run path breaks, so assert
+    the import actually resolves here."""
+    from anchor_worker.jobs import model_runs
+
+    assert model_runs.run_python_transform is dispatch.run_python_transform
+
+
+# ---- the model run path, through the runner ----------------------------------
+@pytest.fixture()
+def model_run_env(ecs, aws_endpoint: str, scratch, monkeypatch):
+    """`run_python_transform` takes no client - the model run path does not have
+    one to give. So point boto3 itself at moto the way a deployment points it at
+    a region: a real service endpoint, from the environment."""
+    monkeypatch.setenv("AWS_ENDPOINT_URL_ECS", aws_endpoint)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv(dispatch.SCRATCH_ROOT_ENV, scratch)
+    monkeypatch.setattr(dispatch, "DEFAULT_POLL_INTERVAL_S", 0)
+    return scratch
+
+
+def _run_the_container_when_staged(monkeypatch):
+    """ECS's turn, at the only moment the directory is fully staged. There is no
+    other seam: `run_python_transform` stages, starts and waits in one call."""
+    real_stage = dispatch.stage
+
+    def capture(*args, **kwargs):
+        handle = real_stage(*args, **kwargs)
+        run_the_container(handle)
+        return handle
+
+    monkeypatch.setattr(dispatch, "stage", capture)
+
+
+def test_a_python_model_run_goes_through_the_runner_and_gets_its_schema_back(
+    model_run_env, ecs, tmp_path, monkeypatch
+) -> None:
+    _run_the_container_when_staged(monkeypatch)
+    orders = make_parquet(str(tmp_path / "orders.parquet"), [(1, "north"), (2, "south")])
+    dest = str(tmp_path / "out.parquet")
+
+    schema, rows = dispatch.run_python_transform(
+        {"orders": orders}, 'output = orders[orders["region"] == "north"]\n', dest
+    )
+
+    # The same shape python_sandbox returns, because model_runs cannot tell
+    # which path it got and records one row either way.
+    assert rows == 1
+    assert [(c.name, isinstance(c.data_type, str)) for c in schema] == [
+        ("id", True),
+        ("region", True),
+    ]
+    assert os.path.exists(dest)
+
+
+def test_a_failing_transform_reaches_the_model_run_as_the_author_s_message(
+    model_run_env, ecs, tmp_path, monkeypatch
+) -> None:
+    from anchor_worker.dataset_engine import DatasetEngineError
+
+    _run_the_container_when_staged(monkeypatch)
+    with pytest.raises(DatasetEngineError) as raised:
+        dispatch.run_python_transform({}, "output = 1 / 0\n", str(tmp_path / "out.parquet"))
+    assert "ZeroDivisionError" in str(raised.value)
+    assert "the platform could not" not in str(raised.value)
+
+
+def test_an_infrastructure_failure_reaching_a_model_run_says_whose_problem_it_is(
+    model_run_env, ecs, tmp_path
+) -> None:
+    """`model_runs.status` has no value between succeeded and failed, so the
+    distinction §67 preserves survives here only in the sentence. It has to be
+    the right sentence: somebody reading this must not go looking at code that
+    is fine."""
+    from anchor_worker.dataset_engine import DatasetEngineError
+
+    # No container runs, so the task leaves no result file.
+    with pytest.raises(DatasetEngineError) as raised:
+        dispatch.run_python_transform({}, "output = 1\n", str(tmp_path / "out.parquet"))
+    assert str(raised.value).startswith("the platform could not run this transform")
+    assert "no result file" in str(raised.value)
