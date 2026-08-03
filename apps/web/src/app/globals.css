@@ -1171,3 +1171,26 @@ button { font: inherit; cursor: pointer; }
    clickable and does nothing is worse than one that looks inert. */
 .row-clickable { cursor: pointer; }
 .row-clickable:hover { background: var(--surface-2, rgba(0, 0, 0, 0.04)); }
+
+/* ---- pages and tabs (ROADMAP phase 2, 1.4) -------------------------------- */
+/* In the builder every page is visible and labelled, because the alternative
+   is pages you cannot edit without a switcher in the chrome. In the running
+   app exactly one renders and this styling never applies. */
+.canvas-page { display: grid; gap: 10px; }
+.canvas-shell .canvas-page {
+  border: 1px dashed var(--line); border-radius: var(--radius);
+  padding: 10px; position: relative;
+}
+.canvas-shell .canvas-page.on { border-color: var(--line-strong); }
+.canvas-page-label {
+  margin: 0; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+.canvas-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+.canvas-tab {
+  padding: 6px 12px; background: none; border: 0; cursor: pointer;
+  font-size: 13px; color: var(--ink-soft); border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.canvas-tab:hover { color: var(--ink); }
+.canvas-tab.on { color: var(--ink); border-bottom-color: var(--accent-deep); font-weight: 600; }

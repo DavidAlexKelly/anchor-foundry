@@ -132,3 +132,30 @@ export function useCanvasParameter(name: string | null | undefined): unknown {
   const { values } = useCanvasParameters();
   return name ? values[name] : undefined;
 }
+
+/**
+ * Which page of a multi-page module is showing (roadmap 1.4).
+ *
+ * **Runtime state, never persisted** — the same rule variable values follow
+ * (decision 0002 §3). A published app opens on its first page for every
+ * viewer rather than on whatever page the last person happened to be looking
+ * at; a saved app is not a saved session.
+ *
+ * `current` is null until something sets it, which a page reads as "show me if
+ * I am the first one". That is a deliberate alternative to seeding it with the
+ * first page's id at mount: the layout is what decides which page is first,
+ * and duplicating that decision into state would make the two disagree the
+ * moment somebody reorders the pages.
+ */
+export interface CanvasPageState {
+  current: string | null;
+  go: (nodeId: string) => void;
+}
+
+const PageContext = createContext<CanvasPageState>({ current: null, go: () => {} });
+
+export const CanvasPageProvider = PageContext.Provider;
+
+export function useCanvasPage(): CanvasPageState {
+  return useContext(PageContext);
+}

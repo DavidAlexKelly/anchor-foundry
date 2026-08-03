@@ -1411,6 +1411,32 @@ Roadmap item 1.3. An event is a **trigger** — which widget, what happened — 
 
 ---
 
+### 77. Pages, tabs, and the effect that was waiting on them (this session)
+
+The first slice of roadmap item 1.4. An app can have more than one screen: a `Page` widget, a `Tabs` widget, and the `navigate` effect §76 refused for want of somewhere to navigate to.
+
+Verified in a browser: a two-page app whose tab bar lists Browse and Selected; the running app opens on the first page; clicking a row **sets a variable and changes page** — two effects of one event, in order; the tab bar goes back.
+
+**A page is a node in the layout tree, not a separate document.** That keeps decision 0002's "the layout is a Craft.js tree" true, keeps the builder editing one tree, and means the set of pages is *read* from the layout rather than stored beside it — the same argument `usages()` makes: a second copy of a fact disagrees with the first the moment something deletes a node without knowing to update it.
+
+**Which page is showing is runtime state, never persisted** — the rule variable values already follow (decision 0002 §3). A published app opens on its first page for every viewer, not on whatever page the last person was looking at; a saved app is not a saved session. `current` starts null and a page reads that as "show me if I am the first", rather than state being seeded with the first page's id at mount: the *layout* decides which page is first, and a copy of that decision in state would disagree the moment somebody reordered them.
+
+**In the builder every page is visible**, stacked and labelled; in the running app exactly one renders. Hiding all but one in the builder would make the other pages uneditable without a page switcher in the chrome, and would hide from the author that they exist at all.
+
+**Tabs go through the event system rather than calling `go` directly**, so "what does this tab do" is answered by the same list as every other trigger and a tab can set a variable on the way. It still navigates when nothing is wired — a tab bar that did nothing until somebody configured an event would look broken, and "go to the page this tab is for" is the only thing a tab could reasonably mean.
+
+**The server refuses navigating to a widget that is not a page.** Not a smaller version of navigating to a page: a click that would do nothing, and save time is the only moment anybody can fix it.
+
+**A bug my own design hid, and the fix.** The first browser run showed the row click setting the variable but *not* changing page. Cause: `run()` skips an effect whose capability is absent, and the object table assembled its event context by hand and forgot `goToPage`. The skip is the right runtime rule — a click that does part of its job beats one that throws mid-list — which is exactly why the capability must not go missing by accident. There is now one `useEventContext()` hook that assembles all three capabilities, so a widget has nothing to forget. The lesson is the general one: a rule that tolerates a missing piece needs a construction that cannot omit it.
+
+One stale test updated honestly rather than around: `test_an_unbuilt_effect_says_so` used `navigate` as its example and now uses `run_action`, with a comment saying why. `run_action` and `export` remain refused — binding an action's parameters to variables is its own design question, and export needs a download surface the viewer route lacks.
+
+**567 API tests green**, 6 of them new for pages.
+
+**What is left in 1.4:** sections (columns, rows, toolbars), overlays, the Layout sidebar, and drag-to-resize. Pages were the piece the rest hangs off and the one blocking an effect.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

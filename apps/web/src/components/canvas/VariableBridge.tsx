@@ -25,7 +25,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { canvas as canvasApi } from "@/lib/api";
-import { CanvasVariableProvider, useCanvasParameters } from "./context";
+import { CanvasPageProvider, CanvasVariableProvider, useCanvasParameters } from "./context";
 
 const DEBOUNCE_MS = 250;
 
@@ -89,9 +89,16 @@ export function VariableBridge({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serialised, enabled, appId]);
 
+  // The current page lives here too: it is runtime state with exactly the
+  // lifetime of the variable values beside it, and a separate provider would
+  // be a second thing to mount in both routes and forget in one.
+  const [page, setPage] = useState<string | null>(null);
+
   return (
     <CanvasVariableProvider value={{ declared, events, resolved, pending }}>
-      {children}
+      <CanvasPageProvider value={{ current: page, go: setPage }}>
+        {children}
+      </CanvasPageProvider>
     </CanvasVariableProvider>
   );
 }

@@ -603,8 +603,11 @@ def test_setting_a_derived_variable_is_refused_and_says_what_to_set_instead() ->
 
 
 def test_an_unbuilt_effect_says_so_rather_than_saving_a_dead_click() -> None:
+    # `navigate` used to be the example here and is built as of item 1.4
+    # (`test_navigate_is_built_now_and_accepted`); `run_action` still waits on
+    # binding an action's parameters to variables.
     with pytest.raises(we.EventError, match="not built yet"):
-        we.parse({"e_1": event("e_1", effects=[{"type": "navigate", "config": {}}])},
+        we.parse({"e_1": event("e_1", effects=[{"type": "run_action", "config": {}}])},
                  layout={"btn": node({})})
 
 
@@ -641,3 +644,69 @@ def test_the_save_path_refuses_a_bad_event_too() -> None:
             {"format": 2, "layout": {}, "variables": {},
              "events": {"e_1": event("e_1", node="gone")}}
         )
+
+
+# ---- pages and navigate (roadmap phase 2, item 1.4) --------------------------
+def page_node(title: str = "Page") -> dict:
+    return {"type": {"resolvedName": "CanvasPage"}, "props": {"title": title}, "nodes": []}
+
+
+def layout_with_pages(*page_ids: str, extra: dict | None = None) -> dict:
+    layout = {"ROOT": {"type": {"resolvedName": "CanvasContainer"},
+                       "nodes": [*page_ids, *(extra or {})]}}
+    for pid in page_ids:
+        layout[pid] = page_node(pid)
+    layout.update(extra or {})
+    return layout
+
+
+def test_pages_are_read_from_the_layout_in_the_order_it_lists_them() -> None:
+    """Read rather than stored beside it, the same way usages are: a second
+    copy of the fact disagrees the moment something deletes a node without
+    knowing to update it. The order is ROOT's child order, which is what
+    somebody arranged in the builder."""
+    layout = layout_with_pages("p_two", "p_one", extra={"tabs": node({})})
+    assert we.pages(layout) == ["p_two", "p_one"]
+
+
+def test_a_layout_with_no_pages_has_none() -> None:
+    assert we.pages({"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["t"]},
+                     "t": node({})}) == []
+
+
+def test_navigate_is_built_now_and_accepted() -> None:
+    events = we.parse(
+        {"e_1": event("e_1", node="tabs", effects=[
+            {"type": "navigate", "config": {"page": "p_one"}}])},
+        layout=layout_with_pages("p_one", extra={"tabs": node({})}),
+    )
+    assert events["e_1"].effects[0].type == "navigate"
+
+
+def test_navigating_to_a_widget_that_is_not_a_page_is_refused() -> None:
+    """Not a smaller version of navigating to a page - it is a click that would
+    do nothing, and saying so at save is the only moment anybody can fix it."""
+    with pytest.raises(we.EventError, match="a widget rather than a page"):
+        we.parse(
+            {"e_1": event("e_1", node="tabs", effects=[
+                {"type": "navigate", "config": {"page": "tbl"}}])},
+            layout=layout_with_pages("p_one", extra={"tabs": node({}), "tbl": node({})}),
+        )
+
+
+def test_navigating_to_a_page_that_is_not_there_is_refused() -> None:
+    with pytest.raises(we.EventError, match="does not contain"):
+        we.parse(
+            {"e_1": event("e_1", node="tabs", effects=[
+                {"type": "navigate", "config": {"page": "p_gone"}}])},
+            layout=layout_with_pages("p_one", extra={"tabs": node({})}),
+        )
+
+
+def test_the_two_effects_still_waiting_on_something_say_so() -> None:
+    """`run_action` and `export` remain refused, each blocked on something
+    real rather than on effort."""
+    for kind in ("run_action", "export"):
+        with pytest.raises(we.EventError, match="not built yet"):
+            we.parse({"e_1": event("e_1", effects=[{"type": kind, "config": {}}])},
+                     layout={"btn": node({})})

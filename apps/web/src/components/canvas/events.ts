@@ -25,6 +25,8 @@
  * document and concerns itself with *when* things happen.
  */
 
+import { useCanvasPage, useCanvasParameters } from "./context";
+
 export interface WorkshopEffect {
   type: string;
   config?: Record<string, unknown>;
@@ -37,6 +39,10 @@ export interface WorkshopEventDef {
 }
 
 export interface EventContext {
+  /** Go to a page (roadmap 1.4). Absent in a context that has no pages, in
+   * which case a navigate effect is skipped rather than throwing — see the
+   * note on unknown effects below. */
+  goToPage?: (nodeId: string) => void;
   /** Applies every variable write from this run, once, at the end. Called with
    * the accumulated map rather than per effect so one click is one render. */
   setVariables: (values: Record<string, unknown>) => void;
@@ -73,6 +79,26 @@ export function interpolate(template: string, payload: Record<string, unknown>):
   });
 }
 
+/** Everything a widget needs to run an event, assembled once.
+ *
+ * Widgets used to build this by hand, and the first one to do so forgot
+ * `goToPage` — so a `navigate` effect was silently skipped and a row click
+ * that should have changed page did nothing. Skipping an effect whose
+ * capability is absent is the right *runtime* rule (see the note in `run`),
+ * which is exactly why the capability must not be absent by accident. One
+ * hook, so there is nothing to forget.
+ */
+export function useEventContext(payload?: Record<string, unknown>): EventContext {
+  const { setMany } = useCanvasParameters();
+  const { go } = useCanvasPage();
+  return {
+    setVariables: setMany,
+    goToPage: go,
+    openUrl: (url: string) => window.open(url, "_blank", "noopener,noreferrer"),
+    payload,
+  };
+}
+
 /** Run one widget's events for one act.
  *
  * Returns the variables it wrote, mostly so tests can assert on them without a
@@ -96,6 +122,9 @@ export function run(
         const raw = config.value;
         written[target] =
           typeof raw === "string" ? interpolate(raw, { ...payload, ...written }) : raw;
+      } else if (effect.type === "navigate") {
+        const target = String(config.page ?? "");
+        if (target && context.goToPage) context.goToPage(target);
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })

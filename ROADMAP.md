@@ -138,7 +138,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.2.
 
-### 1.4 Layouts — **L**
+### 1.4 Layouts — **L, pages and tabs done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, and current-page-as-runtime-state). **What remains**: sections (columns, rows, toolbars), overlays, the Layout sidebar, drag-to-resize, and responsive rules. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
 
 **What Foundry does.** A module has a **header** (persistent toolbar for module-wide title, tabs and buttons), **pages**, **sections**, and **overlays**. A default page starts as two vertically divided sections. Sections subdivide a page and can be configured as columns, rows, tabs or toolbars, each containing widgets or further layout. Overlays are contextual layers over a page — modals and drawers — for content that should not navigate you away. A **Tabs widget** triggers events to navigate between pages and overlays. Layout elements are edited from a Layout sidebar panel or by selecting them in the module view.
 
