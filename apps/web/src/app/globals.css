@@ -1165,3 +1165,9 @@ button { font: inherit; cursor: pointer; }
 }
 .metric-value { font-size: 30px; font-weight: 600; line-height: 1.1; }
 .metric-value.soft { color: var(--ink-soft); font-weight: 400; }
+
+/* ---- clickable rows (ROADMAP phase 2, 1.3) -------------------------------- */
+/* Only when the module wires an event to this table - a row that looks
+   clickable and does nothing is worse than one that looks inert. */
+.row-clickable { cursor: pointer; }
+.row-clickable:hover { background: var(--surface-2, rgba(0, 0, 0, 0.04)); }

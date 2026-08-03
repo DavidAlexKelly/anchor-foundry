@@ -18,6 +18,7 @@ import {
   useCanvasVariable,
   useCanvasVariables,
 } from "./context";
+import { eventsFor, interpolate, run as runEvents } from "./events";
 import {
   chartQuery,
   distinctValuesQuery,
@@ -99,10 +100,15 @@ export function CanvasText({ text = "Text", tag = "p" }: { text?: string; tag?: 
   const {
     connectors: { connect, drag },
   } = useNode();
+  // `{{v_id}}` reads a resolved variable (roadmap 1.3). Without this an event
+  // that sets a variable has nothing to show for itself, and "did the click
+  // work" is only answerable by watching the network tab.
+  const { resolved } = useCanvasVariables();
+  const rendered = interpolate(text ?? "", resolved);
   return React.createElement(
     tag,
     { ref: (ref: HTMLElement | null) => connectDragDrop(ref, connect, drag), style: { margin: 0 } },
-    text,
+    rendered,
   );
 }
 
@@ -117,6 +123,9 @@ function TextSettings() {
       <label className="field">
         <span className="field-label">Text</span>
         <textarea value={text} onChange={(e) => setProp((p: { text: string }) => (p.text = e.target.value))} />
+        <span className="field-hint">
+          {"{{v_id}}"} shows a variable&apos;s current value
+        </span>
       </label>
       <label className="field">
         <span className="field-label">Style</span>
@@ -517,13 +526,15 @@ export function CanvasObjectTable({
   pageSize?: number;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId } = useCanvasEnv();
+  const { setMany } = useCanvasParameters();
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
-  const { pending: variablesPending } = useCanvasVariables();
+  const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
   const usingSet = !!objectSetVariable;
 
   const setPage = useQuery({
@@ -576,6 +587,12 @@ export function CanvasObjectTable({
     ((setDefinition as { filters?: { property: string; value: unknown }[] } | undefined)
       ?.filters) ?? [];
 
+  // Row selection (roadmap 1.3). The widget does not decide what a click
+  // *means* - it announces that a row was chosen and hands over the row, and
+  // the module's events say what happens. That is the difference between a
+  // widget with a hardcoded behaviour and one an app author can wire.
+  const rowEvents = eventsFor(moduleEvents, nodeId, "row_select");
+  const rowsAreClickable = rowEvents.length > 0;
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {!usingSet && !objectTypeId && (
@@ -618,7 +635,22 @@ export function CanvasObjectTable({
               </thead>
               <tbody>
                 {rows.map((instance) => (
-                  <tr key={instance.id}>
+                  <tr
+                    key={instance.id}
+                    className={rowsAreClickable ? "row-clickable" : undefined}
+                    onClick={
+                      rowsAreClickable
+                        ? () =>
+                            runEvents(rowEvents, {
+                              setVariables: setMany,
+                              payload: {
+                                primary_key: instance.primary_key,
+                                ...instance.properties,
+                              },
+                            })
+                        : undefined
+                    }
+                  >
                     <td>{instance.primary_key}</td>
                     {properties.map((p) => (
                       <td key={p.api_name}>

@@ -545,3 +545,99 @@ def test_filtering_something_that_is_not_a_set_says_so() -> None:
     )
     with pytest.raises(wv.VariableError, match="not an object set"):
         wv.evaluate(variables, {"v_text": "hello", "v_region": "north"})
+
+
+# ---- events (roadmap phase 2, item 1.3) --------------------------------------
+from src.services import workshop_events as we  # noqa: E402
+
+
+def event(eid: str, node: str = "btn", on: str = "click", effects=None) -> dict:
+    return {"id": eid, "trigger": {"node": node, "on": on}, "effects": effects or []}
+
+
+def set_var(target: str, value=None) -> dict:
+    return {"type": "set_variable", "config": {"variable": target, "value": value}}
+
+
+def test_an_event_declares_a_trigger_and_ordered_effects() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(
+        {"e_1": event("e_1", effects=[set_var("v_a", "x"),
+                                      {"type": "open_url", "config": {"url": "https://x.test"}}])},
+        layout={"btn": node({})},
+        variables=variables,
+    )
+    assert [e.type for e in events["e_1"].effects] == ["set_variable", "open_url"]
+
+
+def test_an_event_on_a_widget_that_is_not_there_is_refused() -> None:
+    """It can never fire, so it is not an event - it is a fragment of a
+    previous design that will confuse whoever reads the document next."""
+    with pytest.raises(we.EventError, match="does not contain"):
+        we.parse({"e_1": event("e_1", node="gone")}, layout={"btn": node({})})
+
+
+def test_setting_a_variable_the_module_does_not_declare_is_refused() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    with pytest.raises(we.EventError, match="does not declare"):
+        we.parse({"e_1": event("e_1", effects=[set_var("v_gone")])},
+                 layout={"btn": node({})}, variables=variables)
+
+
+def test_setting_a_derived_variable_is_refused_and_says_what_to_set_instead() -> None:
+    """A derived variable is a function of its inputs. Honouring the write
+    would let one document show two different things depending on which the
+    reader believed - the same rule `evaluate` enforces for viewer values."""
+    variables = wv.parse(
+        {
+            "v_a": var("v_a", label="Source"),
+            "v_b": var("v_b", label="Computed",
+                       derivation={"transform": "concat", "inputs": ["v_a"]}),
+        }
+    )
+    with pytest.raises(we.EventError) as raised:
+        we.parse({"e_1": event("e_1", effects=[set_var("v_b")])},
+                 layout={"btn": node({})}, variables=variables)
+    assert "computed from other variables" in str(raised.value)
+    assert "Computed" in str(raised.value), "named by label, not by id"
+
+
+def test_an_unbuilt_effect_says_so_rather_than_saving_a_dead_click() -> None:
+    with pytest.raises(we.EventError, match="not built yet"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "navigate", "config": {}}])},
+                 layout={"btn": node({})})
+
+
+def test_a_url_a_browser_should_not_follow_is_refused() -> None:
+    """An app author is not necessarily trusted by everyone who opens the app,
+    and a published app is opened by the whole workspace."""
+    with pytest.raises(we.EventError, match="not a link a browser will open"):
+        we.parse(
+            {"e_1": event("e_1", effects=[
+                {"type": "open_url", "config": {"url": "javascript:alert(1)"}}])},
+            layout={"btn": node({})},
+        )
+
+
+def test_events_for_one_trigger_come_back_in_a_stated_order() -> None:
+    """Two events on one trigger both writing variables have to run in a
+    stated order, or the app behaves differently between reloads."""
+    events = we.parse(
+        {
+            "e_2": event("e_2", node="btn"),
+            "e_1": event("e_1", node="btn"),
+            "e_3": event("e_3", node="other"),
+        },
+        layout={"btn": node({}), "other": node({})},
+    )
+    assert [e.id for e in we.for_node(events, "btn", "click")] == ["e_1", "e_2"]
+
+
+def test_the_save_path_refuses_a_bad_event_too() -> None:
+    """Events are validated through `validate_module`, so a document with a
+    dead trigger cannot be saved at all."""
+    with pytest.raises(wv.VariableError, match="does not contain"):
+        wv.validate_module(
+            {"format": 2, "layout": {}, "variables": {},
+             "events": {"e_1": event("e_1", node="gone")}}
+        )

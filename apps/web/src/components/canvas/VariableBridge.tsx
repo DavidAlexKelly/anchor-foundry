@@ -34,6 +34,7 @@ export function VariableBridge({
   projectId,
   appId,
   declared,
+  events,
   published = false,
   children,
 }: {
@@ -47,6 +48,7 @@ export function VariableBridge({
   /** The module's declared variables. Empty for a v1 document, which is also
    * how this knows to cost no requests. */
   declared: Record<string, import("@/lib/types").WorkshopVariable>;
+  events?: Record<string, import("./events").WorkshopEventDef>;
   children: React.ReactNode;
 }) {
   const enabled = Object.keys(declared).length > 0;
@@ -88,7 +90,7 @@ export function VariableBridge({
   }, [serialised, enabled, appId]);
 
   return (
-    <CanvasVariableProvider value={{ declared, resolved, pending }}>
+    <CanvasVariableProvider value={{ declared, events, resolved, pending }}>
       {children}
     </CanvasVariableProvider>
   );

@@ -1389,6 +1389,28 @@ Verified in a browser on real data. Opens with 5 sites, the card reading 5 and t
 
 ---
 
+### 76. Events: a click that does something the app author chose (this session)
+
+Roadmap item 1.3. An event is a **trigger** — which widget, what happened — and an **ordered list of effects**. Clicking a row in an object table now sets a variable, and a text widget shows it: click Aberdeen Yard, the app says *Selected: Aberdeen Yard (open)*; click Carlisle Works and it says *Carlisle Works (closed)*. Verified in a browser.
+
+**The widget does not decide what a click means.** It announces that a row was chosen and hands over the row; the module's events say what happens. That is the difference between a widget with a hardcoded behaviour and one an app author can wire — and it is why events live beside the layout rather than inside a widget's props (decision 0002 §4): an event routinely spans widgets, and nesting it in the trigger's node would hide it from the widget it acts on.
+
+**The execution semantics are Foundry's, matched deliberately.** Effects run in configured order; setting a variable copies the value immediately so the next effect sees it; nothing awaits downstream recomputation. The implementation detail that makes the second one true is worth stating: `run()` threads a plain object through the loop rather than reading React state between effects, because state updates are batched and an effect reading a variable a previous effect just set would otherwise read the **old** value — silently, and only sometimes. Awaiting each effect instead would serialise a click behind network round trips *and* change what the second effect sees; the roadmap called this "the kind of difference that is invisible until someone's app misbehaves", and it is right.
+
+**One click is one render.** The context gained `setMany`, so a run's writes apply together. Applying them one at a time would let a widget re-fetch against a half-applied set of writes.
+
+**What the server refuses**, in `workshop_events.py`, wired into the same save path as variables: a trigger on a widget the layout does not contain (it can never fire, so it is not an event — it is a fragment of a previous design), a write to a variable the module does not declare, a write to a **derived** variable (a function of its inputs; honouring the write would let one document show two different things depending on which write the reader believed — the same rule `evaluate` already enforces for viewer values), and a `javascript:` url. That last one matters because an app author is not necessarily trusted by everyone who opens the app, and a published app is opened by the whole workspace.
+
+**`navigate`, `run_action` and `export` are named and refused**, each blocked on something real rather than on effort: pages and overlays do not exist until item 1.4; binding an action's parameters to variables is its own design question; export needs a download surface the viewer route lacks. Refusing with the reason beats accepting and silently doing nothing, which is what an unknown effect type would otherwise do.
+
+**Two smaller decisions.** `{{token}}` resolving to nothing yields an empty string rather than the literal `{{token}}` — a half-substituted label reads as a data problem, an empty one reads as a missing value, which is what it is. And an unknown effect *type* at run time is skipped rather than thrown: the server refuses them at save, so one arriving here means an older document, and a click that does part of its job beats one that throws in the middle of the list.
+
+`CanvasText` interpolates resolved variables, because without it an event that sets a variable has nothing to show for itself and "did the click work" is only answerable from the network tab. Rows are only styled clickable when the module actually wires an event to that table — a row that looks clickable and does nothing is worse than one that looks inert.
+
+**561 API tests green**, 8 of them new for events.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

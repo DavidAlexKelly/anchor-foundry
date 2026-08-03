@@ -548,6 +548,18 @@ def validate_module(document: Any) -> dict[str, Variable]:
     if not isinstance(document, dict) or document.get("format") != 2:
         return {}
     variables = parse(document.get("variables"))
+    # Events are validated against the layout and the variables, because every
+    # refusal there is about a reference resolving.
+    from . import workshop_events
+
+    try:
+        workshop_events.parse(
+            document.get("events"),
+            layout=document.get("layout"),
+            variables=variables,
+        )
+    except workshop_events.EventError as exc:
+        raise VariableError(str(exc)) from exc
     broken = dangling_references(document.get("layout"), variables)
     if broken:
         names = ", ".join(sorted({b["variable"] for b in broken}))

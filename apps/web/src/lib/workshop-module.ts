@@ -17,7 +17,7 @@
  * (`canvasApi.evaluateVariables`), so the transformation semantics have one
  * implementation rather than two that drift - see the API route's own note.
  */
-import type { WorkshopModule, WorkshopVariable } from "./types";
+import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "./types";
 
 /** A Craft.js serialised node map: what `<Frame data>` wants and what
  * `query.getSerializedNodes()` produces. */
@@ -39,6 +39,12 @@ export function layoutOf(definition: unknown): LayoutNodes {
 
 export function variablesOf(definition: unknown): Record<string, WorkshopVariable> {
   return isV2(definition) ? definition.variables ?? {} : {};
+}
+
+/** The module's events. Empty for a v1 document, which had no way to express
+ * one - a Filter's behaviour was hardcoded into the Filter. */
+export function eventsOf(definition: unknown): Record<string, WorkshopEvent> {
+  return isV2(definition) ? definition.events ?? {} : {};
 }
 
 /** True when there is something to render - the question the builder asks to

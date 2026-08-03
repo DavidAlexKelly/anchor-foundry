@@ -130,7 +130,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.1.
 
-### 1.3 Events — **M**
+### 1.3 Events — **M, the model and the first trigger are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals). **What remains**: more trigger sources (a Button Group widget, dropdown select/deselect), and the three effects refused with a reason — `navigate` waits on 1.4's pages and overlays, `run_action` on binding an action's parameters to variables, `export` on a download surface the viewer route lacks.
 
 **What Foundry does.** Events trigger behaviour when a user acts. They fire from many widgets — Button Group, Object Table on row selection, String Dropdown on select/deselect, Tabs. A button's **On click** can trigger an action, trigger a set of events, open a URL, or begin an export; when it triggers an action you can additionally fire events at points in the action lifecycle (on submission start, on successful completion). Events execute **sequentially in configured order**, but do not wait for the downstream computation of previous events. Setting a variable copies the value immediately, so the next event sees it.
 

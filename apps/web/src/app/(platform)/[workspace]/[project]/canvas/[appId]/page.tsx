@@ -2,7 +2,7 @@
 
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
 import { VariablesPanel } from "@/components/canvas/VariablesPanel";
-import { hasLayout, layoutOf, moduleFrom, variablesOf } from "@/lib/workshop-module";
+import { eventsOf, hasLayout, layoutOf, moduleFrom, variablesOf } from "@/lib/workshop-module";
 import type { WorkshopVariable } from "@/lib/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -12,6 +12,7 @@ import { ApiError, api, canvas as canvasApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
+import type { WorkshopEventDef } from "@/components/canvas/events";
 import { SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
@@ -202,12 +203,14 @@ function CanvasEnvBridge({
   projectId,
   appId,
   variables,
+  events,
   children,
 }: {
   workspaceId: string;
   projectId: string;
   appId: string;
   variables: Record<string, WorkshopVariable>;
+  events: Record<string, WorkshopEventDef>;
   children: React.ReactNode;
 }) {
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
@@ -228,6 +231,7 @@ function CanvasEnvBridge({
           projectId={projectId}
           appId={appId}
           declared={variables}
+          events={events}
         >
           {children}
         </VariableBridge>
@@ -297,6 +301,7 @@ export default function CanvasAppEditorPage() {
           projectId={project.id}
           appId={app.id}
           variables={variables}
+          events={eventsOf(app.definition)}
         >
           <TopBar
             app={app}
