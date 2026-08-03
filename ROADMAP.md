@@ -138,17 +138,19 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.2.
 
-### 1.4 Layouts — **L, pages, tabs, sections and overlays done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`; §79: the Layout sidebar). **What remains**: the module header, and drag-to-resize. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
+### 1.4 Layouts — **L, pages, tabs, sections and overlays done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`; §79: the Layout sidebar; §80: the module header). **What remains**: drag-to-resize, deliberately deferred below. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
 
 **What Foundry does.** A module has a **header** (persistent toolbar for module-wide title, tabs and buttons), **pages**, **sections**, and **overlays**. A default page starts as two vertically divided sections. Sections subdivide a page and can be configured as columns, rows, tabs or toolbars, each containing widgets or further layout. Overlays are contextual layers over a page — modals and drawers — for content that should not navigate you away. A **Tabs widget** triggers events to navigate between pages and overlays. Layout elements are edited from a Layout sidebar panel or by selecting them in the module view.
 
-**What exists today.** Pages, a Tabs widget, sections as columns or rows with proportional widths, overlays as modals or drawers, and a Layout sidebar listing every node in the document. No header, no drag-to-resize.
+**What exists today.** Pages, a Tabs widget, sections as columns or rows with proportional widths, overlays as modals or drawers, a Layout sidebar listing every node in the document, and a module header. No drag-to-resize.
 
 **Build.** The layout tree from 1.1 with those node types; the Layout sidebar; drag-to-resize sections; the Tabs widget wired to the event system. Responsive rules per section type.
 
 *Deviation, deliberate: **drag-to-resize is not built and a section's proportions are typed instead.** A drag handle is an affordance over the same numbers, and building it first would have meant a layout nobody could describe in the saved document. The numbers are there now (`weights: "1,2"`), so the handle can arrive without a format change.*
 
 *Deviation: **a toolbar is not a section type.** Foundry lists columns, rows, tabs and toolbars; a tabbed section is the Tabs widget over pages, which is the same idea one level up, and a toolbar is a row with different padding rather than a different concept. Naming them separately would have made three of the four the same code with a label.*
+
+*The header **is** a node type, by the same test the toolbar failed: it differs in behaviour, not decoration. It is pinned while the page beneath it scrolls, and a module may have at most one — a rule the server enforces, since two nodes both claiming to be the module-wide toolbar is a document no renderer can settle. It persists across page changes structurally rather than by special case: it is not inside a page, and only pages hide themselves when another page is showing.*
 
 *Correction to 1.3's list of blocked effects: `navigate` is built and takes a page **or** an overlay, and **`close_overlay` was added as a fourth effect**. It is not "navigate to nothing" — closing an overlay returns you to the page underneath, which navigate has no way to name.*
 

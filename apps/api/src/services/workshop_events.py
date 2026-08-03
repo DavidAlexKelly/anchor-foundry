@@ -61,6 +61,11 @@ PAGE_WIDGET = "CanvasPage"
 # be closed back to what was underneath.
 OVERLAY_WIDGET = "CanvasOverlay"
 
+# The module header - Foundry's persistent toolbar, holding the module-wide
+# title, the tabs and any module-wide buttons. It is not a navigation target:
+# it is always showing, so an effect that "went to" it would mean nothing.
+HEADER_WIDGET = "CanvasHeader"
+
 # Effects that close what a navigate opened. Separate from `navigate` rather
 # than "navigate to nothing", because closing an overlay returns you to the
 # page you were on - which navigate has no way to name.
@@ -124,6 +129,16 @@ def pages(layout: Any, *, widget: str = PAGE_WIDGET) -> list[str]:
 def overlays(layout: Any) -> list[str]:
     """Node ids of every overlay, same reading as `pages`."""
     return pages(layout, widget=OVERLAY_WIDGET)
+
+
+def headers(layout: Any) -> list[str]:
+    """Node ids of every header, same reading as `pages`.
+
+    Returns a list, though a module may have at most one, so the caller can
+    say *how many* it found - "a module may have one header, this one has
+    two" is a sentence somebody can act on; "invalid header" is not.
+    """
+    return pages(layout, widget=HEADER_WIDGET)
 
 
 def parse(

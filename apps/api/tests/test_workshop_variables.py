@@ -761,3 +761,53 @@ def test_navigating_to_a_plain_widget_still_names_both_kinds() -> None:
                 {"type": "navigate", "config": {"page": "tbl"}}])},
             layout=layout,
         )
+
+
+# ---- the module header (roadmap phase 2, item 1.4) ---------------------------
+def header_node(title: str = "") -> dict:
+    return {"type": {"resolvedName": "CanvasHeader"}, "props": {"title": title}, "nodes": []}
+
+
+def test_a_header_is_read_from_the_layout_like_a_page() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h", "p_a"]},
+        "h": header_node("Sites"), "p_a": page_node("A"),
+    }
+    assert we.headers(layout) == ["h"]
+    # And it is not a page: a header is always showing, so navigating to it
+    # would mean nothing.
+    assert we.pages(layout) == ["p_a"]
+
+
+def test_one_header_is_fine() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h", "p_a"]},
+        "h": header_node("Sites"), "p_a": page_node("A"),
+    }
+    assert wv.validate_module(module({}, layout)) == {}
+
+
+def test_a_second_header_is_refused_and_the_message_counts_them() -> None:
+    """Two nodes both claiming to be *the* module-wide toolbar is a document
+    no renderer can settle, so the refusal happens where every route passes."""
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h1", "h2", "p_a"]},
+        "h1": header_node("Sites"), "h2": header_node("Also sites"), "p_a": page_node("A"),
+    }
+    with pytest.raises(wv.VariableError) as raised:
+        wv.validate_module(module({}, layout))
+    assert "one header" in str(raised.value)
+    assert "has 2" in str(raised.value)
+
+
+def test_navigating_to_a_header_is_refused() -> None:
+    """It is always showing. A click that "goes to" it would do nothing."""
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h", "btn"]},
+        "h": header_node("Sites"), "btn": node({}),
+    }
+    with pytest.raises(we.EventError, match="page or an overlay"):
+        we.parse(
+            {"e_1": event("e_1", effects=[{"type": "navigate", "config": {"page": "h"}}])},
+            layout=layout,
+        )

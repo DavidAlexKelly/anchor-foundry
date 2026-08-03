@@ -1485,6 +1485,28 @@ Verified in a browser: eleven rows for the demo module's eleven nodes in tree or
 
 ---
 
+### 80. The module header (this session)
+
+The last structural piece of 1.4: Foundry's persistent toolbar, holding the module-wide title, the tabs that move between pages, and any module-wide buttons.
+
+**Why this is a node type when §78 refused to make a toolbar one.** That refusal said a toolbar is "a row with different padding rather than a different concept", and the test it failed is the right one to apply here: a header differs in *behaviour*. It is pinned while the page beneath it scrolls, and there is at most one per module. Decoration would not have earned a node type; those two rules do.
+
+**It persists across page changes structurally, not by special case.** It is not inside a page, and only pages hide themselves when another page is showing — so nothing in the header had to be taught about pages at all.
+
+**At most one, enforced by the server.** Two nodes both claiming to be *the* module-wide toolbar is a document no renderer can settle. The refusal counts what it found — "a module may have one header and this one has 2" — because a number is something an author can act on where "invalid header" is not. It lives in `validate_module`, not the builder: a document can arrive by any route, and a rule only the builder applies is not a rule.
+
+**A header is not a navigation target.** It is always showing, so `navigate` refuses it exactly as it refuses any other non-page widget — which came out of the existing check for free, and there is a test pinning that so it stays that way.
+
+Verified in a browser: the header renders above the page in the running app with the tab bar inside it, survives a page change, and its title reads a variable (`Sites · {{v_region}}` becomes `Sites · north` when the filter is set). The live API refuses a second header with the counted message.
+
+**A check that would have passed either way, caught and fixed.** The first stickiness assertion scrolled 84px against a header sitting 259px down the page — the header could not have left the viewport whether or not it was sticky. Re-run against a short viewport it now scrolls 404px past that offset and asserts the header is at y=0, which only a sticky one can be. Same lesson as §78's transparent modal: an assertion that cannot fail is not evidence.
+
+**575 API tests green**, 4 new for the header, all mutation-tested: dropping the one-header rule, making the limit two, and making a header count as a page each fail at least one test.
+
+**1.4 is done bar drag-to-resize**, which stays deferred for §78's reason — it is an affordance over numbers that already exist and can arrive without a format change.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

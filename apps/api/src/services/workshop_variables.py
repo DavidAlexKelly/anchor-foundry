@@ -552,6 +552,17 @@ def validate_module(document: Any) -> dict[str, Variable]:
     # refusal there is about a reference resolving.
     from . import workshop_events
 
+    # A module has at most one header: it is *the* module-wide toolbar, and two
+    # nodes both claiming to be that is a document no renderer can settle. Said
+    # here rather than in the builder because a document can arrive by any
+    # route, and a refusal only the builder makes is not a rule.
+    found = workshop_events.headers(document.get("layout"))
+    if len(found) > 1:
+        raise VariableError(
+            f"a module may have one header and this one has {len(found)} - "
+            "the header is the toolbar above every page, so a second one has "
+            "nowhere to be"
+        )
     try:
         workshop_events.parse(
             document.get("events"),

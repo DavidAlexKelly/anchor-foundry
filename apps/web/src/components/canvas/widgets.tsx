@@ -1972,6 +1972,83 @@ CanvasSection.craft = {
   related: { settings: SectionSettings },
 };
 
+/** The module header (roadmap 1.4).
+ *
+ * Foundry's persistent toolbar: the module-wide title, the tabs that move
+ * between pages, and any buttons that apply to the whole module.
+ *
+ * **Why this is a node type and a toolbar section is not** (§78 refused that
+ * one as "a row with different padding"): a header differs in *behaviour*,
+ * not decoration. It is pinned while the page beneath it scrolls, and there
+ * is **at most one per module** — a rule the server enforces, because two
+ * things both claiming to be the module-wide toolbar is a document nobody can
+ * render sensibly.
+ *
+ * It persists across page changes for a structural reason rather than a
+ * special case: it is not inside a page, and only pages hide themselves when
+ * another page is showing.
+ */
+export function CanvasHeader({
+  title = "",
+  sticky = true,
+  children,
+}: {
+  title?: string;
+  sticky?: boolean;
+  children?: React.ReactNode;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  // `{{v_id}}` like every other text, so a header can name what the viewer is
+  // looking at rather than only what the app is called.
+  const { resolved } = useCanvasVariables();
+  return (
+    <header
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-header${sticky ? " canvas-header--sticky" : ""}`}
+    >
+      {title.trim() && <p className="canvas-header-title">{interpolate(title, resolved)}</p>}
+      {children}
+    </header>
+  );
+}
+
+function HeaderSettings() {
+  const {
+    title,
+    sticky,
+    actions: { setProp },
+  } = useNode((node) => ({ title: node.data.props.title, sticky: node.data.props.sticky }));
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+        <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Stays put while the page scrolls</span>
+        <input
+          type="checkbox"
+          checked={sticky ?? true}
+          onChange={(e) => setProp((p: { sticky: boolean }) => (p.sticky = e.target.checked))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasHeader.craft = {
+  displayName: "Header",
+  props: { title: "", sticky: true },
+  isCanvas: true,
+  related: { settings: HeaderSettings },
+};
+
 /** A page (roadmap 1.4).
  *
  * A page is a **node in the layout tree**, not a separate document. That keeps
@@ -2225,6 +2302,7 @@ export function CanvasTabs() {
 CanvasTabs.craft = { displayName: "Tabs", props: {} };
 
 export const CANVAS_RESOLVER = {
+  CanvasHeader,
   CanvasPage,
   CanvasOverlay,
   CanvasSection,
@@ -2241,6 +2319,7 @@ export const CANVAS_RESOLVER = {
 };
 
 export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: string }[] = [
+  { key: "CanvasHeader", label: "Header", hint: "A toolbar above every page; one per module" },
   { key: "CanvasPage", label: "Page", hint: "A screen of the app; Tabs move between them" },
   { key: "CanvasSection", label: "Section", hint: "Split a page into columns or rows" },
   { key: "CanvasOverlay", label: "Overlay", hint: "A modal or drawer over the page" },
