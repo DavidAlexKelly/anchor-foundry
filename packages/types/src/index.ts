@@ -228,6 +228,36 @@ export interface RepositoryDiff {
   modified: string[];
 }
 
+/** One input as the preview actually read it. `sampled` is the difference
+ * between a number that is the answer and a number that looks like one. */
+export interface PreviewedInput {
+  alias: string;
+  dataset: string;
+  dataset_id: string;
+  rows_available: number;
+  rows_used: number;
+  sampled: boolean;
+}
+
+export interface TransformPreview {
+  output: string;
+  columns: { name: string; data_type: string }[];
+  rows: unknown[][];
+  /** Rows produced **from the sample**, not from the datasets. */
+  row_count: number;
+  truncated: boolean;
+  sampled: boolean;
+  inputs: PreviewedInput[];
+  /** What this change would do to the dataset the transform already writes,
+   * or null when it writes a new one or changes nothing. */
+  schema_changes: {
+    added?: { name: string; data_type: string }[];
+    removed?: { name: string; data_type: string }[];
+    retyped?: { name: string; from: string; to: string }[];
+  } | null;
+  writes_to_existing_dataset: boolean;
+}
+
 export interface ProjectMember {
   id: string;
   role: ProjectRole;

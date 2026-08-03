@@ -1239,6 +1239,26 @@ Also refused rather than papered over: an input alias that is not a plain identi
 
 ---
 
+### 69. Preview: running a transform without committing it (this session)
+
+Roadmap item 2.6. `POST .../repositories/{id}/preview` takes a path and **the editor's buffer**, reads the file's declaration, resolves its declared inputs to datasets in the project by name, runs the transform over a sample, and returns rows and schema. Nothing is written. The panel sits under the editor in the repository application and runs when asked, never on a keystroke — a preview reads real datasets and costs real work.
+
+**Previewing the buffer rather than the commit is the whole point.** The question a person asks is "does what I just typed work", and they ask it *before* they are willing to commit. A preview that could only run committed code would answer a question nobody has. Sending no `content` still previews the committed file, which is what the history view wants.
+
+**A sample is not the dataset, and the response says so in three places.** Each input reports `rows_available` / `rows_used` / `sampled`; the result reports `sampled`; the panel prints a warning that names the number. A `group by` over the first thousand rows of an input produces smaller groups than the real thing and a join finds fewer matches than it will — the number looks like an answer, so anything that shows it without saying otherwise will be believed. The counterweight matters too, and has its own test: an input that fits entirely is *not* flagged, because crying sample on a two-row table teaches people to ignore the warning that counts.
+
+**The drift check the roadmap asked for.** When the declared output names a dataset that already exists, the response carries `engine.diff_schemas` between that dataset's stored schema and what the transform now produces — added, removed, retyped columns. Finding out at preview that an edit drops a column from `daily_orders` is the difference between a conversation and a support ticket. It reuses the connectors' existing drift comparison rather than inventing a second notion of what a schema change is.
+
+**Python is refused, with a sentence.** Decision 0004 puts customer Python in an isolated task, never in the API process; previewing it means dispatching Fargate and waiting sixty-odd seconds, which is a job with a status rather than an HTTP response. The refusal says that and says SQL previews now. That is the honest half-built state rather than an endpoint that quietly runs Python in the wrong place.
+
+`preview_transform` lives in `dataset_engine.py` beside `run_transform` because it needs the same sandbox discipline and a second almost-identical one would drift from it. It is simpler in one respect: nothing is written, so there is no trusted writer connection and user SQL never leaves the sandbox where `enable_external_access` is off.
+
+**On mutation testing, including one I got wrong.** Four mutations each fail exactly one test: never reporting a sample, ignoring the editor buffer, reporting no drift, and letting Python through. A fifth — deleting `SET enable_external_access=false` from the preview sandbox — appeared to fail nothing, and I concluded the sandbox tests were theatre and rewrote them. **The mutation was wrong, not the tests**: `run_transform` and `preview_transform` set up their sandboxes with byte-identical statements, and a first-occurrence string replace was hitting `run_transform`'s. Correctly targeted, the test fails on exactly the right assertion — the file's contents come back in the response body. Worth recording twice over: the preview path had no sandbox test at all until this (a *second* sandbox proves nothing about the first), and a mutation that appears to survive is a claim about the mutation as much as about the test.
+
+**14 preview tests**, real Postgres, real uploads, real Parquet, real DuckDB; 100 tests green across the six API files this touched. Verified in a real browser end to end: preview the committed file, edit the buffer, preview again and watch the columns change while the commit bar still says the file is uncommitted.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

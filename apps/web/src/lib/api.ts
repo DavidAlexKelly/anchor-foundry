@@ -138,6 +138,19 @@ export const repositories = {
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,
     ),
+  /** Run one file's transform against a sample of its inputs, writing nothing.
+   * `content` is the editor's buffer, so this answers "does what I just typed
+   * work" rather than "did what I committed work". */
+  preview: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { path: string; content?: string; branch?: string },
+  ) =>
+    request<import("./types").TransformPreview>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/preview`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
 };
 
 /** The resource registry (db 0032). `resolve` takes an id and nothing else -

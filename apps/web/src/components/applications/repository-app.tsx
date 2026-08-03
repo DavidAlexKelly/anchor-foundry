@@ -18,7 +18,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { repositories as repoApi } from "@/lib/api";
-import type { RepositoryTree, ResolvedResource } from "@/lib/types";
+import type { RepositoryTree, ResolvedResource, TransformPreview } from "@/lib/types";
 
 // Monaco touches `window` at module scope and is ~1 MB nothing else needs.
 const CodeEditor = dynamic(
@@ -283,6 +283,13 @@ function FilesTab({
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
                 />
               </div>
+              <PreviewPanel
+                wid={wid}
+                pid={pid}
+                rid={rid}
+                path={selected}
+                content={source}
+              />
             </>
           ) : (
             <p className="state">
@@ -410,5 +417,168 @@ function CommitRow({
         </ul>
       )}
     </div>
+  );
+}
+
+/** Preview: run this file's transform against a sample of its inputs and show
+ * what comes back, without committing anything (roadmap 2.6).
+ *
+ * Three things this has to get right, and only the first is the obvious one:
+ *
+ *   1. it previews **what is on screen**, including unsaved edits, because
+ *      that is the question a person is actually asking;
+ *   2. it says loudly when the answer came from a **sample**, because a row
+ *      count over the first thousand rows of a join is not the row count and
+ *      a table that did not say so would be believed;
+ *   3. it shows what the change would do to the dataset this transform already
+ *      writes, which is the difference between finding out now and finding out
+ *      after the pipeline ran.
+ *
+ * Nothing runs on its own. A preview reads datasets and costs real work, so it
+ * happens when somebody asks for it rather than on every keystroke.
+ */
+function PreviewPanel({
+  wid,
+  pid,
+  rid,
+  path,
+  content,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  path: string;
+  content: string;
+}) {
+  const [result, setResult] = useState<TransformPreview | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  // A result belongs to the text it came from. Keeping the path here and
+  // clearing on change stops a preview of one file being read as a preview of
+  // the next one - the failure mode of every stale panel.
+  useEffect(() => {
+    setResult(null);
+    setFailure(null);
+  }, [path]);
+
+  const run = useMutation({
+    mutationFn: () => repoApi.preview(wid, pid, rid, { path, content }),
+    onSuccess: (data) => {
+      setResult(data);
+      setFailure(null);
+    },
+    onError: (e: Error) => {
+      setResult(null);
+      setFailure(e.message);
+    },
+  });
+
+  const changes = result?.schema_changes;
+
+  return (
+    <section className="repo-preview">
+      <div className="repo-preview-bar">
+        <button
+          type="button"
+          className="btn"
+          onClick={() => run.mutate()}
+          disabled={run.isPending}
+        >
+          {run.isPending ? "Running…" : "Preview"}
+        </button>
+        <span className="soft">
+          Runs against a sample. Writes nothing.
+        </span>
+      </div>
+
+      {failure && <p className="state error">{failure}</p>}
+
+      {result && (
+        <>
+          <div className="repo-preview-meta">
+            <span>
+              → <code>{result.output}</code>
+            </span>
+            <span>
+              {result.row_count.toLocaleString()} row
+              {result.row_count === 1 ? "" : "s"}
+              {result.sampled && " from the sample"}
+            </span>
+            {result.inputs.map((input) => (
+              <span key={input.alias} className={input.sampled ? "warn" : "soft"}>
+                {input.alias} = {input.dataset}
+                {input.sampled
+                  ? ` (${input.rows_used.toLocaleString()} of ${input.rows_available.toLocaleString()})`
+                  : ""}
+              </span>
+            ))}
+          </div>
+
+          {result.sampled && (
+            <p className="repo-preview-warning">
+              This ran on the first {result.inputs
+                .filter((i) => i.sampled)
+                .map((i) => i.rows_used.toLocaleString())
+                .join(" / ")}{" "}
+              rows of its inputs. Joins and aggregates over a sample give an
+              answer, not the answer.
+            </p>
+          )}
+
+          {changes && (
+            <div className="repo-preview-drift">
+              <strong>This would change {result.output}:</strong>
+              <ul>
+                {(changes.added ?? []).map((c) => (
+                  <li key={`a${c.name}`} className="added">
+                    adds <code>{c.name}</code> ({c.data_type})
+                  </li>
+                ))}
+                {(changes.removed ?? []).map((c) => (
+                  <li key={`r${c.name}`} className="deleted">
+                    drops <code>{c.name}</code> ({c.data_type})
+                  </li>
+                ))}
+                {(changes.retyped ?? []).map((c) => (
+                  <li key={`t${c.name}`} className="modified">
+                    <code>{c.name}</code> becomes {c.to} (was {c.from})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="repo-preview-table">
+            <table>
+              <thead>
+                <tr>
+                  {result.columns.map((c) => (
+                    <th key={c.name}>
+                      {c.name}
+                      <span className="soft">{c.data_type}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map((row, i) => (
+                  <tr key={i}>
+                    {row.map((value, j) => (
+                      <td key={j}>
+                        {value === null ? <span className="soft">null</span> : String(value)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {result.truncated && (
+            <p className="soft">
+              Showing {result.rows.length} of {result.row_count.toLocaleString()} rows.
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }

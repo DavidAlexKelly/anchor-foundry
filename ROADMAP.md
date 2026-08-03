@@ -221,9 +221,11 @@ The point of the whole section: code in a repository that declares the dataset i
 
 SQL transforms are the cheaper first step and should ship first, because they are what exists today, just relocated into a repository.
 
-### 2.6 Preview — **M**
+### 2.6 Preview — **M, done for SQL** (`STATUS.md` §69)
 
-Run the transform against a limited sample of its inputs, without committing, and show the resulting rows and schema. Foundry's Preview is the feature that makes the IDE usable rather than ceremonial; it is also the natural place to catch the schema drift the connectors already detect (`STATUS.md` §26).
+Run the transform against a limited sample of its inputs, without committing, and show the resulting rows and schema. It previews **the editor's buffer**, says in three places when the answer came from a sample, and reports what the change would do to the dataset the transform already writes — the drift check this item was always meant to carry, reusing the connectors' existing comparison.
+
+**Python previews are refused with a sentence and are the remaining half.** Customer Python runs in an isolated task (decision 0004), so previewing it means dispatching Fargate and waiting — a job with a status rather than an HTTP response. That needs a preview-run record and something to poll, which is its own item.
 
 ### 2.7 Pull request review UI — **M**
 
