@@ -1226,6 +1226,52 @@ async def aggregate_object_set(
     )
 
 
+class ObjectSetGroupIn(BaseModel):
+    definition: dict[str, Any]
+    property: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=object_sets.MAX_GROUPS, ge=1, le=object_sets.MAX_GROUPS)
+
+
+class ObjectSetGroupOut(BaseModel):
+    groups: list[dict[str, Any]]
+    """`[{value, count}]`, count descending then value ascending."""
+    distinct_total: int
+    """How many distinct values the set actually has. `truncated` is derived
+    from it rather than from "did we fill the page", which would be wrong on a
+    set with exactly `limit` groups."""
+    truncated: bool
+
+
+@router.post("/object-sets/group", response_model=ObjectSetGroupOut)
+async def group_object_set(
+    body: ObjectSetGroupIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetGroupOut:
+    """How many in each distinct value of one property - what a chart over a
+    set plots (roadmap 1.5).
+
+    A grouped *count* only. A grouped sum has the same problem a plain sum
+    does: instance properties are stored untyped, so the two stores would
+    disagree about what the bar heights are. See `object_sets`.
+    """
+    definition = object_sets.parse(body.definition)
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        buckets, distinct_total = await instance_store.store_for(conn).group_object_set(
+            search_prefix=prefix,
+            object_type_id=definition.object_type_id,
+            filters=definition.filters,
+            property_name=body.property,
+            limit=body.limit,
+        )
+    return ObjectSetGroupOut(
+        groups=[{"value": value, "count": count} for value, count in buckets],
+        distinct_total=distinct_total,
+        truncated=distinct_total > len(buckets),
+    )
+
+
 @router.post("/object-sets/evaluate", response_model=ObjectSetOut)
 async def evaluate_object_set(
     body: ObjectSetIn,

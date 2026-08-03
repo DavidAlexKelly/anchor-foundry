@@ -1363,7 +1363,29 @@ Item 1.5's first widget, and the one that makes an object set worth having as a 
 
 **547 API tests green.** Verified in a browser beside §73's table: opens at 5 with the card reading 5; type "north" and both go to 3; clear it and both return to 5.
 
-**What is left in 1.5** for this thread: the chart reading a set (a grouped count is cross-store safe the same way; a measure is not, for the same reason as above).
+**What is left in 1.5** for this thread: the chart reading a set (a grouped count is cross-store safe the same way; a measure is not, for the same reason as above). Built in §75.
+
+---
+
+### 75. The chart over a set, and item 1.2's proof completed (this session)
+
+A chart bound to an object-set variable plots a **grouped count** — how many in each distinct value of one property. With it, the roadmap's proof for item 1.2 is met in full: *a filter list narrowing an object set that an object table and a chart both read, live, with a metric card over the same set; change the filter, all three update, no page reload.*
+
+Verified in a browser on real data. Opens with 5 sites, the card reading 5 and the chart showing open 3 / closed 2. Type "north": the table drops to 3 rows, the card to 3, and the chart regroups to open 2 / closed 1 — and the chart's counts sum to exactly the table's total, asserted rather than eyeballed.
+
+**A grouped count, not a grouped sum**, for the third time and the same reason: bar *heights* from a sum over untyped properties would differ between the two stores. Counting is text-identity and both agree.
+
+**Ordering is part of the contract.** Count descending *then value ascending*, asked for explicitly on both sides. Count alone leaves ties to each store's own tie-break, so two deployments would draw the same data in a different order and one of them would look wrong to whoever knew the other. The cross-store test compares the ordered list, not a set.
+
+**Truncation is reported, not silent.** A terms aggregation is capped (`MAX_GROUPS = 20`) because an unbounded group-by is a real cost and a chart with three hundred bars is not a chart. The response carries `distinct_total`, and `truncated` is derived from it rather than from "did we fill the page" — which would be wrong on a set with exactly `limit` groups. The widget prints "showing the largest N of M values". Same principle as the sampled preview in §69: a number that looks like the whole answer will be believed.
+
+**Missing properties are excluded rather than grouped under a blank label**, because OpenSearch's terms aggregation skips missing fields — a bar labelled "" appearing on one store only is exactly the disagreement this module is arranged to avoid.
+
+**One dimension control, not two.** Binding a set disables the dataset picker and repoints the group-by at the *set's* properties. Offering both equally would let somebody configure a dataset and a set and leave the reader to work out which won.
+
+**553 API tests green**, including 3 cross-store grouping cases. The fixture server gained a terms aggregation with the same explicit ordering, so the fixture is not the reason a test passes.
+
+**A false negative in my own verification, worth recording.** The first browser probe looked for bar labels in `svg text` and found none, which read as "the chart did not render". The screenshot showed it rendering correctly. The probe was wrong, not the widget — and rather than loosen the assertion I repointed it at the `/object-sets/group` responses the bars are drawn from, which is both a real assertion and one that cannot pass for the wrong reason.
 
 ---
 

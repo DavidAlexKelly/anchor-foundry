@@ -19,11 +19,10 @@ viewers. The rows come from evaluating it. Storing rows in a variable would
 make a saved app a saved session, which decision 0002 rules out for exactly
 this reason.
 
-Aggregations are deliberately not here yet. They are what Metric Cards need
-(roadmap 1.5), and they need a second implementation in both stores plus
-aggregation support in the OpenSearch test fixture; shipping filters and paging
-first is what a Filter List driving an Object Table needs, and that is the
-canonical Workshop interaction.
+Aggregations arrived with roadmap 1.5 (`AGGREGATIONS`, `MAX_GROUPS`), and are
+deliberately only the two that mean the same thing in both stores over untyped
+properties. The rest are refused with a sentence rather than picked - see
+`NUMERIC_AGGREGATIONS`.
 """
 from __future__ import annotations
 
@@ -89,6 +88,16 @@ AGGREGATIONS = ("count", "count_distinct")
 NUMERIC_AGGREGATIONS = ("sum", "avg", "min", "max")
 
 
+# The most buckets a grouped count will return. A chart with three hundred
+# bars is not a chart, and an unbounded group-by over a large set is a real
+# cost on both stores. The caller is told when it truncated - a chart showing
+# the top 20 of 300 without saying so is the same trap as a sampled preview
+# that does not say it sampled.
+MAX_GROUPS = 20
+
+MAX_FILTERS = 20
+
+
 def parse_aggregation(name: str, property_name: str | None) -> tuple[str, str | None]:
     """Validate an aggregation, refusing in a sentence."""
     if name in NUMERIC_AGGREGATIONS:
@@ -105,8 +114,6 @@ def parse_aggregation(name: str, property_name: str | None) -> tuple[str, str | 
     if name == "count_distinct" and not property_name:
         raise ValueError("count_distinct needs a property to count distinct values of")
     return name, property_name if name == "count_distinct" else None
-
-MAX_FILTERS = 20
 
 
 @dataclass(frozen=True)

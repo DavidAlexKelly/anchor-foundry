@@ -271,23 +271,36 @@ class Handler(BaseHTTPRequestHandler):
         if aggs:
             computed = {}
             for name, spec in aggs.items():
-                if "cardinality" not in spec:
+                kind = "cardinality" if "cardinality" in spec else (
+                    "terms" if "terms" in spec else None
+                )
+                if kind is None:
                     return self._send(400, {"error": f"fixture has no {list(spec)[0]} aggregation"})
-                field = spec["cardinality"]["field"]
+                field = spec[kind]["field"]
                 # `properties.x.keyword` addresses the same stored value as
                 # `properties.x`; this fixture has no analysers, so the
                 # subfield is the field. Its own docstring already records that
                 # this is the thing a fixture cannot check.
                 path = field[: -len(".keyword")] if field.endswith(".keyword") else field
                 parts = path.split(".")
-                values = set()
+                counts: dict[str, int] = {}
                 for _, source in matched:
                     cursor = source
                     for part in parts:
                         cursor = cursor.get(part) if isinstance(cursor, dict) else None
                     if cursor is not None:
-                        values.add(str(cursor))
-                computed[name] = {"value": len(values)}
+                        counts[str(cursor)] = counts.get(str(cursor), 0) + 1
+                if kind == "cardinality":
+                    computed[name] = {"value": len(counts)}
+                else:
+                    # count desc, then key asc - the order the real terms
+                    # aggregation is asked for explicitly, so the fixture is
+                    # not the reason a test passes.
+                    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+                    size = int(spec["terms"].get("size", 10))
+                    computed[name] = {
+                        "buckets": [{"key": k, "doc_count": n} for k, n in ordered[:size]]
+                    }
             response["aggregations"] = computed
         self._send(200, response)
 

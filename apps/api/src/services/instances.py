@@ -413,6 +413,58 @@ async def aggregate_object_set(
     return int(row["n"]) if row else 0
 
 
+async def group_object_set(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    filters: tuple[Any, ...],
+    property_name: str,
+    limit: int,
+) -> tuple[list[tuple[str, int]], int]:
+    """How many in each distinct value of one property, Postgres edition
+    (roadmap 1.5).
+
+    Ordered by count descending *then value ascending*. The second key is not
+    decoration: without it, ties fall to whatever order each store happens to
+    produce, so two deployments would draw the same data differently and one of
+    them would look wrong to somebody who knew the other.
+
+    Rows whose property is absent are excluded rather than grouped under an
+    empty label - OpenSearch's terms aggregation skips missing fields, and a
+    bar labelled "" appearing on one store only is exactly the disagreement
+    this whole module is arranged to avoid.
+    """
+    predicate, params = _set_predicate(object_type_id, filters)
+    params["prop"] = property_name
+    params["limit"] = max(1, limit)
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT jsonb_extract_path_text(i.properties, :prop) AS value, count(*) AS n
+          FROM object_instances i
+         WHERE {predicate}
+           AND jsonb_extract_path_text(i.properties, :prop) IS NOT NULL
+         GROUP BY 1
+         ORDER BY n DESC, value ASC
+         LIMIT :limit
+        """,
+        params,
+    )
+    total_row = await fetch_one(
+        conn,
+        f"""
+        SELECT count(DISTINCT jsonb_extract_path_text(i.properties, :prop)) AS n
+          FROM object_instances i
+         WHERE {predicate}
+        """,
+        {k: v for k, v in params.items() if k != "limit"},
+    )
+    return (
+        [(str(r["value"]), int(r["n"])) for r in rows],
+        int(total_row["n"]) if total_row else 0,
+    )
+
+
 def _filter_text(value: Any) -> str:
     """One definition of "the text of a value", shared with the OpenSearch
     store and with object_sets."""

@@ -595,6 +595,18 @@ export const objects = {
       `/workspaces/${wid}/object-sets/aggregate`,
       { method: "POST", body: JSON.stringify({ definition, ...opts }) },
     ),
+  /** How many in each distinct value of one property — what a chart over a set
+   * plots. Grouped counts only; a grouped sum has the untyped-property problem
+   * a plain sum does. */
+  groupObjectSet: (wid: string, definition: unknown, property: string, limit?: number) =>
+    request<{
+      groups: { value: string; count: number }[];
+      distinct_total: number;
+      truncated: boolean;
+    }>(`/workspaces/${wid}/object-sets/group`, {
+      method: "POST",
+      body: JSON.stringify({ definition, property, ...(limit ? { limit } : {}) }),
+    }),
   /** Workspace-wide instance search across every object type at once. */
   explore: (
     wid: string,

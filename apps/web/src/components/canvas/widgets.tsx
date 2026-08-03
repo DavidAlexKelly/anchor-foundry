@@ -1229,6 +1229,7 @@ export function CanvasChart({
   filterColumn = null,
   filterParameter = null,
   filterOperator = "equals",
+  objectSetVariable = null,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -1239,25 +1240,50 @@ export function CanvasChart({
   filterColumn?: string | null;
   filterParameter?: string | null;
   filterOperator?: FilterOperator;
+  /** An `object_set` variable to plot instead of a dataset (roadmap 1.5).
+   * Grouped counts only: a grouped *sum* has the same untyped-property problem
+   * a plain sum does, so the two stores would disagree about the bar heights.
+   * See `services/object_sets.py`. */
+  objectSetVariable?: string | null;
 }) {
   const {
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, projectId } = useCanvasEnv();
   const filterValue = useCanvasParameter(filterParameter);
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const usingSet = !!objectSetVariable;
+
   const sql = chartQuery({
     kind, dimension, measure, aggregate,
     filterColumn, filterOperator, filterValue,
   });
 
-  const result = useQuery({
+  const datasetResult = useQuery({
     queryKey: ["canvas-chart", datasetId, sql],
     queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, sql!),
-    enabled: !!datasetId && sql !== null,
+    enabled: !usingSet && !!datasetId && sql !== null,
+  });
+  const setResult = useQuery({
+    queryKey: [
+      "canvas-chart-set", objectSetVariable,
+      JSON.stringify(setDefinition ?? null), dimension,
+    ],
+    queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, dimension!),
+    enabled: usingSet && !!setDefinition && !!dimension,
   });
 
-  const needs =
-    !datasetId ? "pick a dataset in Settings"
+  const result = usingSet ? setResult : datasetResult;
+  const points = usingSet
+    ? (setResult.data?.groups ?? []).map((g) => ({ label: g.value, value: g.count }))
+    : datasetResult.data
+      ? toPoints(datasetResult.data.rows)
+      : null;
+
+  const needs = usingSet
+    ? (!dimension ? "pick a property to group by" : null)
+    : !datasetId ? "pick a dataset in Settings"
     : !dimension ? (kind === "scatter" ? "pick an X column" : "pick a category column")
     : (kind === "scatter" || aggregate !== "count") && !measure
       ? (kind === "scatter" ? "pick a Y column" : `pick a column to ${aggregate}`)
@@ -1267,7 +1293,9 @@ export function CanvasChart({
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
       {needs && <p className="canvas-widget-empty">Chart - {needs}</p>}
-      {!needs && result.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {!needs && (result.isPending || (usingSet && variablesPending)) && (
+        <p className="canvas-widget-empty">Loading…</p>
+      )}
       {result.isError && (
         // The engine's own message, not a generic failure: "Conversion Error:
         // Could not convert string 'north' to DOUBLE" tells a builder exactly
@@ -1276,8 +1304,16 @@ export function CanvasChart({
           {result.error instanceof ApiError ? result.error.message : "Couldn't run this chart."}
         </p>
       )}
-      {result.data && <Chart kind={kind} points={toPoints(result.data.rows)} />}
-      {result.data && filterParameter && filterValue ? (
+      {points && <Chart kind={kind} points={points} />}
+      {/* Said, not hidden: a chart drawing the top 20 of 300 without a word is
+          the same trap as a preview that sampled and did not mention it. */}
+      {usingSet && setResult.data?.truncated && (
+        <p className="canvas-widget-empty">
+          Showing the largest {setResult.data.groups.length} of{" "}
+          {setResult.data.distinct_total.toLocaleString()} values.
+        </p>
+      )}
+      {!usingSet && datasetResult.data && filterParameter && filterValue ? (
         <p className="canvas-widget-empty">
           Filtered by {filterParameter}: {String(filterValue)}
         </p>
@@ -1288,9 +1324,10 @@ export function CanvasChart({
 
 function ChartSettings() {
   const { workspaceId, projectId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
   const {
     datasetId, kind, dimension, measure, aggregate, title,
-    filterColumn, filterParameter, filterOperator,
+    filterColumn, filterParameter, filterOperator, objectSetVariable,
     actions: { setProp },
   } = useNode((node) => ({
     datasetId: node.data.props.datasetId,
@@ -1302,13 +1339,27 @@ function ChartSettings() {
     filterColumn: node.data.props.filterColumn,
     filterParameter: node.data.props.filterParameter,
     filterOperator: node.data.props.filterOperator,
+    objectSetVariable: node.data.props.objectSetVariable,
   }));
   const list = useQuery({
     queryKey: ["datasets", projectId],
     queryFn: () => dsApi.list(workspaceId, projectId),
   });
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const setTypeId = (resolved[objectSetVariable as string] as
+    { object_type_id?: string } | undefined)?.object_type_id;
+  const setType = useQuery({
+    queryKey: ["object-type", setTypeId],
+    queryFn: () => objApi.getType(workspaceId, setTypeId!),
+    enabled: !!setTypeId,
+  });
   const dataset = list.data?.find((d) => d.id === datasetId);
-  const columns = dataset?.table_schema ?? [];
+  // The dimension picker offers the set's properties when plotting a set, and
+  // the dataset's columns otherwise - one control, whichever source is in
+  // play, rather than two that can both be half-filled.
+  const columns = objectSetVariable
+    ? (setType.data?.properties ?? []).map((prop) => ({ name: prop.api_name, data_type: prop.data_type }))
+    : dataset?.table_schema ?? [];
   const scatter = kind === "scatter";
 
   return (
@@ -1330,9 +1381,33 @@ function ChartSettings() {
           <option value="scatter">Scatter</option>
         </select>
       </label>
+      {/* An object set replaces the dataset, so it is offered first and
+          disables what it replaces - rather than letting both be configured
+          and leaving whoever reads the app to guess which won. */}
+      <label className="field">
+        <span className="field-label">Object set variable</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.objectSetVariable = e.target.value || null;
+              p.dimension = null; // property names are per-source
+            })
+          }
+        >
+          <option value="">Not bound — plot a dataset</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        {objectSetVariable && (
+          <span className="field-hint">Counts objects in each group</span>
+        )}
+      </label>
       <label className="field">
         <span className="field-label">Dataset</span>
         <select
+          disabled={!!objectSetVariable}
           value={datasetId || ""}
           onChange={(e) =>
             setProp((p: Record<string, unknown>) => {
@@ -1432,6 +1507,7 @@ CanvasChart.craft = {
     datasetId: null, kind: "bar", dimension: null, measure: null,
     aggregate: "count", title: "", filterColumn: null,
     filterParameter: null, filterOperator: "equals",
+    objectSetVariable: null,
   },
   related: { settings: ChartSettings },
 };

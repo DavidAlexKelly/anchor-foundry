@@ -148,6 +148,26 @@ class InstanceStoreGateway(Protocol):
         """
         ...
 
+    async def group_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: "tuple[Any, ...]",
+        property_name: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, int]], int]:
+        """How many in each distinct value of one property - what a chart over
+        a set plots (roadmap 1.5).
+
+        Returns `(buckets, distinct_total)`, ordered by count descending then
+        value ascending. **Both parts of that ordering matter**: count alone
+        leaves ties to each store's own tie-break, so two deployments would
+        draw the same data in a different order and one of them would look
+        wrong to whoever knew the other.
+        """
+        ...
+
 
 def _text_value(value: Any) -> str:
     """The text form used for filter comparison. Deliberately the same
@@ -518,6 +538,39 @@ class OpenSearchInstanceStore:
             return int(resp["aggregations"]["distinct"]["value"])
         return int(resp["hits"]["total"]["value"])
 
+    async def group_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        property_name: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, int]], int]:
+        """Roadmap 1.5. A terms aggregation on the `.keyword` subfield, with an
+        explicit two-key order so ties do not depend on the store."""
+        field = f"properties.{property_name}.keyword"
+        body: dict[str, Any] = {
+            "query": {"bool": self._set_clauses(object_type_id, filters)},
+            "size": 0,
+            "aggs": {
+                "groups": {
+                    "terms": {
+                        "field": field,
+                        "size": limit,
+                        "order": [{"_count": "desc"}, {"_key": "asc"}],
+                    }
+                },
+                "distinct": {"cardinality": {"field": field}},
+            },
+        }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        buckets = [
+            (str(b["key"]), int(b["doc_count"]))
+            for b in resp["aggregations"]["groups"]["buckets"]
+        ]
+        return buckets, int(resp["aggregations"]["distinct"]["value"])
+
     async def evaluate_object_set(
         self,
         *,
@@ -845,6 +898,25 @@ class PostgresInstanceStore:
             filters=filters,
             aggregation=aggregation,
             property_name=property_name,
+        )
+
+    async def group_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        property_name: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, int]], int]:
+        from . import instances as instances_service
+
+        return await instances_service.group_object_set(
+            self._conn,
+            object_type_id=object_type_id,
+            filters=filters,
+            property_name=property_name,
+            limit=limit,
         )
 
 
