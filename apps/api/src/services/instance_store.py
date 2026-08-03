@@ -131,6 +131,43 @@ class InstanceStoreGateway(Protocol):
         """
         ...
 
+    async def aggregate_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: "tuple[Any, ...]",
+        aggregation: str,
+        property_name: str | None,
+    ) -> int:
+        """One number over a whole set (roadmap 1.5 - what a Metric Card shows).
+
+        Only the text-identity aggregations (`object_sets.AGGREGATIONS`), so
+        both stores answer the same question the same way without knowing what
+        a property's type is.
+        """
+        ...
+
+    async def group_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: "tuple[Any, ...]",
+        property_name: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, int]], int]:
+        """How many in each distinct value of one property - what a chart over
+        a set plots (roadmap 1.5).
+
+        Returns `(buckets, distinct_total)`, ordered by count descending then
+        value ascending. **Both parts of that ordering matter**: count alone
+        leaves ties to each store's own tie-break, so two deployments would
+        draw the same data in a different order and one of them would look
+        wrong to whoever knew the other.
+        """
+        ...
+
 
 def _text_value(value: Any) -> str:
     """The text form used for filter comparison. Deliberately the same
@@ -436,31 +473,14 @@ class OpenSearchInstanceStore:
         ]
         return rows, int(resp["hits"]["total"]["value"])
 
-    async def evaluate_object_set(
-        self,
-        *,
-        search_prefix: str,
-        object_type_id: UUID,
-        filters: tuple[Any, ...],
-        limit: int,
-        offset: int,
-    ) -> tuple[list[dict[str, Any]], int]:
-        """Roadmap 1.2. Filters become query clauses rather than a post-filter
-        over a page, which is the whole reason this is server-side.
+    @staticmethod
+    def _set_clauses(object_type_id: UUID, filters: tuple[Any, ...]) -> dict[str, Any]:
+        """The bool clauses for one set definition.
 
-        Properties are indexed as text, so ordered comparisons run against the
-        same text the equality operators use - consistent with
-        `object_sets.matches`, and consistent between the two stores, which
-        matters more than either being individually cleverer.
+        Shared by paging and aggregating on purpose: two copies would be two
+        definitions of what a set *is*, and the first time they drifted a
+        Metric Card would count rows the table beside it does not show.
         """
-        limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
-        offset = max(0, offset)
-        if offset + limit > MAX_RESULT_WINDOW:
-            raise ValueError(
-                f"pagination past {MAX_RESULT_WINDOW:,} rows needs search_after, not offset - "
-                "not implemented here"
-            )
-
         must: list[dict[str, Any]] = []
         must_not: list[dict[str, Any]] = []
         for f in filters:
@@ -487,6 +507,96 @@ class OpenSearchInstanceStore:
         }
         if must_not:
             clauses["must_not"] = must_not
+        return clauses
+
+    async def aggregate_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        aggregation: str,
+        property_name: str | None,
+    ) -> int:
+        """Roadmap 1.5. `size: 0` - the number is the answer, the documents are
+        not, and fetching a page to count it would be the client-side filtering
+        object sets exist to avoid."""
+        body: dict[str, Any] = {
+            "query": {"bool": self._set_clauses(object_type_id, filters)},
+            "size": 0,
+        }
+        if aggregation == "count_distinct":
+            # The `.keyword` subfield, which `_ensure_index` declares rather
+            # than leaving to dynamic mapping - a cardinality aggregation on
+            # the analysed text field would count *tokens*, so "Aberdeen Yard"
+            # and "Bristol Yard" would share one.
+            body["aggs"] = {
+                "distinct": {"cardinality": {"field": f"properties.{property_name}.keyword"}}
+            }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        if aggregation == "count_distinct":
+            return int(resp["aggregations"]["distinct"]["value"])
+        return int(resp["hits"]["total"]["value"])
+
+    async def group_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        property_name: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, int]], int]:
+        """Roadmap 1.5. A terms aggregation on the `.keyword` subfield, with an
+        explicit two-key order so ties do not depend on the store."""
+        field = f"properties.{property_name}.keyword"
+        body: dict[str, Any] = {
+            "query": {"bool": self._set_clauses(object_type_id, filters)},
+            "size": 0,
+            "aggs": {
+                "groups": {
+                    "terms": {
+                        "field": field,
+                        "size": limit,
+                        "order": [{"_count": "desc"}, {"_key": "asc"}],
+                    }
+                },
+                "distinct": {"cardinality": {"field": field}},
+            },
+        }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        buckets = [
+            (str(b["key"]), int(b["doc_count"]))
+            for b in resp["aggregations"]["groups"]["buckets"]
+        ]
+        return buckets, int(resp["aggregations"]["distinct"]["value"])
+
+    async def evaluate_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Roadmap 1.2. Filters become query clauses rather than a post-filter
+        over a page, which is the whole reason this is server-side.
+
+        Properties are indexed as text, so ordered comparisons run against the
+        same text the equality operators use - consistent with
+        `object_sets.matches`, and consistent between the two stores, which
+        matters more than either being individually cleverer.
+        """
+        limit = max(1, min(limit, INSTANCE_PAGE_SIZE))
+        offset = max(0, offset)
+        if offset + limit > MAX_RESULT_WINDOW:
+            raise ValueError(
+                f"pagination past {MAX_RESULT_WINDOW:,} rows needs search_after, not offset - "
+                "not implemented here"
+            )
+
+        clauses = self._set_clauses(object_type_id, filters)
         body = {
             "query": {"bool": clauses},
             "sort": [{"updated_at": "desc"}],
@@ -769,6 +879,44 @@ class PostgresInstanceStore:
             filters=filters,
             limit=limit,
             offset=offset,
+        )
+
+    async def aggregate_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        aggregation: str,
+        property_name: str | None,
+    ) -> int:
+        from . import instances as instances_service
+
+        return await instances_service.aggregate_object_set(
+            self._conn,
+            object_type_id=object_type_id,
+            filters=filters,
+            aggregation=aggregation,
+            property_name=property_name,
+        )
+
+    async def group_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        property_name: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, int]], int]:
+        from . import instances as instances_service
+
+        return await instances_service.group_object_set(
+            self._conn,
+            object_type_id=object_type_id,
+            filters=filters,
+            property_name=property_name,
+            limit=limit,
         )
 
 

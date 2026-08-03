@@ -46,16 +46,73 @@ export function useCanvasEnv(): CanvasEnv {
 export interface CanvasParameters {
   values: Record<string, unknown>;
   set: (name: string, value: unknown) => void;
+  /** Apply several at once. One event's effects are one render, and applying
+   * them one at a time would let a widget re-fetch against a half-applied set
+   * of writes. */
+  setMany: (values: Record<string, unknown>) => void;
 }
 
 const ParameterContext = createContext<CanvasParameters | null>(null);
+
+/**
+ * Resolved variable values, computed by the server (roadmap 1.2).
+ *
+ * Two maps rather than one, and the distinction is the whole design:
+ * `values` above is **what the viewer has set** - a dropdown selection, a row
+ * click - and is written by widgets. This one is **what every variable
+ * currently resolves to**, including derived ones, and is written only by the
+ * server. A widget reading a derived variable reads this; a widget setting a
+ * filter writes that.
+ *
+ * Merging them would let a widget write a derived variable, which is a value
+ * that is a function of its inputs - so the same document could show two
+ * different things depending on which write the reader believed.
+ */
+export interface CanvasVariables {
+  /** The module's events, by id. Widgets look up their own triggers here
+   * rather than holding them in props - an event routinely spans widgets, and
+   * nesting it in the trigger's node would hide it from the widget it acts
+   * on (decision 0002 §4). */
+  events?: Record<string, import("./events").WorkshopEventDef>;
+  /** What the module *declares*. Widget settings read this to offer a picker
+   * of variables to bind to, which is the whole reason a binding is a choice
+   * from a list rather than a name somebody types and hopes matches. */
+  declared: Record<string, import("@/lib/types").WorkshopVariable>;
+  resolved: Record<string, unknown>;
+  /** True while the first resolve is in flight. A widget that rendered "0
+   * results" during it would be reporting an answer it does not have. */
+  pending: boolean;
+}
+
+const VariableContext = createContext<CanvasVariables>({
+  declared: {},
+  resolved: {},
+  pending: false,
+});
+
+export const CanvasVariableProvider = VariableContext.Provider;
+
+export function useCanvasVariables(): CanvasVariables {
+  return useContext(VariableContext);
+}
+
+/** One variable's resolved value - a scalar for most kinds, an object-set
+ * *definition* for `object_set`. Undefined while nothing has resolved it, which
+ * a consumer reads as "not yet", never as "empty". */
+export function useCanvasVariable(id: string | null | undefined): unknown {
+  const { resolved } = useCanvasVariables();
+  return id ? resolved[id] : undefined;
+}
 
 export function CanvasParameterProvider({ children }: { children: React.ReactNode }) {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const set = useCallback((name: string, value: unknown) => {
     setValues((current) => ({ ...current, [name]: value }));
   }, []);
-  const value = useMemo(() => ({ values, set }), [values, set]);
+  const setMany = useCallback((next: Record<string, unknown>) => {
+    setValues((current) => ({ ...current, ...next }));
+  }, []);
+  const value = useMemo(() => ({ values, set, setMany }), [values, set, setMany]);
   return <ParameterContext.Provider value={value}>{children}</ParameterContext.Provider>;
 }
 

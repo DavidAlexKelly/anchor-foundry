@@ -17,7 +17,7 @@
  * (`canvasApi.evaluateVariables`), so the transformation semantics have one
  * implementation rather than two that drift - see the API route's own note.
  */
-import type { WorkshopModule, WorkshopVariable } from "./types";
+import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "./types";
 
 /** A Craft.js serialised node map: what `<Frame data>` wants and what
  * `query.getSerializedNodes()` produces. */
@@ -41,6 +41,12 @@ export function variablesOf(definition: unknown): Record<string, WorkshopVariabl
   return isV2(definition) ? definition.variables ?? {} : {};
 }
 
+/** The module's events. Empty for a v1 document, which had no way to express
+ * one - a Filter's behaviour was hardcoded into the Filter. */
+export function eventsOf(definition: unknown): Record<string, WorkshopEvent> {
+  return isV2(definition) ? definition.events ?? {} : {};
+}
+
 /** True when there is something to render - the question the builder asks to
  * decide between a saved app and a starter layout. Asked of the *layout*, so a
  * module carrying variables but no widgets still reads as empty, which is what
@@ -49,30 +55,27 @@ export function hasLayout(definition: unknown): boolean {
   return Object.keys(layoutOf(definition)).length > 0;
 }
 
-/** The document to save after the editor has changed the layout.
+/** The document to save.
  *
- * Variables and events are carried across untouched. A save that dropped them
- * would silently unbind every widget in the app, and it would do it on the
- * first save after opening - which is to say, immediately and invisibly.
+ * The layout and the variables come from two different places - Craft.js owns
+ * one, the variables panel owns the other - and **both have to be in the same
+ * save**. Anything left out is carried across from the stored document rather
+ * than dropped: a save that omitted the variables would unbind every widget in
+ * the app, and it would do it on the first save after opening, which is to say
+ * immediately and invisibly.
  */
-export function withLayout(definition: unknown, nodes: LayoutNodes): WorkshopModule {
+export function moduleFrom(
+  definition: unknown,
+  parts: { layout?: LayoutNodes; variables?: Record<string, WorkshopVariable> },
+): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
   return {
     format: 2,
-    layout: nodes,
-    variables: current?.variables ?? {},
+    layout: parts.layout ?? layoutOf(definition),
+    variables: parts.variables ?? current?.variables ?? {},
     events: current?.events ?? {},
     ...(current?.broken_bindings ? { broken_bindings: current.broken_bindings } : {}),
   };
-}
-
-/** The document to save after the variables have changed. */
-export function withVariables(
-  definition: unknown,
-  variables: Record<string, WorkshopVariable>,
-): WorkshopModule {
-  const base = withLayout(definition, layoutOf(definition));
-  return { ...base, variables };
 }
 
 /** Props whose value is a variable id. Mirrors `REFERENCE_PROPS` in

@@ -11,7 +11,14 @@ import { useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { actions as actionApi, ApiError, datasets as dsApi, objects as objApi } from "@/lib/api";
-import { useCanvasEnv, useCanvasParameter, useCanvasParameters } from "./context";
+import {
+  useCanvasEnv,
+  useCanvasParameter,
+  useCanvasParameters,
+  useCanvasVariable,
+  useCanvasVariables,
+} from "./context";
+import { eventsFor, interpolate, run as runEvents } from "./events";
 import {
   chartQuery,
   distinctValuesQuery,
@@ -93,10 +100,15 @@ export function CanvasText({ text = "Text", tag = "p" }: { text?: string; tag?: 
   const {
     connectors: { connect, drag },
   } = useNode();
+  // `{{v_id}}` reads a resolved variable (roadmap 1.3). Without this an event
+  // that sets a variable has nothing to show for itself, and "did the click
+  // work" is only answerable by watching the network tab.
+  const { resolved } = useCanvasVariables();
+  const rendered = interpolate(text ?? "", resolved);
   return React.createElement(
     tag,
     { ref: (ref: HTMLElement | null) => connectDragDrop(ref, connect, drag), style: { margin: 0 } },
-    text,
+    rendered,
   );
 }
 
@@ -111,6 +123,9 @@ function TextSettings() {
       <label className="field">
         <span className="field-label">Text</span>
         <textarea value={text} onChange={(e) => setProp((p: { text: string }) => (p.text = e.target.value))} />
+        <span className="field-hint">
+          {"{{v_id}}"} shows a variable&apos;s current value
+        </span>
       </label>
       <label className="field">
         <span className="field-label">Style</span>
@@ -495,25 +510,49 @@ export function CanvasObjectTable({
   filterProperty = null,
   filterParameter = null,
   searchParameter = null,
+  objectSetVariable = null,
   pageSize = 25,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
   filterParameter?: string | null;
   searchParameter?: string | null;
+  /** An `object_set` variable to read (roadmap 1.2). When set, this table and
+   * every other consumer of that variable read *one* set, narrowed once on the
+   * server, rather than each filtering its own copy. Takes precedence over the
+   * inline type/filter props, which are the pre-variable way of saying the
+   * same thing and stay for apps that have not been rewired. */
+  objectSetVariable?: string | null;
   pageSize?: number;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId } = useCanvasEnv();
+  const { setMany } = useCanvasParameters();
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
+  const usingSet = !!objectSetVariable;
 
+  const setPage = useQuery({
+    queryKey: ["canvas-object-set", objectSetVariable, JSON.stringify(setDefinition ?? null), pageSize],
+    queryFn: () => objApi.evaluateObjectSet(workspaceId, setDefinition, { limit: pageSize }),
+    // Not until the definition has resolved. Querying with `undefined` would
+    // ask the server to evaluate nothing and render "0 objects", which is an
+    // answer this widget does not have yet.
+    enabled: usingSet && !!setDefinition,
+  });
+
+  const effectiveTypeId = usingSet
+    ? ((setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null)
+    : objectTypeId;
   const type = useQuery({
-    queryKey: ["object-type", objectTypeId],
-    queryFn: () => objApi.getType(workspaceId, objectTypeId!),
-    enabled: !!objectTypeId,
+    queryKey: ["object-type", effectiveTypeId],
+    queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
+    enabled: !!effectiveTypeId,
   });
 
   // An exact property filter and a free-text search are different questions,
@@ -539,20 +578,50 @@ export function CanvasObjectTable({
 
   const properties = type.data?.properties ?? [];
 
+  // One shape for both paths, so everything below reads the same. The set path
+  // returns `instances`; the explore path returns `items`.
+  const rows = usingSet ? setPage.data?.instances : page.data?.items;
+  const total = usingSet ? setPage.data?.total : page.data?.total;
+  const active = usingSet ? setPage : page;
+  const setFilters =
+    ((setDefinition as { filters?: { property: string; value: unknown }[] } | undefined)
+      ?.filters) ?? [];
+
+  // Row selection (roadmap 1.3). The widget does not decide what a click
+  // *means* - it announces that a row was chosen and hands over the row, and
+  // the module's events say what happens. That is the difference between a
+  // widget with a hardcoded behaviour and one an app author can wire.
+  const rowEvents = eventsFor(moduleEvents, nodeId, "row_select");
+  const rowsAreClickable = rowEvents.length > 0;
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      {!objectTypeId && (
+      {!usingSet && !objectTypeId && (
         <p className="canvas-widget-empty">Object table - pick an object type in Settings</p>
       )}
-      {objectTypeId && page.isPending && <p className="canvas-widget-empty">Loading…</p>}
-      {page.isError && <p className="canvas-widget-empty">Couldn&apos;t load these objects.</p>}
-      {page.data && (
+      {usingSet && (variablesPending || (!setDefinition && !active.isError)) && (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      )}
+      {!usingSet && objectTypeId && page.isPending && (
+        <p className="canvas-widget-empty">Loading…</p>
+      )}
+      {active.isError && <p className="canvas-widget-empty">Couldn&apos;t load these objects.</p>}
+      {rows && total !== undefined && (
         <>
           <p className="canvas-widget-empty">
-            {page.data.total.toLocaleString()} {type.data?.display_name ?? "object"}
-            {page.data.total === 1 ? "" : "s"}
-            {useProperty ? ` where ${filterProperty} = ${String(filterValue)}` : ""}
-            {!useProperty && searchValue ? ` matching “${String(searchValue)}”` : ""}
+            {total.toLocaleString()} {type.data?.display_name ?? "object"}
+            {total === 1 ? "" : "s"}
+            {/* The set says what narrowed it. A table that showed a filtered
+                count with no sign it was filtered is the same trap as a
+                sampled preview that does not say so. */}
+            {usingSet && setFilters.length > 0
+              ? ` where ${setFilters
+                  .map((f) => `${f.property} = ${String(f.value)}`)
+                  .join(" and ")}`
+              : ""}
+            {!usingSet && useProperty ? ` where ${filterProperty} = ${String(filterValue)}` : ""}
+            {!usingSet && !useProperty && searchValue
+              ? ` matching “${String(searchValue)}”`
+              : ""}
           </p>
           <div className="data-grid">
             <table>
@@ -565,8 +634,23 @@ export function CanvasObjectTable({
                 </tr>
               </thead>
               <tbody>
-                {page.data.items.map((instance) => (
-                  <tr key={instance.id}>
+                {rows.map((instance) => (
+                  <tr
+                    key={instance.id}
+                    className={rowsAreClickable ? "row-clickable" : undefined}
+                    onClick={
+                      rowsAreClickable
+                        ? () =>
+                            runEvents(rowEvents, {
+                              setVariables: setMany,
+                              payload: {
+                                primary_key: instance.primary_key,
+                                ...instance.properties,
+                              },
+                            })
+                        : undefined
+                    }
+                  >
                     <td>{instance.primary_key}</td>
                     {properties.map((p) => (
                       <td key={p.api_name}>
@@ -582,9 +666,9 @@ export function CanvasObjectTable({
               </tbody>
             </table>
           </div>
-          {page.data.total > page.data.items.length && (
+          {total > rows.length && (
             <p className="canvas-widget-empty">
-              Showing the first {page.data.items.length} of {page.data.total.toLocaleString()}.
+              Showing the first {rows.length} of {total.toLocaleString()}.
             </p>
           )}
         </>
@@ -595,16 +679,20 @@ export function CanvasObjectTable({
 
 function ObjectTableSettings() {
   const { workspaceId } = useCanvasEnv();
+  const { declared } = useCanvasVariables();
   const {
-    objectTypeId, filterProperty, filterParameter, searchParameter, pageSize,
+    objectTypeId, filterProperty, filterParameter, searchParameter,
+    objectSetVariable, pageSize,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
     filterProperty: node.data.props.filterProperty,
     filterParameter: node.data.props.filterParameter,
     searchParameter: node.data.props.searchParameter,
+    objectSetVariable: node.data.props.objectSetVariable,
     pageSize: node.data.props.pageSize,
   }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const types = useQuery({
     queryKey: ["object-types", workspaceId],
     queryFn: () => objApi.listTypes(workspaceId),
@@ -617,9 +705,33 @@ function ObjectTableSettings() {
 
   return (
     <>
+      {/* The variable binding comes first because it *replaces* the three
+          fields under it. Offering them equally would invite configuring both
+          and wondering which won. */}
+      <label className="field">
+        <span className="field-label">Object set variable</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))
+          }
+        >
+          <option value="">Not bound — configure below</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {setVariables.length === 0
+            ? "No object set variables yet — add one in the Variables tab"
+            : "Reads a set every other widget can read too"}
+        </span>
+      </label>
       <label className="field">
         <span className="field-label">Object type</span>
         <select
+          disabled={!!objectSetVariable}
           value={objectTypeId || ""}
           onChange={(e) =>
             setProp((p: Record<string, unknown>) => {
@@ -1149,6 +1261,7 @@ export function CanvasChart({
   filterColumn = null,
   filterParameter = null,
   filterOperator = "equals",
+  objectSetVariable = null,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -1159,25 +1272,50 @@ export function CanvasChart({
   filterColumn?: string | null;
   filterParameter?: string | null;
   filterOperator?: FilterOperator;
+  /** An `object_set` variable to plot instead of a dataset (roadmap 1.5).
+   * Grouped counts only: a grouped *sum* has the same untyped-property problem
+   * a plain sum does, so the two stores would disagree about the bar heights.
+   * See `services/object_sets.py`. */
+  objectSetVariable?: string | null;
 }) {
   const {
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, projectId } = useCanvasEnv();
   const filterValue = useCanvasParameter(filterParameter);
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const usingSet = !!objectSetVariable;
+
   const sql = chartQuery({
     kind, dimension, measure, aggregate,
     filterColumn, filterOperator, filterValue,
   });
 
-  const result = useQuery({
+  const datasetResult = useQuery({
     queryKey: ["canvas-chart", datasetId, sql],
     queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, sql!),
-    enabled: !!datasetId && sql !== null,
+    enabled: !usingSet && !!datasetId && sql !== null,
+  });
+  const setResult = useQuery({
+    queryKey: [
+      "canvas-chart-set", objectSetVariable,
+      JSON.stringify(setDefinition ?? null), dimension,
+    ],
+    queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, dimension!),
+    enabled: usingSet && !!setDefinition && !!dimension,
   });
 
-  const needs =
-    !datasetId ? "pick a dataset in Settings"
+  const result = usingSet ? setResult : datasetResult;
+  const points = usingSet
+    ? (setResult.data?.groups ?? []).map((g) => ({ label: g.value, value: g.count }))
+    : datasetResult.data
+      ? toPoints(datasetResult.data.rows)
+      : null;
+
+  const needs = usingSet
+    ? (!dimension ? "pick a property to group by" : null)
+    : !datasetId ? "pick a dataset in Settings"
     : !dimension ? (kind === "scatter" ? "pick an X column" : "pick a category column")
     : (kind === "scatter" || aggregate !== "count") && !measure
       ? (kind === "scatter" ? "pick a Y column" : `pick a column to ${aggregate}`)
@@ -1187,7 +1325,9 @@ export function CanvasChart({
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
       {needs && <p className="canvas-widget-empty">Chart - {needs}</p>}
-      {!needs && result.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {!needs && (result.isPending || (usingSet && variablesPending)) && (
+        <p className="canvas-widget-empty">Loading…</p>
+      )}
       {result.isError && (
         // The engine's own message, not a generic failure: "Conversion Error:
         // Could not convert string 'north' to DOUBLE" tells a builder exactly
@@ -1196,8 +1336,16 @@ export function CanvasChart({
           {result.error instanceof ApiError ? result.error.message : "Couldn't run this chart."}
         </p>
       )}
-      {result.data && <Chart kind={kind} points={toPoints(result.data.rows)} />}
-      {result.data && filterParameter && filterValue ? (
+      {points && <Chart kind={kind} points={points} />}
+      {/* Said, not hidden: a chart drawing the top 20 of 300 without a word is
+          the same trap as a preview that sampled and did not mention it. */}
+      {usingSet && setResult.data?.truncated && (
+        <p className="canvas-widget-empty">
+          Showing the largest {setResult.data.groups.length} of{" "}
+          {setResult.data.distinct_total.toLocaleString()} values.
+        </p>
+      )}
+      {!usingSet && datasetResult.data && filterParameter && filterValue ? (
         <p className="canvas-widget-empty">
           Filtered by {filterParameter}: {String(filterValue)}
         </p>
@@ -1208,9 +1356,10 @@ export function CanvasChart({
 
 function ChartSettings() {
   const { workspaceId, projectId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
   const {
     datasetId, kind, dimension, measure, aggregate, title,
-    filterColumn, filterParameter, filterOperator,
+    filterColumn, filterParameter, filterOperator, objectSetVariable,
     actions: { setProp },
   } = useNode((node) => ({
     datasetId: node.data.props.datasetId,
@@ -1222,13 +1371,27 @@ function ChartSettings() {
     filterColumn: node.data.props.filterColumn,
     filterParameter: node.data.props.filterParameter,
     filterOperator: node.data.props.filterOperator,
+    objectSetVariable: node.data.props.objectSetVariable,
   }));
   const list = useQuery({
     queryKey: ["datasets", projectId],
     queryFn: () => dsApi.list(workspaceId, projectId),
   });
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const setTypeId = (resolved[objectSetVariable as string] as
+    { object_type_id?: string } | undefined)?.object_type_id;
+  const setType = useQuery({
+    queryKey: ["object-type", setTypeId],
+    queryFn: () => objApi.getType(workspaceId, setTypeId!),
+    enabled: !!setTypeId,
+  });
   const dataset = list.data?.find((d) => d.id === datasetId);
-  const columns = dataset?.table_schema ?? [];
+  // The dimension picker offers the set's properties when plotting a set, and
+  // the dataset's columns otherwise - one control, whichever source is in
+  // play, rather than two that can both be half-filled.
+  const columns = objectSetVariable
+    ? (setType.data?.properties ?? []).map((prop) => ({ name: prop.api_name, data_type: prop.data_type }))
+    : dataset?.table_schema ?? [];
   const scatter = kind === "scatter";
 
   return (
@@ -1250,9 +1413,33 @@ function ChartSettings() {
           <option value="scatter">Scatter</option>
         </select>
       </label>
+      {/* An object set replaces the dataset, so it is offered first and
+          disables what it replaces - rather than letting both be configured
+          and leaving whoever reads the app to guess which won. */}
+      <label className="field">
+        <span className="field-label">Object set variable</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.objectSetVariable = e.target.value || null;
+              p.dimension = null; // property names are per-source
+            })
+          }
+        >
+          <option value="">Not bound — plot a dataset</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        {objectSetVariable && (
+          <span className="field-hint">Counts objects in each group</span>
+        )}
+      </label>
       <label className="field">
         <span className="field-label">Dataset</span>
         <select
+          disabled={!!objectSetVariable}
           value={datasetId || ""}
           onChange={(e) =>
             setProp((p: Record<string, unknown>) => {
@@ -1352,6 +1539,7 @@ CanvasChart.craft = {
     datasetId: null, kind: "bar", dimension: null, measure: null,
     aggregate: "count", title: "", filterColumn: null,
     filterParameter: null, filterOperator: "equals",
+    objectSetVariable: null,
   },
   related: { settings: ChartSettings },
 };
@@ -1467,6 +1655,156 @@ CanvasActionForm.craft = {
   related: { settings: ActionFormSettings },
 };
 
+/** A Metric Card: one number over an object set (roadmap 1.5).
+ *
+ * The widget Workshop apps lead with, and the one that makes an object set
+ * worth having as a shared thing: the card, the table and the chart all read
+ * *the same* variable, so "127 sites" and the rows under it cannot disagree.
+ *
+ * Only `count` and `count_distinct` are offered, because those are the two the
+ * two stores answer identically over untyped properties - see
+ * `services/object_sets.py`. A sum would be right on one deployment and absent
+ * on another.
+ */
+export function CanvasMetricCard({
+  objectSetVariable = null,
+  aggregation = "count",
+  property = null,
+  label = "",
+}: {
+  objectSetVariable?: string | null;
+  aggregation?: "count" | "count_distinct";
+  property?: string | null;
+  label?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+
+  const metric = useQuery({
+    queryKey: [
+      "canvas-metric", objectSetVariable, JSON.stringify(setDefinition ?? null),
+      aggregation, property,
+    ],
+    queryFn: () =>
+      objApi.aggregateObjectSet(workspaceId, setDefinition, {
+        aggregation,
+        property: property ?? undefined,
+      }),
+    enabled: !!objectSetVariable && !!setDefinition,
+  });
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      <div className="metric-card">
+        <span className="metric-label">{label || "Metric"}</span>
+        {!objectSetVariable ? (
+          <p className="canvas-widget-empty">Pick an object set variable in Settings</p>
+        ) : variablesPending || metric.isPending ? (
+          // Not "0". A card that showed a number it did not have would be
+          // believed, and nobody re-reads a figure that looked fine.
+          <span className="metric-value soft">…</span>
+        ) : metric.isError ? (
+          <p className="canvas-widget-empty">{(metric.error as Error).message}</p>
+        ) : (
+          <span className="metric-value">{metric.data!.value.toLocaleString()}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MetricCardSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
+  const {
+    objectSetVariable, aggregation, property, label,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    aggregation: node.data.props.aggregation,
+    property: node.data.props.property,
+    label: node.data.props.label,
+  }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  // Which type the chosen set draws from, so the property picker offers that
+  // type's properties rather than a free-text box that fails at read time.
+  const typeId = (resolved[objectSetVariable as string] as { object_type_id?: string } | undefined)
+    ?.object_type_id;
+  const detail = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          value={label ?? ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Object set variable</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Shows</span>
+        <select
+          value={aggregation ?? "count"}
+          onChange={(e) =>
+            setProp((p: { aggregation: string }) => (p.aggregation = e.target.value))
+          }
+        >
+          <option value="count">How many</option>
+          <option value="count_distinct">How many distinct values</option>
+        </select>
+        <span className="field-hint">
+          Sums and averages need typed properties — see the ontology roadmap
+        </span>
+      </label>
+      {aggregation === "count_distinct" && (
+        <label className="field">
+          <span className="field-label">Of property</span>
+          <select
+            value={property || ""}
+            onChange={(e) =>
+              setProp((p: { property: string | null }) => (p.property = e.target.value || null))
+            }
+          >
+            <option value="">Choose…</option>
+            {detail.data?.properties.map((prop) => (
+              <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+    </>
+  );
+}
+
+CanvasMetricCard.craft = {
+  displayName: "Metric card",
+  props: { objectSetVariable: null, aggregation: "count", property: null, label: "" },
+  related: { settings: MetricCardSettings },
+};
+
 export const CANVAS_RESOLVER = {
   CanvasContainer,
   CanvasText,
@@ -1475,6 +1813,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectTable,
   CanvasChart,
   CanvasMap,
+  CanvasMetricCard,
   CanvasActionForm,
 };
 
@@ -1486,6 +1825,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
+  { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },
   { key: "CanvasActionForm", label: "Action form", hint: "Write back to an object instance" },
 ];
 

@@ -1,14 +1,18 @@
 "use client";
 
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
-import { hasLayout, layoutOf, withLayout } from "@/lib/workshop-module";
+import { VariablesPanel } from "@/components/canvas/VariablesPanel";
+import { eventsOf, hasLayout, layoutOf, moduleFrom, variablesOf } from "@/lib/workshop-module";
+import type { WorkshopVariable } from "@/lib/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, api, canvas as canvasApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
+import { VariableBridge } from "@/components/canvas/VariableBridge";
+import type { WorkshopEventDef } from "@/components/canvas/events";
 import { SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
@@ -114,6 +118,7 @@ function TopBar({
   projectId,
   canEdit,
   canPublish,
+  variables,
 }: {
   app: CanvasAppDetail;
   workspaceSlug: string;
@@ -122,25 +127,35 @@ function TopBar({
   projectId: string;
   canEdit: boolean;
   canPublish: boolean;
+  variables: Record<string, WorkshopVariable>;
 }) {
   const { enabled, actions, query } = useEditor((state) => ({ enabled: state.options.enabled }));
   const [showPublish, setShowPublish] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const save = useMutation({
-    // The layout only. Variables and events are carried across untouched -
-    // dropping them would unbind every widget on the first save after
-    // opening, which is to say immediately and invisibly.
+    // Both halves in one save. The layout comes from Craft.js and the
+    // variables from the panel, and a save carrying only one of them would
+    // silently discard the other's edits.
     mutationFn: () =>
       canvasApi.saveDefinition(
         workspaceId,
         projectId,
         app.id,
-        withLayout(app.definition, query.getSerializedNodes()),
+        moduleFrom(app.definition, {
+          layout: query.getSerializedNodes(),
+          variables,
+        }),
       ),
     onSuccess: async () => {
+      setFailure(null);
       await queryClient.invalidateQueries({ queryKey: ["canvas-app", app.id] });
     },
+    // The server refuses a cycle or a binding to a variable that is not
+    // declared. Surfaced here rather than swallowed: the save did not happen,
+    // and a Save button that goes quiet is a Save button people trust wrongly.
+    onError: (e: Error) => setFailure(e.message),
   });
 
   return (
@@ -153,8 +168,9 @@ function TopBar({
         <p className="sub">
           v{app.current_version}
           {app.publish_scope !== "private" && ` · published (${app.publish_scope})`}
-          {save.isSuccess && " · saved"}
+          {save.isSuccess && !failure && " · saved"}
         </p>
+        {failure && <p className="state error">{failure}</p>}
       </div>
       <div className="row-actions">
         <button
@@ -185,10 +201,16 @@ function TopBar({
 function CanvasEnvBridge({
   workspaceId,
   projectId,
+  appId,
+  variables,
+  events,
   children,
 }: {
   workspaceId: string;
   projectId: string;
+  appId: string;
+  variables: Record<string, WorkshopVariable>;
+  events: Record<string, WorkshopEventDef>;
   children: React.ReactNode;
 }) {
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
@@ -198,7 +220,22 @@ function CanvasEnvBridge({
           tree, so a filter set in Preview survives switching back to Edit -
           the alternative resets every filter each time the mode flips, which
           makes a filter impossible to actually try out. */}
-      <CanvasParameterProvider>{children}</CanvasParameterProvider>
+      <CanvasParameterProvider>
+        {/* Resolves what the viewer has selected into what each variable is
+            worth. The builder passes its *working* variables, not the saved
+            ones, so a set configured a moment ago drives the table without a
+            save first - which is the difference between building an app and
+            guessing at one. */}
+        <VariableBridge
+          workspaceId={workspaceId}
+          projectId={projectId}
+          appId={appId}
+          declared={variables}
+          events={events}
+        >
+          {children}
+        </VariableBridge>
+      </CanvasParameterProvider>
     </CanvasEnvProvider>
   );
 }
@@ -228,6 +265,16 @@ export default function CanvasAppEditorPage() {
   const canEdit = project ? project.effective_role !== "viewer" : false;
   const canPublish = workspace?.effective_role === "admin";
 
+  // The variables half of the document. Held here rather than in the panel
+  // because the Save button is in the top bar and has to write both halves at
+  // once - and reseeded only when a *new version* arrives, so a refetch cannot
+  // discard edits somebody has made but not saved.
+  const [variables, setVariables] = useState<Record<string, WorkshopVariable>>({});
+  const savedVersion = appQuery.data?.current_version;
+  useEffect(() => {
+    if (appQuery.data) setVariables(variablesOf(appQuery.data.definition));
+  }, [savedVersion, appQuery.data?.id]);
+
   if (appQuery.isPending || !workspace || !project) {
     return (
       <main>
@@ -249,7 +296,13 @@ export default function CanvasAppEditorPage() {
   return (
     <main>
       <Editor resolver={CANVAS_RESOLVER} enabled={canEdit}>
-        <CanvasEnvBridge workspaceId={workspace.id} projectId={project.id}>
+        <CanvasEnvBridge
+          workspaceId={workspace.id}
+          projectId={project.id}
+          appId={app.id}
+          variables={variables}
+          events={eventsOf(app.definition)}
+        >
           <TopBar
             app={app}
             workspaceSlug={params.workspace}
@@ -258,8 +311,18 @@ export default function CanvasAppEditorPage() {
             projectId={project.id}
             canEdit={canEdit}
             canPublish={canPublish}
+            variables={variables}
           />
-          <CanvasBody hasSavedLayout={hasSavedLayout} definition={app.definition} canEdit={canEdit} />
+          <CanvasBody
+            hasSavedLayout={hasSavedLayout}
+            definition={app.definition}
+            canEdit={canEdit}
+            workspaceId={workspace.id}
+            projectId={project.id}
+            appId={app.id}
+            variables={variables}
+            onVariablesChange={setVariables}
+          />
         </CanvasEnvBridge>
       </Editor>
     </main>
@@ -270,13 +333,28 @@ function CanvasBody({
   hasSavedLayout,
   definition,
   canEdit,
+  workspaceId,
+  projectId,
+  appId,
+  variables,
+  onVariablesChange,
 }: {
   hasSavedLayout: boolean;
   definition: Record<string, unknown>;
   canEdit: boolean;
+  workspaceId: string;
+  projectId: string;
+  appId: string;
+  variables: Record<string, WorkshopVariable>;
+  onVariablesChange: (next: Record<string, WorkshopVariable>) => void;
 }) {
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
   const showChrome = enabled && canEdit;
+  // Two things want the right-hand column: the selected widget's settings and
+  // the module's variables. Tabbed rather than stacked - a variable list that
+  // pushed the settings below the fold would make configuring a widget worse
+  // in service of a panel most edits do not touch.
+  const [tab, setTab] = useState<"widget" | "variables">("widget");
   return (
     <div className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}>
       {showChrome && <Toolbox />}
@@ -291,7 +369,32 @@ function CanvasBody({
       </div>
       {showChrome && (
         <div className="canvas-settings">
-          <SettingsPanel />
+          <nav className="ds-tabs canvas-panel-tabs">
+            {(["widget", "variables"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`ds-tab${t === tab ? " on" : ""}`}
+                aria-current={t === tab}
+                onClick={() => setTab(t)}
+              >
+                {t === "widget" ? "Widget" : `Variables (${Object.keys(variables).length})`}
+              </button>
+            ))}
+          </nav>
+          {tab === "widget" ? (
+            <SettingsPanel />
+          ) : (
+            <VariablesPanel
+              workspaceId={workspaceId}
+              projectId={projectId}
+              appId={appId}
+              variables={variables}
+              layout={layoutOf(definition)}
+              onChange={onVariablesChange}
+              readOnly={!canEdit}
+            />
+          )}
         </div>
       )}
     </div>

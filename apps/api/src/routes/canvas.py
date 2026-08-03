@@ -361,3 +361,36 @@ async def get_published_app(
     async with user_connection(access.auth.user_id) as conn:
         row = await canvas_service.get_published(conn, access.workspace_id, app_id)
     return _out(row)
+
+
+@published_router.post(
+    "/published-canvas-apps/{app_id}/variables/evaluate", response_model=EvaluateVariablesOut
+)
+async def evaluate_published_variables(
+    app_id: UUID,
+    body: EvaluateVariablesIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> EvaluateVariablesOut:
+    """The same resolve, reached the way a published app is reached.
+
+    Needed because the project-scoped one requires project membership, and a
+    published app exists precisely for a workspace member who is *not* in its
+    project (`STATUS.md` §15). Without this, every published Workshop app would
+    resolve no variables for exactly the audience it was published to - and the
+    symptom would be widgets showing nothing, which reads as no data rather
+    than as no permission.
+
+    `get_published` is what enforces the scope, exactly as the read path does:
+    an app that is not published to this caller is not found.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get_published(conn, access.workspace_id, app_id)
+    document = _parse_json(row["definition"])
+    try:
+        variables = variables_service.validate_module(document)
+        resolved = variables_service.evaluate(variables, body.values)
+    except variables_service.VariableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return EvaluateVariablesOut(
+        values=resolved, order=variables_service.evaluation_order(variables)
+    )

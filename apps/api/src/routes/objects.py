@@ -26,7 +26,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import anyio
-from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -1178,6 +1178,98 @@ class ObjectSetOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class ObjectSetAggregateIn(BaseModel):
+    definition: dict[str, Any]
+    aggregation: str = "count"
+    property: str | None = None
+
+
+class ObjectSetAggregateOut(BaseModel):
+    value: int
+    aggregation: str
+    property: str | None
+
+
+@router.post("/object-sets/aggregate", response_model=ObjectSetAggregateOut)
+async def aggregate_object_set(
+    body: ObjectSetAggregateIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetAggregateOut:
+    """One number over a whole set - what a Metric Card shows (roadmap 1.5).
+
+    Separate from `/evaluate` rather than a flag on it, because they are
+    different questions with different costs: a page of rows, or a number over
+    every row. A card that got its number by paging would be wrong the moment
+    a set outgrew a page, which is exactly when the number starts mattering.
+    """
+    definition = object_sets.parse(body.definition)
+    try:
+        aggregation, property_name = object_sets.parse_aggregation(body.aggregation, body.property)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        value = await instance_store.store_for(conn).aggregate_object_set(
+            search_prefix=prefix,
+            object_type_id=definition.object_type_id,
+            filters=definition.filters,
+            aggregation=aggregation,
+            property_name=property_name,
+        )
+    return ObjectSetAggregateOut(
+        value=value, aggregation=aggregation, property=property_name
+    )
+
+
+class ObjectSetGroupIn(BaseModel):
+    definition: dict[str, Any]
+    property: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=object_sets.MAX_GROUPS, ge=1, le=object_sets.MAX_GROUPS)
+
+
+class ObjectSetGroupOut(BaseModel):
+    groups: list[dict[str, Any]]
+    """`[{value, count}]`, count descending then value ascending."""
+    distinct_total: int
+    """How many distinct values the set actually has. `truncated` is derived
+    from it rather than from "did we fill the page", which would be wrong on a
+    set with exactly `limit` groups."""
+    truncated: bool
+
+
+@router.post("/object-sets/group", response_model=ObjectSetGroupOut)
+async def group_object_set(
+    body: ObjectSetGroupIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetGroupOut:
+    """How many in each distinct value of one property - what a chart over a
+    set plots (roadmap 1.5).
+
+    A grouped *count* only. A grouped sum has the same problem a plain sum
+    does: instance properties are stored untyped, so the two stores would
+    disagree about what the bar heights are. See `object_sets`.
+    """
+    definition = object_sets.parse(body.definition)
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        buckets, distinct_total = await instance_store.store_for(conn).group_object_set(
+            search_prefix=prefix,
+            object_type_id=definition.object_type_id,
+            filters=definition.filters,
+            property_name=body.property,
+            limit=body.limit,
+        )
+    return ObjectSetGroupOut(
+        groups=[{"value": value, "count": count} for value, count in buckets],
+        distinct_total=distinct_total,
+        truncated=distinct_total > len(buckets),
+    )
 
 
 @router.post("/object-sets/evaluate", response_model=ObjectSetOut)

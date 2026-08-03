@@ -1299,7 +1299,115 @@ Roadmap item 1.2's server half. `services/workshop_variables.py` validates a mod
 
 **Verified in a real browser** against a converted app: the widgets render (a builder handed the whole v2 document would render nothing), Save works, and the document comes back still `format: 2` with its variables intact. **527 API tests green.**
 
-**What is still missing from item 1.2** is the variables panel itself — create, rename, retype, see usages. `usagesOf` is written and unused; the server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement.
+**What is still missing from item 1.2** is the variables panel itself — create, rename, retype, see usages. `usagesOf` is written and unused; the server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement. (Built in §72.)
+
+---
+
+### 72. The variables panel (this session)
+
+The last piece of item 1.2's builder work. A tab beside the widget settings: create, rename, retype, set a default, build a derivation, delete.
+
+**Renaming is the whole point of the format, so the panel says so.** The field is labelled "Label"; the id sits under it as unchangeable fact — `id v_pbez9mvg — never changes, so renaming is free`. Canvas's parameters were string keys, and renaming one silently unbound every widget reading it; here the id is what widgets point at and the label is free to change.
+
+**Two refusals, and the panel is the affordance rather than the enforcement.** Deleting a variable something binds to is refused *before* the button does anything, naming what uses it: *"Region is used by 2 things (bar1.filterParameter, table1.filterParameter). Unbind it there first."* Saving a cycle is refused by the server, and the top bar now surfaces that instead of going quiet — *"these variables depend on each other in a loop: Full greeting, Greeting prefix"*. Both verified in a real browser. The server is still what enforces both; the panel exists so somebody does not walk into a 422 after doing the work.
+
+**Layout and variables save together, and that is a real constraint.** Craft.js owns the layout and the panel owns the variables, so `moduleFrom` takes both and carries across whatever it was not given. A save with only one half would silently discard the other's edits — and the variables state is reseeded only when a new *version* arrives, so a background refetch cannot throw away typing.
+
+**Small choices with reasons.** The transform picker omits `object_property` and `object_set_aggregation` — the API refuses them until they are built, and offering a choice that fails on save is worse than not offering it. The input picker omits the variable being edited, so "a variable may not read itself" is a refusal nobody can walk into. Changing a transform clears its inputs rather than carrying them, because three inputs meant as condition/then/else are not three parts of a join. And the value shown is labelled "as last saved", because it comes from the server reading the *saved* document — it cannot show a derivation nobody has saved, and implying otherwise would be worse than showing nothing.
+
+**The one thing genuinely mirrored** is `REFERENCE_PROPS`, which decides what the API refuses and, separately, what the builder shows as a usage. Drift makes the *builder* wrong — it would offer to delete a variable a widget binds to, and the save would then be refused with a message the panel had just implied was impossible. A test asserts the two lists match by parsing the TypeScript, the same mechanical shape `test_property_types.py` uses. That list grows widget by widget through item 1.5, which is exactly when one copy gets updated and the other does not.
+
+**528 API tests green.** The panel itself has no unit tests — this repo still has no TypeScript test runner, which decision 0002 already named as the reason it chose a Python converter. The browser verification is the coverage: create a variable, derive a second from it, save, and confirm the document comes back with the derivation, the converted variable, and the layout all intact.
+
+---
+
+### 73. Object-set variables: the spine, end to end (this session)
+
+The half item 1.2 calls "the item that decides whether Workshop parity is real". **Dataset → object type → object set → variable → widget**, working in a browser.
+
+**An object-set variable holds a definition, not rows.** A type plus filters — small, serialisable, the same for every viewer. `/object-sets/evaluate` turns it into instances. Storing rows would make a saved app a saved session (decision 0002 §3), and it would also mean a table, a chart and a count each holding their own copy of "the set" rather than reading one.
+
+**A filter variable narrows a set through a derivation.** `filter_set` takes two inputs — the set to narrow and the variable holding the value — plus a property and an operator. That makes Foundry's Filter-List-drives-Object-Table into an ordinary edge in the variable graph, so it gets cycle detection, usage-aware deletion and dependency ordering for free rather than as a special case. Filters chain: two controls narrowing one set is two derivations, and the second reads the first.
+
+**An unset filter shows everything rather than nothing**, and this is the decision most worth stating. A viewer who has not touched the filter yet should see the whole set; filtering for `region = null` would make every app open empty and look broken. That is *not* the failure decision 0002 removed — that one was a binding to a variable nothing declared, which the save path now refuses outright. This is a declared variable with no value yet, which is an ordinary state with an obvious meaning. Mutation-tested: dropping the guard fails exactly that test.
+
+**Narrowing does not mutate what it read.** `filter_set` copies; a second consumer of the base set would otherwise silently get the narrowed one. Also mutation-tested.
+
+**Refusals that keep the two halves honest.** A set variable must have a type *or* a derivation, never both (two answers to "where do these rows come from"). A non-`object_set` variable carrying a set is refused. The set definition is validated at *save* with the same `object_sets.parse` the read path uses, so a definition that would be refused at read time is refused where somebody can still fix it. And `filter_set`'s operator list is `object_sets`' own — `gt` and friends stay refused, because Postgres casts and OpenSearch compares text, so an app's results would otherwise depend on which store the deployment runs.
+
+**Two contexts in the browser, deliberately.** `values` is what the viewer has set and is written by widgets; `resolved` is what every variable is worth and is written only by the server. Merging them would let a widget write a derived variable — a value that is a function of its inputs — so one document could show two things depending on which write the reader believed. `VariableBridge` posts the raw values, debounced, and holds a request ticket so an older resolve landing late cannot overwrite a newer one (which would show the previous filter's rows under the current filter, and read as the filter being broken).
+
+**A bug caught before it shipped.** The evaluate endpoint was project-scoped, and a *published* app is opened by a workspace member who may not be in its project at all (§15). Every published Workshop app would have resolved no variables for exactly the audience it was published to — and the symptom would be widgets showing nothing, which reads as no data rather than as no permission. There is now a `published-canvas-apps/{id}/variables/evaluate` on the workspace router, scoped by `get_published` exactly as the read path is.
+
+**Proved in a browser** against real data: a CSV of five sites, an object type over it, a real sync, then an app whose filter narrows a set the table reads. Opens showing 5; type "north" and it shows 3, naming what narrowed it (`where region = north`); clear it and 5 return. No reload, no console errors. **538 API tests green**, 10 of them new for object-set variables.
+
+**Still open in 1.2:** `object_property` and `object_set_aggregation` as *variable transforms*, which would need the variable evaluator to reach the instance store. §74 shows a Metric Card does not need that.
+
+---
+
+### 74. Aggregating a set, and the Metric Card that shows it (this session)
+
+Item 1.5's first widget, and the one that makes an object set worth having as a shared thing: **the card and the table read the same variable**, so "3 sites" and the three rows under it cannot disagree.
+
+**Two aggregations, and the line between them is principled.** `count` and `count_distinct` ship; `sum`, `avg`, `min` and `max` are refused with a sentence. The reason is the one that already refuses ordered operators: instance properties are stored untyped, so summing one means deciding what "3" and "10" are without being told. Postgres would cast; OpenSearch cannot aggregate numerically over a text-mapped field at all. **A card whose number is right on one deployment and absent on another is worse than one that says the platform cannot answer yet.** The two that ship are *text-identity* operations — how many documents, how many distinct values — so both stores agree without either knowing a property's type. The fix for the rest is the same single piece of work: honour the declared property type (db 0026) in the index mapping, with a backfill behind it.
+
+**Not a variable transform, and this is a correction to what §73 implied.** A Metric Card does not need `object_set_aggregation` as a *variable*; it needs an aggregation, which is an endpoint. Making the variable evaluator reach the instance store would turn `evaluate()` from a pure function into an async store-dependent one for every caller, to no benefit here. `/object-sets/aggregate` takes the resolved set definition, exactly as the table does with `/evaluate`.
+
+**Separate from `/evaluate` rather than a flag on it.** They are different questions with different costs: a page of rows, or a number over every row. A card that got its number by paging would be wrong the moment a set outgrew a page — which is exactly when the number starts mattering. A test asserts a set of 5 pages 2 and counts 5.
+
+**One definition of the set, in both stores.** The filter-clause builders were extracted (`_set_clauses` in OpenSearch, `_set_predicate` in Postgres) so paging and aggregating share them. Two copies would be two definitions of what a set *is*, and the first time they drifted a Metric Card would count rows the table beside it does not show.
+
+**The fixture server gained cardinality**, implemented exactly rather than approximately — OpenSearch's cardinality is approximate above ~40k distinct values, and a fixture copying that would be imitating an error budget it cannot reproduce. Its existing caveat still stands and is now load-bearing here: it has no analysers, so `properties.x.keyword` and `properties.x` are the same value to it, and whether the real mapping's keyword subfield exists is still something only a real cluster can confirm.
+
+**4 cross-store cases** assert Postgres and OpenSearch produce the same number for count and count_distinct, filtered and unfiltered — different mechanisms, one answer, or an app's headline figure would depend on which store the deployment runs.
+
+**547 API tests green.** Verified in a browser beside §73's table: opens at 5 with the card reading 5; type "north" and both go to 3; clear it and both return to 5.
+
+**What is left in 1.5** for this thread: the chart reading a set (a grouped count is cross-store safe the same way; a measure is not, for the same reason as above). Built in §75.
+
+---
+
+### 75. The chart over a set, and item 1.2's proof completed (this session)
+
+A chart bound to an object-set variable plots a **grouped count** — how many in each distinct value of one property. With it, the roadmap's proof for item 1.2 is met in full: *a filter list narrowing an object set that an object table and a chart both read, live, with a metric card over the same set; change the filter, all three update, no page reload.*
+
+Verified in a browser on real data. Opens with 5 sites, the card reading 5 and the chart showing open 3 / closed 2. Type "north": the table drops to 3 rows, the card to 3, and the chart regroups to open 2 / closed 1 — and the chart's counts sum to exactly the table's total, asserted rather than eyeballed.
+
+**A grouped count, not a grouped sum**, for the third time and the same reason: bar *heights* from a sum over untyped properties would differ between the two stores. Counting is text-identity and both agree.
+
+**Ordering is part of the contract.** Count descending *then value ascending*, asked for explicitly on both sides. Count alone leaves ties to each store's own tie-break, so two deployments would draw the same data in a different order and one of them would look wrong to whoever knew the other. The cross-store test compares the ordered list, not a set.
+
+**Truncation is reported, not silent.** A terms aggregation is capped (`MAX_GROUPS = 20`) because an unbounded group-by is a real cost and a chart with three hundred bars is not a chart. The response carries `distinct_total`, and `truncated` is derived from it rather than from "did we fill the page" — which would be wrong on a set with exactly `limit` groups. The widget prints "showing the largest N of M values". Same principle as the sampled preview in §69: a number that looks like the whole answer will be believed.
+
+**Missing properties are excluded rather than grouped under a blank label**, because OpenSearch's terms aggregation skips missing fields — a bar labelled "" appearing on one store only is exactly the disagreement this module is arranged to avoid.
+
+**One dimension control, not two.** Binding a set disables the dataset picker and repoints the group-by at the *set's* properties. Offering both equally would let somebody configure a dataset and a set and leave the reader to work out which won.
+
+**553 API tests green**, including 3 cross-store grouping cases. The fixture server gained a terms aggregation with the same explicit ordering, so the fixture is not the reason a test passes.
+
+**A false negative in my own verification, worth recording.** The first browser probe looked for bar labels in `svg text` and found none, which read as "the chart did not render". The screenshot showed it rendering correctly. The probe was wrong, not the widget — and rather than loosen the assertion I repointed it at the `/object-sets/group` responses the bars are drawn from, which is both a real assertion and one that cannot pass for the wrong reason.
+
+---
+
+### 76. Events: a click that does something the app author chose (this session)
+
+Roadmap item 1.3. An event is a **trigger** — which widget, what happened — and an **ordered list of effects**. Clicking a row in an object table now sets a variable, and a text widget shows it: click Aberdeen Yard, the app says *Selected: Aberdeen Yard (open)*; click Carlisle Works and it says *Carlisle Works (closed)*. Verified in a browser.
+
+**The widget does not decide what a click means.** It announces that a row was chosen and hands over the row; the module's events say what happens. That is the difference between a widget with a hardcoded behaviour and one an app author can wire — and it is why events live beside the layout rather than inside a widget's props (decision 0002 §4): an event routinely spans widgets, and nesting it in the trigger's node would hide it from the widget it acts on.
+
+**The execution semantics are Foundry's, matched deliberately.** Effects run in configured order; setting a variable copies the value immediately so the next effect sees it; nothing awaits downstream recomputation. The implementation detail that makes the second one true is worth stating: `run()` threads a plain object through the loop rather than reading React state between effects, because state updates are batched and an effect reading a variable a previous effect just set would otherwise read the **old** value — silently, and only sometimes. Awaiting each effect instead would serialise a click behind network round trips *and* change what the second effect sees; the roadmap called this "the kind of difference that is invisible until someone's app misbehaves", and it is right.
+
+**One click is one render.** The context gained `setMany`, so a run's writes apply together. Applying them one at a time would let a widget re-fetch against a half-applied set of writes.
+
+**What the server refuses**, in `workshop_events.py`, wired into the same save path as variables: a trigger on a widget the layout does not contain (it can never fire, so it is not an event — it is a fragment of a previous design), a write to a variable the module does not declare, a write to a **derived** variable (a function of its inputs; honouring the write would let one document show two different things depending on which write the reader believed — the same rule `evaluate` already enforces for viewer values), and a `javascript:` url. That last one matters because an app author is not necessarily trusted by everyone who opens the app, and a published app is opened by the whole workspace.
+
+**`navigate`, `run_action` and `export` are named and refused**, each blocked on something real rather than on effort: pages and overlays do not exist until item 1.4; binding an action's parameters to variables is its own design question; export needs a download surface the viewer route lacks. Refusing with the reason beats accepting and silently doing nothing, which is what an unknown effect type would otherwise do.
+
+**Two smaller decisions.** `{{token}}` resolving to nothing yields an empty string rather than the literal `{{token}}` — a half-substituted label reads as a data problem, an empty one reads as a missing value, which is what it is. And an unknown effect *type* at run time is skipped rather than thrown: the server refuses them at save, so one arriving here means an older document, and a click that does part of its job beats one that throws in the middle of the list.
+
+`CanvasText` interpolates resolved variables, because without it an event that sets a variable has nothing to show for itself and "did the click work" is only answerable from the network tab. Rows are only styled clickable when the module actually wires an event to that table — a row that looks clickable and does nothing is worse than one that looks inert.
+
+**561 API tests green**, 8 of them new for events.
 
 ---
 

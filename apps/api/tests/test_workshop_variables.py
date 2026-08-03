@@ -329,3 +329,315 @@ def test_a_v1_definition_is_left_alone() -> None:
 
 def test_a_v2_document_with_no_variables_is_fine() -> None:
     assert wv.validate_module(module({})) == {}
+
+
+# ---- the one thing mirrored between two runtimes ------------------------------
+def test_the_reference_prop_list_agrees_with_the_browser_s_copy() -> None:
+    """`REFERENCE_PROPS` exists twice: here, where it decides what the API
+    refuses, and in `lib/workshop-module.ts`, where it decides what the builder
+    *shows* as a usage.
+
+    Drift makes the builder wrong rather than the document wrong - it would
+    offer to delete a variable a widget binds to, and the save would then be
+    refused by the server with a message the panel had just implied was
+    impossible. Asserted mechanically, the same way `test_property_types.py`
+    asserts its mirrored file, because this list is short and will grow widget
+    by widget through item 1.5 - which is exactly when one copy gets updated
+    and the other does not.
+    """
+    import re
+
+    web = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "lib", "workshop-module.ts",
+    )
+    source = open(web).read()
+    block = re.search(r"export const REFERENCE_PROPS = \[(.*?)\]", source, re.S)
+    assert block, "REFERENCE_PROPS not found in workshop-module.ts - has it been renamed?"
+    in_browser = tuple(re.findall(r'"([^"]+)"', block.group(1)))
+    assert in_browser == wv.REFERENCE_PROPS, (
+        f"browser has {in_browser}, API has {wv.REFERENCE_PROPS}"
+    )
+
+
+# ---- object sets: the variable kind Workshop is actually built on -------------
+# The roadmap calls this "the item that decides whether Workshop parity is
+# real". The shape being tested is the one a person builds: a dataset becomes
+# an object type, an object-set variable draws from that type, a filter
+# variable narrows it, and a table reads the narrowed set.
+
+TYPE_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def object_set_var(vid: str, **extra) -> dict:
+    return var(vid, kind="object_set", **extra)
+
+
+def test_an_object_set_variable_resolves_to_a_definition_not_to_rows() -> None:
+    """Rows in a variable would make a saved app a saved session. The variable
+    describes the set; `/object-sets/evaluate` turns it into instances."""
+    variables = wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            )
+        }
+    )
+    resolved = wv.evaluate(variables, {})
+    assert resolved["v_sites"] == {"object_type_id": TYPE_ID, "filters": []}
+
+
+def test_a_filter_variable_narrows_the_set_a_table_reads() -> None:
+    """The canonical Workshop interaction: a Filter List and an Object Table
+    reading *the same* set, rather than each filtering its own copy."""
+    variables = wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            ),
+            "v_region": var("v_region", label="Region"),
+            "v_visible": object_set_var(
+                "v_visible", label="Sites in region",
+                derivation={
+                    "transform": "filter_set",
+                    "inputs": ["v_sites", "v_region"],
+                    "config": {"property": "region", "op": "eq"},
+                },
+            ),
+        }
+    )
+    resolved = wv.evaluate(variables, {"v_region": "north"})
+    assert resolved["v_visible"] == {
+        "object_type_id": TYPE_ID,
+        "filters": [{"property": "region", "op": "eq", "value": "north"}],
+    }
+    # And the base set is untouched - one variable narrowing another must not
+    # mutate the thing it read, or a second consumer of the base would silently
+    # get the narrowed one.
+    assert resolved["v_sites"]["filters"] == []
+
+
+def test_an_unset_filter_shows_everything_rather_than_nothing() -> None:
+    """A viewer who has not touched the filter yet should see the whole set.
+    Filtering for `region = null` would make every app open empty and look
+    broken.
+
+    This is *not* the failure decision 0002 removed - that was a binding to a
+    variable nothing declared, which the save path refuses outright. This is a
+    declared variable with no value yet, which is an ordinary state.
+    """
+    variables = wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            ),
+            "v_region": var("v_region", label="Region"),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "filter_set", "inputs": ["v_sites", "v_region"],
+                            "config": {"property": "region"}},
+            ),
+        }
+    )
+    for empty in ({}, {"v_region": None}, {"v_region": ""}, {"v_region": []}):
+        assert wv.evaluate(variables, empty)["v_visible"]["filters"] == [], empty
+
+
+def test_filters_chain_so_two_controls_narrow_one_set() -> None:
+    variables = wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            ),
+            "v_region": var("v_region", label="Region"),
+            "v_status": var("v_status", label="Status"),
+            "v_by_region": object_set_var(
+                "v_by_region", label="By region",
+                derivation={"transform": "filter_set", "inputs": ["v_sites", "v_region"],
+                            "config": {"property": "region"}},
+            ),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "filter_set", "inputs": ["v_by_region", "v_status"],
+                            "config": {"property": "status"}},
+            ),
+        }
+    )
+    resolved = wv.evaluate(variables, {"v_region": "north", "v_status": "open"})
+    assert [f["property"] for f in resolved["v_visible"]["filters"]] == ["region", "status"]
+
+
+def test_an_object_set_variable_with_no_type_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="names no object type"):
+        wv.parse({"v_sites": object_set_var("v_sites", label="All sites")})
+
+
+def test_an_object_set_that_is_both_derived_and_given_a_type_is_refused() -> None:
+    """Two answers to "where do these rows come from" and no rule for which
+    wins."""
+    with pytest.raises(wv.VariableError, match="not both"):
+        wv.parse(
+            {
+                "v_a": object_set_var("v_a", label="A",
+                                      object_set={"object_type_id": TYPE_ID, "filters": []}),
+                "v_b": object_set_var(
+                    "v_b", label="B",
+                    object_set={"object_type_id": TYPE_ID, "filters": []},
+                    derivation={"transform": "filter_set", "inputs": ["v_a", "v_a"],
+                                "config": {"property": "x"}},
+                ),
+            }
+        )
+
+
+def test_a_string_variable_carrying_an_object_set_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="only object_set variables"):
+        wv.parse({"v_a": var("v_a", object_set={"object_type_id": TYPE_ID})})
+
+
+def test_an_invalid_set_definition_is_refused_at_save_not_at_read() -> None:
+    """The same validation `/object-sets/evaluate` applies, moved to the moment
+    somebody can still fix it."""
+    with pytest.raises(wv.VariableError):
+        wv.parse(
+            {
+                "v_sites": object_set_var(
+                    "v_sites", label="All sites",
+                    object_set={"object_type_id": "not-a-uuid", "filters": []},
+                )
+            }
+        )
+
+
+def test_filter_set_refuses_an_operator_the_two_stores_disagree_about() -> None:
+    """`gt` is refused by `object_sets` because Postgres casts and OpenSearch
+    compares text. A derivation must not be a way around that."""
+    with pytest.raises(wv.VariableError, match="operator"):
+        wv.parse(
+            {
+                "v_sites": object_set_var("v_sites", label="Sites",
+                                          object_set={"object_type_id": TYPE_ID}),
+                "v_n": var("v_n", label="N"),
+                "v_big": object_set_var(
+                    "v_big", label="Big",
+                    derivation={"transform": "filter_set", "inputs": ["v_sites", "v_n"],
+                                "config": {"property": "capacity", "op": "gt"}},
+                ),
+            }
+        )
+
+
+def test_filtering_something_that_is_not_a_set_says_so() -> None:
+    variables = wv.parse(
+        {
+            "v_text": var("v_text", label="Some text"),
+            "v_region": var("v_region", label="Region"),
+            "v_bad": object_set_var(
+                "v_bad", label="Bad",
+                derivation={"transform": "filter_set", "inputs": ["v_text", "v_region"],
+                            "config": {"property": "region"}},
+            ),
+        }
+    )
+    with pytest.raises(wv.VariableError, match="not an object set"):
+        wv.evaluate(variables, {"v_text": "hello", "v_region": "north"})
+
+
+# ---- events (roadmap phase 2, item 1.3) --------------------------------------
+from src.services import workshop_events as we  # noqa: E402
+
+
+def event(eid: str, node: str = "btn", on: str = "click", effects=None) -> dict:
+    return {"id": eid, "trigger": {"node": node, "on": on}, "effects": effects or []}
+
+
+def set_var(target: str, value=None) -> dict:
+    return {"type": "set_variable", "config": {"variable": target, "value": value}}
+
+
+def test_an_event_declares_a_trigger_and_ordered_effects() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(
+        {"e_1": event("e_1", effects=[set_var("v_a", "x"),
+                                      {"type": "open_url", "config": {"url": "https://x.test"}}])},
+        layout={"btn": node({})},
+        variables=variables,
+    )
+    assert [e.type for e in events["e_1"].effects] == ["set_variable", "open_url"]
+
+
+def test_an_event_on_a_widget_that_is_not_there_is_refused() -> None:
+    """It can never fire, so it is not an event - it is a fragment of a
+    previous design that will confuse whoever reads the document next."""
+    with pytest.raises(we.EventError, match="does not contain"):
+        we.parse({"e_1": event("e_1", node="gone")}, layout={"btn": node({})})
+
+
+def test_setting_a_variable_the_module_does_not_declare_is_refused() -> None:
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    with pytest.raises(we.EventError, match="does not declare"):
+        we.parse({"e_1": event("e_1", effects=[set_var("v_gone")])},
+                 layout={"btn": node({})}, variables=variables)
+
+
+def test_setting_a_derived_variable_is_refused_and_says_what_to_set_instead() -> None:
+    """A derived variable is a function of its inputs. Honouring the write
+    would let one document show two different things depending on which the
+    reader believed - the same rule `evaluate` enforces for viewer values."""
+    variables = wv.parse(
+        {
+            "v_a": var("v_a", label="Source"),
+            "v_b": var("v_b", label="Computed",
+                       derivation={"transform": "concat", "inputs": ["v_a"]}),
+        }
+    )
+    with pytest.raises(we.EventError) as raised:
+        we.parse({"e_1": event("e_1", effects=[set_var("v_b")])},
+                 layout={"btn": node({})}, variables=variables)
+    assert "computed from other variables" in str(raised.value)
+    assert "Computed" in str(raised.value), "named by label, not by id"
+
+
+def test_an_unbuilt_effect_says_so_rather_than_saving_a_dead_click() -> None:
+    with pytest.raises(we.EventError, match="not built yet"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "navigate", "config": {}}])},
+                 layout={"btn": node({})})
+
+
+def test_a_url_a_browser_should_not_follow_is_refused() -> None:
+    """An app author is not necessarily trusted by everyone who opens the app,
+    and a published app is opened by the whole workspace."""
+    with pytest.raises(we.EventError, match="not a link a browser will open"):
+        we.parse(
+            {"e_1": event("e_1", effects=[
+                {"type": "open_url", "config": {"url": "javascript:alert(1)"}}])},
+            layout={"btn": node({})},
+        )
+
+
+def test_events_for_one_trigger_come_back_in_a_stated_order() -> None:
+    """Two events on one trigger both writing variables have to run in a
+    stated order, or the app behaves differently between reloads."""
+    events = we.parse(
+        {
+            "e_2": event("e_2", node="btn"),
+            "e_1": event("e_1", node="btn"),
+            "e_3": event("e_3", node="other"),
+        },
+        layout={"btn": node({}), "other": node({})},
+    )
+    assert [e.id for e in we.for_node(events, "btn", "click")] == ["e_1", "e_2"]
+
+
+def test_the_save_path_refuses_a_bad_event_too() -> None:
+    """Events are validated through `validate_module`, so a document with a
+    dead trigger cannot be saved at all."""
+    with pytest.raises(wv.VariableError, match="does not contain"):
+        wv.validate_module(
+            {"format": 2, "layout": {}, "variables": {},
+             "events": {"e_1": event("e_1", node="gone")}}
+        )

@@ -174,7 +174,11 @@ export type WorkshopTransform =
   | "if_else"
   | "cast"
   | "is_empty"
-  | "is_not_empty";
+  | "is_not_empty"
+  /** Narrow an object set by a value another variable holds — Foundry's Filter
+   * List driving an Object Table, expressed as a derivation. Inputs are
+   * `[set, valueVariable]`; config carries the property and the operator. */
+  | "filter_set";
 
 export interface WorkshopDerivation {
   transform: WorkshopTransform;
@@ -183,6 +187,15 @@ export interface WorkshopDerivation {
    * accidentally become invisible to cycle detection. */
   inputs: string[];
   config?: Record<string, unknown>;
+}
+
+/** One clause of an object set. The operator list is deliberately short: every
+ * one means the same thing on Postgres and OpenSearch, and an operator that did
+ * not would make an app's results depend on which store the deployment runs. */
+export interface ObjectSetFilter {
+  property: string;
+  op: "eq" | "neq" | "in" | "starts_with";
+  value: unknown;
 }
 
 export interface WorkshopVariable {
@@ -197,6 +210,12 @@ export interface WorkshopVariable {
   /** Present on a derived variable. Its value is a function of its inputs, so
    * a value supplied for it by a viewer is ignored rather than honoured. */
   derivation?: WorkshopDerivation;
+  /** `object_set` variables only: the set this one starts from, as a
+   * *definition* (type plus filters) rather than rows — storing rows would make
+   * a saved app a saved session. A variable has this **or** a derivation, never
+   * both: two answers to "where do these rows come from" and no rule for which
+   * wins, which the API refuses. */
+  object_set?: { object_type_id: string; filters?: ObjectSetFilter[] };
   /** What this was called when it was a string-keyed parameter, so a converted
    * app can still be read against the v1 document it came from. */
   legacy_name?: string;

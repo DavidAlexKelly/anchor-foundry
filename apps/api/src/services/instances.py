@@ -316,6 +316,34 @@ async def evaluate_object_set(
     narrows the set rather than failing the query - the same choice
     ``object_sets._matches_one`` makes, made the same way in both stores.
     """
+    predicate, params = _set_predicate(object_type_id, filters)
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
+          FROM object_instances i
+         WHERE {predicate}
+         ORDER BY i.updated_at DESC, i.id
+         LIMIT :limit OFFSET :offset
+        """,
+        {**params, "limit": max(1, min(limit, INSTANCE_PAGE_SIZE)), "offset": max(0, offset)},
+    )
+    total_row = await fetch_one(
+        conn,
+        f"SELECT count(*) AS n FROM object_instances i WHERE {predicate}",
+        params,
+    )
+    return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0
+
+
+def _set_predicate(
+    object_type_id: UUID, filters: tuple[Any, ...]
+) -> tuple[str, dict[str, Any]]:
+    """The WHERE clause for one set definition, and its bind parameters.
+
+    Shared by paging and aggregating - see `aggregate_object_set` for why that
+    matters.
+    """
     where = ["i.object_type_id = :tid"]
     params: dict[str, Any] = {"tid": str(object_type_id)}
 
@@ -344,24 +372,97 @@ async def evaluate_object_set(
         else:  # pragma: no cover - object_sets.parse refuses anything else
             raise ValueError(f"unsupported object-set operator {f.op!r}")
 
-    predicate = " AND ".join(where)
+    return " AND ".join(where), params
+
+
+async def aggregate_object_set(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    filters: tuple[Any, ...],
+    aggregation: str,
+    property_name: str | None,
+) -> int:
+    """One number over a whole set, Postgres edition (roadmap 1.5).
+
+    Reuses `_set_predicate` so the number counts exactly the rows
+    `evaluate_object_set` would page through. Two predicates would be two
+    definitions of the set, and the first time they drifted a Metric Card
+    would count rows the table beside it does not show.
+    """
+    predicate, params = _set_predicate(object_type_id, filters)
+    if aggregation == "count_distinct":
+        # Same text extraction the filters use, so "how many distinct regions"
+        # and "where region = north" agree about what a region *is*.
+        params["prop"] = property_name
+        row = await fetch_one(
+            conn,
+            f"""
+            SELECT count(DISTINCT jsonb_extract_path_text(i.properties, :prop)) AS n
+              FROM object_instances i
+             WHERE {predicate}
+            """,
+            params,
+        )
+    else:
+        row = await fetch_one(
+            conn,
+            f"SELECT count(*) AS n FROM object_instances i WHERE {predicate}",
+            params,
+        )
+    return int(row["n"]) if row else 0
+
+
+async def group_object_set(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    filters: tuple[Any, ...],
+    property_name: str,
+    limit: int,
+) -> tuple[list[tuple[str, int]], int]:
+    """How many in each distinct value of one property, Postgres edition
+    (roadmap 1.5).
+
+    Ordered by count descending *then value ascending*. The second key is not
+    decoration: without it, ties fall to whatever order each store happens to
+    produce, so two deployments would draw the same data differently and one of
+    them would look wrong to somebody who knew the other.
+
+    Rows whose property is absent are excluded rather than grouped under an
+    empty label - OpenSearch's terms aggregation skips missing fields, and a
+    bar labelled "" appearing on one store only is exactly the disagreement
+    this whole module is arranged to avoid.
+    """
+    predicate, params = _set_predicate(object_type_id, filters)
+    params["prop"] = property_name
+    params["limit"] = max(1, limit)
     rows = await fetch_all(
         conn,
         f"""
-        SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
+        SELECT jsonb_extract_path_text(i.properties, :prop) AS value, count(*) AS n
           FROM object_instances i
          WHERE {predicate}
-         ORDER BY i.updated_at DESC, i.id
-         LIMIT :limit OFFSET :offset
+           AND jsonb_extract_path_text(i.properties, :prop) IS NOT NULL
+         GROUP BY 1
+         ORDER BY n DESC, value ASC
+         LIMIT :limit
         """,
-        {**params, "limit": max(1, min(limit, INSTANCE_PAGE_SIZE)), "offset": max(0, offset)},
+        params,
     )
     total_row = await fetch_one(
         conn,
-        f"SELECT count(*) AS n FROM object_instances i WHERE {predicate}",
-        params,
+        f"""
+        SELECT count(DISTINCT jsonb_extract_path_text(i.properties, :prop)) AS n
+          FROM object_instances i
+         WHERE {predicate}
+        """,
+        {k: v for k, v in params.items() if k != "limit"},
     )
-    return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0
+    return (
+        [(str(r["value"]), int(r["n"])) for r in rows],
+        int(total_row["n"]) if total_row else 0,
+    )
 
 
 def _filter_text(value: Any) -> str:

@@ -57,6 +57,7 @@ TRANSFORMS = (
     "cast",         # between primitives, refusing what it cannot convert
     "is_empty",
     "is_not_empty",
+    "filter_set",   # narrow an object set by a value another variable holds
 )
 
 # Declared here and deliberately not evaluated here. Both need the instance
@@ -98,6 +99,10 @@ class Variable:
     label: str
     default: Any = None
     derivation: Derivation | None = None
+    # kind == "object_set" only: the set this variable starts from, as a
+    # *definition* (type plus filters) rather than rows. Storing rows would
+    # make a saved app a saved session, which decision 0002 rules out.
+    object_set: dict[str, Any] | None = None
 
     @property
     def derived(self) -> bool:
@@ -133,17 +138,59 @@ def parse(raw: Any) -> dict[str, Variable]:
         label = str(value.get("label") or "").strip()
         if not label:
             raise VariableError(f"variable {key!r} needs a label")
+        derivation = _parse_derivation(vid, value.get("derivation"))
         variables[vid] = Variable(
             id=vid,
             kind=str(kind),
             label=label,
             default=value.get("default"),
-            derivation=_parse_derivation(vid, value.get("derivation")),
+            derivation=derivation,
+            object_set=_parse_object_set(vid, kind, label, value.get("object_set"), derivation),
         )
 
     _refuse_unknown_inputs(variables)
     _refuse_cycles(variables)
     return variables
+
+
+def _parse_object_set(
+    vid: str, kind: Any, label: str, raw: Any, derivation: Derivation | None
+) -> dict[str, Any] | None:
+    """The set an `object_set` variable starts from.
+
+    An object-set variable is either a **base** set - a type, optionally with
+    fixed filters - or a **derived** one narrowed from another set. Exactly one
+    of the two, because a variable that declared both would have two answers to
+    "where do these rows come from" and no rule for which wins.
+    """
+    from . import object_sets  # local: only object-set variables need it
+
+    if kind != "object_set":
+        if raw is not None:
+            raise VariableError(
+                f"variable {label!r} is a {kind} but carries an object set - only "
+                "object_set variables may"
+            )
+        return None
+    if derivation is not None:
+        if raw is not None:
+            raise VariableError(
+                f"variable {label!r} is both derived and given a set of its own; it can "
+                "start from a type or be narrowed from another set, not both"
+            )
+        return None
+    if raw is None:
+        raise VariableError(
+            f"variable {label!r} is an object set but names no object type to draw from"
+        )
+    try:
+        # Parsed rather than trusted: the same validation `/object-sets/evaluate`
+        # applies, so a definition that would be refused at read time is refused
+        # at save time instead - which is where somebody can still fix it.
+        object_sets.parse(raw)
+    except ValueError as exc:
+        raise VariableError(f"variable {label!r}: {exc}") from exc
+    return dict(raw)
 
 
 def _parse_derivation(vid: str, raw: Any) -> Derivation | None:
@@ -203,6 +250,26 @@ def _check_arity(vid: str, d: Derivation) -> None:
     elif d.transform in ("is_empty", "is_not_empty"):
         if len(d.inputs) != 1:
             raise VariableError(f"variable {vid!r}: {d.transform} needs exactly one input")
+    elif d.transform == "filter_set":
+        from . import object_sets
+
+        if len(d.inputs) != 2:
+            raise VariableError(
+                f"variable {vid!r}: filter_set needs exactly two inputs "
+                "(the set to narrow, and the variable holding the value)"
+            )
+        prop = d.config.get("property")
+        if not prop or not isinstance(prop, str):
+            raise VariableError(f"variable {vid!r}: filter_set needs a property to filter on")
+        op = d.config.get("op", "eq")
+        if op not in object_sets.OPERATORS:
+            # The same short operator list, and the same reason: an operator
+            # that meant different things on Postgres and OpenSearch would make
+            # an app's results depend on which store the deployment runs.
+            raise VariableError(
+                f"variable {vid!r}: filter_set operator {op!r}; expected one of "
+                f"{', '.join(object_sets.OPERATORS)}"
+            )
 
 
 def _refuse_unknown_inputs(variables: dict[str, Variable]) -> None:
@@ -284,7 +351,15 @@ def evaluate(variables: dict[str, Variable], values: dict[str, Any]) -> dict[str
     for vid in evaluation_order(variables):
         variable = variables[vid]
         if variable.derivation is None:
-            resolved[vid] = values.get(vid, variable.default)
+            # An object-set variable resolves to its *definition*, not to rows.
+            # Turning that into instances is `/object-sets/evaluate`'s job, and
+            # keeping the two apart is what lets one set feed a table, a chart
+            # and a count without three different notions of what the set is.
+            resolved[vid] = (
+                dict(variable.object_set)
+                if variable.object_set is not None
+                else values.get(vid, variable.default)
+            )
             continue
         resolved[vid] = _apply(variable, [resolved[i] for i in variable.derivation.inputs])
     return resolved
@@ -308,7 +383,38 @@ def _apply(variable: Variable, inputs: list[Any]) -> Any:
         return _empty(inputs[0])
     if d.transform == "is_not_empty":
         return not _empty(inputs[0])
+    if d.transform == "filter_set":
+        return _filter_set(variable, inputs[0], inputs[1], d.config)
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
+
+
+def _filter_set(
+    variable: Variable, base: Any, value: Any, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Narrow an object set by a value another variable holds - Foundry's
+    Filter List driving an Object Table, expressed as a derivation.
+
+    **An unset value drops the filter rather than filtering for nothing.** A
+    viewer who has not touched the filter yet should see the whole set, not an
+    empty table; filtering for `region = null` would make every app open empty
+    and look broken.
+
+    This is *not* the failure decision 0002 removed. That one was a binding to
+    a variable nothing declared, which the save path now refuses outright. This
+    is a declared variable that simply has no value yet, which is an ordinary
+    state with an obvious meaning.
+    """
+    if not isinstance(base, dict) or "object_type_id" not in base:
+        raise VariableError(
+            f"{variable.label!r} filters something that is not an object set"
+        )
+    if value is None or value == "" or (isinstance(value, (list, tuple)) and not value):
+        return dict(base)
+    filters = list(base.get("filters") or [])
+    filters.append(
+        {"property": config["property"], "op": config.get("op", "eq"), "value": value}
+    )
+    return {**base, "filters": filters}
 
 
 def _text(value: Any) -> str:
@@ -442,6 +548,18 @@ def validate_module(document: Any) -> dict[str, Variable]:
     if not isinstance(document, dict) or document.get("format") != 2:
         return {}
     variables = parse(document.get("variables"))
+    # Events are validated against the layout and the variables, because every
+    # refusal there is about a reference resolving.
+    from . import workshop_events
+
+    try:
+        workshop_events.parse(
+            document.get("events"),
+            layout=document.get("layout"),
+            variables=variables,
+        )
+    except workshop_events.EventError as exc:
+        raise VariableError(str(exc)) from exc
     broken = dangling_references(document.get("layout"), variables)
     if broken:
         names = ", ".join(sorted({b["variable"] for b in broken}))

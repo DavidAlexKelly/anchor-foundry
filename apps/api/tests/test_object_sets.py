@@ -349,3 +349,246 @@ def test_a_bad_definition_is_refused_in_a_sentence(client: TestClient, fx: Fixtu
     assert r.status_code == 422, r.text
     assert isinstance(r.json()["detail"], str)
     assert "nope" in r.json()["detail"]
+
+
+# ---- aggregating a set (roadmap 1.5, what a Metric Card shows) ----------------
+def aggregate(client: TestClient, fx: Fixture, definition: dict, **kw):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/aggregate",
+        headers=hdr(fx.owner_sub),
+        json={"definition": definition, **kw},
+    )
+
+
+def test_a_count_is_the_size_of_the_set_not_of_a_page(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The whole reason this is not a flag on `/evaluate`: a card that got its
+    number by paging would be wrong the moment a set outgrew a page, which is
+    exactly when the number starts mattering."""
+    definition = {"object_type_id": seeded, "filters": []}
+    page = evaluate(client, fx, definition, limit=2)
+    assert len(page["instances"]) == 2
+
+    r = aggregate(client, fx, definition, aggregation="count")
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == len(ROWS)
+
+
+def test_a_count_honours_the_set_s_filters(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    definition = {
+        "object_type_id": seeded,
+        "filters": [{"property": "region", "op": "eq", "value": "north"}],
+    }
+    expected = sum(1 for _, p in ROWS if p["region"] == "north")
+    r = aggregate(client, fx, definition, aggregation="count")
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == expected
+    # And it agrees with what the table beside it would show.
+    assert evaluate(client, fx, definition)["total"] == expected
+
+
+def test_count_distinct_counts_values_not_rows(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    definition = {"object_type_id": seeded, "filters": []}
+    expected = len({p["region"] for _, p in ROWS})
+    r = aggregate(client, fx, definition, aggregation="count_distinct", property="region")
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == expected
+    assert expected < len(ROWS), "the fixture must have repeats or this proves nothing"
+
+
+def test_count_distinct_without_a_property_says_what_is_missing(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    r = aggregate(client, fx, {"object_type_id": seeded, "filters": []},
+                  aggregation="count_distinct")
+    assert r.status_code == 422, r.text
+    assert "needs a property" in r.json()["detail"]
+
+
+def test_a_numeric_aggregation_is_refused_with_the_reason(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """Same refusal as ordered operators, for the same cause: properties are
+    stored untyped, so a sum means one thing on Postgres and nothing at all on
+    OpenSearch. A card whose number is right on one deployment and absent on
+    another is worse than one that says the platform cannot answer yet."""
+    r = aggregate(client, fx, {"object_type_id": seeded, "filters": []},
+                  aggregation="sum", property="capacity")
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "untyped" in detail
+    assert "count and count_distinct" in detail
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"aggregation": "count", "property": None, "filters": []},
+        {"aggregation": "count", "property": None,
+         "filters": [{"property": "region", "op": "eq", "value": "north"}]},
+        {"aggregation": "count_distinct", "property": "region", "filters": []},
+        {"aggregation": "count_distinct", "property": "status",
+         "filters": [{"property": "region", "op": "eq", "value": "north"}]},
+    ],
+    ids=["count", "count-filtered", "distinct", "distinct-filtered"],
+)
+async def test_both_stores_aggregate_a_set_the_same_way(opensearch: str, case: dict) -> None:
+    """The check that stops a Metric Card meaning two things.
+
+    Postgres counts distinct `jsonb_extract_path_text`; OpenSearch runs a
+    cardinality aggregation on the `.keyword` subfield. Different mechanisms,
+    and the number has to be the same or an app's headline figure depends on
+    which store the deployment happens to run.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-agg-test",
+            object_type_id=type_id,
+            source_id=source_id,
+            rows=ROWS,
+            synced_at=datetime.now(timezone.utc),
+        )
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id), "filters": case["filters"]}
+        )
+        in_set = [p for _, p in ROWS if object_sets.matches(p, definition.filters)]
+        expected = (
+            len(in_set)
+            if case["aggregation"] == "count"
+            else len({str(p[case["property"]]) for p in in_set if p.get(case["property"]) is not None})
+        )
+        value = await store.aggregate_object_set(
+            search_prefix="ws-agg-test",
+            object_type_id=type_id,
+            filters=definition.filters,
+            aggregation=case["aggregation"],
+            property_name=case["property"],
+        )
+        assert value == expected, case
+    finally:
+        await store.close()
+
+
+# ---- grouping a set (roadmap 1.5, what a chart over a set plots) -------------
+def group(client: TestClient, fx: Fixture, definition: dict, **kw):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/group",
+        headers=hdr(fx.owner_sub),
+        json={"definition": definition, **kw},
+    )
+
+
+def test_grouping_counts_each_value_and_orders_biggest_first(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    r = group(client, fx, {"object_type_id": seeded, "filters": []}, property="region")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    expected: dict[str, int] = {}
+    for _, p in ROWS:
+        expected[p["region"]] = expected.get(p["region"], 0) + 1
+    assert {g["value"]: g["count"] for g in body["groups"]} == expected
+    counts = [g["count"] for g in body["groups"]]
+    assert counts == sorted(counts, reverse=True), "biggest bar first"
+    assert body["distinct_total"] == len(expected)
+    assert body["truncated"] is False
+
+
+def test_grouping_honours_the_set_s_filters(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The point of grouping a *set* rather than a type: the chart and the
+    table beside it are looking at the same rows."""
+    definition = {
+        "object_type_id": seeded,
+        "filters": [{"property": "region", "op": "eq", "value": "north"}],
+    }
+    r = group(client, fx, definition, property="status")
+    assert r.status_code == 200, r.text
+    expected: dict[str, int] = {}
+    for _, p in ROWS:
+        if p["region"] == "north":
+            expected[p["status"]] = expected.get(p["status"], 0) + 1
+    assert {g["value"]: g["count"] for g in r.json()["groups"]} == expected
+    assert sum(g["count"] for g in r.json()["groups"]) == evaluate(
+        client, fx, definition
+    )["total"]
+
+
+def test_truncation_is_reported_rather_than_silent(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """A chart drawing the top N of many without saying so is the same trap as
+    a preview that sampled and did not mention it. Derived from the distinct
+    total, not from "did we fill the page", which would be wrong on a set with
+    exactly `limit` groups."""
+    r = group(client, fx, {"object_type_id": seeded, "filters": []},
+              property="region", limit=1)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["groups"]) == 1
+    assert body["truncated"] is True
+    assert body["distinct_total"] > 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"property": "region", "filters": []},
+        {"property": "status", "filters": []},
+        {"property": "status",
+         "filters": [{"property": "region", "op": "eq", "value": "north"}]},
+    ],
+    ids=["region", "status", "status-filtered"],
+)
+async def test_both_stores_group_a_set_the_same_way(opensearch: str, case: dict) -> None:
+    """Postgres groups with SQL, OpenSearch with a terms aggregation. Same
+    buckets, same counts, **same order** - ties included, which is why both
+    sides ask for count-descending-then-value-ascending explicitly."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-group-test",
+            object_type_id=type_id,
+            source_id=source_id,
+            rows=ROWS,
+            synced_at=datetime.now(timezone.utc),
+        )
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id), "filters": case["filters"]}
+        )
+        in_set = [p for _, p in ROWS if object_sets.matches(p, definition.filters)]
+        tally: dict[str, int] = {}
+        for p in in_set:
+            value = p.get(case["property"])
+            if value is not None:
+                tally[str(value)] = tally.get(str(value), 0) + 1
+        expected = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+
+        buckets, distinct_total = await store.group_object_set(
+            search_prefix="ws-group-test",
+            object_type_id=type_id,
+            filters=definition.filters,
+            property_name=case["property"],
+            limit=object_sets.MAX_GROUPS,
+        )
+        assert buckets == expected, case
+        assert distinct_total == len(tally)
+    finally:
+        await store.close()

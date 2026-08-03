@@ -255,12 +255,54 @@ class Handler(BaseHTTPRequestHandler):
         start = int(body.get("from", 0))
         size = int(body.get("size", 10))
         window = matched[start:start + size]
-        self._send(200, {
+        response: dict = {
             "hits": {
                 "total": {"value": len(matched), "relation": "eq"},
                 "hits": [{"_index": index, "_id": i, "_source": s} for i, s in window],
             }
-        })
+        }
+        # Cardinality only - the one aggregation this platform issues
+        # (object_sets.AGGREGATIONS). Implemented exactly, not approximately:
+        # OpenSearch's cardinality is approximate above ~40k distinct values,
+        # and a fixture that copied that would be imitating an error budget it
+        # has no way to reproduce. Small sets agree either way, which is what
+        # a test asserts against.
+        aggs = body.get("aggs") or {}
+        if aggs:
+            computed = {}
+            for name, spec in aggs.items():
+                kind = "cardinality" if "cardinality" in spec else (
+                    "terms" if "terms" in spec else None
+                )
+                if kind is None:
+                    return self._send(400, {"error": f"fixture has no {list(spec)[0]} aggregation"})
+                field = spec[kind]["field"]
+                # `properties.x.keyword` addresses the same stored value as
+                # `properties.x`; this fixture has no analysers, so the
+                # subfield is the field. Its own docstring already records that
+                # this is the thing a fixture cannot check.
+                path = field[: -len(".keyword")] if field.endswith(".keyword") else field
+                parts = path.split(".")
+                counts: dict[str, int] = {}
+                for _, source in matched:
+                    cursor = source
+                    for part in parts:
+                        cursor = cursor.get(part) if isinstance(cursor, dict) else None
+                    if cursor is not None:
+                        counts[str(cursor)] = counts.get(str(cursor), 0) + 1
+                if kind == "cardinality":
+                    computed[name] = {"value": len(counts)}
+                else:
+                    # count desc, then key asc - the order the real terms
+                    # aggregation is asked for explicitly, so the fixture is
+                    # not the reason a test passes.
+                    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+                    size = int(spec["terms"].get("size", 10))
+                    computed[name] = {
+                        "buckets": [{"key": k, "doc_count": n} for k, n in ordered[:size]]
+                    }
+            response["aggregations"] = computed
+        self._send(200, response)
 
     def _delete_by_query(self, index: str, body: dict) -> None:
         matched = _filtered(index, body.get("query", {}))

@@ -106,7 +106,11 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Prove it.** Round-trip an existing canvas app through the new format and render it unchanged.
 
-### 1.2 Variables — **L, part done** (`STATUS.md` §58 object-set evaluation, §70 the typed variable graph: derivations, cycle refusal, usage-aware deletion, and an evaluation endpoint. §71 the conversion, run: migration 0034 converted every stored app to `format: 2` and the builder now reads and writes it, so the refusals above apply to real saves. **What remains is the variables panel itself** — create, rename, retype, see usages. The server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement.)
+### 1.2 Variables — **L, part done** (`STATUS.md` §58 object-set evaluation, §70 the typed variable graph: derivations, cycle refusal, usage-aware deletion, and an evaluation endpoint. §71 the conversion, run: migration 0034 converted every stored app to `format: 2` and the builder now reads and writes it, so the refusals above apply to real saves. §72 the variables panel: create, rename, retype, derive, delete, with both refusals surfaced where the work happens.)
+
+§73 the object-set half — a variable of kind `object_set` holding a definition, a `filter_set` derivation that narrows one set from another, an object table that reads a set variable, and the panel to configure both. Verified end to end in a browser: dataset → object type → set → filter → table, live.
+
+**What remains** are the two ontology transforms, `object_property` and `object_set_aggregation`. Both need a round trip against the instance store rather than a pure function, and both are what a Metric Card wants — so they are better built with item 1.5's widgets than ahead of them. The API refuses them with a sentence in the meantime.
 
 **What Foundry does.** Typed variables are the wiring. Types: **object set**, **single object**, string, numeric, boolean, date/timestamp, array (of boolean, date, numeric, geopoint, geoshape, string, timestamp or struct), and object-set-filter variables. Object set variables are initialised from an object type or another object set, then optionally filtered by property values or Filter variables, or **pivoted to linked objects via a Search Around**. Variables also support **transformations**: string concatenation, if/else, casting between primitives, `is empty`/`is not empty`, `object property` (a property of a single object), and `object set aggregation` (an aggregate over a property of a set) — and transformations chain, referencing earlier ones.
 
@@ -120,9 +124,13 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Prove it.** A filter list narrowing an object set that an object table and a chart both read, live, with a metric card showing an aggregation over the same set. Change the filter; all three update; no page reload.
 
+*Status: **done and verified** (§73, §74, §75). A filter narrows one object set; a table, a metric card and a chart all read it; changing the filter moves all three with no reload. The chart plots a grouped count and the card counts — grouped sums and numeric aggregates are refused, because untyped properties make them mean different things on the two stores.*
+
+*One correction to an earlier assumption recorded here: the metric card did **not** need `object_set_aggregation` as a variable transform. It needs an aggregation endpoint, which is what §74 built; making the variable evaluator reach the instance store would have changed `evaluate()`'s contract for every caller to no benefit.*
+
 **Depends on** 1.1.
 
-### 1.3 Events — **M**
+### 1.3 Events — **M, the model and the first trigger are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals). **What remains**: more trigger sources (a Button Group widget, dropdown select/deselect), and the three effects refused with a reason — `navigate` waits on 1.4's pages and overlays, `run_action` on binding an action's parameters to variables, `export` on a download surface the viewer route lacks.
 
 **What Foundry does.** Events trigger behaviour when a user acts. They fire from many widgets — Button Group, Object Table on row selection, String Dropdown on select/deselect, Tabs. A button's **On click** can trigger an action, trigger a set of events, open a URL, or begin an export; when it triggers an action you can additionally fire events at points in the action lifecycle (on submission start, on successful completion). Events execute **sequentially in configured order**, but do not wait for the downstream computation of previous events. Setting a variable copies the value immediately, so the next event sees it.
 
