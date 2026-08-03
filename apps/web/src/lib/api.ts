@@ -138,6 +138,19 @@ export const repositories = {
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,
     ),
+  /** Run one file's transform against a sample of its inputs, writing nothing.
+   * `content` is the editor's buffer, so this answers "does what I just typed
+   * work" rather than "did what I committed work". */
+  preview: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { path: string; content?: string; branch?: string },
+  ) =>
+    request<import("./types").TransformPreview>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/preview`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
 };
 
 /** The resource registry (db 0032). `resolve` takes an id and nothing else -
@@ -743,10 +756,30 @@ export const canvas = {
     ),
   remove: (wid: string, pid: string, appId: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}`, { method: "DELETE" }),
-  saveDefinition: (wid: string, pid: string, appId: string, definition: Record<string, unknown>) =>
+  saveDefinition: (
+    wid: string,
+    pid: string,
+    appId: string,
+    // A whole module document (decision 0002), not a bare node map. The API
+    // refuses a v2 document whose bindings do not resolve, so a save that
+    // dropped the variables would come back 422 rather than corrupt the app.
+    definition: import("./types").WorkshopModule | Record<string, unknown>,
+  ) =>
     request<import("./types").CanvasAppDetail>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/definition`,
       { method: "PUT", body: JSON.stringify({ definition }) },
+    ),
+  /** Resolve every variable, computing derived ones server-side so the
+   * transformation semantics have one implementation. */
+  evaluateVariables: (
+    wid: string,
+    pid: string,
+    appId: string,
+    values: Record<string, unknown>,
+  ) =>
+    request<{ values: Record<string, unknown>; order: string[] }>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/variables/evaluate`,
+      { method: "POST", body: JSON.stringify({ values }) },
     ),
   listVersions: (wid: string, pid: string, appId: string) =>
     request<import("./types").CanvasAppVersion[]>(

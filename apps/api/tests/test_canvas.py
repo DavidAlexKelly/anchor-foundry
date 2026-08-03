@@ -295,3 +295,97 @@ def test_publishing_shares_the_layout_not_access_to_the_data(
     r = client.get(f"/api/workspaces/{fx.workspace}/projects/{pid}/datasets",
                    headers=hdr(fx.editor_sub))
     assert r.status_code == 200, r.text
+
+
+# ---- typed variables (roadmap phase 2, item 1.2) -----------------------------
+# The service tests (test_workshop_variables.py) cover the graph. These cover
+# the two things only the HTTP layer can prove: that a bad document is refused
+# at *save* rather than discovered at view, and that evaluation is reachable.
+
+
+def _module(variables: dict, layout: dict | None = None) -> dict:
+    return {"format": 2, "layout": layout or {}, "variables": variables, "events": {}}
+
+
+def _new_app(client: TestClient, fx: Fixture) -> str:
+    r = client.post(base(fx), headers=hdr(fx.editor_sub),
+                    json={"name": f"Vars {uuid.uuid4().hex[:8]}"})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_saving_a_module_with_a_dangling_binding_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The save is where this has to be caught. A document with a binding to
+    nothing renders as a widget showing everything, which looks like data."""
+    app_id = _new_app(client, fx)
+    layout = {"f1": {"type": {"resolvedName": "CanvasParameterControl"},
+                     "props": {"filterParameter": "v_gone"}}}
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": _module({}, layout)})
+    assert r.status_code == 422, r.text
+    assert "v_gone" in r.json()["detail"]
+
+
+def test_saving_a_module_with_a_variable_cycle_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    app_id = _new_app(client, fx)
+    variables = {
+        "v_a": {"id": "v_a", "kind": "string", "label": "Alpha",
+                "derivation": {"transform": "concat", "inputs": ["v_b"]}},
+        "v_b": {"id": "v_b", "kind": "string", "label": "Beta",
+                "derivation": {"transform": "concat", "inputs": ["v_a"]}},
+    }
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": _module(variables)})
+    assert r.status_code == 422, r.text
+    assert "loop" in r.json()["detail"]
+
+
+def test_a_v1_definition_still_saves(client: TestClient, fx: Fixture) -> None:
+    """Every unconverted app must keep working. A v1 document has no variables
+    to validate and must pass straight through."""
+    app_id = _new_app(client, fx)
+    v1 = {"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["f1"]},
+          "f1": {"type": {"resolvedName": "CanvasParameterControl"},
+                 "props": {"name": "region", "filterParameter": "region"}}}
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": v1})
+    assert r.status_code == 200, r.text
+
+
+def test_evaluating_variables_resolves_derived_ones(
+    client: TestClient, fx: Fixture
+) -> None:
+    app_id = _new_app(client, fx)
+    variables = {
+        "v_first": {"id": "v_first", "kind": "string", "label": "First"},
+        "v_last": {"id": "v_last", "kind": "string", "label": "Last", "default": "Lovelace"},
+        "v_full": {"id": "v_full", "kind": "string", "label": "Full",
+                   "derivation": {"transform": "concat", "inputs": ["v_first", "v_last"],
+                                  "config": {"separator": " "}}},
+    }
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": _module(variables)})
+    assert r.status_code == 200, r.text
+
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub), json={"values": {"v_first": "Ada"}})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["values"]["v_full"] == "Ada Lovelace"
+    assert body["values"]["v_last"] == "Lovelace", "an untouched variable keeps its default"
+    assert body["order"].index("v_full") > body["order"].index("v_first")
+
+
+def test_a_viewer_may_evaluate_but_not_save(client: TestClient, fx: Fixture) -> None:
+    """Evaluating is reading an app you can already open. Saving is not."""
+    app_id = _new_app(client, fx)
+    r = client.post(f"{base(fx)}/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub), json={"values": {}})
+    assert r.status_code == 200, r.text
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.viewer_sub),
+                   json={"definition": _module({})})
+    assert r.status_code == 403, r.text

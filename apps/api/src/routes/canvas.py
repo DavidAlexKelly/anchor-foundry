@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
@@ -27,6 +27,7 @@ from ..lib.errors import ForbiddenError
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import canvas as canvas_service
+from ..services import workshop_variables as variables_service
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/canvas-apps", tags=["canvas"]
@@ -84,6 +85,18 @@ class PublishIn(BaseModel):
 class ShareOut(BaseModel):
     group_id: UUID
     group_name: str
+
+
+class EvaluateVariablesIn(BaseModel):
+    """What the viewer has set. Values for derived variables are ignored - a
+    derived variable is a function of its inputs (see the service)."""
+
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvaluateVariablesOut(BaseModel):
+    values: dict[str, Any]
+    order: list[str]
 
 
 def _out(row: dict[str, Any]) -> CanvasAppDetail:
@@ -201,6 +214,18 @@ async def save_definition(
     request: Request,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> CanvasAppDetail:
+    # Validated here rather than in `canvas_service`, which stores an opaque
+    # blob and does not interpret it - a property decision 0002 records as
+    # worth keeping. The API refuses the document; the storage layer stays
+    # uninterested in what is inside it. v1 definitions pass through
+    # untouched, or every unconverted app would stop being saveable.
+    try:
+        variables_service.validate_module(body.definition)
+    except variables_service.VariableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
     async with user_connection(access.auth.user_id) as conn:
         row = await canvas_service.save_definition(
             conn, access.project_id, app_id,
@@ -230,6 +255,50 @@ async def list_versions(
     async with user_connection(access.auth.user_id) as conn:
         rows = await canvas_service.list_versions(conn, access.project_id, app_id)
     return [VersionOut(**r) for r in rows]
+
+
+# ---- variables (roadmap phase 2, item 1.2) -----------------------------------
+@router.post("/{app_id}/variables/evaluate", response_model=EvaluateVariablesOut)
+async def evaluate_variables(
+    app_id: UUID,
+    body: EvaluateVariablesIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> EvaluateVariablesOut:
+    """Resolve every variable in the app, computing derived ones in dependency
+    order.
+
+    **Why the server does this rather than the browser**, since the transforms
+    are pure functions and the browser is where the values are shown. This
+    repo already carries five files mirrored between two runtimes and a
+    standing note that a sixth should become a shared package instead
+    (`STATUS.md`, rough edges). A TypeScript copy of `if_else`'s truthiness or
+    `cast`'s refusals would be the sixth, and those are exactly the semantics
+    two implementations get subtly and invisibly different.
+
+    The round trip is close to free where it matters: derived values change
+    when their *inputs* change - a filter selection, a row click - which is the
+    same moment the app is already asking the server to re-evaluate an object
+    set. It rides along with a call that was happening anyway. The honest cost
+    is a text input, where every debounced keystroke now costs a request that a
+    local computation would not.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get(conn, access.project_id, app_id)
+    document = _parse_json(row["definition"])
+    try:
+        variables = variables_service.validate_module(document)
+        resolved = variables_service.evaluate(variables, body.values)
+    except variables_service.VariableError as exc:
+        # A saved app whose document no longer validates. Reachable: the module
+        # could have been written before a rule existed, or by something other
+        # than this API. Reported rather than swallowed, because the viewer
+        # otherwise sees widgets quietly bound to nothing.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    return EvaluateVariablesOut(
+        values=resolved, order=variables_service.evaluation_order(variables)
+    )
 
 
 # ---- publishing ---------------------------------------------------------------

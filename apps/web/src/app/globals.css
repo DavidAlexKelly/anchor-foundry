@@ -1080,3 +1080,41 @@ button { font: inherit; cursor: pointer; }
   font: inherit; font-size: 12.5px; border: none; background: none;
   color: var(--ink-soft); cursor: pointer; text-decoration: underline;
 }
+
+/* ---- transform preview (ROADMAP phase 2, 2.6) ----------------------------- */
+.repo-preview { margin-top: 12px; display: grid; gap: 8px; }
+.repo-preview-bar { display: flex; align-items: center; gap: 10px; }
+.repo-preview-bar .soft { font-size: 12px; }
+.repo-preview-meta {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  font-size: 12px; color: var(--ink-soft);
+}
+.repo-preview-meta .warn { color: var(--brass); }
+/* The sample warning is the one thing on this panel that must not be mistaken
+   for decoration: a row count over a sample is not the row count. */
+.repo-preview-warning {
+  margin: 0; padding: 8px 10px;
+  border-left: 3px solid var(--brass);
+  background: var(--surface-2, rgba(0, 0, 0, 0.03));
+  font-size: 12.5px; line-height: 1.45;
+}
+.repo-preview-drift {
+  padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  font-size: 12.5px;
+}
+.repo-preview-drift strong { display: block; margin-bottom: 4px; }
+.repo-preview-drift ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; }
+.repo-preview-drift li { font-size: 12px; color: var(--ink-soft); }
+.repo-preview-drift li.added { color: var(--accent-deep); }
+.repo-preview-drift li.modified { color: var(--brass); }
+.repo-preview-drift li.deleted { color: var(--danger); }
+.repo-preview-table { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.repo-preview-table table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.repo-preview-table th, .repo-preview-table td {
+  padding: 5px 9px; text-align: left; border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.repo-preview-table th { position: sticky; top: 0; background: var(--surface); font-weight: 600; }
+.repo-preview-table th .soft { display: block; font-weight: 400; font-size: 10.5px; }
+.repo-preview-table td { font-family: var(--font-mono); }

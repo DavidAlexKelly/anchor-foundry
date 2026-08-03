@@ -29,6 +29,7 @@ import { canvas as canvasApi } from "@/lib/api";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
+import { layoutOf } from "@/lib/workshop-module";
 
 /** Craft.js's `enabled` option is what makes a node draggable, selectable and
  * editable. `<Editor enabled={false}>` is the documented way to render a
@@ -77,7 +78,9 @@ export default function PublishedAppPage() {
     );
   }
 
-  const definition = app.data.definition;
+  // After migration 0034 a stored definition wraps the node tree; the
+  // renderer wants the tree.
+  const definition = layoutOf(app.data.definition);
   return (
     <main className="page">
       <nav className="crumbs" aria-label="Breadcrumb">

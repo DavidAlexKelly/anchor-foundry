@@ -106,7 +106,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Prove it.** Round-trip an existing canvas app through the new format and render it unchanged.
 
-### 1.2 Variables — **L, part done** (`STATUS.md` §58: object-set evaluation shipped; the builder panel and derived variables remain)
+### 1.2 Variables — **L, part done** (`STATUS.md` §58 object-set evaluation, §70 the typed variable graph: derivations, cycle refusal, usage-aware deletion, and an evaluation endpoint. §71 the conversion, run: migration 0034 converted every stored app to `format: 2` and the builder now reads and writes it, so the refusals above apply to real saves. **What remains is the variables panel itself** — create, rename, retype, see usages. The server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement.)
 
 **What Foundry does.** Typed variables are the wiring. Types: **object set**, **single object**, string, numeric, boolean, date/timestamp, array (of boolean, date, numeric, geopoint, geoshape, string, timestamp or struct), and object-set-filter variables. Object set variables are initialised from an object type or another object set, then optionally filtered by property values or Filter variables, or **pivoted to linked objects via a Search Around**. Variables also support **transformations**: string concatenation, if/else, casting between primitives, `is empty`/`is not empty`, `object property` (a property of a single object), and `object set aggregation` (an aggregate over a property of a set) — and transformations chain, referencing earlier ones.
 
@@ -213,15 +213,19 @@ Tree, create/rename/delete/move, tabbed editors, unsaved-state indicators, and a
 
 Create from a branch, switch, list, delete. Commit to a branch. A diff view (the existing `services/code.py` diff logic already handles the trailing-newline case correctly — `STATUS.md` §46 — and should be reused, not rewritten). Fast-forward merge. **Depends on** 2.1.
 
-### 2.5 Transforms authoring — **L, spiked** (`docs/decisions/0004-running-customer-code.md`, `STATUS.md` §63: declarations read statically and tested; execution blocked on the runner task and empty role that decision requires)
+### 2.5 Transforms authoring — **L, done** (`docs/decisions/0004-running-customer-code.md`; `STATUS.md` §63 declarations, §64 the runner task and empty role, §65 the container entrypoint, §66 the EFS scratch transport, §67 dispatch, §68 the substitution). Customer Python now runs in a container with an empty task role and no route out, on any deployment configured for it; a worker with no runner configured still uses `python_sandbox`, and a *half*-configured one refuses rather than downgrading quietly.
+
+Two things named rather than assumed. SQL transforms still run through the API's in-process DuckDB path and have not been relocated into a repository — that is the cheaper half of this item and is still open. And a run whose infrastructure failed is recorded as a failed run with a message saying so, because `model_runs.status` has no value between succeeded and failed; giving that its own status is a migration and a screen (`STATUS.md` §68).
 
 The point of the whole section: code in a repository that declares the dataset it produces, and a build that runs it. Python transforms executing in the worker; the existing DuckDB execution path is the target, and the sandboxing question (running customer Python) is a real security design item, not an implementation detail — **flag it early, do not discover it at build time**.
 
 SQL transforms are the cheaper first step and should ship first, because they are what exists today, just relocated into a repository.
 
-### 2.6 Preview — **M**
+### 2.6 Preview — **M, done for SQL** (`STATUS.md` §69)
 
-Run the transform against a limited sample of its inputs, without committing, and show the resulting rows and schema. Foundry's Preview is the feature that makes the IDE usable rather than ceremonial; it is also the natural place to catch the schema drift the connectors already detect (`STATUS.md` §26).
+Run the transform against a limited sample of its inputs, without committing, and show the resulting rows and schema. It previews **the editor's buffer**, says in three places when the answer came from a sample, and reports what the change would do to the dataset the transform already writes — the drift check this item was always meant to carry, reusing the connectors' existing comparison.
+
+**Python previews are refused with a sentence and are the remaining half.** Customer Python runs in an isolated task (decision 0004), so previewing it means dispatching Fargate and waiting — a job with a status rather than an HTTP response. That needs a preview-run record and something to poll, which is its own item.
 
 ### 2.7 Pull request review UI — **M**
 

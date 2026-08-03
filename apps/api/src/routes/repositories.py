@@ -20,18 +20,32 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
+from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
+from ..services import dataset_engine as engine
+from ..services import datasets as ds_service
 from ..services import repositories as repo_service
+from ..services import transform_declarations as declarations
+from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/repositories",
     tags=["repositories"],
 )
+
+
+def _dataset_storage():
+    """The one gateway `main.py` configured, not a second one pointed
+    somewhere else - same reason `models.py` reaches for it this way."""
+    from . import datasets as dataset_routes
+
+    return dataset_routes._storage
 
 
 class RepositoryOut(BaseModel):
@@ -91,6 +105,40 @@ class DiffOut(BaseModel):
     added: list[str]
     deleted: list[str]
     modified: list[str]
+
+
+class PreviewIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    # The editor's buffer, not the commit. Previewing only what is committed
+    # would make this ceremonial - the question a person asks is "does what I
+    # just typed work", and they ask it before they are willing to commit.
+    content: str | None = None
+    branch: str | None = None
+    commit_id: UUID | None = None
+
+
+class PreviewedInputOut(BaseModel):
+    alias: str
+    dataset: str
+    dataset_id: UUID
+    rows_available: int
+    rows_used: int
+    sampled: bool
+
+
+class PreviewOut(BaseModel):
+    output: str
+    columns: list[dict[str, str]]
+    rows: list[list[Any]]
+    # Rows produced *from the sample*. `sampled` says whether that is the same
+    # thing as the answer.
+    row_count: int
+    truncated: bool
+    sampled: bool
+    inputs: list[PreviewedInputOut]
+    # Against the dataset this transform already writes, when it exists.
+    schema_changes: dict[str, Any] | None = None
+    writes_to_existing_dataset: bool = False
 
 
 @router.get("", response_model=list[RepositoryOut])
@@ -294,3 +342,145 @@ async def diff_commits(
             else (await repo_service.get_commit(conn, UUID(str(base_id))))["manifest"]
         )
     return DiffOut(**repo_service.diff(base, target["manifest"]))
+
+
+# ---- preview (ROADMAP.md phase 2, item 2.6) ----------------------------------
+@router.post("/{repo_id}/preview", response_model=PreviewOut)
+async def preview_transform(
+    repo_id: UUID,
+    body: PreviewIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> PreviewOut:
+    """Run one file's transform against a sample of its declared inputs and
+    return the rows, writing nothing.
+
+    Editor rather than viewer, unlike every other read here. A preview
+    executes SQL the caller supplied against datasets in the project, which is
+    the same act `POST /datasets/{id}/query` performs - but this one arrives
+    from an editor buffer rather than a saved model, so the floor matches who
+    is allowed to write the file rather than who is allowed to read it.
+
+    The inputs are resolved *by name*, from the declaration. A transform that
+    names a dataset the project does not have is refused with the name in the
+    message, which is the answer to the question the author is actually asking.
+    """
+    content = body.content
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        if content is None:
+            ref = await repo_service.resolve_ref(
+                conn,
+                repo_id=repo_id,
+                branch=body.branch or repo["default_branch"],
+                commit_id=body.commit_id,
+                allow_missing_branch=body.branch is None,
+            )
+            files = (
+                {} if ref is None
+                else await repo_service.read_tree(
+                    conn, workspace_id=access.workspace_id, commit_id=ref
+                )
+            )
+            if body.path not in files:
+                raise NotFoundError(f"{body.path} at this commit")
+            content = files[body.path]
+
+        try:
+            declaration = declarations.read(body.path, content)
+        except declarations.DeclarationError as exc:
+            # 422: the file is the request body and it is the thing that is
+            # wrong. The message is already phrased for whoever wrote it.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        if declaration is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"{body.path} does not declare a transform, so there is nothing to "
+                    "preview - a transform declares the dataset it produces"
+                ),
+            )
+        if not body.path.endswith(".sql"):
+            # Decision 0004: customer Python runs in the runner task, never in
+            # the API. Previewing it means dispatching a Fargate task and
+            # waiting on it, which is a job with a status rather than an HTTP
+            # response (STATUS.md §69).
+            raise ConflictError(
+                "previewing Python transforms is not built yet - they run in an isolated "
+                "task rather than in the API, which takes long enough to need a job you "
+                "can watch rather than a request that waits. SQL transforms preview now."
+            )
+
+        datasets_by_name = {
+            str(row["name"]): row
+            for row in await ds_service.list_for_project(conn, access.project_id)
+        }
+        missing = [
+            name for name in declaration.inputs.values() if name not in datasets_by_name
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "this transform reads "
+                    + ", ".join(sorted(set(missing)))
+                    + ", which this project does not have"
+                ),
+            )
+        input_rows = {
+            alias: datasets_by_name[name] for alias, name in declaration.inputs.items()
+        }
+        output_row = datasets_by_name.get(declaration.output)
+
+    storage = _dataset_storage()
+    input_paths: dict[str, str] = {}
+    for alias, row in input_rows.items():
+        input_paths[alias] = await anyio.to_thread.run_sync(
+            storage.local_path, str(row["s3_location"])
+        )
+
+    try:
+        result, previewed = await anyio.to_thread.run_sync(
+            engine.preview_transform, input_paths, content
+        )
+    except DatasetEngineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except FileNotFoundError as exc:
+        # A dataset row with no bytes behind it. Not the author's fault, and
+        # saying "your SQL is wrong" would send them to the wrong place.
+        raise ConflictError(
+            "one of this transform's inputs has no stored data yet, so there is nothing "
+            "to preview against"
+        ) from exc
+
+    used = {p.alias: p for p in previewed}
+    return PreviewOut(
+        output=declaration.output,
+        columns=[c.as_dict() for c in result.columns],
+        rows=result.rows,
+        row_count=result.total_rows,
+        truncated=result.truncated,
+        sampled=any(p.sampled for p in previewed),
+        inputs=[
+            PreviewedInputOut(
+                alias=alias,
+                dataset=str(row["name"]),
+                dataset_id=UUID(str(row["id"])),
+                rows_available=used[alias].rows_available,
+                rows_used=used[alias].rows_used,
+                sampled=used[alias].sampled,
+            )
+            for alias, row in input_rows.items()
+        ],
+        # The drift the roadmap asked this to catch: what this change would do
+        # to the dataset the transform already writes.
+        schema_changes=engine.diff_schemas(
+            output_row.get("table_schema") if output_row else None, result.columns
+        ),
+        writes_to_existing_dataset=output_row is not None,
+    )

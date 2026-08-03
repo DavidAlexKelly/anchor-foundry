@@ -1185,6 +1185,124 @@ Naming it rather than improvising: the transport is the next decision, and picki
 
 ---
 
+### 66. The EFS scratch share, and the checks that turned out to be theatre (this session)
+
+§65's named gap, built. A transform's inputs and its output now travel over a shared filesystem: an `efs.FileSystem` with its own security group, an access point at `/runs` pinning uid/gid 1000 and mode 750, mounted at `/work` in the runner and `/transform-scratch` in the worker (`makeService` gained a `mountScratch` option rather than a second copy of the service definition).
+
+**Why a filesystem and not a bucket.** The runner's role grants nothing and its egress is closed, so it cannot reach S3 — deliberately, that is the whole of decision 0004. A mount works precisely because **the ECS agent performs it, not the container**: the runner authenticates to nothing, its role stays empty, and the property the decision rests on survives contact with the transport. The access point is what stops one run reading another's staging directory by walking up a level; transit encryption is set explicitly because it is *off* by default on an EFS volume configuration, which is the kind of default nobody notices.
+
+Egress grew one destination — TCP 2049 to the scratch security group, reciprocated as an ingress rule — and that is still not a route out: the only two things this group can reach are AWS endpoints inside the VPC and one filesystem.
+
+**Then mutation testing found a flaw in my own checks, which is the part worth recording.** §64's `transform-runner-check.ts` asserted that the runner's security group has no open egress. It read `Properties.SecurityGroupEgress` off the `AWS::EC2::SecurityGroup` resource. Adding a deliberate rule on port 8080 did not fail it. A throwaway probe printed the reason: **inline egress on the runner SG: NONE; standalone egress resources: 4**. An egress rule whose destination is *another security group* cannot be inlined — CloudFormation renders it as a separate `AWS::EC2::SecurityGroupEgress` resource — and every one of the runner's rules is of that kind. Both egress checks had been reading an empty array and passing on nothing since the day they were written. They were theatre, and they were theatre about the one property a reader of decision 0004 would most want assurance on.
+
+The fix is `egressRulesFor()`, which merges inline and standalone rules and **refuses to pass on zero of them** ("found no egress rules to check - has the rendering changed?"). That guard is the actual lesson: a check that reads a structure CDK is free to re-render must fail when it finds nothing, or the next re-rendering turns it silently green again.
+
+Re-run against four mutations, all now caught and each naming its own cause: an extra egress port (→ "can reach unexpected port(s): 8080"), a `0.0.0.0/0` rule on an *allowed* port 443 (→ "1 open egress rule(s)", correctly a different check from the port one), the container's mount point removed (→ "the runner container mounts nothing"), and both egress rules deleted. That last one exposed a smaller edge: a group with `allowAllOutbound: false` and no rules is not rendered empty — CDK inlines a placeholder to `255.255.255.255/32` so CloudFormation accepts it — so the check failed blaming "port 86", a rule nobody wrote. It now recognises the placeholder and says what it means: "has no egress rules at all - a task in it cannot pull its image or start".
+
+8 checks, all passing, and now demonstrably for a reason. `npm test` in `infra/cdk` runs them.
+
+**Still missing before Python transforms run:** worker-side dispatch that stages a job onto the scratch share, calls `RunTask` against the runner task definition, waits, and reads `result.json` — including what it does when there is no result file (§65's distinction, which only pays off if the caller honours it).
+
+---
+
+### 67. Dispatch: the worker's half of the runner contract (this session)
+
+`anchor_worker/transform_dispatch.py`. Stage a run directory, `RunTask`, wait, read the result, clean up. Split into `stage`/`start`/`wait`/`collect` rather than one call, because those are the pieces ECS has and a caller that wants to record a task ARN against a run row can.
+
+**One filesystem, two paths — the bug this module is shaped to avoid.** The worker mounts the scratch access point at `/transform-scratch`, the runner mounts it at `/work`, so a run directory is one directory with two names and `ANCHOR_TRANSFORM_WORKDIR` must carry the *runner's*. Handing over the worker's path produces a container that starts, finds no job file, and reports it — a symptom that reads like a caller bug and is a mount bug. `RunHandle` therefore carries both names and a test asserts the override never contains the worker's root.
+
+**The exit code is not consulted.** §65 has the runner write `result.json` on failure *and* exit non-zero, deliberately in two places. This side reads the file: a result saying `failed` is `TransformFailed` carrying the author's own traceback; **no result file at all is `DispatchError`**, carrying whatever ECS gave as `stoppedReason`, because "OutOfMemoryError: Container killed due to memory usage" is the useful sentence and "your transform failed" would be a lie about whose problem it is. Mutation-tested: making a missing result file report as a failed transform fails exactly that test and nothing else.
+
+Also refused rather than papered over: an input alias that is not a plain identifier (it becomes both a file name and the name the transform's code binds — silently renaming it would bind a name the author never wrote), a result claiming `ok` with no output file (recording a successful run against a dataset version with no bytes is the quietly-wrong outcome), and a run that overruns, which is stopped rather than left burning a Fargate task. `run_transform` removes the run directory in a `finally` — scratch is one shared filesystem, and a failed run that leaves its inputs behind leaves the customer's data behind.
+
+**Testing.** Real `moto.server`, a real VPC and subnet, real RunTask/DescribeTasks/StopTask. Nothing here runs a container, so where ECS would start the runner the tests call `transform_runner.main()` on the staged directory — the actual entrypoint, so the files it reads and the result it writes are the ones the container would produce. Three mutations, each caught by one test: conflating the two failure kinds, handing over the worker's path, and cleaning up only on success. One branch is deliberately unproven and says so in the test module — `RunTask` returning 200 with an empty `tasks` list and a `failures` entry, which moto never produces; the handling stays because a caller waiting on a task ARN it never received is the exact failure this module exists to prevent.
+
+**Two moto quirks worth knowing** if these tests ever look strange: it computes Fargate placement from the *container's* cpu/memory rather than the task-level values, so the fixture's container definition carries them; and `describe_tasks` advances the task's lifecycle a step per call (RUNNING → DEACTIVATING → STOPPING → DEPROVISIONING → STOPPED), which is what lets a real polling loop terminate against it.
+
+**The infrastructure that makes it legal**, and one line of it is the security-relevant one. The worker gains `ecs:RunTask` on exactly the runner's task definition with an `ecs:cluster` condition, `DescribeTasks`/`StopTask` pinned to the same cluster, and **`iam:PassRole` naming exactly the runner's task role and execution role**. An unscoped `PassRole` is not a convenience — it lets the holder register a task definition naming any role in the account and start a container as it, which would make the runner's empty role, the whole control in decision 0004, beside the point. Three more checks in `transform-runner-check.ts` (11 total), each mutation-tested: `PassRole` widened to `*`, `RunTask` widened to `*`, and a missing env var each fail exactly one check.
+
+**Worker 55 → 67.** What remains is wiring this into `jobs/model_runs.py` so a Python model run actually takes this path instead of `python_sandbox.py`'s subprocess — a substitution at one call site, but one that changes where every existing Python transform runs, so it is its own step rather than a rider on this one.
+
+---
+
+### 68. The substitution: customer Python actually moves into the runner (this session)
+
+`jobs/model_runs.py` now imports `run_python_transform` from `transform_dispatch` rather than `python_sandbox`. One line at the call site; the decision lives in `transform_dispatch.isolation_mode()`, with the same signature and return shape as before so the model run path cannot tell which it got.
+
+**All four settings or none, and a half-configured worker is refused.** This is the only interesting decision in the item. The obvious design — use the runner when configured, fall back when not — silently downgrades a deployment that lost an environment variable back to `python_sandbox`, which its own docstring is explicit is process isolation and *not* a security boundary. A deployment that believed it had the isolation and did not is worse than a worker that will not start a transform, so three-of-four raises and names what is missing. None-of-four is local development and falls back, which is what every Python transform has done until now.
+
+**Where the §67 distinction stops.** `model_runs.status` has no value between 'succeeded' and 'failed', so an infrastructure failure is recorded as a failed run with a message beginning "the platform could not run this transform: …", and a failed transform carries the author's own traceback. The distinction survives in the text and nowhere else. That is a real limitation, not a design: expressing it properly means a status value and a UI that shows it, which is a migration and a screen, not a rider on this.
+
+**Verified.** The 18 existing model-run tests pass unchanged (they exercise the fallback path, since this sandbox has no ECS). The runner path through the same function is covered directly: `AWS_ENDPOINT_URL_ECS` points boto3 at moto — a real service endpoint from the environment, the same mechanism a deployment uses to pick a region — so `run_python_transform` runs for real with no injected client. Two mutations, each caught by one test: a half-configured worker downgrading silently, and an infrastructure failure losing its attribution.
+
+**One thing this found in my own code.** `wait()` took `poll_interval_s: float = DEFAULT_POLL_INTERVAL_S`, and a test that set `dispatch.DEFAULT_POLL_INTERVAL_S = 0` changed nothing — a default argument binds when the function is defined, not when it is called. The test passed either way and took 49 seconds doing it; the giveaway was the clock, not a failure. Both limits now default to `None` and read the constant at call time (4 seconds). Same family as the Starlette header-cache mistake in §57: a change that appeared to take effect and did not.
+
+---
+
+### 69. Preview: running a transform without committing it (this session)
+
+Roadmap item 2.6. `POST .../repositories/{id}/preview` takes a path and **the editor's buffer**, reads the file's declaration, resolves its declared inputs to datasets in the project by name, runs the transform over a sample, and returns rows and schema. Nothing is written. The panel sits under the editor in the repository application and runs when asked, never on a keystroke — a preview reads real datasets and costs real work.
+
+**Previewing the buffer rather than the commit is the whole point.** The question a person asks is "does what I just typed work", and they ask it *before* they are willing to commit. A preview that could only run committed code would answer a question nobody has. Sending no `content` still previews the committed file, which is what the history view wants.
+
+**A sample is not the dataset, and the response says so in three places.** Each input reports `rows_available` / `rows_used` / `sampled`; the result reports `sampled`; the panel prints a warning that names the number. A `group by` over the first thousand rows of an input produces smaller groups than the real thing and a join finds fewer matches than it will — the number looks like an answer, so anything that shows it without saying otherwise will be believed. The counterweight matters too, and has its own test: an input that fits entirely is *not* flagged, because crying sample on a two-row table teaches people to ignore the warning that counts.
+
+**The drift check the roadmap asked for.** When the declared output names a dataset that already exists, the response carries `engine.diff_schemas` between that dataset's stored schema and what the transform now produces — added, removed, retyped columns. Finding out at preview that an edit drops a column from `daily_orders` is the difference between a conversation and a support ticket. It reuses the connectors' existing drift comparison rather than inventing a second notion of what a schema change is.
+
+**Python is refused, with a sentence.** Decision 0004 puts customer Python in an isolated task, never in the API process; previewing it means dispatching Fargate and waiting sixty-odd seconds, which is a job with a status rather than an HTTP response. The refusal says that and says SQL previews now. That is the honest half-built state rather than an endpoint that quietly runs Python in the wrong place.
+
+`preview_transform` lives in `dataset_engine.py` beside `run_transform` because it needs the same sandbox discipline and a second almost-identical one would drift from it. It is simpler in one respect: nothing is written, so there is no trusted writer connection and user SQL never leaves the sandbox where `enable_external_access` is off.
+
+**On mutation testing, including one I got wrong.** Four mutations each fail exactly one test: never reporting a sample, ignoring the editor buffer, reporting no drift, and letting Python through. A fifth — deleting `SET enable_external_access=false` from the preview sandbox — appeared to fail nothing, and I concluded the sandbox tests were theatre and rewrote them. **The mutation was wrong, not the tests**: `run_transform` and `preview_transform` set up their sandboxes with byte-identical statements, and a first-occurrence string replace was hitting `run_transform`'s. Correctly targeted, the test fails on exactly the right assertion — the file's contents come back in the response body. Worth recording twice over: the preview path had no sandbox test at all until this (a *second* sandbox proves nothing about the first), and a mutation that appears to survive is a claim about the mutation as much as about the test.
+
+**14 preview tests**, real Postgres, real uploads, real Parquet, real DuckDB; 100 tests green across the six API files this touched. Verified in a real browser end to end: preview the committed file, edit the buffer, preview again and watch the columns change while the commit bar still says the file is uncommitted.
+
+---
+
+### 70. The typed variable graph (this session)
+
+Roadmap item 1.2's server half. `services/workshop_variables.py` validates a module's variables, computes derived ones in dependency order, and answers "what would break if I deleted this" by reading the document.
+
+**Read this section knowing what it is not.** Nothing produces a `format: 2` document yet. Item 1.1 was the *spike* — decision 0002, the converter, and its tests — and the one-shot conversion it designed has not been run; the builder still saves a bare Craft.js map. So this is a validated layer with an endpoint and no producer. Deliberate order (the format is the thing most expensive to get wrong, so its rules exist before anything writes to it), but it means **the refusals below are proven by tests and have never refused a real save**. The conversion and a builder that speaks v2 are the next step, and until then a v1 definition passes through the save path untouched — a test asserts that, because refusing one would break every app that exists.
+
+**Three refusals, each removing a failure Canvas commits today** (decision 0002, "what exists today, precisely"):
+
+- **A binding to a variable nothing declares.** Today that reads as "no filter", so the widget shows *more* rows than it should — silently, forever, and looking like data rather than like a bug. It is now a save that does not happen, and the refusal says "the widget would quietly show everything" rather than naming a constraint.
+- **Deleting a variable something uses.** `usages()` reads the layout, so "used by 2 widgets" is answerable. A derivation counts as a usage too — deleting an input out from under one is the same mistake, and naming only the widget case would make the refusal look arbitrary.
+- **A derivation cycle.** The precedent is Models item 7 (§30); the reason is sharper here because there is no run loop to notice — a cycle is either an infinite recompute in the browser or a value depending on its own previous value. Reported by *label*, sorted, because the person reading named the variables and has never seen `v_7f3a1c`.
+
+**Two semantics that two implementations would get quietly different**, which is why they have tests naming the reasoning rather than the behaviour. `if_else` does not use Python truthiness: `0` and `""` are values somebody typed, and treating them as absence would make a numeric filter of zero behave as though the filter were off — only `None` and `false` are false. And `cast` *refuses* what it cannot convert rather than returning nothing, because a blank card sends the reader to look at the widget instead of at the variable feeding it.
+
+**Why evaluation is a server round trip**, given the transforms are pure and the values are shown in the browser. This repo already carries five files mirrored between two runtimes and a standing note that a sixth should become a shared package instead. A TypeScript copy of `if_else`'s truthiness and `cast`'s refusals would be that sixth, and those are precisely the semantics that drift invisibly. The cost is close to zero where it matters — derived values change when their inputs change, which is the same moment the app is already asking the server to re-evaluate an object set, so it rides along with a call that was happening anyway. The honest exception is a text input, where every debounced keystroke now costs a request a local computation would not.
+
+**Where validation lives.** In the route, not in `services/canvas.py`, which stores an opaque blob and does not interpret it — a property decision 0002 records as worth keeping. The API refuses the document; the storage layer stays uninterested in what is inside it.
+
+`object_property` and `object_set_aggregation` are declared and refused with "not built yet": both read the instance store, so they are a round trip rather than a pure function, and quietly returning `None` for them would make every caller guess which of its results were real.
+
+**24 service tests + 5 route tests**, all green with 79 across the canvas/workshop files. Three mutations, each caught: cycles not refused, dangling bindings allowed, and `if_else` switched to Python truthiness.
+
+---
+
+### 71. The format-2 conversion, run (this session)
+
+§70's variable graph had no producer. This gives it one: migration `0034_workshop_module_format.py` converts every stored Canvas app to a `format: 2` module, and the builder reads and writes that format.
+
+**The first `.py` migration.** The runner was SQL-only; it now applies `NNNN_name.py` files exposing `apply(cur)`, in the same numbered sequence, in the same transaction, with the same checksum guard and the same once-only record. Python because the thing being rewritten is a jsonb document whose *meaning* the application defines — which props name a parameter, which widget declares one. Re-expressing that in PL/pgSQL would be a second implementation of the format, in the language with no tests, drifting from the one `test_workshop_format.py` exercises. The migration imports the converter instead. A `.py` step that raises anything at all rolls back and records nothing, same as a SQL failure: a half-converted database is not a state this can leave behind.
+
+**What the conversion touches, precisely.** Only `canvas_apps.definition`, the live document. Historical `canvas_app_versions` rows are left alone — they are the record of what the app was, and rewriting them would make the history lie about the format it was written in. The conversion appends a *new* version row carrying the converted document, so the change is itself in the history rather than an edit nobody can see.
+
+**Run against this sandbox's database: 109 of 212 apps converted**, the other 103 being apps nobody ever saved (skipped rather than given an empty module — an app with no layout has nothing to preserve, and converting it would put a version row in the history of an app that has never had one). Afterwards: 116 documents at format 2, **zero left at v1**.
+
+**The check that mattered, and a finding from running it.** Every converted document was fed through §70's `validate_module`. First pass: 114 pass, 2 fail. The two turned out to be **residue from my own mutation testing** — the runs that disabled the cycle and dangling-binding refusals let those test saves through, and the rows stayed in the shared dev database. Deleted; 114 of 114 then validated. That ad-hoc check is now two tests in `test_workshop_format.py`, because the converter and the validator meeting is not something anything else makes them do: if they disagree, this migration converts every app in a deployment into something the API then refuses to save, and nobody finds out until the first person edits one. They agree because the converter leaves an *unresolved* reference as its original parameter name rather than inventing a `v_` id for it — so the validator sees a legacy name, which is not its business, rather than a dangling variable id.
+
+**The builder speaks v2**, via `lib/workshop-module.ts`. Both shapes are handled rather than only v2, because a deployment that has not run the migration still serves v1 and the browser is not the place to discover that. `isV2` is a structural check, not a version compare. Saving carries variables and events across untouched — a save that dropped them would unbind every widget in the app on the first save after opening, which is to say immediately and invisibly.
+
+**Verified in a real browser** against a converted app: the widgets render (a builder handed the whole v2 document would render nothing), Save works, and the document comes back still `format: 2` with its variables intact. **527 API tests green.**
+
+**What is still missing from item 1.2** is the variables panel itself — create, rename, retype, see usages. `usagesOf` is written and unused; the server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

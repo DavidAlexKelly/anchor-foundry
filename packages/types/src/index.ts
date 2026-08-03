@@ -165,12 +165,38 @@ export type WorkshopVariableKind =
   | "single_object"
   | "object_set";
 
+/** Foundry's transformation vocabulary, less the two that read the ontology
+ * (`object_property`, `object_set_aggregation`) — those need the instance
+ * store, so they are a server round trip rather than a pure function and the
+ * API refuses them until they are built. */
+export type WorkshopTransform =
+  | "concat"
+  | "if_else"
+  | "cast"
+  | "is_empty"
+  | "is_not_empty";
+
+export interface WorkshopDerivation {
+  transform: WorkshopTransform;
+  /** Variable ids this reads. Held apart from `config` so the dependency graph
+   * does not depend on knowing each transform's shape — a new transform cannot
+   * accidentally become invisible to cycle detection. */
+  inputs: string[];
+  config?: Record<string, unknown>;
+}
+
 export interface WorkshopVariable {
   /** Opaque and stable. Deliberately not derived from the label - a derived id
    * is a rename waiting to break every reference. */
   id: string;
   kind: WorkshopVariableKind;
   label: string;
+  /** Where a plain variable starts, for every viewer. Values are never
+   * persisted (decision 0002 §3): a saved app is not a saved session. */
+  default?: unknown;
+  /** Present on a derived variable. Its value is a function of its inputs, so
+   * a value supplied for it by a viewer is ignored rather than honoured. */
+  derivation?: WorkshopDerivation;
   /** What this was called when it was a string-keyed parameter, so a converted
    * app can still be read against the v1 document it came from. */
   legacy_name?: string;
@@ -226,6 +252,36 @@ export interface RepositoryDiff {
   added: string[];
   deleted: string[];
   modified: string[];
+}
+
+/** One input as the preview actually read it. `sampled` is the difference
+ * between a number that is the answer and a number that looks like one. */
+export interface PreviewedInput {
+  alias: string;
+  dataset: string;
+  dataset_id: string;
+  rows_available: number;
+  rows_used: number;
+  sampled: boolean;
+}
+
+export interface TransformPreview {
+  output: string;
+  columns: { name: string; data_type: string }[];
+  rows: unknown[][];
+  /** Rows produced **from the sample**, not from the datasets. */
+  row_count: number;
+  truncated: boolean;
+  sampled: boolean;
+  inputs: PreviewedInput[];
+  /** What this change would do to the dataset the transform already writes,
+   * or null when it writes a new one or changes nothing. */
+  schema_changes: {
+    added?: { name: string; data_type: string }[];
+    removed?: { name: string; data_type: string }[];
+    retyped?: { name: string; from: string; to: string }[];
+  } | null;
+  writes_to_existing_dataset: boolean;
 }
 
 export interface ProjectMember {

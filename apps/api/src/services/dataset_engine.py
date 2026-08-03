@@ -657,3 +657,97 @@ def run_transform(
     finally:
         sandbox.close()
         writer.close()
+
+
+# ---- preview (ROADMAP.md phase 2, item 2.6) ----------------------------------
+PREVIEW_SAMPLE_ROWS = 1000
+
+
+@dataclass(frozen=True)
+class PreviewedInput:
+    alias: str
+    rows_available: int
+    rows_used: int
+
+    @property
+    def sampled(self) -> bool:
+        return self.rows_used < self.rows_available
+
+
+def preview_transform(
+    inputs: dict[str, str],
+    sql: str,
+    *,
+    sample_rows: int = PREVIEW_SAMPLE_ROWS,
+    limit: int = PREVIEW_ROWS,
+) -> tuple[TabularResult, list[PreviewedInput]]:
+    """Run a transform over a *sample* of its inputs and return the rows,
+    writing nothing (roadmap item 2.6).
+
+    Lives here, beside `run_transform`, because it needs the same sandbox
+    discipline and a second almost-identical one would eventually drift from
+    it. It is simpler in one respect: nothing is written, so there is no
+    trusted writer connection and the user's SQL never leaves the sandbox
+    where `enable_external_access` is off.
+
+    **The row count returned is the count over the sample, and the caller must
+    say so.** A transform with a join or a `group by` over the first thousand
+    rows of each input produces an answer that is not the answer - one where
+    the join found fewer matches than it will and the groups are smaller than
+    they will be. That is inherent to previewing rather than running, which is
+    why `PreviewedInput.sampled` exists: it is the difference between a screen
+    a person can trust and one that quietly misleads them.
+    """
+    sample_rows = max(1, sample_rows)
+    limit = max(1, min(limit, MAX_RESULT_ROWS))
+
+    sandbox = duckdb.connect()
+    try:
+        sandbox.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
+        previewed: list[PreviewedInput] = []
+        for alias, path in inputs.items():
+            validate_alias(alias)
+            available = int(
+                sandbox.execute(
+                    f"SELECT count(*) FROM read_parquet({path!r})"
+                ).fetchone()[0]
+            )
+            sandbox.execute(
+                f'CREATE TABLE "{alias}" AS '
+                f"SELECT * FROM read_parquet({path!r}) LIMIT {sample_rows}"
+            )
+            used = int(sandbox.execute(f'SELECT count(*) FROM "{alias}"').fetchone()[0])
+            previewed.append(
+                PreviewedInput(alias=alias, rows_available=available, rows_used=used)
+            )
+
+        # Sandbox boundary: user SQL sees only the sampled input tables, and
+        # unlike run_transform nothing after this point needs it reopened.
+        sandbox.execute("SET enable_external_access=false")
+        try:
+            sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+
+        described = sandbox.execute("DESCRIBE __model_output").fetchall()
+        if not described:
+            raise DatasetEngineError("the transform produced no columns")
+        columns = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
+        produced = int(sandbox.execute("SELECT count(*) FROM __model_output").fetchone()[0])
+        rows = sandbox.execute(
+            f"SELECT * FROM __model_output LIMIT {limit}"
+        ).fetchall()
+        return (
+            TabularResult(
+                columns=columns,
+                rows=[[json_safe(value) for value in row] for row in rows],
+                # Rows the transform produced *from the sample*, not from the
+                # datasets. Named total_rows only because every other tabular
+                # response is; the caller has to make the difference visible.
+                total_rows=produced,
+                truncated=len(rows) < produced,
+            ),
+            previewed,
+        )
+    finally:
+        sandbox.close()

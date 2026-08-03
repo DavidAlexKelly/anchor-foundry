@@ -1,6 +1,7 @@
 import { Duration, Stack } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as efs from "aws-cdk-lib/aws-efs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as logs from "aws-cdk-lib/aws-logs";
@@ -50,6 +51,9 @@ export class ServicesConstruct extends Construct {
    * customer code in it. */
   public readonly transformRunnerTaskDefinition: ecs.FargateTaskDefinition;
   public readonly transformRunnerSecurityGroup: ec2.SecurityGroup;
+  /** Shared working directory between the worker and the runner. Mounted by
+   * the ECS agent, so the runner never authenticates to anything. */
+  public readonly transformScratch: efs.FileSystem;
   public readonly webService: ecs.FargateService;
   public readonly alb: elbv2.ApplicationLoadBalancer;
 
@@ -121,6 +125,39 @@ export class ServicesConstruct extends Construct {
       })
     );
 
+    // ---- Transform scratch: how anything reaches a task with no credentials --
+    // The transport decision 0004 left open (STATUS.md §65). With an empty task
+    // role and no egress, inputs cannot arrive by S3 - the runner cannot reach
+    // it, deliberately. A shared filesystem can, because **the ECS agent
+    // performs the mount, not the container**: the runner authenticates to
+    // nothing and its role stays empty, which is the property the whole
+    // decision rests on.
+    //
+    // Cost: EFS is charged per GB stored with no baseline, and this holds one
+    // run's inputs at a time. The lifecycle policy moves anything left behind
+    // to infrequent access rather than letting an abandoned run accrue.
+    const scratchSecurityGroup = new ec2.SecurityGroup(this, "TransformScratchSg", {
+      vpc: props.vpc,
+      description: "Transform scratch EFS - reachable from the worker and the runner only",
+      allowAllOutbound: false,
+    });
+    const scratch = new efs.FileSystem(this, "TransformScratch", {
+      vpc: props.vpc,
+      securityGroup: scratchSecurityGroup,
+      encrypted: true,
+      lifecyclePolicy: efs.LifecyclePolicy.AFTER_7_DAYS,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    });
+    // An access point rather than the filesystem root: it pins the uid/gid and
+    // a directory, so a transform cannot read another run's staging area by
+    // walking up one level.
+    const scratchAccessPoint = scratch.addAccessPoint("TransformScratchAp", {
+      path: "/runs",
+      createAcl: { ownerUid: "1000", ownerGid: "1000", permissions: "750" },
+      posixUser: { uid: "1000", gid: "1000" },
+    });
+    this.transformScratch = scratch;
+
     // ---- Transform runner (decision 0004) -----------------------------------
     // Customer-authored Python runs here and nowhere else. Two properties, and
     // the order matters because the first is the control and the second is the
@@ -165,11 +202,34 @@ export class ServicesConstruct extends Construct {
       ec2.Port.tcp(443),
       "ECR, S3 and CloudWatch Logs via VPC endpoints - no route to the internet"
     );
+    // NFS to the scratch filesystem. Still not a route out: the only two
+    // destinations this group can reach are AWS endpoints inside the VPC and
+    // one filesystem.
+    this.transformRunnerSecurityGroup.addEgressRule(
+      scratchSecurityGroup,
+      ec2.Port.tcp(2049),
+      "Transform scratch (EFS) - staged inputs in, output back"
+    );
+    scratchSecurityGroup.addIngressRule(
+      this.transformRunnerSecurityGroup,
+      ec2.Port.tcp(2049),
+      "Transform runner"
+    );
 
     const runnerTaskDef = new ecs.FargateTaskDefinition(this, "TransformRunnerTaskDef", {
       cpu: 1024,
       memoryLimitMiB: 2048,
       taskRole: runnerTaskRole,
+      volumes: [
+        {
+          name: "scratch",
+          efsVolumeConfiguration: {
+            fileSystemId: scratch.fileSystemId,
+            transitEncryption: "ENABLED",
+            authorizationConfig: { accessPointId: scratchAccessPoint.accessPointId, iam: "DISABLED" },
+          },
+        },
+      ],
     });
     runnerTaskDef.obtainExecutionRole().addManagedPolicy(
       iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AmazonECSTaskExecutionRolePolicy")
@@ -185,8 +245,19 @@ export class ServicesConstruct extends Construct {
         // container from reaching for instance metadata at all. Not the
         // control - the role is - but it removes a confusing failure mode.
         AWS_EC2_METADATA_DISABLED: "true",
+        // Matches transform_runner.WORK_DIR_ENV. Set explicitly rather than
+        // relying on the module's default, so the mount path and the code that
+        // reads it are stated in the same place.
+        ANCHOR_TRANSFORM_WORKDIR: "/work",
       },
       command: ["python", "-m", "anchor_worker.transform_runner"],
+    }).addMountPoints({
+      containerPath: "/work",
+      sourceVolume: "scratch",
+      // The runner writes its output and result file here, so this cannot be
+      // read-only - and the access point is what keeps one run out of
+      // another's directory.
+      readOnly: false,
     });
     this.transformRunnerTaskDefinition = runnerTaskDef;
 
@@ -226,12 +297,37 @@ export class ServicesConstruct extends Construct {
       name: string,
       image: string,
       role: iam.Role,
-      opts: { cpu: number; memory: number; port?: number; command?: string[] }
+      opts: {
+        cpu: number;
+        memory: number;
+        port?: number;
+        command?: string[];
+        /** Mount the transform scratch filesystem. Only the worker does: it is
+         * the side that stages a run's inputs and reads its result back. */
+        mountScratch?: boolean;
+        /** Env this service needs and the others do not. */
+        extraEnv?: Record<string, string>;
+      }
     ): ecs.FargateService => {
       const taskDef = new ecs.FargateTaskDefinition(this, `${name}TaskDef`, {
         cpu: opts.cpu,
         memoryLimitMiB: opts.memory,
         taskRole: role,
+        volumes: opts.mountScratch
+          ? [
+              {
+                name: "scratch",
+                efsVolumeConfiguration: {
+                  fileSystemId: scratch.fileSystemId,
+                  transitEncryption: "ENABLED",
+                  authorizationConfig: {
+                    accessPointId: scratchAccessPoint.accessPointId,
+                    iam: "DISABLED",
+                  },
+                },
+              },
+            ]
+          : undefined,
       });
       // ContainerImage.fromRegistry (below) takes a plain URL string, not an
       // IRepository, so CDK has nothing to grant ECR pull permissions from —
@@ -246,12 +342,19 @@ export class ServicesConstruct extends Construct {
       const container = taskDef.addContainer(name, {
         image: ecs.ContainerImage.fromRegistry(image),
         logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: name }),
-        environment: commonEnv,
+        environment: { ...commonEnv, ...(opts.extraEnv ?? {}) },
         secrets: name === "web" ? undefined : dbSecretEnv,
         command: opts.command,
       });
       if (opts.port !== undefined) {
         container.addPortMappings({ containerPort: opts.port });
+      }
+      if (opts.mountScratch) {
+        container.addMountPoints({
+          containerPath: "/transform-scratch",
+          sourceVolume: "scratch",
+          readOnly: false,
+        });
       }
       return new ecs.FargateService(this, `${name}Service`, {
         cluster: this.cluster,
@@ -269,10 +372,67 @@ export class ServicesConstruct extends Construct {
       memory: 1024,
       port: 8000,
     });
+    // Everything anchor_worker/transform_dispatch.py needs to find the runner.
+    // Passed as configuration rather than discovered at run time: a worker that
+    // guessed its own cluster would guess wrong in a stack it does not own, and
+    // the failure would be a RunTask into somebody else's cluster.
+    const transformRunnerEnv = {
+      ANCHOR_TRANSFORM_SCRATCH: "/transform-scratch",
+      ANCHOR_TRANSFORM_CLUSTER: this.cluster.clusterName,
+      ANCHOR_TRANSFORM_TASK_DEFINITION: runnerTaskDef.taskDefinitionArn,
+      ANCHOR_TRANSFORM_SUBNETS: vpc
+        .selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS })
+        .subnetIds.join(","),
+      ANCHOR_TRANSFORM_SECURITY_GROUPS: this.transformRunnerSecurityGroup.securityGroupId,
+    };
     this.workerService = makeService("worker", `${props.workerImage}:${props.imageTag}`, workerTaskRole, {
       cpu: 1024,
       memory: 2048,
+      mountScratch: true,
+      extraEnv: transformRunnerEnv,
     });
+
+    // ---- Permission to dispatch, and nothing more ---------------------------
+    // Scoped to one task definition and one cluster. A wildcard here would let
+    // the worker start any task in the account.
+    workerTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ecs:RunTask"],
+        resources: [runnerTaskDef.taskDefinitionArn],
+        conditions: { ArnEquals: { "ecs:cluster": this.cluster.clusterArn } },
+      })
+    );
+    workerTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        // The task's ARN is not known until RunTask returns, so this cannot be
+        // narrowed past the cluster - which the condition pins.
+        actions: ["ecs:DescribeTasks", "ecs:StopTask"],
+        resources: [`arn:aws:ecs:${Stack.of(this).region}:${Stack.of(this).account}:task/*`],
+        conditions: { ArnEquals: { "ecs:cluster": this.cluster.clusterArn } },
+      })
+    );
+    // **The one that would matter if it were wrong.** RunTask requires
+    // iam:PassRole for the roles in the task definition, and an unscoped
+    // PassRole is a privilege escalation, not a convenience: the worker could
+    // register a task definition naming any role in the account and start a
+    // container as it. Named exactly, so the only roles the worker can hand to
+    // a task are the runner's empty one and the execution role that pulls its
+    // image.
+    workerTaskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["iam:PassRole"],
+        resources: [runnerTaskRole.roleArn, runnerTaskDef.obtainExecutionRole().roleArn],
+        conditions: { StringEquals: { "iam:PassedToService": "ecs-tasks.amazonaws.com" } },
+      })
+    );
+    // The worker stages a run's inputs and reads its result back, so it needs
+    // the mount too. Granted from the service rather than by hand: CDK creates
+    // the service's security group, and a hand-written rule would name a group
+    // that does not exist yet.
+    scratch.connections.allowDefaultPortFrom(
+      this.workerService,
+      "Worker stages transform inputs and collects results"
+    );
     this.webService = makeService("web", `${props.webImage}:${props.imageTag}`, webTaskRole, {
       cpu: 256,
       memory: 512,
