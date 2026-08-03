@@ -138,11 +138,11 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.2.
 
-### 1.4 Layouts — **L, pages, tabs, sections and overlays done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`). **What remains**: the Layout sidebar, drag-to-resize, and toolbar sections. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
+### 1.4 Layouts — **L, pages, tabs, sections and overlays done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`; §79: the Layout sidebar). **What remains**: the module header, and drag-to-resize. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
 
 **What Foundry does.** A module has a **header** (persistent toolbar for module-wide title, tabs and buttons), **pages**, **sections**, and **overlays**. A default page starts as two vertically divided sections. Sections subdivide a page and can be configured as columns, rows, tabs or toolbars, each containing widgets or further layout. Overlays are contextual layers over a page — modals and drawers — for content that should not navigate you away. A **Tabs widget** triggers events to navigate between pages and overlays. Layout elements are edited from a Layout sidebar panel or by selecting them in the module view.
 
-**What exists today.** Pages, a Tabs widget, sections as columns or rows with proportional widths, and overlays as modals or drawers. No header, no Layout sidebar, no drag-to-resize.
+**What exists today.** Pages, a Tabs widget, sections as columns or rows with proportional widths, overlays as modals or drawers, and a Layout sidebar listing every node in the document. No header, no drag-to-resize.
 
 **Build.** The layout tree from 1.1 with those node types; the Layout sidebar; drag-to-resize sections; the Tabs widget wired to the event system. Responsive rules per section type.
 

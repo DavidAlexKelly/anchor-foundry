@@ -1465,6 +1465,26 @@ Verified in a browser, in both modes: the running app lays the demo app out as a
 
 ---
 
+### 79. The Layout sidebar (this session)
+
+The third slice of 1.4, and the panel Foundry's own docs name: layout elements are edited "from a Layout sidebar panel or by selecting them in the module view". Both, not either — selecting in the view is the fast path for a widget you can see, and the tree is the only way to reach one you cannot.
+
+**It closes a structural hole, not a convenience gap.** A section is filled by its children and a page by its sections, so a container has no pixels of its own to click. §78 had to give sections a builder label purely to make their settings reachable, and that trick does not generalise — not to a container three levels down, not to an empty one. A tree does: every node in the document gets exactly one row whether or not it has any area on screen.
+
+**It holds no state.** Craft's node map *is* the layout (decision 0002), so the panel reads the editor's state and renders it. There is nothing here that can disagree with what is being edited — the same argument `pages()` and `usages()` make server-side, applied to the builder.
+
+**Each row carries what distinguishes it from its siblings** — a page's title, a section's direction and proportions, a widget's bound variable. A page of four sections would otherwise be four identical rows, which is a tree that tells you the shape and not the thing.
+
+**Rows never wrap.** The indent is the only thing showing the nesting, so a wrapped row would make the one signal ambiguous; the detail truncates instead.
+
+**Stacked above the widget palette rather than tabbed with it.** The right-hand column tabs Widget against Variables because they answer different questions about different things and one is usually irrelevant. These two are both about the document in front of you, and an author dropping a widget wants to see where it landed — a tab would trade a scroll for a click on every edit.
+
+Verified in a browser: eleven rows for the demo module's eleven nodes in tree order, indent tracking depth across four levels, clicking a section's row opening its proportions, an overlay reachable the same way, and deleting a widget removing its row.
+
+**What is left in 1.4:** the module header, and drag-to-resize.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

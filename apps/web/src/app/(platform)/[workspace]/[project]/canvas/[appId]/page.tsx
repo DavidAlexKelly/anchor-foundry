@@ -13,6 +13,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import type { WorkshopEventDef } from "@/components/canvas/events";
+import { LayoutPanel } from "@/components/canvas/LayoutPanel";
 import { SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
@@ -240,10 +241,19 @@ function CanvasEnvBridge({
   );
 }
 
+/** The left column: what the module is made of, then what can be added to it.
+ *
+ * Stacked rather than tabbed, unlike the right-hand column. The two panels on
+ * the right answer different questions about different things (this widget /
+ * this module) and one is usually irrelevant; these two are both about the
+ * document in front of you, and an author dropping a widget wants to see
+ * where it landed. Hiding either behind a tab would trade a scroll for a
+ * click on every single edit. */
 function Toolbox() {
   return (
     <div className="canvas-toolbox">
-      <p className="field-label">Widgets</p>
+      <LayoutPanel />
+      <p className="field-label canvas-toolbox-heading">Widgets</p>
       {PALETTE.map((p) => (
         <PaletteItem key={p.key} componentKey={p.key} label={p.label} hint={p.hint} />
       ))}

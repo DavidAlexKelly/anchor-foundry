@@ -540,6 +540,26 @@ button { font: inherit; cursor: pointer; }
   position: sticky;
   top: 16px;
 }
+/* ---- the Layout sidebar (ROADMAP phase 2, 1.4) ---------------------------- */
+/* Capped and scrollable: a deep module's tree would otherwise push the widget
+   palette off the bottom of a laptop screen, and both are wanted at once. */
+.canvas-layout-tree { max-height: 320px; overflow: auto; margin-bottom: 4px; }
+/* One line per node, always: a row that wrapped would make the indent - the
+   only thing showing the nesting - ambiguous. The detail truncates instead. */
+.canvas-tree-row {
+  display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left;
+  border: 0; background: none; padding: 4px 6px; border-radius: 4px;
+  cursor: pointer; font-size: 12.5px; color: var(--ink); overflow: hidden;
+}
+.canvas-tree-row:hover { background: var(--accent-wash); }
+.canvas-tree-row.on { background: var(--accent-wash); box-shadow: inset 2px 0 0 var(--accent); }
+.canvas-tree-label { font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
+.canvas-tree-detail {
+  color: var(--ink-soft); font-size: 11.5px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.canvas-toolbox-heading { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+
 .canvas-palette-item {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
