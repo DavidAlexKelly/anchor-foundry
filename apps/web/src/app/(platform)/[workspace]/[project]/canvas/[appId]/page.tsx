@@ -1,6 +1,7 @@
 "use client";
 
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
+import { hasLayout, layoutOf, withLayout } from "@/lib/workshop-module";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -127,7 +128,16 @@ function TopBar({
   const queryClient = useQueryClient();
 
   const save = useMutation({
-    mutationFn: () => canvasApi.saveDefinition(workspaceId, projectId, app.id, query.getSerializedNodes()),
+    // The layout only. Variables and events are carried across untouched -
+    // dropping them would unbind every widget on the first save after
+    // opening, which is to say immediately and invisibly.
+    mutationFn: () =>
+      canvasApi.saveDefinition(
+        workspaceId,
+        projectId,
+        app.id,
+        withLayout(app.definition, query.getSerializedNodes()),
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["canvas-app", app.id] });
     },
@@ -234,7 +244,7 @@ export default function CanvasAppEditorPage() {
   }
 
   const app = appQuery.data;
-  const hasSavedLayout = Object.keys(app.definition).length > 0;
+  const hasSavedLayout = hasLayout(app.definition);
 
   return (
     <main>
@@ -272,7 +282,7 @@ function CanvasBody({
       {showChrome && <Toolbox />}
       <div className="canvas-frame-area">
         {hasSavedLayout ? (
-          <Frame data={JSON.stringify(definition)} />
+          <Frame data={JSON.stringify(layoutOf(definition))} />
         ) : (
           <Frame>
             <Element is={CanvasContainer} canvas />

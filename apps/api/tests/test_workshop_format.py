@@ -234,3 +234,43 @@ def test_degenerate_documents_convert_to_something_renderable(definition: dict) 
     module = wf.convert(definition)
     assert module["format"] == wf.FORMAT_VERSION
     assert module["layout"] == {}
+
+
+# ---- the converter and the validator must agree ------------------------------
+def test_converted_documents_pass_the_save_path_validator() -> None:
+    """The two halves of the format meet here, and nothing else makes them.
+
+    `workshop_format` writes v2 documents; `workshop_variables` decides which
+    v2 documents may be saved. If they disagree, migration 0034 converts every
+    app in a deployment into something the API then refuses to save - which
+    nobody discovers until the first person edits an app.
+
+    Checked over the same real definitions the rest of this file uses, plus the
+    broken-binding case, which is the one where they could most plausibly
+    diverge: the converter *records* a reference it could not resolve, and the
+    validator refuses references it cannot resolve. They agree because the
+    converter leaves an unresolved reference as the original parameter name
+    rather than inventing a `v_` id for it, so the validator does not see a
+    dangling variable id - it sees a legacy name, which is not its business.
+    """
+    from src.services import workshop_variables as wv
+
+    with_broken = copy.deepcopy(REAL_V1)
+    with_broken["objmap"]["props"]["searchParameter"] = "typo_never_declared"
+
+    for definition in (REAL_V1, with_broken, {}):
+        module = wf.convert(definition)
+        variables = wv.validate_module(module)
+        assert isinstance(variables, dict)
+
+
+def test_a_converted_app_declares_a_variable_the_validator_can_see() -> None:
+    """The counterweight to the test above: passing validation is easy if the
+    conversion produced nothing. This asserts it produced something."""
+    from src.services import workshop_variables as wv
+
+    module = wf.convert(REAL_V1)
+    variables = wv.validate_module(module)
+    assert variables, "the conversion declared no variables at all"
+    usages = wv.usages(module["layout"], variables)
+    assert any(usages[vid] for vid in variables), "no widget references the converted variable"

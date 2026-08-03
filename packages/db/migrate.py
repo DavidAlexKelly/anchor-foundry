@@ -30,7 +30,13 @@ import psycopg
 from psycopg import sql
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-FILENAME_RE = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
+# `.py` steps run in the same numbered sequence as `.sql` ones, in their own
+# transaction, recorded the same way. They exist for the one thing SQL is the
+# wrong tool for: rewriting a jsonb document whose *meaning* the application
+# defines. Decision 0002's Workshop conversion is the first, and it is
+# deliberately the same converter the tests exercise rather than a second
+# implementation of the format in PL/pgSQL.
+FILENAME_RE = re.compile(r"^(\d{4})_[a-z0-9_]+\.(sql|py)$")
 
 BOOTSTRAP_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -46,14 +52,35 @@ def discover_migrations() -> list[Path]:
     for p in sorted(MIGRATIONS_DIR.iterdir()):
         if p.is_file() and FILENAME_RE.match(p.name):
             files.append(p)
-        elif p.is_file() and p.suffix == ".sql":
+        elif p.is_file() and p.suffix in (".sql", ".py"):
             raise SystemExit(
-                f"error: {p.name} does not match NNNN_name.sql naming; refusing to guess order"
+                f"error: {p.name} does not match NNNN_name.(sql|py) naming; "
+                "refusing to guess order"
             )
     numbers = [FILENAME_RE.match(p.name).group(1) for p in files]  # type: ignore[union-attr]
     if len(set(numbers)) != len(numbers):
         raise SystemExit("error: duplicate migration numbers detected")
     return files
+
+
+def apply_python_migration(path: Path, cur: "psycopg.Cursor") -> None:
+    """Run a `.py` migration's `apply(cur)`.
+
+    Loaded by path rather than imported as a module: migration file names are
+    not importable identifiers (they start with a digit), and putting them on
+    `sys.path` would make every migration a permanent name in the process.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(f"migration_{path.stem}", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable in practice
+        raise RuntimeError(f"{path.name} could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    apply = getattr(module, "apply", None)
+    if not callable(apply):
+        raise RuntimeError(f"{path.name} has no apply(cur) function")
+    apply(cur)
 
 
 def checksum(path: Path) -> str:
@@ -124,12 +151,22 @@ def run(dsn: str, *, dry_run: bool = False) -> int:
                 try:
                     with conn.transaction():
                         with conn.cursor() as cur:
-                            cur.execute(m.read_text())
+                            if m.suffix == ".py":
+                                apply_python_migration(m, cur)
+                            else:
+                                cur.execute(m.read_text())
                             cur.execute(
                                 "INSERT INTO schema_migrations (filename, checksum) VALUES (%s, %s)",
                                 (m.name, checksum(m)),
                             )
                 except psycopg.Error as exc:
+                    print(f"error applying {m.name}: {exc}", file=sys.stderr)
+                    return 1
+                except Exception as exc:  # noqa: BLE001 - a .py step can raise anything
+                    # Same outcome as a SQL failure and for the same reason: the
+                    # transaction rolls back and nothing is recorded, so a
+                    # half-converted database is not a state this can leave
+                    # behind.
                     print(f"error applying {m.name}: {exc}", file=sys.stderr)
                     return 1
             conn.commit()

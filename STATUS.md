@@ -1283,6 +1283,26 @@ Roadmap item 1.2's server half. `services/workshop_variables.py` validates a mod
 
 ---
 
+### 71. The format-2 conversion, run (this session)
+
+§70's variable graph had no producer. This gives it one: migration `0034_workshop_module_format.py` converts every stored Canvas app to a `format: 2` module, and the builder reads and writes that format.
+
+**The first `.py` migration.** The runner was SQL-only; it now applies `NNNN_name.py` files exposing `apply(cur)`, in the same numbered sequence, in the same transaction, with the same checksum guard and the same once-only record. Python because the thing being rewritten is a jsonb document whose *meaning* the application defines — which props name a parameter, which widget declares one. Re-expressing that in PL/pgSQL would be a second implementation of the format, in the language with no tests, drifting from the one `test_workshop_format.py` exercises. The migration imports the converter instead. A `.py` step that raises anything at all rolls back and records nothing, same as a SQL failure: a half-converted database is not a state this can leave behind.
+
+**What the conversion touches, precisely.** Only `canvas_apps.definition`, the live document. Historical `canvas_app_versions` rows are left alone — they are the record of what the app was, and rewriting them would make the history lie about the format it was written in. The conversion appends a *new* version row carrying the converted document, so the change is itself in the history rather than an edit nobody can see.
+
+**Run against this sandbox's database: 109 of 212 apps converted**, the other 103 being apps nobody ever saved (skipped rather than given an empty module — an app with no layout has nothing to preserve, and converting it would put a version row in the history of an app that has never had one). Afterwards: 116 documents at format 2, **zero left at v1**.
+
+**The check that mattered, and a finding from running it.** Every converted document was fed through §70's `validate_module`. First pass: 114 pass, 2 fail. The two turned out to be **residue from my own mutation testing** — the runs that disabled the cycle and dangling-binding refusals let those test saves through, and the rows stayed in the shared dev database. Deleted; 114 of 114 then validated. That ad-hoc check is now two tests in `test_workshop_format.py`, because the converter and the validator meeting is not something anything else makes them do: if they disagree, this migration converts every app in a deployment into something the API then refuses to save, and nobody finds out until the first person edits one. They agree because the converter leaves an *unresolved* reference as its original parameter name rather than inventing a `v_` id for it — so the validator sees a legacy name, which is not its business, rather than a dangling variable id.
+
+**The builder speaks v2**, via `lib/workshop-module.ts`. Both shapes are handled rather than only v2, because a deployment that has not run the migration still serves v1 and the browser is not the place to discover that. `isV2` is a structural check, not a version compare. Saving carries variables and events across untouched — a save that dropped them would unbind every widget in the app on the first save after opening, which is to say immediately and invisibly.
+
+**Verified in a real browser** against a converted app: the widgets render (a builder handed the whole v2 document would render nothing), Save works, and the document comes back still `format: 2` with its variables intact. **527 API tests green.**
+
+**What is still missing from item 1.2** is the variables panel itself — create, rename, retype, see usages. `usagesOf` is written and unused; the server already refuses the deletions that matter, so the panel is the affordance rather than the enforcement.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
