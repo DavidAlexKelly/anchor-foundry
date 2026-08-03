@@ -835,3 +835,97 @@ def test_a_button_gated_on_a_variable_nothing_declares_is_refused() -> None:
                       "nodes": []}}
     with pytest.raises(wv.VariableError, match="does not declare"):
         wv.validate_module(module({}, layout))
+
+
+# ---- narrow_set: the Filter List's derivation (roadmap 1.5) ------------------
+def narrowing_module() -> dict[str, wv.Variable]:
+    return wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            ),
+            "v_clauses": var("v_clauses", kind="array", label="Chosen filters"),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "narrow_set", "inputs": ["v_sites", "v_clauses"]},
+            ),
+        }
+    )
+
+
+def test_narrow_set_applies_the_clauses_a_widget_wrote() -> None:
+    """A Filter List narrows on properties the *viewer* picks, so what varies
+    is the list of clauses rather than one configured property."""
+    variables = narrowing_module()
+    resolved = wv.evaluate(variables, {"v_clauses": [
+        {"property": "region", "op": "eq", "value": "north"},
+        {"property": "status", "op": "in", "value": ["open", "closed"]},
+    ]})
+    assert resolved["v_visible"]["filters"] == [
+        {"property": "region", "op": "eq", "value": "north"},
+        {"property": "status", "op": "in", "value": ["open", "closed"]},
+    ]
+
+
+def test_narrow_set_with_nothing_chosen_is_the_whole_set() -> None:
+    """Not an empty one: a viewer who has touched nothing should see
+    everything, the rule `filter_set` already follows."""
+    variables = narrowing_module()
+    for empty in ({}, {"v_clauses": None}, {"v_clauses": []}):
+        assert wv.evaluate(variables, empty)["v_visible"]["filters"] == [], empty
+
+
+def test_narrow_set_keeps_the_filters_the_base_set_already_had() -> None:
+    variables = wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="Open sites",
+                object_set={"object_type_id": TYPE_ID,
+                            "filters": [{"property": "status", "op": "eq", "value": "open"}]},
+            ),
+            "v_clauses": var("v_clauses", kind="array", label="Chosen filters"),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "narrow_set", "inputs": ["v_sites", "v_clauses"]},
+            ),
+        }
+    )
+    resolved = wv.evaluate(
+        variables, {"v_clauses": [{"property": "region", "op": "eq", "value": "north"}]}
+    )
+    assert [f["property"] for f in resolved["v_visible"]["filters"]] == ["status", "region"]
+
+
+def test_narrow_set_refuses_clauses_it_cannot_mean_rather_than_dropping_them() -> None:
+    """The clauses come from a browser, so they get the same parse every set
+    gets. A dropped clause is a set wider than the viewer asked for."""
+    variables = narrowing_module()
+    with pytest.raises(wv.VariableError, match="not supported yet"):
+        wv.evaluate(variables, {"v_clauses": [
+            {"property": "capacity", "op": "gt", "value": 40}]})
+    with pytest.raises(wv.VariableError, match="unknown filter operator"):
+        wv.evaluate(variables, {"v_clauses": [
+            {"property": "region", "op": "regex", "value": "^n"}]})
+    with pytest.raises(wv.VariableError, match="no value"):
+        wv.evaluate(variables, {"v_clauses": [{"property": "region", "op": "eq"}]})
+
+
+def test_narrow_set_refuses_something_that_is_not_a_list() -> None:
+    variables = narrowing_module()
+    with pytest.raises(wv.VariableError, match="list of filter clauses"):
+        wv.evaluate(variables, {"v_clauses": {"property": "region"}})
+
+
+def test_narrow_set_needs_two_inputs() -> None:
+    with pytest.raises(wv.VariableError, match="narrow_set needs exactly two inputs"):
+        wv.parse({
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            ),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "narrow_set", "inputs": ["v_sites"]},
+            ),
+        })

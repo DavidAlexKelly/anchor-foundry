@@ -1228,6 +1228,23 @@ button { font: inherit; cursor: pointer; }
 .canvas-header--sticky { position: sticky; top: 0; z-index: 20; }
 .canvas-header-title { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 700; }
 
+/* ---- the Filter List (ROADMAP phase 2, 1.5) ------------------------------- */
+/* Capped: a filter list is a column of choices, and stretching one across a
+   whole page leaves each count marooned a foot from its label. */
+.canvas-filter-group { border: 0; padding: 0; margin: 0 0 12px; max-width: 320px; }
+.canvas-filter-group legend {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-soft); padding: 0 0 4px;
+}
+.canvas-filter-option {
+  display: flex; align-items: center; gap: 8px; padding: 2px 0;
+  font-size: 13px; cursor: pointer;
+}
+.canvas-filter-option span:first-of-type { flex: 1 1 auto; min-width: 0; }
+/* The count is the point of showing options this way, so it gets its own
+   column rather than trailing the label and wrapping. */
+.canvas-filter-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+
 .canvas-button-wrap { display: inline-flex; align-items: center; gap: 6px; }
 .canvas-button-wrap .canvas-widget-empty { margin: 0; }
 

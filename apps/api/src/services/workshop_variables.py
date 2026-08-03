@@ -58,6 +58,7 @@ TRANSFORMS = (
     "is_empty",
     "is_not_empty",
     "filter_set",   # narrow an object set by a value another variable holds
+    "narrow_set",   # narrow an object set by a list of clauses a widget writes
 )
 
 # Declared here and deliberately not evaluated here. Both need the instance
@@ -276,6 +277,16 @@ def _check_arity(vid: str, d: Derivation) -> None:
                 f"variable {vid!r}: filter_set operator {op!r}; expected one of "
                 f"{', '.join(object_sets.OPERATORS)}"
             )
+    elif d.transform == "narrow_set":
+        # No property or operator here on purpose: which properties a Filter
+        # List narrows on is what the *viewer* chooses, so it is part of the
+        # value rather than of the declaration. The clauses are validated when
+        # they arrive, by the same parse every object set gets.
+        if len(d.inputs) != 2:
+            raise VariableError(
+                f"variable {vid!r}: narrow_set needs exactly two inputs "
+                "(the set to narrow, and the variable holding the filter clauses)"
+            )
 
 
 def _refuse_unknown_inputs(variables: dict[str, Variable]) -> None:
@@ -391,6 +402,8 @@ def _apply(variable: Variable, inputs: list[Any]) -> Any:
         return not _empty(inputs[0])
     if d.transform == "filter_set":
         return _filter_set(variable, inputs[0], inputs[1], d.config)
+    if d.transform == "narrow_set":
+        return _narrow_set(variable, inputs[0], inputs[1])
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
 
 
@@ -421,6 +434,43 @@ def _filter_set(
         {"property": config["property"], "op": config.get("op", "eq"), "value": value}
     )
     return {**base, "filters": filters}
+
+
+def _narrow_set(variable: Variable, base: Any, clauses: Any) -> dict[str, Any]:
+    """Narrow an object set by a *list* of clauses a widget wrote.
+
+    `filter_set` is one property and one operator, both fixed when the app was
+    built, driven by whatever value a variable holds. A Filter List is the
+    other shape: the viewer decides *which* properties to filter and on how
+    many values at once, so what varies is the list itself.
+
+    **The clauses are runtime data and are validated like any other input.**
+    They arrive from a browser, so they get the same parse every object set
+    gets — unknown operators, ordered comparisons and missing values are
+    refused with the sentence `object_sets.parse` already writes, rather than
+    quietly dropped. A dropped clause is a set that is wider than the viewer
+    asked for, which is the failure decision 0002 exists to remove.
+
+    **An empty list is no filter, not an empty set** — the same rule
+    `filter_set` follows, for the same reason: a viewer who has touched
+    nothing yet should see everything.
+    """
+    from . import object_sets
+
+    if not isinstance(base, dict) or "object_type_id" not in base:
+        raise VariableError(f"{variable.label!r} filters something that is not an object set")
+    if clauses is None or clauses == "" or clauses == []:
+        return dict(base)
+    if not isinstance(clauses, list):
+        raise VariableError(
+            f"{variable.label!r} expects a list of filter clauses, not {type(clauses).__name__}"
+        )
+    combined = {**base, "filters": [*(base.get("filters") or []), *clauses]}
+    try:
+        object_sets.parse(combined)
+    except ValueError as exc:
+        raise VariableError(f"{variable.label!r}: {exc}") from exc
+    return combined
 
 
 def _text(value: Any) -> str:

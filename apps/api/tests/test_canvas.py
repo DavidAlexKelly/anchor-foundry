@@ -389,3 +389,40 @@ def test_a_viewer_may_evaluate_but_not_save(client: TestClient, fx: Fixture) -> 
     r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.viewer_sub),
                    json={"definition": _module({})})
     assert r.status_code == 403, r.text
+
+
+def test_bad_filter_clauses_blame_the_request_not_the_saved_app(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A Filter List sends clauses with the evaluate call, so a bad clause is
+    now a bad *request* against a perfectly valid document. Reporting it as a
+    409 - "this saved app no longer validates" - would send whoever reads it to
+    edit an app that has nothing wrong with it.
+    """
+    app_id = _new_app(client, fx)
+    type_id = "11111111-1111-1111-1111-111111111111"
+    variables = {
+        "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                  "object_set": {"object_type_id": type_id, "filters": []}},
+        "v_clauses": {"id": "v_clauses", "kind": "array", "label": "Chosen"},
+        "v_visible": {"id": "v_visible", "kind": "object_set", "label": "Visible",
+                      "derivation": {"transform": "narrow_set",
+                                     "inputs": ["v_all", "v_clauses"]}},
+    }
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": _module(variables)})
+    assert r.status_code == 200, r.text
+
+    good = client.post(f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.viewer_sub),
+                       json={"values": {"v_clauses": [
+                           {"property": "region", "op": "eq", "value": "north"}]}})
+    assert good.status_code == 200, good.text
+    assert good.json()["values"]["v_visible"]["filters"] == [
+        {"property": "region", "op": "eq", "value": "north"}
+    ]
+
+    bad = client.post(f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.viewer_sub),
+                      json={"values": {"v_clauses": [
+                          {"property": "capacity", "op": "gt", "value": 40}]}})
+    assert bad.status_code == 422, bad.text
+    assert "not supported yet" in bad.json()["detail"]

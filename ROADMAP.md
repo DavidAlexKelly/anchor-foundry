@@ -161,13 +161,13 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 ### 1.5 The widget library — **XL, and incremental**
 
 Anchor has eight: Container, Text, Filter, Dataset table, Object table, Map, Chart, Action form.
-Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button and Metric Card is done (§74).
+Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button, §82 the Filter List, and Metric Card is done (§74).
 
 Build toward Foundry's set, in the order below (roughly descending value per unit of work):
 
 | Priority | Widget | Notes |
 |---|---|---|
-| 1 | **Filter List** | The canonical Workshop widget. Property-aware filters over an object set, emitting an object set variable. Anchor's Filter emits a scalar — this is a rewrite, not an extension |
+| 1 | ~~**Filter List**~~ | **Done** (`STATUS.md` §82). Property-aware filters over an object set, with each value's count, driving a `narrow_set` derivation. It writes *clauses*, not a set: object sets resolve on the server, so a widget that wrote one would be a second place sets come from with no rule for which wins |
 | 1 | **Object Table** (upgrade) | Row selection emitting single-object and object-set variables; column config; sorting; server-side paging |
 | 1 | ~~**Button Group**~~ | **Done** (`STATUS.md` §81) as a **Button**: one button is one node, and a group is a row of them in a Section. A trigger is `(node, on)`, so a multi-button node would need every event to name *which* button — a format change to express what the layout already expresses |
 | 1 | ~~**Metric Card**~~ | **Done** (`STATUS.md` §74) |

@@ -146,6 +146,247 @@ CanvasText.craft = {
   related: { settings: TextSettings },
 };
 
+// ---- Filter List -----------------------------------------------------------
+/**
+ * The canonical Workshop widget (roadmap 1.5, priority 1): property-aware
+ * filters over an object set.
+ *
+ * **It reads a set and writes clauses; a derivation makes the narrowed set.**
+ * The widget does not produce an object-set variable directly, and that is the
+ * design rather than a shortcut. Object-set variables resolve on the server -
+ * that is what makes "how many are there" and "the next page" answerable at
+ * all (`services/object_sets.py`) - so a widget that wrote a set would be a
+ * second place sets come from, with no rule for which one wins. Instead the
+ * widget writes a plain list of clauses, and a `narrow_set` variable applies
+ * them to the input set. Widgets write values; derivations make sets.
+ *
+ * **The options are the data's, with counts, not a list somebody typed.** Each
+ * property's values come from `/object-sets/group` against the *input* set, so
+ * they are always the values that actually exist, and each carries how many
+ * rows it accounts for. A hand-typed list goes stale the first time a new
+ * value appears - the argument that made object links derived rather than
+ * stored (§37) and dropdown options come from a column (Canvas item 1).
+ *
+ * **Counts come from the unfiltered input set on purpose.** Recomputing them
+ * against the *narrowed* set would make every count go to zero except the ones
+ * you already picked, and a filter list whose other options all read "0" tells
+ * you nothing about what selecting them would do.
+ */
+export function CanvasFilterList({
+  objectSetVariable = null,
+  variable = null,
+  properties = "",
+  title = "Filters",
+}: {
+  /** The set to offer filters over. */
+  objectSetVariable?: string | null;
+  /** The variable this widget writes its clauses into. A `narrow_set`
+   * derivation reads it and the input set, and produces the filtered set
+   * every other widget then points at. */
+  variable?: string | null;
+  /** Property api_names to offer, comma-separated. Blank means "none yet" -
+   * a filter list over every property of a wide type would be a wall. */
+  properties?: string;
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const { set } = useCanvasParameters();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const chosen = useCanvasParameter(variable);
+
+  const names = String(properties || "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  // What is currently selected, per property, read back from the variable this
+  // widget writes - so the checkboxes reflect the document's state rather than
+  // a second copy of it held here.
+  const selected: Record<string, string[]> = {};
+  for (const clause of Array.isArray(chosen) ? chosen : []) {
+    const c = clause as { property?: string; op?: string; value?: unknown };
+    if (!c.property) continue;
+    selected[c.property] = Array.isArray(c.value) ? c.value.map(String) : [String(c.value)];
+  }
+
+  const toggle = (property: string, value: string) => {
+    const current = selected[property] ?? [];
+    const next = current.includes(value)
+      ? current.filter((v) => v !== value)
+      : [...current, value];
+    const merged = { ...selected, [property]: next };
+    const clauses = Object.entries(merged)
+      .filter(([, values]) => values.length > 0)
+      // One value is `eq`, several are `in`. Both mean the same thing on both
+      // stores; sending a one-element `in` would work too, but `eq` is what a
+      // reader of the saved document expects to see for a single choice.
+      .map(([prop, values]) =>
+        values.length === 1
+          ? { property: prop, op: "eq", value: values[0] }
+          : { property: prop, op: "in", value: values },
+      );
+    if (variable) set(variable, clauses);
+  };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      <p className="field-label">{title}</p>
+      {!objectSetVariable || !variable ? (
+        <p className="canvas-widget-empty">
+          Filter list - point it at an object set and at the variable it writes in Settings
+        </p>
+      ) : names.length === 0 ? (
+        <p className="canvas-widget-empty">Choose properties to filter on in Settings</p>
+      ) : (
+        names.map((property) => (
+          <FilterListProperty
+            key={property}
+            workspaceId={workspaceId}
+            definition={setDefinition}
+            property={property}
+            selected={selected[property] ?? []}
+            onToggle={(value) => toggle(property, value)}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+function FilterListProperty({
+  workspaceId,
+  definition,
+  property,
+  selected,
+  onToggle,
+}: {
+  workspaceId: string;
+  definition: unknown;
+  property: string;
+  selected: string[];
+  onToggle: (value: string) => void;
+}) {
+  const result = useQuery({
+    queryKey: ["canvas-filter-list", property, JSON.stringify(definition ?? null)],
+    queryFn: () => objApi.groupObjectSet(workspaceId, definition, property),
+    enabled: !!definition,
+  });
+  return (
+    <fieldset className="canvas-filter-group">
+      <legend>{property}</legend>
+      {result.isError && (
+        <p className="canvas-widget-empty">Couldn&apos;t read this property&apos;s values.</p>
+      )}
+      {result.data?.truncated && (
+        <p className="canvas-widget-empty">showing the most common values</p>
+      )}
+      {(result.data?.groups ?? []).map((group) => (
+        <label key={group.value} className="canvas-filter-option">
+          <input
+            type="checkbox"
+            checked={selected.includes(group.value)}
+            onChange={() => onToggle(group.value)}
+          />
+          <span>{group.value}</span>
+          <span className="canvas-filter-count">{group.count}</span>
+        </label>
+      ))}
+      {result.data && result.data.groups.length === 0 && (
+        <p className="canvas-widget-empty">no values</p>
+      )}
+    </fieldset>
+  );
+}
+
+function FilterListSettings() {
+  const {
+    objectSetVariable,
+    variable,
+    properties,
+    title,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    variable: node.data.props.variable,
+    properties: node.data.props.properties,
+    title: node.data.props.title,
+  }));
+  const { declared } = useCanvasVariables();
+  const sets = Object.values(declared).filter((v) => v.kind === "object_set");
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable ?? ""}
+          onChange={(e) =>
+            setProp(
+              (p: { objectSetVariable: string | null }) =>
+                (p.objectSetVariable = e.target.value || null),
+            )
+          }
+        >
+          <option value="">Pick a set</option>
+          {sets.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">The set the options are read from</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Writes its filters to</span>
+        <select
+          value={variable ?? ""}
+          onChange={(e) =>
+            setProp((p: { variable: string | null }) => (p.variable = e.target.value || null))
+          }
+        >
+          <option value="">Pick a variable</option>
+          {arrays.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">
+          An array variable. Point a narrow_set variable at it and the set to get the
+          filtered set other widgets read.
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Properties</span>
+        <input
+          value={properties ?? ""}
+          placeholder="region, status"
+          onChange={(e) =>
+            setProp((p: { properties: string }) => (p.properties = e.target.value))
+          }
+        />
+        <span className="field-hint">Comma-separated property names to offer</span>
+      </label>
+    </>
+  );
+}
+
+CanvasFilterList.craft = {
+  displayName: "Filter list",
+  props: { objectSetVariable: null, variable: null, properties: "", title: "Filters" },
+  related: { settings: FilterListSettings },
+};
+
 // ---- Parameter (filter control) --------------------------------------------
 /**
  * Sets a named value other widgets read (ROADMAP Canvas item 1). This is the
@@ -2443,6 +2684,7 @@ export const CANVAS_RESOLVER = {
   CanvasButton,
   CanvasContainer,
   CanvasText,
+  CanvasFilterList,
   CanvasParameterControl,
   CanvasDatasetTable,
   CanvasObjectTable,
@@ -2461,6 +2703,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasButton", label: "Button", hint: "Runs the events wired to its click" },
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
+  { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },

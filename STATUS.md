@@ -1523,7 +1523,31 @@ Roadmap 1.5's third priority-1 widget, and the trigger source 1.3 was missing. A
 
 Verified in a browser: the header button starts gated shut, opens when a row is selected, and its label interpolates the selection; the header button is genuinely unreachable behind the scrim (asserted with `elementFromPoint`, not assumed); the modal's button runs both its effects in order; and once the modal is gone the header's button clears the variable and gates itself shut again.
 
-**577 API tests green**, 2 new for the button's gate. Both mutation-tested, along with the mirrored `REFERENCE_PROPS` list: dropping `enabledVariable` from the server's copy fails three tests, and dropping it from the browser's copy fails the mirror test that exists for exactly this.
+**577 API tests green** at the time, 2 new for the button's gate. Both mutation-tested, along with the mirrored `REFERENCE_PROPS` list: dropping `enabledVariable` from the server's copy fails three tests, and dropping it from the browser's copy fails the mirror test that exists for exactly this.
+
+---
+
+### 82. The Filter List, and the derivation under it (this session)
+
+Roadmap 1.5's first priority-1 widget and, the roadmap says, "the canonical Workshop widget": property-aware filters over an object set. It is a rewrite rather than an extension — Anchor's existing Filter emits a scalar for one configured property, and this one lets a viewer narrow on several properties and several values at once.
+
+**It writes clauses; a derivation makes the set.** The widget does not produce an object-set variable directly, and that is the design rather than a shortcut. Object sets resolve on the server — that is what makes "how many are there" and "the next page" answerable at all — so a widget that wrote a set would be a second place sets come from, with no rule for which one wins. Instead the widget writes a plain list of clauses into an `array` variable, and a new **`narrow_set`** derivation applies them to the input set. Widgets write values; derivations make sets.
+
+**`narrow_set` carries no property or operator, unlike `filter_set`.** Which properties a Filter List narrows on is what the *viewer* chooses, so it belongs to the value rather than to the declaration. That is the whole difference between the two transforms, and why the older one is still right for "a dropdown drives one fixed filter".
+
+**The clauses are runtime data and get the same parse every object set gets.** They arrive from a browser, so unknown operators, ordered comparisons and missing values are refused with the sentence `object_sets.parse` already writes, rather than dropped. A dropped clause is a set wider than the viewer asked for — the failure decision 0002 exists to remove.
+
+**A bug this introduced, and the fix.** `/variables/evaluate` wrapped validation *and* evaluation in one `except VariableError`, reporting both as 409 "this saved app no longer validates". That was true when only the document could fail. Now a Filter List sends clauses with the request, so a bad clause is a bad **request** against a perfectly good document — and a 409 would send whoever read it to edit an app with nothing wrong with it. The two calls are now separate: 409 for the document, 422 for the values, on both the project-scoped and published routes.
+
+**The options are the data's own values with counts, not a list somebody typed**, read from `/object-sets/group` — the same endpoint the chart uses. A hand-typed list goes stale the first time a new value appears, the argument that made object links derived rather than stored (§37).
+
+**The counts come from the unfiltered input set on purpose.** Recomputing them against the narrowed set would make every unpicked option read "0", which tells a viewer nothing about what picking it would do.
+
+**One value is `eq`, several are `in`.** A one-element `in` would work identically on both stores, but `eq` is what a reader of the saved document expects to see for a single choice.
+
+Verified in a browser, against the demo app rebuilt around it: a group per configured property with the real values and counts (`north 3`, `south 2`); every row shown before anything is picked; one value narrows 5 rows to 3; a second property narrows to 2; a second value of that property widens back to 3 (an OR within a property, AND across them); the metric card and chart move with the table because all three read the same set; and clearing every checkbox is the whole set again rather than an empty one.
+
+**584 API tests green**, 7 new. All mutation-tested: trusting clauses instead of parsing them, dropping the base set's own filters, making an empty choice mean an empty set, and blaming a bad request on the saved app each fail at least one test.
 
 ---
 
