@@ -1321,6 +1321,30 @@ The last piece of item 1.2's builder work. A tab beside the widget settings: cre
 
 ---
 
+### 73. Object-set variables: the spine, end to end (this session)
+
+The half item 1.2 calls "the item that decides whether Workshop parity is real". **Dataset → object type → object set → variable → widget**, working in a browser.
+
+**An object-set variable holds a definition, not rows.** A type plus filters — small, serialisable, the same for every viewer. `/object-sets/evaluate` turns it into instances. Storing rows would make a saved app a saved session (decision 0002 §3), and it would also mean a table, a chart and a count each holding their own copy of "the set" rather than reading one.
+
+**A filter variable narrows a set through a derivation.** `filter_set` takes two inputs — the set to narrow and the variable holding the value — plus a property and an operator. That makes Foundry's Filter-List-drives-Object-Table into an ordinary edge in the variable graph, so it gets cycle detection, usage-aware deletion and dependency ordering for free rather than as a special case. Filters chain: two controls narrowing one set is two derivations, and the second reads the first.
+
+**An unset filter shows everything rather than nothing**, and this is the decision most worth stating. A viewer who has not touched the filter yet should see the whole set; filtering for `region = null` would make every app open empty and look broken. That is *not* the failure decision 0002 removed — that one was a binding to a variable nothing declared, which the save path now refuses outright. This is a declared variable with no value yet, which is an ordinary state with an obvious meaning. Mutation-tested: dropping the guard fails exactly that test.
+
+**Narrowing does not mutate what it read.** `filter_set` copies; a second consumer of the base set would otherwise silently get the narrowed one. Also mutation-tested.
+
+**Refusals that keep the two halves honest.** A set variable must have a type *or* a derivation, never both (two answers to "where do these rows come from"). A non-`object_set` variable carrying a set is refused. The set definition is validated at *save* with the same `object_sets.parse` the read path uses, so a definition that would be refused at read time is refused where somebody can still fix it. And `filter_set`'s operator list is `object_sets`' own — `gt` and friends stay refused, because Postgres casts and OpenSearch compares text, so an app's results would otherwise depend on which store the deployment runs.
+
+**Two contexts in the browser, deliberately.** `values` is what the viewer has set and is written by widgets; `resolved` is what every variable is worth and is written only by the server. Merging them would let a widget write a derived variable — a value that is a function of its inputs — so one document could show two things depending on which write the reader believed. `VariableBridge` posts the raw values, debounced, and holds a request ticket so an older resolve landing late cannot overwrite a newer one (which would show the previous filter's rows under the current filter, and read as the filter being broken).
+
+**A bug caught before it shipped.** The evaluate endpoint was project-scoped, and a *published* app is opened by a workspace member who may not be in its project at all (§15). Every published Workshop app would have resolved no variables for exactly the audience it was published to — and the symptom would be widgets showing nothing, which reads as no data rather than as no permission. There is now a `published-canvas-apps/{id}/variables/evaluate` on the workspace router, scoped by `get_published` exactly as the read path is.
+
+**Proved in a browser** against real data: a CSV of five sites, an object type over it, a real sync, then an app whose filter narrows a set the table reads. Opens showing 5; type "north" and it shows 3, naming what narrowed it (`where region = north`); clear it and 5 return. No reload, no console errors. **538 API tests green**, 10 of them new for object-set variables.
+
+**Still open in 1.2:** `object_property` and `object_set_aggregation`, which need a round trip against the instance store rather than a pure function, and are what a Metric Card will want (item 1.5).
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

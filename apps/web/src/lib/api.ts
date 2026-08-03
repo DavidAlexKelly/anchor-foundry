@@ -563,6 +563,26 @@ export interface SourceCreateInput {
 }
 
 export const objects = {
+  /** Evaluate an object-set *definition* into instances (roadmap 1.2).
+   *
+   * The definition comes from a resolved `object_set` variable, so a filter
+   * list, a table and a count all read the same set rather than each filtering
+   * its own copy. `total` is the size of the whole set, not of this page -
+   * which is the answer a page of rows cannot give. */
+  evaluateObjectSet: (
+    wid: string,
+    definition: unknown,
+    opts: { limit?: number; offset?: number } = {},
+  ) =>
+    request<{
+      instances: import("./types").ObjectInstance[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(`/workspaces/${wid}/object-sets/evaluate`, {
+      method: "POST",
+      body: JSON.stringify({ definition, ...opts }),
+    }),
   /** Workspace-wide instance search across every object type at once. */
   explore: (
     wid: string,
@@ -779,6 +799,13 @@ export const canvas = {
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/variables/evaluate`,
+      { method: "POST", body: JSON.stringify({ values }) },
+    ),
+  /** The same resolve for a published app, which a workspace member may open
+   * without being in its project. */
+  evaluatePublishedVariables: (wid: string, appId: string, values: Record<string, unknown>) =>
+    request<{ values: Record<string, unknown>; order: string[] }>(
+      `/workspaces/${wid}/published-canvas-apps/${appId}/variables/evaluate`,
       { method: "POST", body: JSON.stringify({ values }) },
     ),
   listVersions: (wid: string, pid: string, appId: string) =>

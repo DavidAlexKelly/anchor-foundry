@@ -108,7 +108,9 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 ### 1.2 Variables — **L, part done** (`STATUS.md` §58 object-set evaluation, §70 the typed variable graph: derivations, cycle refusal, usage-aware deletion, and an evaluation endpoint. §71 the conversion, run: migration 0034 converted every stored app to `format: 2` and the builder now reads and writes it, so the refusals above apply to real saves. §72 the variables panel: create, rename, retype, derive, delete, with both refusals surfaced where the work happens.)
 
-**What remains is the object-set half** — the one the item calls the thing that decides whether Workshop parity is real. Object-set *evaluation* shipped (§58); what is missing is a variable of kind `object_set` that the panel can configure and widgets can read, plus the two ontology transforms (`object_property`, `object_set_aggregation`) the API currently refuses as not built.
+§73 the object-set half — a variable of kind `object_set` holding a definition, a `filter_set` derivation that narrows one set from another, an object table that reads a set variable, and the panel to configure both. Verified end to end in a browser: dataset → object type → set → filter → table, live.
+
+**What remains** are the two ontology transforms, `object_property` and `object_set_aggregation`. Both need a round trip against the instance store rather than a pure function, and both are what a Metric Card wants — so they are better built with item 1.5's widgets than ahead of them. The API refuses them with a sentence in the meantime.
 
 **What Foundry does.** Typed variables are the wiring. Types: **object set**, **single object**, string, numeric, boolean, date/timestamp, array (of boolean, date, numeric, geopoint, geoshape, string, timestamp or struct), and object-set-filter variables. Object set variables are initialised from an object type or another object set, then optionally filtered by property values or Filter variables, or **pivoted to linked objects via a Search Around**. Variables also support **transformations**: string concatenation, if/else, casting between primitives, `is empty`/`is not empty`, `object property` (a property of a single object), and `object set aggregation` (an aggregate over a property of a set) — and transformations chain, referencing earlier ones.
 
@@ -121,6 +123,8 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 - Object set variables are the hard part and where the value is: they need server-side evaluation against the instance store (OpenSearch, `STATUS.md` §31), because "filter this set and aggregate it" cannot be done client-side over a 200-row page. **This is the item that decides whether Workshop parity is real.**
 
 **Prove it.** A filter list narrowing an object set that an object table and a chart both read, live, with a metric card showing an aggregation over the same set. Change the filter; all three update; no page reload.
+
+*Status: the filter → set → object table half is done and verified (§73). The chart and the metric card are widget work — neither reads a variable yet, and the metric card additionally needs `object_set_aggregation` — so they land with item 1.5 rather than here.*
 
 **Depends on** 1.1.
 

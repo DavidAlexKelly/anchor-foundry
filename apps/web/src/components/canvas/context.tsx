@@ -50,6 +50,51 @@ export interface CanvasParameters {
 
 const ParameterContext = createContext<CanvasParameters | null>(null);
 
+/**
+ * Resolved variable values, computed by the server (roadmap 1.2).
+ *
+ * Two maps rather than one, and the distinction is the whole design:
+ * `values` above is **what the viewer has set** - a dropdown selection, a row
+ * click - and is written by widgets. This one is **what every variable
+ * currently resolves to**, including derived ones, and is written only by the
+ * server. A widget reading a derived variable reads this; a widget setting a
+ * filter writes that.
+ *
+ * Merging them would let a widget write a derived variable, which is a value
+ * that is a function of its inputs - so the same document could show two
+ * different things depending on which write the reader believed.
+ */
+export interface CanvasVariables {
+  /** What the module *declares*. Widget settings read this to offer a picker
+   * of variables to bind to, which is the whole reason a binding is a choice
+   * from a list rather than a name somebody types and hopes matches. */
+  declared: Record<string, import("@/lib/types").WorkshopVariable>;
+  resolved: Record<string, unknown>;
+  /** True while the first resolve is in flight. A widget that rendered "0
+   * results" during it would be reporting an answer it does not have. */
+  pending: boolean;
+}
+
+const VariableContext = createContext<CanvasVariables>({
+  declared: {},
+  resolved: {},
+  pending: false,
+});
+
+export const CanvasVariableProvider = VariableContext.Provider;
+
+export function useCanvasVariables(): CanvasVariables {
+  return useContext(VariableContext);
+}
+
+/** One variable's resolved value - a scalar for most kinds, an object-set
+ * *definition* for `object_set`. Undefined while nothing has resolved it, which
+ * a consumer reads as "not yet", never as "empty". */
+export function useCanvasVariable(id: string | null | undefined): unknown {
+  const { resolved } = useCanvasVariables();
+  return id ? resolved[id] : undefined;
+}
+
 export function CanvasParameterProvider({ children }: { children: React.ReactNode }) {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const set = useCallback((name: string, value: unknown) => {

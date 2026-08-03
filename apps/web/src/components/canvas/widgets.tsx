@@ -11,7 +11,13 @@ import { useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { actions as actionApi, ApiError, datasets as dsApi, objects as objApi } from "@/lib/api";
-import { useCanvasEnv, useCanvasParameter, useCanvasParameters } from "./context";
+import {
+  useCanvasEnv,
+  useCanvasParameter,
+  useCanvasParameters,
+  useCanvasVariable,
+  useCanvasVariables,
+} from "./context";
 import {
   chartQuery,
   distinctValuesQuery,
@@ -495,12 +501,19 @@ export function CanvasObjectTable({
   filterProperty = null,
   filterParameter = null,
   searchParameter = null,
+  objectSetVariable = null,
   pageSize = 25,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
   filterParameter?: string | null;
   searchParameter?: string | null;
+  /** An `object_set` variable to read (roadmap 1.2). When set, this table and
+   * every other consumer of that variable read *one* set, narrowed once on the
+   * server, rather than each filtering its own copy. Takes precedence over the
+   * inline type/filter props, which are the pre-variable way of saying the
+   * same thing and stay for apps that have not been rewired. */
+  objectSetVariable?: string | null;
   pageSize?: number;
 }) {
   const {
@@ -509,11 +522,26 @@ export function CanvasObjectTable({
   const { workspaceId } = useCanvasEnv();
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const usingSet = !!objectSetVariable;
 
+  const setPage = useQuery({
+    queryKey: ["canvas-object-set", objectSetVariable, JSON.stringify(setDefinition ?? null), pageSize],
+    queryFn: () => objApi.evaluateObjectSet(workspaceId, setDefinition, { limit: pageSize }),
+    // Not until the definition has resolved. Querying with `undefined` would
+    // ask the server to evaluate nothing and render "0 objects", which is an
+    // answer this widget does not have yet.
+    enabled: usingSet && !!setDefinition,
+  });
+
+  const effectiveTypeId = usingSet
+    ? ((setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null)
+    : objectTypeId;
   const type = useQuery({
-    queryKey: ["object-type", objectTypeId],
-    queryFn: () => objApi.getType(workspaceId, objectTypeId!),
-    enabled: !!objectTypeId,
+    queryKey: ["object-type", effectiveTypeId],
+    queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
+    enabled: !!effectiveTypeId,
   });
 
   // An exact property filter and a free-text search are different questions,
@@ -539,20 +567,44 @@ export function CanvasObjectTable({
 
   const properties = type.data?.properties ?? [];
 
+  // One shape for both paths, so everything below reads the same. The set path
+  // returns `instances`; the explore path returns `items`.
+  const rows = usingSet ? setPage.data?.instances : page.data?.items;
+  const total = usingSet ? setPage.data?.total : page.data?.total;
+  const active = usingSet ? setPage : page;
+  const setFilters =
+    ((setDefinition as { filters?: { property: string; value: unknown }[] } | undefined)
+      ?.filters) ?? [];
+
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      {!objectTypeId && (
+      {!usingSet && !objectTypeId && (
         <p className="canvas-widget-empty">Object table - pick an object type in Settings</p>
       )}
-      {objectTypeId && page.isPending && <p className="canvas-widget-empty">Loading…</p>}
-      {page.isError && <p className="canvas-widget-empty">Couldn&apos;t load these objects.</p>}
-      {page.data && (
+      {usingSet && (variablesPending || (!setDefinition && !active.isError)) && (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      )}
+      {!usingSet && objectTypeId && page.isPending && (
+        <p className="canvas-widget-empty">Loading…</p>
+      )}
+      {active.isError && <p className="canvas-widget-empty">Couldn&apos;t load these objects.</p>}
+      {rows && total !== undefined && (
         <>
           <p className="canvas-widget-empty">
-            {page.data.total.toLocaleString()} {type.data?.display_name ?? "object"}
-            {page.data.total === 1 ? "" : "s"}
-            {useProperty ? ` where ${filterProperty} = ${String(filterValue)}` : ""}
-            {!useProperty && searchValue ? ` matching “${String(searchValue)}”` : ""}
+            {total.toLocaleString()} {type.data?.display_name ?? "object"}
+            {total === 1 ? "" : "s"}
+            {/* The set says what narrowed it. A table that showed a filtered
+                count with no sign it was filtered is the same trap as a
+                sampled preview that does not say so. */}
+            {usingSet && setFilters.length > 0
+              ? ` where ${setFilters
+                  .map((f) => `${f.property} = ${String(f.value)}`)
+                  .join(" and ")}`
+              : ""}
+            {!usingSet && useProperty ? ` where ${filterProperty} = ${String(filterValue)}` : ""}
+            {!usingSet && !useProperty && searchValue
+              ? ` matching “${String(searchValue)}”`
+              : ""}
           </p>
           <div className="data-grid">
             <table>
@@ -565,7 +617,7 @@ export function CanvasObjectTable({
                 </tr>
               </thead>
               <tbody>
-                {page.data.items.map((instance) => (
+                {rows.map((instance) => (
                   <tr key={instance.id}>
                     <td>{instance.primary_key}</td>
                     {properties.map((p) => (
@@ -582,9 +634,9 @@ export function CanvasObjectTable({
               </tbody>
             </table>
           </div>
-          {page.data.total > page.data.items.length && (
+          {total > rows.length && (
             <p className="canvas-widget-empty">
-              Showing the first {page.data.items.length} of {page.data.total.toLocaleString()}.
+              Showing the first {rows.length} of {total.toLocaleString()}.
             </p>
           )}
         </>
@@ -595,16 +647,20 @@ export function CanvasObjectTable({
 
 function ObjectTableSettings() {
   const { workspaceId } = useCanvasEnv();
+  const { declared } = useCanvasVariables();
   const {
-    objectTypeId, filterProperty, filterParameter, searchParameter, pageSize,
+    objectTypeId, filterProperty, filterParameter, searchParameter,
+    objectSetVariable, pageSize,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
     filterProperty: node.data.props.filterProperty,
     filterParameter: node.data.props.filterParameter,
     searchParameter: node.data.props.searchParameter,
+    objectSetVariable: node.data.props.objectSetVariable,
     pageSize: node.data.props.pageSize,
   }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const types = useQuery({
     queryKey: ["object-types", workspaceId],
     queryFn: () => objApi.listTypes(workspaceId),
@@ -617,9 +673,33 @@ function ObjectTableSettings() {
 
   return (
     <>
+      {/* The variable binding comes first because it *replaces* the three
+          fields under it. Offering them equally would invite configuring both
+          and wondering which won. */}
+      <label className="field">
+        <span className="field-label">Object set variable</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))
+          }
+        >
+          <option value="">Not bound — configure below</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {setVariables.length === 0
+            ? "No object set variables yet — add one in the Variables tab"
+            : "Reads a set every other widget can read too"}
+        </span>
+      </label>
       <label className="field">
         <span className="field-label">Object type</span>
         <select
+          disabled={!!objectSetVariable}
           value={objectTypeId || ""}
           onChange={(e) =>
             setProp((p: Record<string, unknown>) => {

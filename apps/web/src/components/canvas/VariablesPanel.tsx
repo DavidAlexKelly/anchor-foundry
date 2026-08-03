@@ -25,9 +25,9 @@
  * implementation rather than two that drift - see the API route's own note.
  */
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { canvas as canvasApi } from "@/lib/api";
+import { canvas as canvasApi, objects as objectsApi } from "@/lib/api";
 import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "@/lib/types";
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
 
@@ -54,6 +54,10 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "is_not_empty", label: "Is not empty", arity: "one" },
 ];
 
+/** Only offered on `object_set` variables, and the only thing offered there -
+ * narrowing a set is what a derived object set *is*. */
+const SET_TRANSFORM: WorkshopTransform = "filter_set";
+
 const CAST_TARGETS = ["string", "number", "boolean"] as const;
 
 /** How many inputs each transform takes, so the editor can render the right
@@ -61,11 +65,13 @@ const CAST_TARGETS = ["string", "number", "boolean"] as const;
 function arityOf(transform: WorkshopTransform): number | "many" {
   if (transform === "concat") return "many";
   if (transform === "if_else") return 3;
+  if (transform === "filter_set") return 2;
   return 1;
 }
 
 function slotLabels(transform: WorkshopTransform): string[] {
   if (transform === "if_else") return ["Condition", "Then", "Else"];
+  if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
   return ["Value"];
 }
@@ -208,9 +214,21 @@ export function VariablesPanel({
                       <select
                         value={variable.kind}
                         disabled={readOnly}
-                        onChange={(e) =>
-                          update(id, { kind: e.target.value as WorkshopVariableKind })
-                        }
+                        onChange={(e) => {
+                          const kind = e.target.value as WorkshopVariableKind;
+                          // Retyping to object_set without a set would be a
+                          // document the server refuses ("names no object
+                          // type"), so the shape follows the kind rather than
+                          // leaving somebody to discover it at save.
+                          const { object_set: _s, derivation: _d, ...rest } = variable;
+                          update(id, {
+                            ...rest,
+                            kind,
+                            ...(kind === "object_set"
+                              ? { object_set: { object_type_id: "", filters: [] } }
+                              : {}),
+                          } as Partial<WorkshopVariable>);
+                        }}
                       >
                         {KINDS.map((k) => (
                           <option key={k} value={k}>
@@ -220,7 +238,15 @@ export function VariablesPanel({
                       </select>
                     </label>
 
-                    {variable.derivation ? (
+                    {variable.kind === "object_set" ? (
+                      <ObjectSetEditor
+                        workspaceId={workspaceId}
+                        variable={variable}
+                        variables={variables}
+                        readOnly={readOnly}
+                        onChange={(next) => onChange({ ...variables, [id]: next })}
+                      />
+                    ) : variable.derivation ? (
                       <DerivationEditor
                         variable={variable}
                         variables={variables}
@@ -398,6 +424,186 @@ function DerivationEditor({
         <button type="button" className="btn quiet" onClick={onClear}>
           Stop deriving
         </button>
+      )}
+    </div>
+  );
+}
+
+/** An object-set variable: either a base set drawn from an object type, or a
+ * set narrowed from another by a filter variable.
+ *
+ * Exactly one of the two, because the server refuses a variable that declares
+ * both - a set with two answers to "where do these rows come from" has no rule
+ * for which wins. The toggle here is what makes that a choice rather than a
+ * refusal somebody runs into.
+ */
+function ObjectSetEditor({
+  workspaceId,
+  variable,
+  variables,
+  readOnly,
+  onChange,
+}: {
+  workspaceId: string;
+  variable: WorkshopVariable;
+  variables: Record<string, WorkshopVariable>;
+  readOnly: boolean;
+  onChange: (next: WorkshopVariable) => void;
+}) {
+  const types = useQuery({
+    queryKey: ["object-types", workspaceId],
+    queryFn: () => objectsApi.listTypes(workspaceId),
+  });
+  const base = (variable.object_set ?? null) as
+    | { object_type_id?: string; filters?: unknown[] }
+    | null;
+  const derived = !!variable.derivation;
+
+  // Sets this one could narrow. Itself excluded, and so is anything that would
+  // read back round to it - the server refuses a cycle, and a picker that
+  // offered one would be offering a save that fails.
+  const otherSets = Object.values(variables).filter(
+    (v) => v.kind === "object_set" && v.id !== variable.id,
+  );
+  const scalars = Object.values(variables).filter((v) => v.kind !== "object_set");
+  const detail = useQuery({
+    queryKey: ["object-type", base?.object_type_id],
+    queryFn: () => objectsApi.getType(workspaceId, base!.object_type_id!),
+    enabled: !!base?.object_type_id,
+  });
+
+  function setDerivation(patch: Record<string, unknown>) {
+    const d = variable.derivation ?? { transform: SET_TRANSFORM, inputs: [], config: {} };
+    onChange({ ...variable, derivation: { ...d, ...patch } as WorkshopVariable["derivation"] });
+  }
+
+  return (
+    <div className="vars-derivation">
+      <label>
+        This set
+        <select
+          value={derived ? "narrowed" : "type"}
+          disabled={readOnly}
+          onChange={(e) => {
+            if (e.target.value === "narrowed") {
+              const { object_set: _dropped, ...rest } = variable;
+              onChange({
+                ...rest,
+                derivation: { transform: SET_TRANSFORM, inputs: [], config: { op: "eq" } },
+              });
+            } else {
+              const { derivation: _dropped, ...rest } = variable;
+              onChange({ ...rest, object_set: { object_type_id: "", filters: [] } });
+            }
+          }}
+        >
+          <option value="type">Draws from an object type</option>
+          <option value="narrowed">Is another set, narrowed</option>
+        </select>
+      </label>
+
+      {!derived ? (
+        <label>
+          Object type
+          <select
+            value={base?.object_type_id ?? ""}
+            disabled={readOnly}
+            onChange={(e) =>
+              onChange({
+                ...variable,
+                object_set: { object_type_id: e.target.value, filters: [] },
+              })
+            }
+          >
+            <option value="">Choose…</option>
+            {types.data?.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <>
+          <label>
+            Set to narrow
+            <select
+              value={variable.derivation?.inputs?.[0] ?? ""}
+              disabled={readOnly}
+              onChange={(e) =>
+                setDerivation({
+                  inputs: [e.target.value, variable.derivation?.inputs?.[1] ?? ""].filter(Boolean),
+                })
+              }
+            >
+              <option value="">Choose a set…</option>
+              {otherSets.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Filter value from
+            <select
+              value={variable.derivation?.inputs?.[1] ?? ""}
+              disabled={readOnly}
+              onChange={(e) =>
+                setDerivation({
+                  inputs: [variable.derivation?.inputs?.[0] ?? "", e.target.value].filter(Boolean),
+                })
+              }
+            >
+              <option value="">Choose a variable…</option>
+              {scalars.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Property
+            <input
+              value={String(variable.derivation?.config?.property ?? "")}
+              readOnly={readOnly}
+              placeholder="e.g. region"
+              onChange={(e) =>
+                setDerivation({
+                  config: { ...variable.derivation?.config, property: e.target.value },
+                })
+              }
+            />
+          </label>
+          {/* Only the operators both stores agree about. `gt` and friends are
+              refused by the API because Postgres casts and OpenSearch compares
+              text, so an app's results would depend on the deployment. */}
+          <label>
+            Match
+            <select
+              value={String(variable.derivation?.config?.op ?? "eq")}
+              disabled={readOnly}
+              onChange={(e) =>
+                setDerivation({ config: { ...variable.derivation?.config, op: e.target.value } })
+              }
+            >
+              <option value="eq">equals</option>
+              <option value="neq">does not equal</option>
+              <option value="starts_with">starts with</option>
+              <option value="in">is one of</option>
+            </select>
+          </label>
+          <p className="soft" style={{ margin: 0, fontSize: 11 }}>
+            An unset filter shows the whole set rather than nothing.
+          </p>
+        </>
+      )}
+      {!derived && detail.data && (
+        <p className="soft" style={{ margin: 0, fontSize: 11 }}>
+          {detail.data.properties.length} propert
+          {detail.data.properties.length === 1 ? "y" : "ies"} available to filter on
+        </p>
       )}
     </div>
   );

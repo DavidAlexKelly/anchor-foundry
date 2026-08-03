@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { ApiError, api, canvas as canvasApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
+import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
@@ -199,10 +200,14 @@ function TopBar({
 function CanvasEnvBridge({
   workspaceId,
   projectId,
+  appId,
+  variables,
   children,
 }: {
   workspaceId: string;
   projectId: string;
+  appId: string;
+  variables: Record<string, WorkshopVariable>;
   children: React.ReactNode;
 }) {
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
@@ -212,7 +217,21 @@ function CanvasEnvBridge({
           tree, so a filter set in Preview survives switching back to Edit -
           the alternative resets every filter each time the mode flips, which
           makes a filter impossible to actually try out. */}
-      <CanvasParameterProvider>{children}</CanvasParameterProvider>
+      <CanvasParameterProvider>
+        {/* Resolves what the viewer has selected into what each variable is
+            worth. The builder passes its *working* variables, not the saved
+            ones, so a set configured a moment ago drives the table without a
+            save first - which is the difference between building an app and
+            guessing at one. */}
+        <VariableBridge
+          workspaceId={workspaceId}
+          projectId={projectId}
+          appId={appId}
+          declared={variables}
+        >
+          {children}
+        </VariableBridge>
+      </CanvasParameterProvider>
     </CanvasEnvProvider>
   );
 }
@@ -273,7 +292,12 @@ export default function CanvasAppEditorPage() {
   return (
     <main>
       <Editor resolver={CANVAS_RESOLVER} enabled={canEdit}>
-        <CanvasEnvBridge workspaceId={workspace.id} projectId={project.id}>
+        <CanvasEnvBridge
+          workspaceId={workspace.id}
+          projectId={project.id}
+          appId={app.id}
+          variables={variables}
+        >
           <TopBar
             app={app}
             workspaceSlug={params.workspace}

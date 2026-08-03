@@ -27,9 +27,10 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { canvas as canvasApi } from "@/lib/api";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
+import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
-import { layoutOf } from "@/lib/workshop-module";
+import { layoutOf, variablesOf } from "@/lib/workshop-module";
 
 /** Craft.js's `enabled` option is what makes a node draggable, selectable and
  * editable. `<Editor enabled={false}>` is the documented way to render a
@@ -113,7 +114,15 @@ export default function PublishedAppPage() {
             value={{ workspaceId: workspace!.id, projectId: app.data.project_id, mode: "run" }}
           >
             <CanvasParameterProvider>
-              <ReadOnlyFrame definition={definition} />
+              <VariableBridge
+                workspaceId={workspace!.id}
+                projectId={app.data.project_id}
+                appId={app.data.id}
+                declared={variablesOf(app.data.definition)}
+                published
+              >
+                <ReadOnlyFrame definition={definition} />
+              </VariableBridge>
             </CanvasParameterProvider>
           </CanvasEnvProvider>
         </Editor>
