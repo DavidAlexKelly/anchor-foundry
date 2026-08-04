@@ -309,8 +309,10 @@ Closest to parity already. Two applications, both mostly re-presentation:
 ### 4.1 Object Explorer — **M**
 Workspace-wide search, type filtering, saved searches, link traversal. The explorer (`STATUS.md` §32) and traversal (§33) exist; this is the full-page app around them.
 
-### 4.2 Ontology Manager — **M**
+### ~~4.2 Ontology Manager~~ — **done** (`STATUS.md` §97)
 Type and link management, property types, change history (§34, §35) as a proper application rather than a settings page.
+
+An object type opens at `/r/{id}` with Objects, Properties, Links and History. It was the last resource kind whose card said "building in roadmap item 4.2" instead of opening something. Properties are shown as *declared* rather than inferred from untyped stored values; a version is shown as it was, dropped properties included; links appear in both directions, and one with no join mapped says it is not traversable.
 
 ---
 

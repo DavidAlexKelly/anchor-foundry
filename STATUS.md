@@ -1868,6 +1868,26 @@ So time travel needed **no migration and no backfill**. What was missing was a w
 
 One test found a real hole in itself: it deleted `v1/data.parquet` by globbing, and matched the *source* dataset's v1 rather than the one under test — so the assertion about a shrinking total passed while measuring nothing. Scoped to the dataset id.
 
+### 97. The Ontology Manager, and the last resource that was not an application (this session)
+
+Roadmap 4.2. An object type now opens as its own full-page application at `/r/{id}` — Objects, Properties, Links, History — rather than as a card saying "open in Objects" and sending you to a workspace page to find it again.
+
+**It is the last kind that resolved to a placeholder.** `datasets` got theirs in §56, repositories in §62; `object_type` was the remaining one whose card literally read *"building in roadmap item 4.2"*. Section 0's whole argument is that a resource opens as an application; this is that argument applied to the one place it had not been.
+
+**Almost no new behaviour.** Properties, links, versions and instances are services that have existed since §31–§35. What is new is that they are in one place keyed by the resource id, so "look at this object type" is a link.
+
+Three things it takes care over, all about reading rather than editing:
+
+- **A property's type is shown as declared, not inferred.** The instance store keeps properties untyped (§87), so a screen that guessed from values would disagree with the declaration exactly when they had drifted — which is the moment somebody is looking.
+- **A version is shown as it was**, including properties the type no longer has. The seeded example deliberately *drops* a property between v1 and v2, because a history that rendered every version with the current shape would look right and be worthless.
+- **Links are shown in both directions.** A link this type is the target of is as much a fact about it as one it is the source of. A link with no join mapped says "not traversable" rather than leaving an empty cell — db 0027 calls that a valid ontology statement that cannot yet be traversed, and it is worth saying so.
+
+**One simplification found while writing it**: the links list already carries `from_display_name` / `to_display_name`, so the second query I had written to resolve type names was removed rather than kept.
+
+**702 API tests green**, unchanged — this item added no server code, which is the honest measure of how much of it already existed. The browser check drives all four tabs against real servers, including the dropped property appearing in v1 and not in the current columns.
+
+Seeding it needed three corrections that are worth knowing: `SourceCreate` takes `column_mappings` as **column → property**, `LinkTypeCreate` takes `from_type_id`/`to_type_id` rather than the `*_object_type_id` names the *response* uses, and there is no `many_to_one` cardinality.
+
 ---
 
 ## What's not started
