@@ -43,10 +43,24 @@ from ..lib.errors import ConflictError, NotFoundError
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 MAX_DEFINITION_BYTES = 2 * 1024 * 1024  # flag: conservative day-one cap on a saved layout
 
-_COLUMNS = """
-    id, project_id, name, slug, description, current_version,
-    publish_scope, published_at, created_at, updated_at
-"""
+_COLUMN_NAMES = (
+    "id", "project_id", "name", "slug", "description", "current_version",
+    "publish_scope", "published_at", "published_version", "created_at", "updated_at",
+)
+
+
+def _columns(alias: str = "") -> str:
+    """The row shape every read returns, optionally qualified.
+
+    A list rather than a `SELECT *`: the definition is fetched only where it is
+    wanted (it is up to 2 MB), and a join needs the same columns qualified,
+    which a hand-edited second copy of the list would eventually get wrong.
+    """
+    prefix = f"{alias}." if alias else ""
+    return ", ".join(prefix + name for name in _COLUMN_NAMES)
+
+
+_COLUMNS = _columns()
 
 
 def slugify(name: str) -> str:
@@ -216,13 +230,27 @@ async def set_publish_scope(
         if unknown:
             raise ValueError(f"unknown group(s): {', '.join(unknown)}")
 
+    # Publishing pins the version viewers see (roadmap 1.7). Saving never
+    # touches it, so an author can work on an app all day without anybody
+    # watching a half-finished layout - which is what "publish" has to mean
+    # for the word to be worth anything.
+    #
+    # Re-publishing an already-published app moves the pin to the current
+    # version: the button says "publish", and publishing what is in front of
+    # you is the only thing it could sensibly do. Going private clears it, so
+    # a later re-publish pins what is current *then* rather than resurrecting
+    # a version nobody has looked at since.
     row = await fetch_one(
         conn,
         f"""
         UPDATE canvas_apps
            SET publish_scope = CAST(:scope AS app_publish_scope),
                published_at = CASE WHEN :scope = 'private' THEN NULL
-                                    ELSE COALESCE(published_at, now()) END
+                                    ELSE COALESCE(published_at, now()) END,
+               published_version = CASE
+                   WHEN :scope = 'private' THEN NULL
+                   WHEN current_version > 0 THEN current_version
+                   ELSE NULL END
          WHERE id = :aid
         RETURNING {_COLUMNS}, definition
         """,
@@ -283,12 +311,28 @@ async def list_published(conn: AsyncConnection, workspace_id: UUID) -> list[dict
 
 
 async def get_published(conn: AsyncConnection, workspace_id: UUID, app_id: UUID) -> dict[str, Any]:
+    """A published app as its viewers see it: the *published* version's
+    definition, not the live one (roadmap 1.7).
+
+    The row still carries `current_version`, so a caller can tell that the
+    author has moved on - but `definition` is what was published, because that
+    is the whole point of publishing being an act rather than a checkbox.
+
+    An app whose `published_version` is NULL has been published without ever
+    being saved. Its viewers get the live (empty) definition, which is the same
+    thing, rather than a 404 for a version row that does not exist.
+    """
     row = await fetch_one(
         conn,
         f"""
-        SELECT {_COLUMNS}, definition FROM canvas_apps
-         WHERE id = :aid AND publish_scope <> 'private'
-           AND rls_project_workspace_id(project_id) = :wid
+        SELECT {_columns("a")},
+               COALESCE(v.definition, a.definition) AS definition
+          FROM canvas_apps a
+          LEFT JOIN canvas_app_versions v
+                 ON v.canvas_app_id = a.id
+                AND v.version_number = a.published_version
+         WHERE a.id = :aid AND a.publish_scope <> 'private'
+           AND rls_project_workspace_id(a.project_id) = :wid
         """,
         {"aid": str(app_id), "wid": str(workspace_id)},
     )

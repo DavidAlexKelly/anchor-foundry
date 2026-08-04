@@ -1228,6 +1228,14 @@ button { font: inherit; cursor: pointer; }
 .canvas-header--sticky { position: sticky; top: 0; z-index: 20; }
 .canvas-header-title { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 700; }
 
+/* A node that a viewer would not see, shown anyway while editing. Marked the
+   way a page is: hiding it in the builder would make it uneditable and hide
+   from the author that it exists (ROADMAP phase 2, 1.7). */
+.canvas-hidden-marker {
+  font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--brass); margin: 0 0 4px;
+}
+
 /* ---- the events panel (ROADMAP phase 2, 1.6) ------------------------------ */
 .canvas-events-panel { display: grid; gap: 8px; }
 .canvas-event { border: 1px solid var(--line); border-radius: var(--radius); }

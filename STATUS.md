@@ -1673,6 +1673,72 @@ Verified in a browser: clicking a row opens a modal that says "Editing S1" with 
 
 ---
 
+### 88. Publishing pins a version (this session)
+
+Roadmap 1.7's first half, and a sharp edge the publish dialog admitted to in its own copy: *"Publishing is not a snapshot either — each save you make from here is immediately what they see."* Every keystroke an author saved went straight to everyone the app was published to, half-finished layouts included. Publishing did not mean anything; it was a visibility checkbox.
+
+**It is a pointer, not a new store.** `canvas_app_versions` has held one row per save since migration 0003. Migration 0035 adds `canvas_apps.published_version`, publishing sets it to the current version, and the published read path joins to that version's definition. Saving never touches it.
+
+**The backfill pins what each app's viewers are looking at right now.** An already-published app gets `published_version = current_version` at migration time, so nobody's view changes at the moment of migration and from then on it changes only when somebody publishes. A migration that moved every viewer to something they had not seen would be an odd way to introduce the idea that viewers should not be moved without a publish.
+
+**Going private forgets the pin**, so a later re-publish pins what is current *then* rather than resurrecting a version nobody has looked at since. Publishing an app that has never been saved pins nothing and its viewers get the live (empty) definition, which is the same thing, rather than a 404 for a version row that does not exist.
+
+**`current_version` is still reported next to it**, because "published v1, editing v2" is the sentence an author of a live app needs and one number cannot say it. The builder shows `· viewers see v32` in the subtitle whenever the two differ, and the publish dialog says which version each side is on. The dialog's copy was rewritten: it described the old behaviour accurately, and leaving it would have been worse than never having written it.
+
+**The evaluate route reads the published document too.** It resolves variables from the stored definition, so without this a viewer's app would render one version and resolve another — a variable added after publishing would reach a viewer whose layout has no widget bound to it. There is a test for exactly that.
+
+Verified in a browser with two sessions side by side: the author publishes, changes the header to "Work in progress" and saves; the builder says `viewers see v32`; the viewer reloads and still sees `Sites`; the author publishes again and the viewer moves.
+
+**609 API tests green**, 6 new.
+
+**A stale check, found and repaired.** `packages/db/verify_schema.py` asserts "no unexplained extra tables" against a list written when the spec had 22. Sixteen tables have been added by migrations since, so the check had been *failing on every run* — the one check watching for tables nobody meant to create had been reporting a wall of expected ones and telling nobody anything. The list now names each table and the migration that added it, plus `customer_stacks`, which is the control plane's and appears only because this sandbox points both services at one Postgres.
+
+**And why it went unnoticed: the verifier is single-use per database.** It creates a fixture organisation, and `audit_log` carries an append-only `DELETE` rule (migration 0004) that *silently swallows* deletes — `DELETE 0` with the row still there, even as superuser with `row_security = off`. So the fixture org can never be removed and a second run dies on a unique-slug violation before it checks anything. The rule is right; the verifier needing a fresh database is the thing to know, and it is in the rough edges now.
+
+---
+
+### 89. Visibility conditions, and 1.7 finished (this session)
+
+The rest of roadmap 1.7: a layout node can be bound to a variable and shows only while that variable is truthy. Foundry's own example of the feature is "a section that appears only when a set is non-empty".
+
+**The condition is a variable, not an expression.** `is_empty`/`is_not_empty` have been in the variable graph since item 1.2 — the roadmap says they exist "precisely for this" — so anything a viewer's state can decide is already expressible as a derivation. An expression language here would be a second grammar to validate, explain, and keep in step with the first, bought for nothing.
+
+**It lives on the layout nodes, not on every widget.** Section and Container carry `visibleWhen`. Hiding a section hides what is in it, which is what "this part of the page does not apply yet" means; a single widget that needs hiding goes in a container, which is one node rather than a new concept, and the alternative was a prop on all fourteen widgets.
+
+**Unresolved means visible.** `undefined` is "the first resolve has not come back yet", and a section that vanished until it did would flash on every load. Only an explicitly falsy value hides — the rule §81's button gate already follows, now shared by both through one hook.
+
+**In the builder a hidden node renders anyway, marked** `HIDDEN UNLESS ANY FILTER CHOSEN`. Hiding it there would make it uneditable and hide from the author that it exists, which is the argument §77 made for pages and is the same argument. The marker never reaches a viewer.
+
+**A visibility binding is a usage**, so `visibleWhen` joined the mirrored `REFERENCE_PROPS` lists and deleting the variable a section depends on is refused rather than quietly making the section permanent.
+
+Verified in a browser: the builder shows the demo's results section marked as conditional; the running app opens with it absent and its Filter List present; ticking a filter reveals the section with its table, chart and card; unticking hides it again.
+
+**611 API tests green**, 2 new.
+
+**Roadmap item 1.7 is now done**, and with it every item in section 1 except the pieces named as blocked or deferred: drag-to-resize (an affordance over numbers that exist), chart drill-down, and the four features behind the typed-property index.
+
+---
+
+### 90. Closing the way back to v1, and a docstring that was lying (this session)
+
+Roadmap 1.8 asked for a one-shot conversion of every saved app to the Workshop format. §71 ran it. This is what was missing to call the item done, and it was found by checking the claim rather than accepting it.
+
+**The API still accepted v1 documents on save**, with a comment saying "or every unconverted app would stop being saveable" — and a test asserting it. That was true when written and had quietly stopped being true: migration 0034 converted every stored app, and the migration container runs *before* this code does (`migrate.py`'s own docstring), so an unconverted app cannot reach the route. What could still reach it is a script or a client older than the conversion, and what either would write is an app with no variables, no events and no pages — silently, since a v1 document is valid and simply has none of those things.
+
+**So a v1 document is now refused on save**, in a sentence that says what it is and why it cannot be what the sender meant. Reading v1 is untouched: 0034 deliberately leaves historical version rows in the format they were written in, and the browser still renders them (`layoutOf` is a structural check, not a version compare).
+
+**A conversion is only finished when the old format cannot come back.** That is the general form of it, and it is why this belongs to 1.8 rather than being a tidy-up.
+
+**The test that asserted the opposite was updated, not deleted**, with its old premise written down — the same treatment §77's stale test got. A second test now pins that `{}` still saves: an empty document is not a v1 document, it is an app with nothing in it, which is what every app is before somebody drags a widget onto it.
+
+**A docstring contradicting itself, and why it mattered.** `0034`'s summary said "`canvas_apps.definition` becomes a `format: 2` document, **and every version row is converted alongside it**", while the next paragraph said historical version rows are **left untouched**. The code does the latter. That is not a cosmetic error: §88 made the published read path join to a version row, so "are old version rows v1?" is now a question with consequences, and the file answered it both ways. Corrected to match the code.
+
+For the record, the answer: **a `published_version` can only point at a post-conversion row**, because 0034 bumped `current_version` for every app it converted and §88's backfill pinned `current_version`. A v1 document therefore cannot reach a viewer through that path — and if one somehow did, the browser renders it rather than failing.
+
+**612 API tests green**, 1 new; two existing ones updated where their premises had changed. Re-verified in a browser that the builder still saves through the stricter route.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
@@ -1708,6 +1774,7 @@ Verified in a browser: clicking a row opens a modal that says "Editing S1" with 
 - **Worker jobs' per-candidate `except` tuples are the single most repeated bug in this codebase** - §14 (twice, `sync_configs.py`), §16 (`instance_syncs.py`, `StorageKeyError`), and §21 (`sync_configs.py` again, the *same* `StorageKeyError` gap §16 fixed one file over). Every occurrence has the same shape: a job calls something that raises an exception type the isolation tuple doesn't name, so one bad candidate crashes the whole batch instead of failing alone. When adding or editing a scheduled job, enumerate every exception type on the call path rather than the ones a first test run happens to exercise - and when fixing one job, check its siblings for the identical gap.
 - **RLS policies that read another RLS-protected table are a recurring bug class in this codebase** - 0008 (users), 0009 (canvas_apps↔canvas_app_shares), and now 0015 (canvas_apps↔projects) all hit the same shape: a policy's `USING` clause subqueries a table whose own policy can legitimately hide the exact row the first policy needs, so the check silently fails closed instead of erroring loudly. Worth a systematic pass if another cross-table RLS policy gets added - the fix is always the same (`SECURITY DEFINER` helper resolving just the needed column, bypassing RLS internally) but nothing currently catches the pattern except noticing a feature silently doesn't work.
 - **`npm run build` while `next dev` is running corrupts the dev server.** Both write `apps/web/.next`, so a production build under a running dev server leaves it serving 500s with `Cannot find module './vendor-chunks/@tanstack.js'` on every route - which reads as a broken page rather than a broken cache, and cost a debugging detour in §47. Recovery: stop the dev server, `rm -rf apps/web/.next`, restart. Run the two in sequence, never concurrently.
+- **`verify_schema.py` needs a fresh database; it cannot be run twice against the same one.** It creates a fixture organisation, and `audit_log`'s append-only `DELETE` rule (migration 0004) *silently* discards deletes — `DELETE 0`, row still present, even as superuser with `row_security = off` — so the fixture can never be cleaned up and the second run dies on a duplicate slug before checking anything. Found in §88, and it is the reason the verifier's "no unexplained extra tables" check had been failing unnoticed for sixteen migrations.
 - **Four features are waiting on one missing capability: the instance index does not honour declared property types.** Ordered filters (`gt`/`lt`), numeric aggregations (`sum`/`avg`/`min`/`max`, §74), sorting a table by a property (§83) and selecting an area on a map (§86) are each refused for the same reason — properties are stored untyped, so a comparison means one thing on Postgres and another on OpenSearch. Every refusal says so in a sentence. **It cannot be built in this sandbox**: the OpenSearch side is tested against `tests/opensearch_fixture_server.py`, which has no mapping enforcement by design, and there is no Docker daemon and no reachable OpenSearch artifact host here, so the cross-store agreement — the entire point — cannot be demonstrated. It needs a real cluster, not more code.
 - **Two sources feeding one object type produce two instances for the same primary key** (found in §83). Instance identity is `(source_id, primary_key)` — `instance_store._doc_id` — so pointing a second dataset at an object type that already has one duplicates every overlapping key instead of updating it, and a set over that type returns each duplicated object twice. Nothing errors. Multi-source object types are a legitimate Foundry pattern (a union of feeds into one type), so the honest fix is to make identity `(object_type_id, primary_key)` and decide what happens when two sources disagree about the same object's properties — an ontology decision with a backfill behind it. Until then, one source per object type.
 - **Craft.js gives a canvas widget its children as one Fragment, not a list.** `React.Children.toArray(children)` therefore returns a one-element array however many widgets the node contains, and nothing errors — §78's sections all rendered as a single column until this was found. Any canvas widget that needs to treat its children individually (a section, a grid, anything positional) must go through `childList()` in `widgets.tsx` rather than `React.Children` directly.

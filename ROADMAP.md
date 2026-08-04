@@ -194,13 +194,23 @@ Three panels: left (Layout tree / Variables / Events, tabbed), centre (the modul
 
 **Depends on** 1.4.
 
-### 1.7 Publishing, sharing and permissions — **M**
+### ~~1.7 Publishing, sharing and permissions~~ — **done** (`STATUS.md` §88: publishing pins a version, saving no longer moves viewers, and the builder says who is on what; §89: visibility conditions on layout nodes). Per-module sharing already existed (`STATUS.md` §15: workspace-wide or to named groups).
+
+*Deviation: **visibility is a variable, not an expression.** Foundry's example — a section that appears only when a set is non-empty — is expressible with `is_not_empty`, which the variable graph has had since 1.2. An expression language here would be a second grammar to validate, explain and keep in step with the first.*
+
+*It lives on the **layout nodes** (Section, Container) rather than on every widget: hiding a section hides what is in it, which is what "this part of the page does not apply yet" means. A single widget that needs hiding goes in a container — which is one node, not a new concept.*
 
 Published modules with a version pointer, so editing a live app does not change what users see until you publish. Per-module sharing. Widget-level visibility conditions driven by variables (a section that appears only when a set is non-empty — `is empty`/`is not empty` from 1.2 exist precisely for this).
 
-### 1.8 Migrating the existing canvas apps — **S**
+### ~~1.8 Migrating the existing canvas apps~~ — **done** (`STATUS.md` §71 ran the conversion, §90 closed the way back)
 
 One-shot SQL migration to the new format, run against real saved apps, with the old definitions retained in the migration's audit trail. **A record of what an app was must not change when the format does** — the same principle that shaped the dataset/version work in phase 1.
+
+*It is Python, not SQL: the thing being rewritten is a jsonb document whose meaning the application defines, and re-expressing that in PL/pgSQL would be a second implementation of the format in the language with no tests (`0034_workshop_module_format.py`).*
+
+*The retention is sharper than "an audit trail": historical version rows are left in the format they were written in, and the conversion **appends** a new version carrying the converted document — so the change is in the history rather than being an edit nobody can see.*
+
+*Completed by §90: **the API now refuses to save a v1 document.** A conversion is only finished when the old format cannot come back, and after 0034 the only things that could still write one were a script or a client older than the conversion.*
 
 ---
 

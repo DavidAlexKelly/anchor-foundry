@@ -8,8 +8,9 @@ implementation of the format, in the language with no tests, diverging from the
 one `apps/api/tests/test_workshop_format.py` exercises. So this imports the
 converter rather than restating it.
 
-**What changes.** `canvas_apps.definition` becomes a `format: 2` document, and
-every version row is converted alongside it.
+**What changes.** `canvas_apps.definition` - the live document - becomes a
+`format: 2` document. Nothing else is rewritten; see the next paragraph, which
+this sentence used to contradict.
 
 **The original is kept, and precisely this way.** Historical `canvas_app_versions`
 rows are left untouched - they are the record of what the app was, and a

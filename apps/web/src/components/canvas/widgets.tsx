@@ -38,26 +38,96 @@ function connectDragDrop(node: HTMLElement | null, connect: (el: HTMLElement) =>
 }
 
 // ---- Container (layout) ------------------------------------------------------
+/** Whether a layout node bound to a `visibleWhen` variable should render, and
+ * how the builder shows one that is hidden (roadmap 1.7).
+ *
+ * Foundry's example: a section that appears only when a set is non-empty.
+ * `is_empty`/`is_not_empty` have existed in the variable graph since item 1.2
+ * precisely for this, so the condition is *a variable*, not an expression
+ * language invented here - anything a viewer's state can decide is already
+ * expressible as a derivation, and a second grammar would be a second thing to
+ * validate, explain and keep in step.
+ *
+ * **Unresolved means visible.** `undefined` is "the first resolve has not come
+ * back yet", and a section that vanished until it did would flash on every
+ * load. Only an explicitly falsy value hides - the rule the Button's gate
+ * already follows (§81).
+ *
+ * **In the builder a hidden node still renders, marked.** Hiding it there
+ * would make it uneditable and hide from the author that it exists, which is
+ * the argument §77 made for pages and is the same argument.
+ */
+function useVisibility(variableId: string | null | undefined): {
+  hidden: boolean;
+  marker: string | null;
+} {
+  const { mode } = useCanvasEnv();
+  const { resolved, declared } = useCanvasVariables();
+  if (!variableId) return { hidden: false, marker: null };
+  const value = resolved[variableId];
+  const hidden = value !== undefined && !value;
+  if (!hidden) return { hidden: false, marker: null };
+  if (mode === "edit") {
+    const label = declared[variableId]?.label || variableId;
+    return { hidden: false, marker: `hidden unless ${label}` };
+  }
+  return { hidden: true, marker: null };
+}
+
 export function CanvasContainer({
   children,
   background,
   padding,
+  visibleWhen = null,
 }: {
   children?: React.ReactNode;
   background?: string;
   padding?: number;
+  /** A variable that must be truthy for this box to show (roadmap 1.7). */
+  visibleWhen?: string | null;
 }) {
   const {
     connectors: { connect, drag },
   } = useNode();
+  const { hidden, marker } = useVisibility(visibleWhen);
+  if (hidden) return null;
   return (
     <div
       ref={(ref) => connectDragDrop(ref, connect, drag)}
       className="canvas-block"
       style={{ background: background || "transparent", padding: padding ?? 12 }}
     >
+      {marker && <p className="canvas-hidden-marker">{marker}</p>}
       {children}
     </div>
+  );
+}
+
+/** The one control every node that can be conditionally shown uses, so the
+ * wording and the "always" option are written once. */
+function VisibilityField({
+  value,
+  onChange,
+}: {
+  value: string | null | undefined;
+  onChange: (next: string | null) => void;
+}) {
+  const { declared } = useCanvasVariables();
+  return (
+    <label className="field">
+      <span className="field-label">Shown when</span>
+      <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+        <option value="">Always</option>
+        {Object.values(declared).map((v) => (
+          <option key={v.id} value={v.id}>
+            {v.label || v.id}
+          </option>
+        ))}
+      </select>
+      <span className="field-hint">
+        Hidden while this variable is empty or false — Is not empty makes one
+      </span>
+    </label>
   );
 }
 
@@ -65,10 +135,19 @@ function ContainerSettings() {
   const {
     background,
     padding,
+    visibleWhen,
     actions: { setProp },
-  } = useNode((node) => ({ background: node.data.props.background, padding: node.data.props.padding }));
+  } = useNode((node) => ({
+    background: node.data.props.background,
+    padding: node.data.props.padding,
+    visibleWhen: node.data.props.visibleWhen,
+  }));
   return (
     <>
+      <VisibilityField
+        value={visibleWhen}
+        onChange={(next) => setProp((p: { visibleWhen: string | null }) => (p.visibleWhen = next))}
+      />
       <label className="field">
         <span className="field-label">Background</span>
         <input
@@ -92,7 +171,7 @@ function ContainerSettings() {
 
 CanvasContainer.craft = {
   displayName: "Container",
-  props: { background: "", padding: 12 },
+  props: { background: "", padding: 12, visibleWhen: null },
   related: { settings: ContainerSettings },
 };
 
@@ -2402,9 +2481,15 @@ export function CanvasSection({
   direction = "columns",
   weights = "",
   gap = 12,
+  visibleWhen = null,
   children,
 }: {
   direction?: "columns" | "rows";
+  /** A variable that must be truthy for this section to show (roadmap 1.7) -
+   * Foundry's own example of the feature, and the reason it lives on the
+   * layout nodes rather than on every widget: hiding a section hides what is
+   * in it, which is what "this part of the page does not apply yet" means. */
+  visibleWhen?: string | null;
   /** Comma-separated proportions, one per child: "2,1" is two-thirds and a
    * third. Blank, or short, means equal - a section should lay out sensibly
    * before anybody has configured it. */
@@ -2416,17 +2501,20 @@ export function CanvasSection({
     connectors: { connect, drag },
   } = useNode();
   const { mode } = useCanvasEnv();
+  const { hidden, marker } = useVisibility(visibleWhen);
   const parts = childList(children);
   const parsed = String(weights || "")
     .split(",")
     .map((w) => Number(w.trim()))
     .filter((w) => Number.isFinite(w) && w > 0);
 
+  if (hidden) return null;
   return (
     <div
       ref={(ref) => connectDragDrop(ref, connect, drag)}
       className={`canvas-section canvas-section--${direction}`}
     >
+      {marker && <p className="canvas-hidden-marker">{marker}</p>}
       {/* A section fills itself with its children, so in the builder there is
           otherwise nowhere to click that is the section rather than a widget
           inside it - and its settings (proportions, direction, gap) would be
@@ -2464,14 +2552,20 @@ function SectionSettings() {
     direction,
     weights,
     gap,
+    visibleWhen,
     actions: { setProp },
   } = useNode((node) => ({
     direction: node.data.props.direction,
     weights: node.data.props.weights,
     gap: node.data.props.gap,
+    visibleWhen: node.data.props.visibleWhen,
   }));
   return (
     <>
+      <VisibilityField
+        value={visibleWhen}
+        onChange={(next) => setProp((p: { visibleWhen: string | null }) => (p.visibleWhen = next))}
+      />
       <label className="field">
         <span className="field-label">Arrange as</span>
         <select
@@ -2507,7 +2601,7 @@ function SectionSettings() {
 
 CanvasSection.craft = {
   displayName: "Section",
-  props: { direction: "columns", weights: "", gap: 12 },
+  props: { direction: "columns", weights: "", gap: 12, visibleWhen: null },
   isCanvas: true,
   related: { settings: SectionSettings },
 };

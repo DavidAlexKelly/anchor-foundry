@@ -34,6 +34,36 @@ SPEC_TABLES = {
     "object_type_sources", "canvas_apps", "canvas_app_versions", "code_repos",
     "audit_log",
 }
+# Tables added after spec §16 was written, each by the migration named. Listed
+# rather than lumped into an "ignore everything else" rule, so a table nobody
+# meant to create still shows up - which is the only thing this check is for.
+#
+# It had drifted: sixteen of these existed and the check reported them as
+# unexplained on every run, so the one check here that watches for accidental
+# tables had been failing continuously and telling nobody anything.
+POST_SPEC_TABLES = {
+    "sync_runs": "0011",
+    "object_instances": "0012",
+    "action_types": "0013",
+    "action_runs": "0013",
+    "dataset_expectations": "0020",
+    "model_versions": "0024",
+    "object_type_versions": "0028",
+    "code_change_sets": "0030",
+    "code_proposals": "0031",
+    "code_proposal_files": "0031",
+    "code_proposal_reviews": "0031",
+    "resources": "0032",
+    "code_blobs": "0033",
+    "code_commits": "0033",
+    "code_branches": "0033",
+}
+
+# Not the platform's at all: the control plane keeps its own registry, and in
+# production that is a different database. It appears here because the local
+# sandbox points both at one Postgres.
+FOREIGN_TABLES = {"customer_stacks"}
+
 SPEC_FUNCTIONS = {"effective_workspace_role", "effective_project_role"}
 SPEC_VIEWS = {"v_user_workspaces", "v_user_projects"}
 
@@ -49,7 +79,13 @@ def main() -> int:
     tables = {r[0] for r in cur.fetchall()}
     missing = SPEC_TABLES - tables
     check("all 22 spec §16 tables exist", not missing, f"missing: {missing}")
-    extra = tables - SPEC_TABLES - {"schema_migrations", "canvas_app_shares"}
+    extra = (
+        tables
+        - SPEC_TABLES
+        - set(POST_SPEC_TABLES)
+        - FOREIGN_TABLES
+        - {"schema_migrations", "canvas_app_shares"}
+    )
     check("no unexplained extra tables", not extra, f"extra: {extra}")
 
     cur.execute("SELECT routine_name FROM information_schema.routines WHERE routine_schema='public'")

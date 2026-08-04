@@ -91,6 +91,7 @@ REFERENCE_PROPS = (
     "variable",
     "objectSetVariable",
     "enabledVariable",
+    "visibleWhen",
 )
 
 
