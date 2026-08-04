@@ -186,9 +186,11 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 
 **Rule for every widget:** it consumes input variables and emits output variables. A widget that reaches directly for a dataset id is a widget that cannot be wired to anything, which is the flaw in the current eight.
 
-### 1.6 The builder shell — **M**
+### 1.6 The builder shell — **M, the three panels exist** (`STATUS.md` §79 the layout tree, §85 the events panel). **What remains**: nothing structural — Edit/View already exist as Preview and the viewer route.
 
 Three panels: left (Layout tree / Variables / Events, tabbed), centre (the module), right (configuration for the selection). Plus **Edit and View modes** — Workshop's edit/preview split is not a nicety, it is how you check an app before publishing it. Anchor's viewer route (`/[workspace]/apps/[appId]`, `STATUS.md` §44) is the seed of View mode.
+
+*Deviation: **Variables and Events are on the right, beside the selected widget's settings; the left holds the layout tree and the widget palette.** Both panels are things you open *because of* a widget you just selected — wiring the button you are looking at, binding the table you just dropped — and putting them a column away from the settings you arrived from would make every wiring job a diagonal. The left column keeps what you reach for before selecting anything: the structure, and the things you can add.*
 
 **Depends on** 1.4.
 

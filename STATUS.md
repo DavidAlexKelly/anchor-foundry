@@ -1603,6 +1603,32 @@ Verified in a browser: before any click the derived label is empty rather than b
 
 ---
 
+### 85. The events panel: wiring an app without writing the document (this session)
+
+Roadmap 1.6's third panel, and the thing that had been quietly missing since §76: **the event system could only be authored by writing JSON.** Every event in this repo's demo module was put there by a seed script. A widget library and a variable graph are not an application builder if the thing that connects them is unreachable from the builder.
+
+The panel lists the module's events by the widget they fire from, opens one to show its trigger and its ordered effects, and edits all of it: add and delete events, add, configure, reorder and remove effects.
+
+**It offers only what the server accepts.** Trigger widgets come from the Craft tree, triggers from what that widget can actually fire, variables from the declared ones *minus the derived*, pages from the pages and overlays that exist. That is §77's lesson applied deliberately rather than after the fact: a rule that tolerates a missing piece needs a construction that cannot omit it. Every refusal in `workshop_events.py` is a shape this panel cannot build.
+
+**Effect order is numbered and reorderable, because it is semantic.** Effects run in configured order and setting a variable copies immediately, so the same two effects the other way round produce a different result. A list you could not reorder would hide the one thing about an event that is not obvious from reading it.
+
+**Changing an effect's type clears its config.** A `page` left behind by a navigate would ride along inside a `set_variable` and be saved as debris nobody put there.
+
+**Nothing here validates.** The server does. This panel's job is to make the invalid unbuildable, not to re-implement the rules — a second copy of them is a second thing to keep in step, which this repo already has enough of.
+
+**The working events run in Preview before they are saved**, the way an unsaved variable already resolves. The builder now holds all three parts of the document — layout, variables, events — and `moduleFrom` writes all three in one save, which is the same argument its docstring already made for two.
+
+**Two panels caught up with the last two slices.** The variables panel offered `filter_set` as the only way to narrow a set and refused to offer `object_property` at all — both true when written, both stale after §82 and §84. It now offers `narrow_set` ("a filter list the viewer builds") beside `filter_set` ("one value, on a property you choose"), hiding the property and operator fields for the former since it has neither, and offers `object_property` with its property field. `object_set_aggregation` is still absent, still for its original reason.
+
+Verified in a browser: the three seeded events read back correctly with their effects in order; only the three writable variables are offered as `set_variable` targets (the four derived ones absent); `navigate` offers the two pages and the overlay; a new event wired from the panel — header button, clicked, opens the overlay — saves without a refusal and **runs on click in Preview**.
+
+**603 API tests green**, unchanged: this is a builder surface over rules that already existed and are already covered. The check that matters here is the browser one.
+
+**A check that picked the wrong widget.** The first run wired the event to "the first thing called Button" and asserted a click on the header's button ran it — which it did not, because the overlay has a button too. Fixed by naming the one it means. The same shape as §84's row that was on another page: an assertion that is precise about the outcome and vague about the subject.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

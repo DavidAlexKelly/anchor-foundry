@@ -3,6 +3,7 @@
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
 import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { eventsOf, hasLayout, layoutOf, moduleFrom, variablesOf } from "@/lib/workshop-module";
+import type { WorkshopEvent } from "@/lib/types";
 import type { WorkshopVariable } from "@/lib/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -13,6 +14,12 @@ import { Dialog, Field } from "@/components/dialog";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import type { WorkshopEventDef } from "@/components/canvas/events";
+import {
+  EventsPanel,
+  TRIGGER_WIDGETS,
+  type PageCandidate,
+  type TriggerCandidate,
+} from "@/components/canvas/EventsPanel";
 import { LayoutPanel } from "@/components/canvas/LayoutPanel";
 import { SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
@@ -120,6 +127,7 @@ function TopBar({
   canEdit,
   canPublish,
   variables,
+  events,
 }: {
   app: CanvasAppDetail;
   workspaceSlug: string;
@@ -129,6 +137,7 @@ function TopBar({
   canEdit: boolean;
   canPublish: boolean;
   variables: Record<string, WorkshopVariable>;
+  events: Record<string, WorkshopEvent>;
 }) {
   const { enabled, actions, query } = useEditor((state) => ({ enabled: state.options.enabled }));
   const [showPublish, setShowPublish] = useState(false);
@@ -136,9 +145,9 @@ function TopBar({
   const queryClient = useQueryClient();
 
   const save = useMutation({
-    // Both halves in one save. The layout comes from Craft.js and the
-    // variables from the panel, and a save carrying only one of them would
-    // silently discard the other's edits.
+    // All three parts in one save. The layout comes from Craft.js, the
+    // variables and events from their panels, and a save carrying only some of
+    // them would silently discard the rest.
     mutationFn: () =>
       canvasApi.saveDefinition(
         workspaceId,
@@ -147,6 +156,7 @@ function TopBar({
         moduleFrom(app.definition, {
           layout: query.getSerializedNodes(),
           variables,
+          events,
         }),
       ),
     onSuccess: async () => {
@@ -280,9 +290,12 @@ export default function CanvasAppEditorPage() {
   // once - and reseeded only when a *new version* arrives, so a refetch cannot
   // discard edits somebody has made but not saved.
   const [variables, setVariables] = useState<Record<string, WorkshopVariable>>({});
+  const [events, setEvents] = useState<Record<string, WorkshopEvent>>({});
   const savedVersion = appQuery.data?.current_version;
   useEffect(() => {
-    if (appQuery.data) setVariables(variablesOf(appQuery.data.definition));
+    if (!appQuery.data) return;
+    setVariables(variablesOf(appQuery.data.definition));
+    setEvents(eventsOf(appQuery.data.definition));
   }, [savedVersion, appQuery.data?.id]);
 
   if (appQuery.isPending || !workspace || !project) {
@@ -322,6 +335,7 @@ export default function CanvasAppEditorPage() {
             canEdit={canEdit}
             canPublish={canPublish}
             variables={variables}
+            events={events}
           />
           <CanvasBody
             hasSavedLayout={hasSavedLayout}
@@ -332,6 +346,8 @@ export default function CanvasAppEditorPage() {
             appId={app.id}
             variables={variables}
             onVariablesChange={setVariables}
+            events={events}
+            onEventsChange={setEvents}
           />
         </CanvasEnvBridge>
       </Editor>
@@ -348,6 +364,8 @@ function CanvasBody({
   appId,
   variables,
   onVariablesChange,
+  events,
+  onEventsChange,
 }: {
   hasSavedLayout: boolean;
   definition: Record<string, unknown>;
@@ -357,14 +375,44 @@ function CanvasBody({
   appId: string;
   variables: Record<string, WorkshopVariable>;
   onVariablesChange: (next: Record<string, WorkshopVariable>) => void;
+  events: Record<string, WorkshopEvent>;
+  onEventsChange: (next: Record<string, WorkshopEvent>) => void;
 }) {
-  const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
+  const { enabled, triggerNodes, pageNodes } = useEditor((state) => {
+    // Read from the editor's own node map rather than from the saved
+    // definition: a widget dropped a moment ago is wireable, and a widget
+    // deleted a moment ago is not - which is what somebody wiring an event
+    // has just done and expects to see.
+    const triggers: TriggerCandidate[] = [];
+    const pages: PageCandidate[] = [];
+    for (const [id, node] of Object.entries(state.nodes)) {
+      const name = node?.data?.name;
+      if (!name) continue;
+      const props = (node.data.props ?? {}) as Record<string, unknown>;
+      const label = String(
+        props.label || props.title || props.text || node.data.displayName || name,
+      ).slice(0, 40);
+      if (TRIGGER_WIDGETS.includes(name)) {
+        triggers.push({ id, label: `${node.data.displayName ?? name} · ${label}`, widget: name });
+      }
+      if (name === "CanvasPage" || name === "CanvasOverlay") {
+        pages.push({ id, label: `${node.data.displayName ?? name} · ${label}` });
+      }
+    }
+    return { enabled: state.options.enabled, triggerNodes: triggers, pageNodes: pages };
+  });
   const showChrome = enabled && canEdit;
-  // Two things want the right-hand column: the selected widget's settings and
-  // the module's variables. Tabbed rather than stacked - a variable list that
-  // pushed the settings below the fold would make configuring a widget worse
-  // in service of a panel most edits do not touch.
-  const [tab, setTab] = useState<"widget" | "variables">("widget");
+  // Three things want the right-hand column: the selected widget's settings,
+  // the module's variables, and its events. Tabbed rather than stacked - a
+  // variable list that pushed the settings below the fold would make
+  // configuring a widget worse in service of a panel most edits do not touch.
+  //
+  // Roadmap 1.6 puts Variables and Events in the *left* column beside the
+  // layout tree. They are here instead, with the layout tree keeping the left
+  // to itself: both of these are things you edit *because of* a widget you
+  // just selected, and putting them a column away from the settings you
+  // arrived from would make every wiring job a diagonal.
+  const [tab, setTab] = useState<"widget" | "variables" | "events">("widget");
   return (
     <div className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}>
       {showChrome && <Toolbox />}
@@ -380,7 +428,7 @@ function CanvasBody({
       {showChrome && (
         <div className="canvas-settings">
           <nav className="ds-tabs canvas-panel-tabs">
-            {(["widget", "variables"] as const).map((t) => (
+            {(["widget", "variables", "events"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -388,13 +436,27 @@ function CanvasBody({
                 aria-current={t === tab}
                 onClick={() => setTab(t)}
               >
-                {t === "widget" ? "Widget" : `Variables (${Object.keys(variables).length})`}
+                {t === "widget"
+                  ? "Widget"
+                  : t === "variables"
+                    ? `Variables (${Object.keys(variables).length})`
+                    : `Events (${Object.keys(events).length})`}
               </button>
             ))}
           </nav>
+          {tab === "events" && (
+            <EventsPanel
+              events={events}
+              variables={variables}
+              triggerNodes={triggerNodes}
+              pages={pageNodes}
+              onChange={onEventsChange}
+              readOnly={!canEdit}
+            />
+          )}
           {tab === "widget" ? (
             <SettingsPanel />
-          ) : (
+          ) : tab === "variables" ? (
             <VariablesPanel
               workspaceId={workspaceId}
               projectId={projectId}
@@ -404,7 +466,7 @@ function CanvasBody({
               onChange={onVariablesChange}
               readOnly={!canEdit}
             />
-          )}
+          ) : null}
         </div>
       )}
     </div>

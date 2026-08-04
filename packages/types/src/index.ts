@@ -178,7 +178,16 @@ export type WorkshopTransform =
   /** Narrow an object set by a value another variable holds — Foundry's Filter
    * List driving an Object Table, expressed as a derivation. Inputs are
    * `[set, valueVariable]`; config carries the property and the operator. */
-  | "filter_set";
+  | "filter_set"
+  /** Narrow an object set by a *list* of clauses a Filter List writes. Inputs
+   * are `[set, clausesVariable]`, and there is no property or operator in the
+   * config — which properties get narrowed is the viewer's choice, so it lives
+   * in the value rather than the declaration. */
+  | "narrow_set"
+  /** One property of the object a viewer picked. Input is `[objectVariable]`;
+   * config carries the property name. Pure, because a `single_object` variable
+   * holds the object rather than a key to fetch (`STATUS.md` §84). */
+  | "object_property";
 
 export interface WorkshopDerivation {
   transform: WorkshopTransform;
@@ -227,7 +236,16 @@ export interface WorkshopVariable {
 export interface WorkshopEvent {
   id: string;
   trigger: { node: string; on: string };
-  effects: { type: string; [key: string]: unknown }[];
+  effects: WorkshopEffect[];
+}
+
+/** One step of an event. `config`'s shape depends on `type`, which is why it
+ * is not narrowed here: the server (`services/workshop_events.py`) is what
+ * refuses a config that does not match its type, and a second set of rules in
+ * the type system would be a second thing to keep in step. */
+export interface WorkshopEffect {
+  type: string;
+  config?: Record<string, unknown>;
 }
 
 // ---- repositories (docs/decisions/0003-repository-storage.md, db 0033) -----
