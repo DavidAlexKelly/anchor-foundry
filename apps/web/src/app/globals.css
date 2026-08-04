@@ -1199,6 +1199,8 @@ button { font: inherit; cursor: pointer; }
 }
 .repo-publish-orphans ul { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 3px; }
 .repo-publish-orphans p { margin: 0; }
+.code-open-proposals { margin-bottom: 16px; max-width: 720px; }
+.repo-publish-gated { margin: 6px 0 0; font-size: 12.5px; color: var(--brass); max-width: 70ch; }
 /* `.state` is a whole-page empty state with 48px of air. Inside the publish
    panel it is a one-line result sitting between two things, so it keeps the
    colour and loses the padding. */
@@ -1213,6 +1215,11 @@ button { font: inherit; cursor: pointer; }
 .review-head h2 { font-size: 16px; margin: 0 0 4px; }
 .review-meta { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
 .review-unresolved { color: var(--brass); font-weight: 600; }
+.review-source {
+  margin: 0; font-size: 12.5px; color: var(--accent-deep);
+  background: var(--accent-wash); border-radius: var(--radius); padding: 8px 12px;
+}
+.review-source code { font-family: var(--font-mono); font-size: 11.5px; }
 .review-description {
   margin: 0; padding: 10px 12px; background: var(--paper); border: 1px solid var(--line);
   border-radius: var(--radius); font: inherit; font-size: 12.5px; white-space: pre-wrap;

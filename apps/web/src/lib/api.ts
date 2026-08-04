@@ -945,7 +945,14 @@ export const code = {
   propose: (
     wid: string,
     pid: string,
-    input: { summary: string; description?: string; changes: { model_id: string; code: string }[] },
+    input: {
+      summary: string;
+      description?: string;
+      /** Files typed into the proposal, or a commit to publish - never both. */
+      changes?: { model_id: string; code: string }[];
+      source_repo_id?: string;
+      source_commit_id?: string;
+    },
   ) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals`,
@@ -967,7 +974,14 @@ export const code = {
     wid: string,
     pid: string,
     id: string,
-    input: { model_id: string; side: "live" | "proposed"; line?: number | null; body: string },
+    input: {
+      /** One of these, never both: a file with no model yet anchors by path. */
+      model_id?: string | null;
+      source_path?: string | null;
+      side: "live" | "proposed";
+      line?: number | null;
+      body: string;
+    },
   ) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/comments`,
@@ -989,7 +1003,7 @@ export const code = {
     wid: string,
     pid: string,
     id: string,
-    input: { model_id: string; read: boolean },
+    input: { model_id?: string | null; source_path?: string | null; read: boolean },
   ) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/read`,

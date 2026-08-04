@@ -1214,7 +1214,11 @@ export interface CodeDiffRow {
 
 export interface CodeProposalComment {
   id: string;
-  model_id: string;
+  /** One of these two, never both. A commit-backed proposal may create
+   * transforms that do not exist yet, and a remark about one of those has only
+   * its repository path to hang on (db 0039). */
+  model_id: string | null;
+  source_path?: string | null;
   /** Which column of the diff it hangs on. */
   side: "live" | "proposed";
   /** Null is a remark about the file rather than about a line. */
@@ -1237,7 +1241,8 @@ export interface CodeProposalComment {
  * files are returned - one made before the last edit says somebody read a file
  * that no longer exists in that form. */
 export interface CodeFileMark {
-  model_id: string;
+  model_id: string | null;
+  source_path?: string | null;
   reviewer_id: string;
   reviewer_email: string | null;
   marked_at: string;
@@ -1255,8 +1260,10 @@ export type CodeCheckStatus = "pass" | "warn" | "fail" | "error";
 
 export interface CodeCheck {
   id: string;
-  /** Null is a check about the proposal as a whole rather than about a file. */
+  /** Null on both is a check about the proposal as a whole. `source_path`
+   * carries the file when it has no model yet (db 0039). */
   model_id: string | null;
+  source_path?: string | null;
   name: string;
   status: CodeCheckStatus;
   summary: string;
@@ -1271,7 +1278,9 @@ export interface CodeCheck {
 }
 
 export interface CodeProposalFile {
-  model_id: string;
+  /** Null for a file that would *create* a transform: a commit-backed proposal
+   * publishes files that may have no model until it is applied. */
+  model_id: string | null;
   model_name: string;
   language: "sql" | "python";
   path: string | null;
@@ -1299,6 +1308,11 @@ export interface CodeReview {
 export interface CodeProposal {
   id: string;
   project_id: string;
+  /** Set when this proposal asks to publish a repository commit rather than to
+   * change named transforms (db 0039). Its files are derived from the commit,
+   * and applying it publishes. */
+  source_repo_id?: string | null;
+  source_commit_id?: string | null;
   summary: string;
   description: string;
   state: "open" | "applied" | "withdrawn";

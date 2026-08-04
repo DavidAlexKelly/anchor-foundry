@@ -398,3 +398,309 @@ def test_a_file_that_keeps_existing_but_stops_declaring_is_orphaned_too(
     seen = do_plan(client, fx, repo["id"]).json()
     assert [s["output"] for s in seen["steps"]] == [kept]
     assert [o["source_path"] for o in seen["orphaned"]] == ["src/dropped.sql"]
+
+
+# ---- a proposal over a commit (db 0039) --------------------------------------
+def cbase(fx: Fixture) -> str:
+    return f"{pbase(fx)}/code"
+
+
+def review_on(client: TestClient, fx: Fixture, on: bool) -> None:
+    r = client.put(f"{cbase(fx)}/review-policy", headers=hdr(fx.owner_sub),
+                   json={"require_code_review": on})
+    assert r.status_code == 200, r.text
+
+
+@pytest.fixture()
+def gated(client: TestClient, fx: Fixture):
+    """Review on for the test, off again afterwards - it is project-wide."""
+    review_on(client, fx, True)
+    yield
+    review_on(client, fx, False)
+
+
+def propose_commit(client: TestClient, fx: Fixture, repo_id: str, commit_id: str,
+                   summary: str = "Publish this commit", sub: str | None = None):
+    return client.post(
+        f"{cbase(fx)}/proposals", headers=hdr(sub or fx.editor_sub),
+        json={"summary": summary, "source_repo_id": repo_id,
+              "source_commit_id": commit_id},
+    )
+
+
+def test_a_gated_project_cannot_publish_directly_and_is_told_where_to_go(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    commit(client, fx, repo["id"], {"src/t.sql": sql(f"g_{uuid.uuid4().hex[:8]}", source)})
+    r = do_publish(client, fx, repo["id"])
+    assert r.status_code == 409, r.text
+    assert "open a proposal for it" in r.json()["detail"]
+
+
+def test_a_proposal_over_a_commit_derives_its_files_from_the_commit(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """No `code_proposal_files` rows exist for it. The commit is immutable, so
+    the code under review cannot be swapped after an approval - a stronger
+    guarantee than stored files give, not a weaker one."""
+    out = f"derived_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    r = propose_commit(client, fx, repo["id"], made["id"])
+    assert r.status_code == 201, r.text
+    detail = r.json()
+    assert detail["source_commit_id"] == made["id"]
+    assert detail["source_repo_id"] == repo["id"]
+    assert len(detail["files"]) == 1
+    f = detail["files"][0]
+    assert f["path"] == "src/t.sql"
+    assert f["model_id"] is None
+    assert "SELECT id, total FROM raw" in f["code"]
+    assert f["rows"], "no side-by-side rows for a derived file"
+
+
+def test_applying_a_commit_proposal_publishes_it(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    out = f"applied_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+
+    client.post(f"{cbase(fx)}/proposals/{p['id']}/reviews", headers=hdr(fx.owner_sub),
+                json={"verdict": "approve", "comment": "looks right"})
+    applied = client.post(f"{cbase(fx)}/proposals/{p['id']}/apply",
+                          headers=hdr(fx.editor_sub))
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["state"] == "applied"
+    assert applied.json()["change_set_id"]
+
+    models = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    published = next((m for m in models if m["name"] == out), None)
+    assert published is not None, "applying the proposal did not publish"
+    assert published["source_path"] == "src/t.sql"
+
+    versions = client.get(
+        f"{pbase(fx)}/models/{published['id']}/versions", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert versions[-1]["source_commit_id"] == made["id"]
+
+
+def test_a_commit_proposal_cannot_be_applied_without_an_approval(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """The whole point of the join: publishing now goes through the gate rather
+    than round it."""
+    out = f"ungated_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    assert any("approved" in b for b in p["blockers"]), p["blockers"]
+
+    r = client.post(f"{cbase(fx)}/proposals/{p['id']}/apply", headers=hdr(fx.editor_sub))
+    assert r.status_code == 422, r.text
+    names = [m["name"] for m in
+             client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()]
+    assert out not in names
+
+
+def test_nobody_approves_their_own_commit_proposal_either(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(f"own_{uuid.uuid4().hex[:8]}", source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    r = client.post(f"{cbase(fx)}/proposals/{p['id']}/reviews", headers=hdr(fx.editor_sub),
+                    json={"verdict": "approve", "comment": ""})
+    assert r.status_code == 422, r.text
+
+
+def test_a_comment_on_a_file_with_no_model_yet_anchors_to_its_path(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """`code_proposal_comments.model_id` was NOT NULL, which is right for a
+    change to an existing transform and impossible for a file that will produce
+    a new one."""
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(f"anchor_{uuid.uuid4().hex[:8]}", source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"source_path": "src/t.sql", "side": "proposed", "line": 3,
+              "body": "does this need the total column?"},
+    )
+    assert r.status_code == 201, r.text
+    comment = r.json()["comments"][0]
+    assert comment["source_path"] == "src/t.sql" and comment["model_id"] is None
+    assert [c["id"] for c in r.json()["files"][0]["comments"]] == [comment["id"]]
+
+
+def test_a_comment_on_a_path_the_proposal_does_not_touch_is_refused(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(f"nope_{uuid.uuid4().hex[:8]}", source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"source_path": "src/elsewhere.sql", "side": "proposed", "line": 1,
+              "body": "nowhere"},
+    )
+    assert r.status_code == 422, r.text
+    assert "does not change that file" in r.json()["detail"]
+
+
+def test_marking_a_pathless_file_read_works_the_same_way(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(f"mark_{uuid.uuid4().hex[:8]}", source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    r = client.put(f"{cbase(fx)}/proposals/{p['id']}/read", headers=hdr(fx.viewer_sub),
+                   json={"source_path": "src/t.sql", "read": True})
+    assert r.status_code == 200, r.text
+    assert len(r.json()["files"][0]["read_by"]) == 1
+
+
+def test_checks_run_on_a_commit_proposal_and_gate_it(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """A check that found nothing to do and reported success by silence would
+    be the worst outcome here - a commit-backed proposal has no
+    `code_proposal_files` rows at all."""
+    good = commit(client, fx, repo["id"],
+                  {"src/ok.sql": sql(f"ok_{uuid.uuid4().hex[:8]}", source)})
+    p = propose_commit(client, fx, repo["id"], good["id"]).json()
+    ran = client.post(f"{cbase(fx)}/proposals/{p['id']}/checks", headers=hdr(fx.editor_sub))
+    assert ran.status_code == 200, ran.text
+    names = sorted(c["name"] for c in ran.json()["checks"])
+    assert names == ["schema_compatible", "transform_runs"]
+    assert {c["status"] for c in ran.json()["checks"]} == {"pass"}, [
+        (c["name"], c["status"], c["summary"]) for c in ran.json()["checks"]
+    ]
+    assert ran.json()["checks"][0]["source_path"] == "src/ok.sql"
+
+    broken = commit(client, fx, repo["id"], {
+        "src/bad.sql": sql(f"bad_{uuid.uuid4().hex[:8]}", source,
+                           body="SELECT nosuchcolumn FROM raw"),
+    }, branch="broken")
+    q = propose_commit(client, fx, repo["id"], broken["id"], summary="Broken").json()
+    failed = client.post(f"{cbase(fx)}/proposals/{q['id']}/checks",
+                         headers=hdr(fx.editor_sub)).json()
+    assert any(c["status"] == "fail" for c in failed["checks"]), failed["checks"]
+    assert any(b.startswith("a check failed") for b in failed["blockers"])
+
+
+def test_a_proposal_is_either_a_commit_or_a_set_of_files(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """One describes files typed into the proposal, the other describes files
+    that already exist. Both would be two answers to "what is being reviewed"."""
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(f"both_{uuid.uuid4().hex[:8]}", source)})
+    models = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    if not models:
+        pytest.skip("no model to build a file change from")
+    r = client.post(
+        f"{cbase(fx)}/proposals", headers=hdr(fx.editor_sub),
+        json={"summary": "Both", "source_repo_id": repo["id"],
+              "source_commit_id": made["id"],
+              "changes": [{"model_id": models[0]["id"], "code": "SELECT 1 AS x"}]},
+    )
+    assert r.status_code == 422, r.text
+    assert "not both" in r.json()["detail"]
+
+
+def test_a_commit_that_declares_nothing_cannot_become_a_proposal(
+    client: TestClient, fx: Fixture, repo: dict, gated
+) -> None:
+    """Refused at the door rather than becoming a proposal nobody can apply."""
+    made = commit(client, fx, repo["id"], {"README.md": "# nothing here\n"})
+    r = propose_commit(client, fx, repo["id"], made["id"])
+    assert r.status_code == 422, r.text
+
+
+def test_a_commit_proposal_survives_the_branch_being_deleted(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """A proposal is a record of what was asked for. One whose commit vanished
+    would be a review of nothing - which is why the FK is RESTRICT and why the
+    branch pointer is not what it holds."""
+    out = f"survives_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)}, branch="tmp")
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+
+    assert client.delete(f"{rbase(fx)}/{repo['id']}/branches/tmp",
+                         headers=hdr(fx.editor_sub)).status_code == 204
+
+    still = client.get(f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.viewer_sub))
+    assert still.status_code == 200, still.text
+    assert len(still.json()["files"]) == 1
+
+
+def test_a_comment_cannot_name_both_a_model_and_a_path(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """Two anchors is two answers to "which file is this about". Refused with a
+    sentence rather than left to the database's own CHECK, which would arrive
+    as a 500."""
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(f"anchors_{uuid.uuid4().hex[:8]}", source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    models = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    if not models:
+        pytest.skip("no model to name alongside a path")
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": models[0]["id"], "source_path": "src/t.sql",
+              "side": "proposed", "line": 1, "body": "which one?"},
+    )
+    assert r.status_code == 422, r.text
+
+    neither = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"side": "proposed", "line": 1, "body": "about what?"},
+    )
+    assert neither.status_code == 422, neither.text
+
+
+def test_a_commit_proposal_goes_stale_when_another_one_lands_first(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """Two proposals over the same file. The second must not silently overwrite
+    the first - which is what `base_version` guards for a file-backed proposal,
+    and what a commit-backed one derives from the version that existed when it
+    was opened."""
+    out = f"race_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    a = propose_commit(client, fx, repo["id"], first["id"], summary="A").json()
+    client.post(f"{cbase(fx)}/proposals/{a['id']}/reviews", headers=hdr(fx.owner_sub),
+                json={"verdict": "approve", "comment": ""})
+    landed = client.post(f"{cbase(fx)}/proposals/{a['id']}/apply", headers=hdr(fx.editor_sub))
+    assert landed.status_code == 200, landed.text
+
+    second = commit(client, fx, repo["id"], {
+        "src/t.sql": sql(out, source, body="SELECT id, total, region FROM raw"),
+    })
+    b = propose_commit(client, fx, repo["id"], second["id"], summary="B").json()
+    assert b["files"][0]["base_version"] == b["files"][0]["current_version"]
+
+    third = commit(client, fx, repo["id"], {
+        "src/t.sql": sql(out, source, body="SELECT id FROM raw"),
+    })
+    c = propose_commit(client, fx, repo["id"], third["id"], summary="C").json()
+    client.post(f"{cbase(fx)}/proposals/{c['id']}/reviews", headers=hdr(fx.owner_sub),
+                json={"verdict": "approve", "comment": ""})
+    assert client.post(f"{cbase(fx)}/proposals/{c['id']}/apply",
+                       headers=hdr(fx.editor_sub)).status_code == 200
+
+    # B was opened against the version C has now replaced.
+    stale = client.get(f"{cbase(fx)}/proposals/{b['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert stale["files"][0]["base_version"] < stale["files"][0]["current_version"]
+    assert any("overwrite work nobody reviewed" in x for x in stale["blockers"]), \
+        stale["blockers"]
+
+    client.post(f"{cbase(fx)}/proposals/{b['id']}/reviews", headers=hdr(fx.owner_sub),
+                json={"verdict": "approve", "comment": ""})
+    refused = client.post(f"{cbase(fx)}/proposals/{b['id']}/apply",
+                          headers=hdr(fx.editor_sub))
+    assert refused.status_code == 422, refused.text

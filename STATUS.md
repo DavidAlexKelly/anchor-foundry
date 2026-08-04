@@ -1828,6 +1828,26 @@ The half of roadmap 2.5 that stayed open. SQL transforms were authored in a text
 
 The browser check drives the Publish tab against real servers: the plan listing only declared files, the button naming how many it would write, publishing, and a second visit finding nothing to do. Two small dishonesties were fixed after looking at the screenshot — the button still offered to publish transforms it had just published, and a full-page empty-state style was being used for a one-line result.
 
+### 95. Joining the two halves of Code Repositories (this session)
+
+§92 exposed a gap and §94 made it load-bearing: **proposals reference `models`, repositories hold branches, and nothing joined them.** The consequence was concrete — a project with `require_code_review` on could not publish from a repository at all, because letting a publish through would make the gate avoidable by putting the code in a repository first. §94 stated that limitation rather than papering over it. This closes it.
+
+**A proposal can name a commit.** Migration 0039 adds `source_repo_id` / `source_commit_id` to `code_proposals`; when set, applying the proposal *publishes* rather than writing a change set, and the direct-publish refusal now says where to go instead.
+
+**A commit-backed proposal stores no files, and that is the stronger property, not a shortcut.** 0031 keeps `files_updated_at` and invalidates approvals whenever the proposed code changes, because approve-then-swap-the-code is how arbitrary code gets past a reviewer who read something else. A commit is immutable, so for this kind of proposal the code under review **cannot** change — there is nothing to swap. Its files are derived from the commit's declared transforms at read time, through the same `plan()` the Publish tab uses, so the screen and the write cannot disagree.
+
+**What can still move underneath is the live definition**, which is what `code_proposal_files.base_version` guards for a stored proposal. A commit-backed one derives the same thing: the model's version *as of the proposal's `files_updated_at`*, computed from `model_versions.created_at`. Versions are append-only and carry their own timestamps, so the question is one the data already answers — and an answer computed from the data cannot disagree with it. The test that matters is two proposals over the same file where one lands first: the other goes stale and is refused.
+
+**Comments needed a second anchor.** `code_proposal_comments.model_id` was NOT NULL, which is right for a change to an existing transform and impossible for a file that will *create* one. A comment on such a file anchors to its repository path instead — the thing that is stable across the publish, and the thing the reviewer is looking at. The same applies to checks and to "I have read this file", and `anchor_key()` is the one place that decides which.
+
+**Applying a commit proposal creates a change set around the publish**, so four files land as one entry in the project's history rather than four — and 0031's own `(state = 'applied') = (change_set_id IS NOT NULL)` keeps meaning what it says.
+
+**689 API tests green**, 15 new. Thirteen mutations; three survived a first pass and two were real gaps — nothing tested that a commit-backed proposal goes stale when another lands first, and nothing tested a comment naming *both* a model the proposal really changes and a path (the anchor lookup catches a wrong model on its own; that case reaches the database's own CHECK as a 500). The third survivor was an unreachable guard, deleted rather than tested: `plan()` already refuses a commit that declares nothing.
+
+**Two real bugs the join exposed in the browser, both fixed.** The Code page rendered its open-proposals list only when the project already had transforms — so a proposal that would create the *first* ones was unreachable, which is exactly the case this whole feature exists for. And the review surface keyed each file on `model_id`, which is null for every file of a commit-backed proposal: React duplicates or drops children that share a key, silently.
+
+**One omission from §93 caught while here**: `code_proposal_checks` was never added to `verify_schema.py`'s `POST_SPEC_TABLES`, so the verifier would have reported it as an unexplained extra table.
+
 ---
 
 ## What's not started

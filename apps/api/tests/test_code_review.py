@@ -917,3 +917,20 @@ def test_re_running_updates_a_verdict_the_world_has_changed(
     assert any(b.startswith("a check failed") for b in again["blockers"])
     # Still one result, not two: re-running replaces the answer.
     assert len(checks_of(again, "schema_compatible")) == 1
+
+
+def test_a_comment_naming_a_real_model_and_a_path_is_refused_not_a_500(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """The anchor lookup catches a *wrong* model on its own. This is the case
+    it cannot catch: a model the proposal really does change, named alongside a
+    path. Two anchors is two answers to "which file is this about", and without
+    the check it reaches the database's own CHECK as a 500."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "source_path": "src/anything.sql",
+              "side": "proposed", "line": 1, "body": "which one?"},
+    )
+    assert r.status_code == 422, r.text
+    assert "not both or neither" in r.json()["detail"]

@@ -59,6 +59,7 @@ POST_SPEC_TABLES = {
     "code_branches": "0033",
     "code_proposal_comments": "0036",
     "code_proposal_file_marks": "0036",
+    "code_proposal_checks": "0037",
 }
 
 # Not the platform's at all: the control plane keeps its own registry, and in

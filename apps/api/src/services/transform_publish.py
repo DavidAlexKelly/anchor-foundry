@@ -182,6 +182,13 @@ async def publish(
     repo_id: UUID,
     commit_id: UUID,
     actor_id: UUID,
+    # Set by the proposal-apply path (db 0039). It lifts the review refusal
+    # below, because the review has happened - that is what applying a proposal
+    # means - and nothing else.
+    reviewed: bool = False,
+    # Groups every version this writes under one edit, so a publish of four
+    # files reads as one entry in the project's history rather than four.
+    change_set_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
     """Make the declared transforms at this commit the project's definitions.
 
@@ -189,18 +196,16 @@ async def publish(
     one landing would leave a pipeline that matches no state the repository has
     ever been in. The caller's `user_connection` provides it.
     """
-    if await code_service.requires_review(conn, project_id):
+    if not reviewed and await code_service.requires_review(conn, project_id):
         # Publishing changes what runs, so it is subject to the gate like every
         # other way of changing what runs. Letting it through would make
         # `require_code_review` trivially avoidable by putting the code in a
         # repository first - and a gate with a documented way round it is not a
-        # gate. Reviewing a *publish* needs proposals that understand commits,
-        # which is not built: proposals reference models, repositories hold
-        # branches, and nothing joins them yet (STATUS.md §92).
+        # gate. The way through it is a proposal *over this commit* (db 0039),
+        # which is reviewed like any other and publishes when it is applied.
         raise ConflictError(
-            "this project requires code review, and reviewing a publish is not built "
-            "yet - a proposal describes a change to a transform, not a commit. Turn "
-            "review off to publish from a repository, or edit through proposals."
+            "this project requires code review, so a commit cannot be published "
+            "directly - open a proposal for it and publish by applying that."
         )
 
     steps = await plan(
@@ -235,9 +240,10 @@ async def publish(
             # same definition, and appending a second identical one to say so
             # would put a diff-less entry in every published model's history.
             await conn.exec_driver_sql(
-                "UPDATE model_versions SET source_commit_id = %s, source_path = %s "
-                "WHERE model_id = %s AND version_number = 1",
-                (str(commit_id), step["path"], str(model_id)),
+                "UPDATE model_versions SET source_commit_id = %s, source_path = %s, "
+                "change_set_id = %s WHERE model_id = %s AND version_number = 1",
+                (str(commit_id), step["path"],
+                 str(change_set_id) if change_set_id else None, str(model_id)),
             )
             action = "created"
         else:
@@ -254,6 +260,8 @@ async def publish(
                 code=step["code"], inputs=inputs,
                 updated_by=actor_id,
                 from_repository=True,
+                reviewed=reviewed,
+                change_set_id=change_set_id,
                 source_commit_id=commit_id, source_path=step["path"],
             )
 
