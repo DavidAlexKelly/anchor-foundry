@@ -1719,6 +1719,26 @@ Verified in a browser: the builder shows the demo's results section marked as co
 
 ---
 
+### 90. Closing the way back to v1, and a docstring that was lying (this session)
+
+Roadmap 1.8 asked for a one-shot conversion of every saved app to the Workshop format. §71 ran it. This is what was missing to call the item done, and it was found by checking the claim rather than accepting it.
+
+**The API still accepted v1 documents on save**, with a comment saying "or every unconverted app would stop being saveable" — and a test asserting it. That was true when written and had quietly stopped being true: migration 0034 converted every stored app, and the migration container runs *before* this code does (`migrate.py`'s own docstring), so an unconverted app cannot reach the route. What could still reach it is a script or a client older than the conversion, and what either would write is an app with no variables, no events and no pages — silently, since a v1 document is valid and simply has none of those things.
+
+**So a v1 document is now refused on save**, in a sentence that says what it is and why it cannot be what the sender meant. Reading v1 is untouched: 0034 deliberately leaves historical version rows in the format they were written in, and the browser still renders them (`layoutOf` is a structural check, not a version compare).
+
+**A conversion is only finished when the old format cannot come back.** That is the general form of it, and it is why this belongs to 1.8 rather than being a tidy-up.
+
+**The test that asserted the opposite was updated, not deleted**, with its old premise written down — the same treatment §77's stale test got. A second test now pins that `{}` still saves: an empty document is not a v1 document, it is an app with nothing in it, which is what every app is before somebody drags a widget onto it.
+
+**A docstring contradicting itself, and why it mattered.** `0034`'s summary said "`canvas_apps.definition` becomes a `format: 2` document, **and every version row is converted alongside it**", while the next paragraph said historical version rows are **left untouched**. The code does the latter. That is not a cosmetic error: §88 made the published read path join to a version row, so "are old version rows v1?" is now a question with consequences, and the file answered it both ways. Corrected to match the code.
+
+For the record, the answer: **a `published_version` can only point at a post-conversion row**, because 0034 bumped `current_version` for every app it converted and §88's backfill pinned `current_version`. A v1 document therefore cannot reach a viewer through that path — and if one somehow did, the browser renders it rather than failing.
+
+**612 API tests green**, 1 new; two existing ones updated where their premises had changed. Re-verified in a browser that the builder still saves through the stricter route.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

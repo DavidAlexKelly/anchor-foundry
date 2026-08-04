@@ -27,6 +27,7 @@ from ..lib.errors import ForbiddenError
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import canvas as canvas_service
+from ..services import workshop_format
 from ..services import workshop_variables as variables_service
 
 router = APIRouter(
@@ -222,8 +223,25 @@ async def save_definition(
     # Validated here rather than in `canvas_service`, which stores an opaque
     # blob and does not interpret it - a property decision 0002 records as
     # worth keeping. The API refuses the document; the storage layer stays
-    # uninterested in what is inside it. v1 definitions pass through
-    # untouched, or every unconverted app would stop being saveable.
+    # uninterested in what is inside it.
+    #
+    # **A v1 document is refused on the way in** (roadmap 1.8). Migration 0034
+    # converted every stored app, and the migration container runs before this
+    # code does, so an "unconverted app" cannot reach here - the only things
+    # that can still produce a v1 document are a script or a client older than
+    # the conversion, and what they would produce is an app that silently has
+    # no variables, no events and no pages. Reading v1 is untouched: historical
+    # version rows are deliberately left in the format they were written in
+    # (0034), and the browser still renders them.
+    if workshop_format.is_v1(body.definition):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "this is a pre-Workshop (v1) layout, and saving one would create an app "
+                "with no variables, events or pages. Every stored app was converted by "
+                "migration 0034; a client sending this one is older than that conversion."
+            ),
+        )
     try:
         variables_service.validate_module(body.definition)
     except variables_service.VariableError as exc:

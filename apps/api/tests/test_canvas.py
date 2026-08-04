@@ -131,19 +131,21 @@ def test_editor_updates_metadata(client: TestClient, fx: Fixture) -> None:
 
 # ---- definition versioning ------------------------------------------------------
 def test_save_definition_versions(client: TestClient, fx: Fixture) -> None:
+    """Versioning, which has nothing to do with the format - this used to save
+    v1 documents because they were shorter, and now saves the format the
+    builder writes (see `test_saving_a_v1_definition_is_refused`)."""
     aid = _app_id(client, fx)
-    r = client.put(
-        f"{base(fx)}/{aid}/definition", headers=hdr(fx.editor_sub),
-        json={"definition": {"ROOT": {"type": "Container", "nodes": []}}},
-    )
+    first = {"format": 2, "variables": {}, "events": {},
+             "layout": {"ROOT": {"type": "Container", "nodes": []}}}
+    r = client.put(f"{base(fx)}/{aid}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": first})
     assert r.status_code == 200, r.text
     assert r.json()["current_version"] == 1
-    assert r.json()["definition"]["ROOT"]["type"] == "Container"
+    assert r.json()["definition"]["layout"]["ROOT"]["type"] == "Container"
 
-    r = client.put(
-        f"{base(fx)}/{aid}/definition", headers=hdr(fx.editor_sub),
-        json={"definition": {"ROOT": {"type": "Container", "nodes": ["a"]}}},
-    )
+    second = {**first, "layout": {"ROOT": {"type": "Container", "nodes": ["a"]}}}
+    r = client.put(f"{base(fx)}/{aid}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": second})
     assert r.status_code == 200
     assert r.json()["current_version"] == 2
 
@@ -344,15 +346,33 @@ def test_saving_a_module_with_a_variable_cycle_is_refused(
     assert "loop" in r.json()["detail"]
 
 
-def test_a_v1_definition_still_saves(client: TestClient, fx: Fixture) -> None:
-    """Every unconverted app must keep working. A v1 document has no variables
-    to validate and must pass straight through."""
+def test_saving_a_v1_definition_is_refused(client: TestClient, fx: Fixture) -> None:
+    """This case used to assert the opposite, and the premise it rested on -
+    "every unconverted app must keep working" - stopped being true when
+    migration 0034 converted every stored app (§71). The migration container
+    runs before this code does, so an unconverted app cannot reach this route;
+    what can is a script or a client older than the conversion, and what it
+    would write is an app with no variables, events or pages.
+
+    Reading v1 is untouched: 0034 deliberately leaves historical version rows
+    in the format they were written in, and the browser still renders them.
+    """
     app_id = _new_app(client, fx)
     v1 = {"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["f1"]},
           "f1": {"type": {"resolvedName": "CanvasParameterControl"},
                  "props": {"name": "region", "filterParameter": "region"}}}
     r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
                    json={"definition": v1})
+    assert r.status_code == 422, r.text
+    assert "pre-Workshop" in r.json()["detail"]
+
+
+def test_an_empty_definition_still_saves(client: TestClient, fx: Fixture) -> None:
+    """`{}` is not a v1 document, it is an app with nothing in it - which is
+    what every app is before somebody drags a widget onto it."""
+    app_id = _new_app(client, fx)
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": {}})
     assert r.status_code == 200, r.text
 
 
