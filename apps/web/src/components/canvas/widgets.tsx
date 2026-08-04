@@ -936,6 +936,12 @@ export function CanvasObjectTable({
                               // for a `single_object` variable, which needs to
                               // know which field is the key.
                               object: {
+                                // The row twice, deliberately: flattened above
+                                // for `{{...}}` in a label, and whole here for
+                                // a `single_object` variable, which needs to
+                                // know which field is the key - and the id,
+                                // which is what the write APIs take.
+                                id: instance.id,
                                 // The table's own type, not the row's: every
                                 // row in one table is one type, and the row
                                 // payload does not carry it.
@@ -1360,6 +1366,7 @@ export function CanvasMap({
                     },
                     object: point.instance
                       ? {
+                          id: point.instance.id,
                           object_type_id:
                             (setDefinition as { object_type_id?: string } | undefined)
                               ?.object_type_id ?? objectTypeId ?? undefined,
@@ -1989,12 +1996,27 @@ CanvasChart.craft = {
 };
 
 // ---- Action form (write-back) --------------------------------------------------
-export function CanvasActionForm({ actionTypeId = null }: { actionTypeId?: string | null }) {
+export function CanvasActionForm({
+  actionTypeId = null,
+  subjectVariable = null,
+}: {
+  actionTypeId?: string | null;
+  /** A `single_object` variable naming what to edit (roadmap 1.5, the inline
+   * action form). Bound, the form edits the object somebody picked and the
+   * record dropdown disappears — which is the difference between a form beside
+   * an app and a form *in* one. Unbound, it keeps the dropdown, so the apps
+   * built before this still work. */
+  subjectVariable?: string | null;
+}) {
   const {
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, projectId, mode } = useCanvasEnv();
   const queryClient = useQueryClient();
+  const subject = useCanvasVariable(subjectVariable) as
+    | { id?: string; primary_key?: unknown; properties?: Record<string, unknown> }
+    | undefined;
+  const { set: setParameter } = useCanvasParameters();
 
   const actionTypesQ = useQuery({
     queryKey: ["action-types", workspaceId],
@@ -2005,15 +2027,52 @@ export function CanvasActionForm({ actionTypeId = null }: { actionTypeId?: strin
   const instancesQ = useQuery({
     queryKey: ["canvas-widget-instances", actionType?.object_type_id],
     queryFn: () => objApi.listInstances(workspaceId, actionType!.object_type_id, 25, 0),
-    enabled: !!actionType,
+    enabled: !!actionType && !subjectVariable,
   });
 
-  const [instanceId, setInstanceId] = useState("");
+  const [picked, setPicked] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
+  const instanceId = subjectVariable ? String(subject?.id ?? "") : picked;
+
+  // The fields start at what the object currently says, so the form shows the
+  // thing being edited rather than an empty box beside it. Re-seeded whenever
+  // the subject changes - picking a different row and finding the last one's
+  // values still typed in would be an edit about to go to the wrong object.
+  const subjectKey = subjectVariable ? String(subject?.id ?? "") : "";
+  const [seeded, setSeeded] = useState<string | null>(null);
+  if (subjectVariable && subjectKey !== seeded) {
+    setSeeded(subjectKey);
+    const from = subject?.properties ?? {};
+    setValues(
+      Object.fromEntries(
+        (actionType?.editable_properties ?? []).map((p) => [
+          p,
+          from[p] === undefined || from[p] === null ? "" : String(from[p]),
+        ]),
+      ),
+    );
+  }
+
   const execute = useMutation({
     mutationFn: () => actionApi.execute(workspaceId, projectId, actionType!.id, instanceId, values),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      if (!result.ok) return;
+      // Everything reading this object type reads a *set*, and the set is now
+      // one write out of date.
       await queryClient.invalidateQueries({ queryKey: ["canvas-widget-instances"] });
+      await queryClient.invalidateQueries({ queryKey: ["canvas-object-set"] });
+      await queryClient.invalidateQueries({ queryKey: ["canvas-map-set"] });
+      await queryClient.invalidateQueries({ queryKey: ["canvas-filter-list"] });
+      // And so is the subject variable, which holds the object as it was when
+      // it was picked (§84). The widget that changed it is the one place that
+      // knows what it now says, so it writes it back rather than leaving a
+      // detail panel showing the values you just replaced.
+      if (subjectVariable && subject) {
+        setParameter(subjectVariable, {
+          ...subject,
+          properties: { ...(subject.properties ?? {}), ...values },
+        });
+      }
     },
   });
 
@@ -2031,17 +2090,25 @@ export function CanvasActionForm({ actionTypeId = null }: { actionTypeId?: strin
           }}
         >
           <h3 style={{ marginTop: 0 }}>{actionType.display_name}</h3>
-          <label className="field">
-            <span className="field-label">Record</span>
-            <select value={instanceId} onChange={(e) => setInstanceId(e.target.value)} disabled={!live}>
-              <option value="">Choose…</option>
-              {instancesQ.data?.items.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.primary_key}
-                </option>
-              ))}
-            </select>
-          </label>
+          {subjectVariable ? (
+            <p className="canvas-widget-empty">
+              {subject?.id
+                ? `Editing ${String(subject.primary_key ?? "")}`
+                : "Nothing picked yet — select an object to edit it"}
+            </p>
+          ) : (
+            <label className="field">
+              <span className="field-label">Record</span>
+              <select value={picked} onChange={(e) => setPicked(e.target.value)} disabled={!live}>
+                <option value="">Choose…</option>
+                {instancesQ.data?.items.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.primary_key}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {actionType.editable_properties.map((prop) => (
             <label className="field" key={prop}>
               <span className="field-label">{prop}</span>
@@ -2069,33 +2136,63 @@ function ActionFormSettings() {
   const { workspaceId } = useCanvasEnv();
   const {
     actionTypeId,
+    subjectVariable,
     actions: { setProp },
-  } = useNode((node) => ({ actionTypeId: node.data.props.actionTypeId }));
+  } = useNode((node) => ({
+    actionTypeId: node.data.props.actionTypeId,
+    subjectVariable: node.data.props.subjectVariable,
+  }));
+  const { declared } = useCanvasVariables();
+  const objects = Object.values(declared).filter((v) => v.kind === "single_object");
   const list = useQuery({
     queryKey: ["action-types", workspaceId],
     queryFn: () => actionApi.listTypes(workspaceId),
   });
   return (
-    <label className="field">
-      <span className="field-label">Action</span>
-      <select
-        value={actionTypeId || ""}
-        onChange={(e) => setProp((p: { actionTypeId: string | null }) => (p.actionTypeId = e.target.value || null))}
-      >
-        <option value="">Choose…</option>
-        {list.data?.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.display_name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <>
+      <label className="field">
+        <span className="field-label">Action</span>
+        <select
+          value={actionTypeId || ""}
+          onChange={(e) => setProp((p: { actionTypeId: string | null }) => (p.actionTypeId = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {list.data?.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.display_name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Edits</span>
+        <select
+          value={subjectVariable || ""}
+          onChange={(e) =>
+            setProp(
+              (p: { subjectVariable: string | null }) =>
+                (p.subjectVariable = e.target.value || null),
+            )
+          }
+        >
+          <option value="">Whatever the viewer picks from a list</option>
+          {objects.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">
+          A single-object variable — what a row or pin selection writes
+        </span>
+      </label>
+    </>
   );
 }
 
 CanvasActionForm.craft = {
   displayName: "Action form",
-  props: { actionTypeId: null },
+  props: { actionTypeId: null, subjectVariable: null },
   related: { settings: ActionFormSettings },
 };
 
