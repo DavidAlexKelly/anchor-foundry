@@ -240,13 +240,17 @@ Python and SQL syntax first; language-server-grade IntelliSense is 2.9, not this
 
 Tree, create/rename/delete/move, tabbed editors, unsaved-state indicators, and a working-set concept so a half-finished edit survives navigating away. **Depends on** 2.1.
 
-### 2.4 Branches — **L, part done** (`STATUS.md` §60: create/list/delete, fast-forward moves and commit diffs exist; the UI and the merge path do not)
+### ~~2.4 Branches~~ — **done** (`STATUS.md` §60 create/list/delete, fast-forward moves and commit diffs; §91 the merge path and the Branches screen)
 
 Create from a branch, switch, list, delete. Commit to a branch. A diff view (the existing `services/code.py` diff logic already handles the trailing-newline case correctly — `STATUS.md` §46 — and should be reused, not rewritten). Fast-forward merge. **Depends on** 2.1.
 
-### 2.5 Transforms authoring — **L, done** (`docs/decisions/0004-running-customer-code.md`; `STATUS.md` §63 declarations, §64 the runner task and empty role, §65 the container entrypoint, §66 the EFS scratch transport, §67 dispatch, §68 the substitution). Customer Python now runs in a container with an empty task role and no route out, on any deployment configured for it; a worker with no runner configured still uses `python_sandbox`, and a *half*-configured one refuses rather than downgrading quietly.
+Merging is a comparison plus a pointer move: four states (`identical`, `fast_forward`, `contained`, `diverged`), both directions counted, and the screen shows the verdict before the button rather than after the failure. Divergence is refused — decision 0003 chose fast-forward only — with both counts and the files it would take to redo the work. The default branch cannot be deleted, because deleting it makes the repository *open as empty*.
 
-Two things named rather than assumed. SQL transforms still run through the API's in-process DuckDB path and have not been relocated into a repository — that is the cheaper half of this item and is still open. And a run whose infrastructure failed is recorded as a failed run with a message saying so, because `model_runs.status` has no value between succeeded and failed; giving that its own status is a migration and a screen (`STATUS.md` §68).
+### ~~2.5 Transforms authoring~~ — **done** (`docs/decisions/0004-running-customer-code.md`; `STATUS.md` §63 declarations, §64 the runner task and empty role, §65 the container entrypoint, §66 the EFS scratch transport, §67 dispatch, §68 the substitution). Customer Python now runs in a container with an empty task role and no route out, on any deployment configured for it; a worker with no runner configured still uses `python_sandbox`, and a *half*-configured one refuses rather than downgrading quietly.
+
+Both halves are now done. `STATUS.md` §94 built the relocation: a file that declares a transform (`-- output:` / `-- input:`, or the Python decorator) publishes to a model definition, identified by (repository, path) so a rename moves the same model rather than starting a second one, and the source is *copied* into a version so deleting the branch changes nothing about what runs. A model authored in a repository refuses direct edits. **One limitation, stated rather than papered over: a project that requires code review cannot publish**, because reviewing a publish needs proposals that understand commits and proposals reference models. That join is the next piece of work in this section.
+
+One thing named rather than assumed: a run whose infrastructure failed is recorded as a failed run with a message saying so, because `model_runs.status` has no value between succeeded and failed; giving that its own status is a migration and a screen (`STATUS.md` §68).
 
 The point of the whole section: code in a repository that declares the dataset it produces, and a build that runs it. Python transforms executing in the worker; the existing DuckDB execution path is the target, and the sandboxing question (running customer Python) is a real security design item, not an implementation detail — **flag it early, do not discover it at build time**.
 
@@ -258,13 +262,17 @@ Run the transform against a limited sample of its inputs, without committing, an
 
 **Python previews are refused with a sentence and are the remaining half.** Customer Python runs in an isolated task (decision 0004), so previewing it means dispatching Fargate and waiting — a job with a status rather than an HTTP response. That needs a preview-run record and something to poll, which is its own item.
 
-### 2.7 Pull request review UI — **M**
+### ~~2.7 Pull request review UI~~ — **done** (`STATUS.md` §92, migration 0036)
 
 Anchor already has proposals, reviews, blockers and the review gate. What it lacks is the *review surface*: side-by-side diffs, inline comments anchored to lines, per-file resolution, a description template. Build the UI onto the existing service rather than a second workflow beside it.
 
-### 2.8 Checks — **M**
+Built onto the existing service, as asked. One idea carries it: a remark about a line is a claim about a *version* of the file, so a comment records the `files_updated_at` it was written against and goes outdated — shown and marked, never hidden — when the proposal is edited. The same derivation gives per-file resolution its meaning. The alignment is computed from `SequenceMatcher` opcodes server-side, not by parsing a unified diff in the browser. The description template is built in rather than per project: a configurable one belongs in the repository, and proposals are not connected to repositories.
+
+### ~~2.8 Checks~~ — **done** (`STATUS.md` §93, migration 0037)
 
 Lint and schema-compatibility checks that run on a proposal and block merge. Reuse the existing quality-gate machinery from Models item 3 where it fits.
+
+Reused rather than rebuilt, and the item turned out to be a sequencing problem: migration 0023's schema policy *already* refused a breaking change — at run time, hours after somebody approved it. `transform_runs` executes the proposed SQL over a sample; `schema_compatible` compares what it produced against the dataset the transform writes, with the dataset's own `schema_policy` deciding `fail` from `warn`. `error` (the check could not run) is neither a pass nor a block. A failing check blocks; an absent one does not, and the surface never lets silence read as a pass.
 
 ### 2.9 Code assistance — **L, and optional**
 

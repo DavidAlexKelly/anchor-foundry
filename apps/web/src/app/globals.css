@@ -1141,6 +1141,179 @@ button { font: inherit; cursor: pointer; }
 .repo-preview-table th .soft { display: block; font-weight: 400; font-size: 10.5px; }
 .repo-preview-table td { font-family: var(--font-mono); }
 
+/* ---- branches and merge (ROADMAP phase 2, 2.4) ---------------------------- */
+.repo-branches { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .repo-branches { grid-template-columns: minmax(0, 1fr); } }
+.repo-branches h3 { font-size: 13px; margin: 0 0 8px; }
+.repo-branch-list ul { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 1px; }
+.repo-branch-list li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: var(--radius); font-size: 13px;
+}
+.repo-branch-list li.on { background: var(--accent-wash); }
+.repo-branch-name {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-family: var(--font-mono); color: var(--ink);
+}
+.repo-branch-name:hover { color: var(--accent-deep); text-decoration: underline; }
+.repo-branch-tag {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ink-soft); border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px;
+}
+.repo-branch-list .repo-sha { margin-left: auto; }
+.repo-branch-delete {
+  background: none; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 2px 8px; font-size: 11.5px; cursor: pointer; color: var(--ink-soft);
+}
+.repo-branch-delete:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.repo-branch-delete:disabled { opacity: 0.4; cursor: not-allowed; }
+.repo-branch-new { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.repo-branch-new input { flex: 1 1 140px; min-width: 0; }
+.repo-branch-new label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); }
+.repo-merge-refs { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 10px; }
+.repo-merge-refs label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-soft); }
+.repo-merge-verdict { font-size: 13px; margin: 0 0 8px; line-height: 1.5; }
+.repo-merge-verdict.fast-forward { color: var(--accent-deep); }
+.repo-merge-verdict.diverged { color: var(--danger); }
+.repo-merge-verdict.diverged p { margin: 0 0 6px; }
+.repo-merge-verdict.identical, .repo-merge-verdict.contained { color: var(--ink-soft); }
+.repo-merge-commits { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 3px; font-size: 12.5px; }
+.repo-merge-go { margin-top: 10px; }
+
+/* ---- publishing from a repository (ROADMAP phase 2, 2.5) ------------------ */
+.repo-publish { display: grid; gap: 12px; }
+.repo-publish-head { display: flex; align-items: flex-start; gap: 20px; }
+.repo-publish-head h3 { font-size: 14px; margin: 0 0 4px; }
+.repo-publish-head p { margin: 0; font-size: 12.5px; max-width: 70ch; }
+.repo-publish-head .btn { margin-left: auto; white-space: nowrap; }
+.repo-publish-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.repo-publish-table th, .repo-publish-table td {
+  padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.repo-publish-table th { font-weight: 600; color: var(--ink-soft); font-size: 11.5px; }
+.repo-publish-table code { font-family: var(--font-mono); font-size: 11.5px; }
+.repo-publish-orphans {
+  border: 1px solid var(--brass); border-radius: var(--radius);
+  background: var(--brass-wash); padding: 10px 12px; font-size: 12.5px;
+}
+.repo-publish-orphans ul { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 3px; }
+.repo-publish-orphans p { margin: 0; }
+/* `.state` is a whole-page empty state with 48px of air. Inside the publish
+   panel it is a one-line result sitting between two things, so it keeps the
+   colour and loses the padding. */
+.repo-publish > .state { padding: 0; text-align: left; }
+
+/* ---- the review surface (ROADMAP phase 2, 2.7) ---------------------------- */
+/* Reviewing takes the page rather than a sidebar column. Two columns of source
+   in a 300px panel is a diff nobody can read, which is the whole point of the
+   item. */
+.code-review-mode { display: grid; gap: 12px; }
+.review { display: grid; gap: 14px; }
+.review-head h2 { font-size: 16px; margin: 0 0 4px; }
+.review-meta { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+.review-unresolved { color: var(--brass); font-weight: 600; }
+.review-description {
+  margin: 0; padding: 10px 12px; background: var(--paper); border: 1px solid var(--line);
+  border-radius: var(--radius); font: inherit; font-size: 12.5px; white-space: pre-wrap;
+}
+.code-description {
+  width: 100%; font: inherit; font-size: 12.5px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+  color: var(--ink); resize: vertical;
+}
+.review-checks { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
+.review-checks-head { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.review-checks-none { color: var(--brass); font-size: 12.5px; }
+.review-checks-tally { display: flex; gap: 10px; font-size: 12.5px; }
+.review-checks-tally .fail { color: var(--danger); font-weight: 600; }
+.review-checks-tally .warn { color: var(--brass); font-weight: 600; }
+.review-checks-tally .error { color: var(--ink-soft); }
+.review-checks-tally .pass { color: var(--accent-deep); }
+.review-checks-run { margin-left: auto; }
+.review-check-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 5px; }
+.review-check-list li {
+  display: grid; grid-template-columns: 62px 150px minmax(0, 1fr) auto;
+  gap: 10px; align-items: baseline; font-size: 12.5px;
+}
+.review-check-list li.stale { opacity: 0.6; }
+.review-check-status {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+  border-radius: 999px; text-align: center; padding: 1px 0;
+}
+li.pass .review-check-status { background: var(--accent-wash); color: var(--accent-deep); }
+li.warn .review-check-status { background: var(--brass-wash); color: var(--brass); }
+li.fail .review-check-status { background: var(--danger-wash); color: var(--danger); }
+li.error .review-check-status { background: var(--paper); color: var(--ink-soft); border: 1px solid var(--line); }
+.review-check-name { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-soft); }
+.review-check-summary { min-width: 0; }
+.review-file { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.review-file-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 7px 10px; background: var(--paper); border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.review-file-toggle {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-family: var(--font-mono); font-weight: 600; color: var(--ink);
+}
+.review-read-by { margin-left: auto; font-size: 11.5px; color: var(--accent-deep); }
+.review-mark {
+  background: none; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 2px 8px; font-size: 11.5px; cursor: pointer; color: var(--ink-soft);
+}
+.review-mark:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-deep); }
+.review-diff {
+  width: 100%; border-collapse: collapse; table-layout: fixed;
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.review-diff td { padding: 0 6px; vertical-align: top; }
+.review-num {
+  width: 44px; text-align: right; color: var(--ink-soft); user-select: none;
+  border-right: 1px solid var(--line);
+}
+.review-code { width: calc(50% - 44px); position: relative; }
+.review-code code { white-space: pre-wrap; word-break: break-word; }
+/* The four tones. --paper/--accent-wash exist; there is no --surface, and an
+   undefined custom property renders as nothing rather than erroring. */
+.review-num.added, .review-code.added { background: var(--accent-wash); }
+.review-num.removed, .review-code.removed { background: var(--danger-wash); }
+.review-num.blank, .review-code.blank { background: var(--paper); }
+.review-add-comment {
+  position: absolute; left: -2px; top: 0; width: 15px; height: 15px; line-height: 13px;
+  padding: 0; border: none; border-radius: 3px; cursor: pointer;
+  background: var(--accent); color: #fff; font-size: 11px; opacity: 0;
+}
+.review-code:hover .review-add-comment { opacity: 1; }
+.review-add-comment:focus { opacity: 1; }
+.review-thread-row td { padding: 8px 12px; background: var(--paper); }
+.review-comment {
+  border-left: 2px solid var(--accent); padding: 4px 10px; margin-bottom: 6px;
+  font-family: var(--font-body, inherit); font-size: 12.5px;
+}
+.review-comment.outdated { border-left-color: var(--brass); opacity: 0.85; }
+.review-comment.resolved { border-left-color: var(--line); opacity: 0.7; }
+.review-comment-meta { margin: 0 0 2px; font-size: 11.5px; color: var(--ink-soft); }
+.review-comment-body { margin: 0 0 3px; white-space: pre-wrap; }
+.review-tag {
+  margin-left: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 5px; color: var(--brass);
+}
+.review-say-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 11.5px; color: var(--accent-deep); text-decoration: underline;
+}
+.review-comment-box { display: grid; gap: 6px; margin: 6px 0; }
+.review-comment-box textarea {
+  width: 100%; font: inherit; font-size: 12.5px; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); color: var(--ink); resize: vertical;
+}
+.review-file-comments, .review-file-say { padding: 8px 12px; }
+.review-verdicts { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 12.5px; }
+.review-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.review-actions input { flex: 1 1 200px; min-width: 0; }
+
 /* ---- variables panel (ROADMAP phase 2, 1.2) ------------------------------- */
 .canvas-panel-tabs { margin-bottom: 10px; }
 .vars-panel { display: grid; gap: 8px; }

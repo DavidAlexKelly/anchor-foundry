@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
+from . import code_checks as check_service
 from . import models as model_service
 
 _EXTENSIONS = {"sql": "sql", "python": "py"}
@@ -560,7 +561,8 @@ async def list_proposals(
 
 
 def _blockers(proposal: dict[str, Any], files: list[dict[str, Any]],
-              reviews: list[dict[str, Any]]) -> list[str]:
+              reviews: list[dict[str, Any]],
+              checks: list[dict[str, Any]] | None = None) -> list[str]:
     """Every reason this proposal cannot be applied, in one list.
 
     A single "can't apply" boolean would leave somebody guessing which rule
@@ -586,6 +588,10 @@ def _blockers(proposal: dict[str, Any], files: list[dict[str, Any]],
             "changed since this was proposed, so applying it would overwrite work "
             "nobody reviewed: " + ", ".join(sorted(stale))
         )
+    # Item 2.8. A failing check is a reason in exactly the same list as every
+    # other reason, so `apply` has one gate rather than two - and the surface
+    # keeps showing every rule that was tripped rather than the first.
+    reasons.extend(check_service.blockers(checks or []))
     return reasons
 
 
@@ -630,6 +636,11 @@ async def get_proposal(
             "base_version": row["base_version"],
             "current_version": current,
             "diff": "\n".join(diff_lines),
+            # The same comparison as `diff`, aligned into rows with both sides'
+            # line numbers (item 2.7). Both are returned: the unified string is
+            # what an existing caller reads, and re-deriving one from the other
+            # in the browser would be a second implementation of the diff.
+            "rows": side_by_side(str(row["current_code"]), str(row["code"])),
         })
     reviews = [dict(r) for r in await fetch_all(
         conn,
@@ -642,11 +653,29 @@ async def get_proposal(
         """,
         {"pid": str(proposal_id)},
     )]
+    comments = await _comments(conn, proposal_id, proposal["files_updated_at"])
+    marks = await _file_marks(conn, proposal_id, proposal["files_updated_at"])
+    checks = await check_service.list_checks(
+        conn, proposal_id, proposal["files_updated_at"]
+    )
+    for f in files:
+        key = str(f["model_id"])
+        f["comments"] = [c for c in comments if str(c["model_id"]) == key]
+        f["read_by"] = marks.get(key, [])
+        f["checks"] = [c for c in checks if str(c["model_id"]) == key]
     return {
         **proposal,
         "files": files,
         "reviews": reviews,
-        "blockers": _blockers(proposal, files, reviews),
+        # File-less comments cannot exist (every comment names a file the
+        # proposal changes), so this is the whole conversation in one place for
+        # a caller that wants a timeline rather than a per-file view.
+        "comments": comments,
+        # Including the ones with no file, and the stale ones - a check that
+        # went stale is information, and hiding it would read as "no checks
+        # have run" when in fact they have and the code moved.
+        "checks": checks,
+        "blockers": _blockers(proposal, files, reviews, checks),
     }
 
 
@@ -745,3 +774,251 @@ async def set_require_review(
     if row is None:
         raise NotFoundError("project")
     return bool(row["require_code_review"])
+
+
+# ---- the review surface (ROADMAP.md phase 2, item 2.7) -----------------------
+"""Side-by-side diffs, line-anchored comments, and per-file resolution.
+
+The governance half of review was built above and by migration 0031. This is
+the part a reviewer touches, and it adds one idea to the data model: **a remark
+about a line is a claim about a version of the file**. Line 14 of the code
+somebody read is not line 14 of the code somebody else will apply, so a comment
+records the `files_updated_at` it was written against and goes *outdated* when
+the proposal is edited - shown and marked, never hidden, because it said
+something true about the code it was written against.
+
+The same derivation gives "I have read this file" its meaning, which is why
+both live here rather than in two shapes.
+"""
+
+# One line, aligned against the other side. `kind` is what happened to it:
+#   same    - present on both sides, unchanged
+#   added   - only on the proposed side
+#   removed - only on the live side
+#   changed - a replacement, so both sides have text and they differ
+SIDE_BY_SIDE_KINDS = ("same", "added", "removed", "changed")
+
+
+def side_by_side(live: str, proposed: str) -> list[dict[str, Any]]:
+    """Two texts as aligned rows, each carrying both sides' line numbers.
+
+    Built on `SequenceMatcher` opcodes rather than by parsing a unified diff.
+    A unified diff is a *rendering*: recovering line numbers from it means
+    re-reading the hunk headers and counting, and a comment anchored to a
+    number recovered that way is anchored to a parser bug waiting to happen.
+
+    A `replace` opcode covering unequal run lengths pairs what it can and
+    leaves the remainder as one-sided rows, so a 3-line block becoming 5 lines
+    reads as three changes and two additions rather than as five of anything.
+    """
+    left, right = live.splitlines(), proposed.splitlines()
+    rows: list[dict[str, Any]] = []
+
+    def row(kind: str, ln: int | None, lt: str | None, rn: int | None, rt: str | None) -> None:
+        rows.append({"kind": kind, "live_line": ln, "live_text": lt,
+                     "proposed_line": rn, "proposed_text": rt})
+
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, left, right).get_opcodes():
+        if tag == "equal":
+            for k in range(i2 - i1):
+                row("same", i1 + k + 1, left[i1 + k], j1 + k + 1, right[j1 + k])
+        elif tag == "delete":
+            for k in range(i1, i2):
+                row("removed", k + 1, left[k], None, None)
+        elif tag == "insert":
+            for k in range(j1, j2):
+                row("added", None, None, k + 1, right[k])
+        else:  # replace
+            paired = min(i2 - i1, j2 - j1)
+            for k in range(paired):
+                row("changed", i1 + k + 1, left[i1 + k], j1 + k + 1, right[j1 + k])
+            for k in range(i1 + paired, i2):
+                row("removed", k + 1, left[k], None, None)
+            for k in range(j1 + paired, j2):
+                row("added", None, None, k + 1, right[k])
+    return rows
+
+
+async def _assert_open_proposal(
+    conn: AsyncConnection, project_id: UUID, proposal_id: UUID
+) -> dict[str, Any]:
+    proposal = await _proposal_row(conn, project_id, proposal_id)
+    if proposal["state"] != "open":
+        raise ValueError("this proposal is closed, so it cannot be commented on")
+    return proposal
+
+
+async def _assert_proposal_file(
+    conn: AsyncConnection, proposal_id: UUID, model_id: UUID
+) -> None:
+    """A comment has to hang on a file the proposal actually changes.
+
+    Without this, a comment can be anchored to any model in any project the
+    caller can reach, and it would render nowhere - a remark that exists and
+    cannot be read is worse than one that was refused.
+    """
+    row = await fetch_one(
+        conn,
+        "SELECT model_id FROM code_proposal_files "
+        "WHERE proposal_id = :pid AND model_id = :mid",
+        {"pid": str(proposal_id), "mid": str(model_id)},
+    )
+    if row is None:
+        raise ValueError("this proposal does not change that file")
+
+
+async def add_comment(
+    conn: AsyncConnection,
+    project_id: UUID,
+    proposal_id: UUID,
+    *,
+    model_id: UUID,
+    side: str,
+    line: int | None,
+    body: str,
+    author_id: UUID,
+) -> dict[str, Any]:
+    """Anchor a remark to a line - or to the file, when `line` is None.
+
+    Anyone who can read the project can comment, including the author. A
+    reviewer's *verdict* is gated (nobody approves their own proposal); saying
+    something about a line is not a verdict, and an author who cannot answer a
+    question about their own change makes the conversation one-directional.
+    """
+    proposal = await _assert_open_proposal(conn, project_id, proposal_id)
+    if side not in ("live", "proposed"):
+        raise ValueError(f"a comment hangs on the live or the proposed side, not {side!r}")
+    if line is not None and line < 1:
+        raise ValueError("line numbers start at 1")
+    if not body.strip():
+        raise ValueError("a comment needs something in it")
+    await _assert_proposal_file(conn, proposal_id, model_id)
+    row = await fetch_one(
+        conn,
+        """
+        INSERT INTO code_proposal_comments
+            (proposal_id, model_id, side, line, body, author_id, anchored_at)
+        VALUES (:pid, :mid, CAST(:side AS code_comment_side), :line, :body, :by, :anchor)
+        RETURNING id
+        """,
+        {
+            "pid": str(proposal_id), "mid": str(model_id), "side": side, "line": line,
+            "body": body.strip(), "by": str(author_id),
+            # The anchor is the proposal's own timestamp, not `now()`: the
+            # question is which version of the files this was said about, and
+            # two clocks answering it is one clock too many.
+            "anchor": proposal["files_updated_at"],
+        },
+    )
+    assert row is not None
+    return await get_proposal(conn, project_id, proposal_id)
+
+
+async def resolve_comment(
+    conn: AsyncConnection,
+    project_id: UUID,
+    proposal_id: UUID,
+    comment_id: UUID,
+    *,
+    resolved: bool,
+    actor_id: UUID,
+) -> dict[str, Any]:
+    """Settle a thread, or reopen it. Both directions, because a comment marked
+    settled by mistake otherwise needs a second comment saying so."""
+    await _proposal_row(conn, project_id, proposal_id)
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE code_proposal_comments
+           SET resolved_at = CASE WHEN :on THEN now() ELSE NULL END,
+               resolved_by = CASE WHEN :on THEN CAST(:by AS uuid) ELSE NULL END
+         WHERE id = :id AND proposal_id = :pid
+        RETURNING id
+        """,
+        {"on": resolved, "by": str(actor_id), "id": str(comment_id), "pid": str(proposal_id)},
+    )
+    if row is None:
+        raise NotFoundError("comment")
+    return await get_proposal(conn, project_id, proposal_id)
+
+
+async def mark_file_read(
+    conn: AsyncConnection,
+    project_id: UUID,
+    proposal_id: UUID,
+    *,
+    model_id: UUID,
+    read: bool,
+    reviewer_id: UUID,
+) -> dict[str, Any]:
+    """"I have read this file", per reviewer, against a particular version.
+
+    Upserted rather than toggled through a delete, so re-marking a file after
+    the proposal changed is one statement and cannot leave a half-state.
+    """
+    proposal = await _assert_open_proposal(conn, project_id, proposal_id)
+    await _assert_proposal_file(conn, proposal_id, model_id)
+    if read:
+        await conn.exec_driver_sql(
+            """
+            INSERT INTO code_proposal_file_marks
+                (proposal_id, model_id, reviewer_id, anchored_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (proposal_id, model_id, reviewer_id)
+            DO UPDATE SET marked_at = now(), anchored_at = EXCLUDED.anchored_at
+            """,
+            (str(proposal_id), str(model_id), str(reviewer_id),
+             proposal["files_updated_at"]),
+        )
+    else:
+        await conn.exec_driver_sql(
+            "DELETE FROM code_proposal_file_marks "
+            "WHERE proposal_id = %s AND model_id = %s AND reviewer_id = %s",
+            (str(proposal_id), str(model_id), str(reviewer_id)),
+        )
+    return await get_proposal(conn, project_id, proposal_id)
+
+
+async def _comments(conn: AsyncConnection, proposal_id: UUID,
+                    files_updated_at: Any) -> list[dict[str, Any]]:
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT c.id, c.model_id, c.side, c.line, c.body, c.author_id, c.created_at,
+               c.anchored_at, c.resolved_at, c.resolved_by,
+               (SELECT u.email FROM users u WHERE u.id = c.author_id) AS author_email
+          FROM code_proposal_comments c
+         WHERE c.proposal_id = :pid
+         ORDER BY c.created_at
+        """,
+        {"pid": str(proposal_id)},
+    )
+    return [
+        # Derived, not stored: a stored flag would need a write on every edit,
+        # and a write that can be missed is a flag that can be wrong.
+        {**dict(r), "outdated": r["anchored_at"] < files_updated_at}
+        for r in rows
+    ]
+
+
+async def _file_marks(conn: AsyncConnection, proposal_id: UUID,
+                      files_updated_at: Any) -> dict[str, list[dict[str, Any]]]:
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT m.model_id, m.reviewer_id, m.marked_at, m.anchored_at,
+               (SELECT u.email FROM users u WHERE u.id = m.reviewer_id) AS reviewer_email
+          FROM code_proposal_file_marks m
+         WHERE m.proposal_id = :pid
+        """,
+        {"pid": str(proposal_id)},
+    )
+    by_model: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        # A mark from before the last edit says somebody read a file that no
+        # longer exists in that form, so it does not count as read - the same
+        # rule 0031 already applies to approvals.
+        if r["anchored_at"] < files_updated_at:
+            continue
+        by_model.setdefault(str(r["model_id"]), []).append(dict(r))
+    return by_model

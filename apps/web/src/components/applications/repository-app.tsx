@@ -2,23 +2,33 @@
 
 /** The repository application (ROADMAP.md phase 2, section 2).
  *
- * Read-only. Editing arrives with the editor in item 2.2, and shipping a
- * viewer first is deliberate: it makes the storage layer decision 0003 settled
- * something a person can actually look at, and every question the editor will
- * need answered - which branch, which commit, what changed - is answered here
- * without a 2 MB dependency in the way.
+ * Four tabs, and they are the four questions a repository has to answer: what
+ * is in it (Files, with the editor and Preview), what happened to it (History),
+ * what else it could be (Branches, and the merge), and what it *does* to this
+ * project (Publish).
  *
  * A repository is a tree at a *ref*, so the ref is in the URL alongside the
  * open file. "Look at this file on this branch" has to be a link, or reviewing
  * anything means describing where to click.
+ *
+ * Nothing here makes a commit live. Publishing is a separate act on its own
+ * tab, and until somebody performs it a commit changes nothing about what runs
+ * - which is the property decision 0003 was chosen for.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { repositories as repoApi } from "@/lib/api";
-import type { RepositoryTree, ResolvedResource, TransformPreview } from "@/lib/types";
+import { ApiError, repositories as repoApi } from "@/lib/api";
+import type {
+  PublishPlan,
+  RepositoryBranch,
+  RepositoryComparison,
+  RepositoryTree,
+  ResolvedResource,
+  TransformPreview,
+} from "@/lib/types";
 
 // Monaco touches `window` at module scope and is ~1 MB nothing else needs.
 const CodeEditor = dynamic(
@@ -26,7 +36,14 @@ const CodeEditor = dynamic(
   { ssr: false, loading: () => <div className="code-editor-loading">Loading editor…</div> },
 );
 
-type Tab = "files" | "history";
+type Tab = "files" | "history" | "branches" | "publish";
+
+const TAB_LABELS: Record<Tab, string> = {
+  files: "Files",
+  history: "History",
+  branches: "Branches",
+  publish: "Publish",
+};
 
 export function RepositoryApplication({ resource }: { resource: ResolvedResource }) {
   const router = useRouter();
@@ -36,7 +53,11 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
   const pid = resource.project_id!;
   const rid = resource.kind_id;
 
-  const tab: Tab = params.get("tab") === "history" ? "history" : "files";
+  const requested = params.get("tab");
+  const tab: Tab =
+    requested === "history" || requested === "branches" || requested === "publish"
+      ? requested
+      : "files";
   const branch = params.get("branch") ?? undefined;
   const commitId = params.get("commit") ?? undefined;
   const openPath = params.get("file") ?? undefined;
@@ -100,7 +121,7 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
 
         <div className="spacer" />
         <nav className="ds-tabs repo-tabs">
-          {(["files", "history"] as Tab[]).map((t) => (
+          {(["files", "history", "branches", "publish"] as Tab[]).map((t) => (
             <button
               key={t}
               type="button"
@@ -108,13 +129,13 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
               aria-current={t === tab}
               onClick={() => setParams({ tab: t })}
             >
-              {t === "files" ? "Files" : "History"}
+              {TAB_LABELS[t]}
             </button>
           ))}
         </nav>
       </div>
 
-      {tab === "files" ? (
+      {tab === "files" && (
         <FilesTab
           wid={wid}
           pid={pid}
@@ -127,13 +148,37 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           openPath={openPath}
           onOpen={(path) => setParams({ file: path })}
         />
-      ) : (
+      )}
+      {tab === "history" && (
         <HistoryTab
           wid={wid}
           pid={pid}
           rid={rid}
           branch={current}
           onOpenCommit={(id) => setParams({ commit: id, tab: "files", file: undefined })}
+        />
+      )}
+      {tab === "publish" && (
+        <PublishTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          branch={current}
+          pinned={!!commitId}
+        />
+      )}
+      {tab === "branches" && (
+        <BranchesTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          current={current}
+          defaultBranch={repo.data?.default_branch ?? "main"}
+          branches={branches.data}
+          pending={branches.isPending}
+          onSwitch={(name) =>
+            setParams({ branch: name, commit: undefined, file: undefined, tab: "files" })
+          }
         />
       )}
     </div>
@@ -329,6 +374,499 @@ function FilesTab({
   );
 }
 
+
+/** Publish: make the transforms declared at this commit the project's
+ * definitions (roadmap 2.5).
+ *
+ * The plan is shown before the button, for the same reason the merge screen
+ * shows a verdict first: every refusal a publish can make is knowable without
+ * publishing, and a screen that only reports them afterwards teaches people to
+ * press and hope.
+ *
+ * Two things this has to be honest about, and neither is the happy path:
+ *
+ *   * **a file whose source has not changed publishes nothing**, and says so
+ *     rather than manufacturing a version with an empty diff;
+ *   * **a model whose file has stopped declaring a transform is left alone**
+ *     and named. It holds a dataset other things read, and removing a file is
+ *     not the same act as deciding that dataset should stop being produced.
+ */
+function PublishTab({
+  wid,
+  pid,
+  rid,
+  branch,
+  pinned,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  pinned: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [result, setResult] = useState<PublishPlan | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const plan = useQuery({
+    queryKey: ["repo-publish-plan", rid, branch],
+    queryFn: () => repoApi.publishPlan(wid, pid, rid, { branch }),
+    retry: false,
+  });
+
+  const run = useMutation({
+    mutationFn: () => repoApi.publish(wid, pid, rid, { branch }),
+    onSuccess: (done) => {
+      setResult(done);
+      setFailure(null);
+      queryClient.invalidateQueries({ queryKey: ["repo-publish-plan", rid] });
+    },
+    onError: (e: Error) => {
+      setResult(null);
+      setFailure(e instanceof ApiError ? e.message : String(e));
+    },
+  });
+
+  // A plan is against a branch's head. Viewing a pinned commit is history, and
+  // publishing history would quietly make an old snapshot live.
+  if (pinned) {
+    return (
+      <p className="state">
+        You are looking at a commit rather than a branch. Publishing is against a
+        branch&apos;s head — go back to the branch to publish it.
+      </p>
+    );
+  }
+  if (plan.isPending) return <p className="state">Reading {branch}…</p>;
+
+  const steps = result?.steps ?? plan.data?.steps ?? [];
+  const orphaned = result?.orphaned ?? plan.data?.orphaned ?? [];
+  const refusal = plan.isError ? (plan.error as Error).message : null;
+  // After a publish, what is left to write is what the *result* says, not what
+  // the plan said before it ran - a button offering to publish two transforms
+  // it has just published is a small lie, and the next press proves it.
+  const writes = steps.filter((s) =>
+    s.action ? s.action !== "unchanged" && !result : !s.unchanged,
+  ).length;
+
+  return (
+    <div className="repo-publish">
+      <div className="repo-publish-head">
+        <div>
+          <h3>Publish {branch}</h3>
+          <p className="soft">
+            The transforms declared at this commit become this project&apos;s
+            definitions. The source is copied into a version, so deleting the branch
+            afterwards changes nothing about what runs.
+          </p>
+        </div>
+        <button
+          className="btn"
+          type="button"
+          disabled={!!refusal || run.isPending || steps.length === 0}
+          onClick={() => run.mutate()}
+        >
+          {run.isPending
+            ? "Publishing…"
+            : writes === 0 && steps.length > 0
+              ? "Nothing to publish"
+              : `Publish ${writes} transform${writes === 1 ? "" : "s"}`}
+        </button>
+      </div>
+
+      {refusal && <p className="state error">{refusal}</p>}
+      {failure && <p className="state error">{failure}</p>}
+      {result && (
+        <p className="state">
+          Published {result.steps.filter((s) => s.action !== "unchanged").length} of{" "}
+          {result.steps.length}.
+        </p>
+      )}
+
+      {steps.length > 0 && (
+        <table className="repo-publish-table">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Produces</th>
+              <th>Reads</th>
+              <th>What happens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {steps.map((s) => (
+              <tr key={s.path}>
+                <td>
+                  <code>{s.path}</code>
+                </td>
+                <td>
+                  <code>{s.output}</code>
+                  {s.renames && (
+                    <span className="soft"> (was {s.model_name})</span>
+                  )}
+                </td>
+                <td className="soft">
+                  {s.inputs.map((i) => `${i.input_alias} = ${i.dataset}`).join(", ") || "—"}
+                </td>
+                <td className={s.unchanged ? "soft" : ""}>
+                  {s.action ??
+                    (s.unchanged
+                      ? "unchanged"
+                      : s.model_id
+                        ? "updates the live definition"
+                        : "creates a transform")}
+                  {s.version_number ? ` (v${s.version_number})` : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {orphaned.length > 0 && (
+        <div className="repo-publish-orphans">
+          <strong>
+            {orphaned.length} transform{orphaned.length === 1 ? "" : "s"} published from
+            this repository {orphaned.length === 1 ? "is" : "are"} no longer declared here
+          </strong>
+          <ul>
+            {orphaned.map((o) => (
+              <li key={o.id}>
+                <code>{o.source_path}</code> produced {o.name}
+              </li>
+            ))}
+          </ul>
+          <p className="soft">
+            Left alone, not deleted — each still produces a dataset other things may
+            read. Delete the transform if it should stop running.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Branches: create, switch, delete, and merge (roadmap 2.4).
+ *
+ * Merging is fast-forward only - decision 0003 chose that, and three-way text
+ * merge in a browser is a product in itself. Two consequences shape this
+ * screen:
+ *
+ *   1. **The comparison is shown before the button, not after the failure.**
+ *      A merge that can only report "no" once you have pressed it teaches
+ *      people to press and hope. The four states each get a sentence, and the
+ *      one that cannot merge gets the files it would take to redo the work.
+ *   2. **Nothing that would move a branch happens without saying so first.**
+ *      The button names the branch that moves and the commit it moves to.
+ */
+function BranchesTab({
+  wid,
+  pid,
+  rid,
+  current,
+  defaultBranch,
+  branches,
+  pending,
+  onSwitch,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  current: string;
+  defaultBranch: string;
+  branches: RepositoryBranch[] | undefined;
+  pending: boolean;
+  onSwitch: (name: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const known = useMemo(() => branches ?? [], [branches]);
+  const names = known.map((b) => b.name);
+
+  const [base, setBase] = useState(defaultBranch);
+  const [head, setHead] = useState("");
+  const [newName, setNewName] = useState("");
+  const [from, setFrom] = useState(current);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  // Derived at render rather than seeded into state by an effect: a default
+  // that lives in state goes stale the moment the branch it named is deleted,
+  // and a select pointing at a branch that is gone is the bug that produces.
+  const headBranch = head && names.includes(head) ? head : names.find((n) => n !== base) ?? "";
+  const baseBranch = names.includes(base) ? base : defaultBranch;
+
+  function refresh() {
+    queryClient.invalidateQueries({ queryKey: ["repo-branches", rid] });
+    queryClient.invalidateQueries({ queryKey: ["repo-tree", rid] });
+    queryClient.invalidateQueries({ queryKey: ["repo-commits", rid] });
+    queryClient.invalidateQueries({ queryKey: ["repo-compare", rid] });
+  }
+
+  const comparison = useQuery({
+    queryKey: ["repo-compare", rid, baseBranch, headBranch],
+    queryFn: () => repoApi.compare(wid, pid, rid, baseBranch, headBranch),
+    enabled: !!baseBranch && !!headBranch && baseBranch !== headBranch,
+  });
+
+  const create = useMutation({
+    mutationFn: (input: { name: string; from_branch: string }) =>
+      repoApi.createBranch(wid, pid, rid, input),
+    onSuccess: (made) => {
+      setNewName("");
+      setFailure(null);
+      setNote(`Created ${made.name}.`);
+      refresh();
+    },
+    onError: (e: Error) => {
+      setNote(null);
+      setFailure(e.message);
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (name: string) => repoApi.deleteBranch(wid, pid, rid, name),
+    onSuccess: (_data, name) => {
+      setFailure(null);
+      setNote(`Deleted ${name}. Its commits are still here.`);
+      refresh();
+    },
+    onError: (e: Error) => {
+      setNote(null);
+      setFailure(e.message);
+    },
+  });
+
+  const merge = useMutation({
+    mutationFn: () => repoApi.merge(wid, pid, rid, baseBranch, headBranch),
+    onSuccess: (result) => {
+      setFailure(null);
+      setNote(
+        result.merged
+          ? `${baseBranch} moved to ${headBranch} — ${result.ahead_by} commit${
+              result.ahead_by === 1 ? "" : "s"
+            }.`
+          : `Nothing to merge: ${headBranch} is already in ${baseBranch}.`,
+      );
+      refresh();
+    },
+    onError: (e: Error) => {
+      setNote(null);
+      setFailure(e instanceof ApiError ? e.message : String(e));
+    },
+  });
+
+  if (pending) return <p className="state">Loading branches…</p>;
+
+  const seen = comparison.data;
+  const canMerge = seen?.state === "fast_forward";
+
+  return (
+    <div className="repo-branches">
+      <section className="repo-branch-list">
+        <h3>Branches</h3>
+        <ul>
+          {known.map((b) => (
+            <li key={b.id} className={b.name === current ? "on" : undefined}>
+              <button type="button" className="repo-branch-name" onClick={() => onSwitch(b.name)}>
+                {b.name}
+              </button>
+              {b.name === defaultBranch && <span className="repo-branch-tag">default</span>}
+              {b.name === current && <span className="repo-branch-tag">viewing</span>}
+              <code className="repo-sha">
+                {b.head_commit_id ? b.head_commit_id.slice(0, 8) : "no commits"}
+              </code>
+              <button
+                type="button"
+                className="repo-branch-delete"
+                // The default branch is not offered, because deleting it makes
+                // the repository open as *empty* - which is also what losing
+                // everything looks like. The API refuses it too.
+                disabled={b.name === defaultBranch || remove.isPending}
+                onClick={() => {
+                  if (window.confirm(`Delete ${b.name}? Its commits stay.`)) {
+                    remove.mutate(b.name);
+                  }
+                }}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+          {known.length === 0 && (
+            <li className="soft">No branches yet — the first commit makes one.</li>
+          )}
+        </ul>
+
+        <form
+          className="repo-branch-new"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newName.trim()) {
+              create.mutate({ name: newName.trim(), from_branch: from });
+            }
+          }}
+        >
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="New branch name"
+            aria-label="New branch name"
+          />
+          <label>
+            from
+            <select value={from} onChange={(e) => setFrom(e.target.value)}>
+              {names.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="btn" type="submit" disabled={create.isPending || !newName.trim()}>
+            Create branch
+          </button>
+        </form>
+      </section>
+
+      <section className="repo-merge">
+        <h3>Merge</h3>
+        <div className="repo-merge-refs">
+          <label>
+            Into
+            <select value={baseBranch} onChange={(e) => setBase(e.target.value)}>
+              {names.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span aria-hidden>←</span>
+          <label>
+            From
+            <select value={headBranch} onChange={(e) => setHead(e.target.value)}>
+              {names
+                .filter((n) => n !== baseBranch)
+                .map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+            </select>
+          </label>
+        </div>
+
+        {!headBranch && (
+          <p className="state">
+            There is only one branch, so there is nothing to merge into it.
+          </p>
+        )}
+        {comparison.isPending && !!headBranch && <p className="state">Comparing…</p>}
+        {comparison.isError && (
+          <p className="state error">{(comparison.error as Error).message}</p>
+        )}
+
+        {seen && (
+          <>
+            <MergeVerdict comparison={seen} />
+            {(seen.commits.length > 0 || seen.ahead_by > 0) && (
+              <ul className="repo-merge-commits">
+                {seen.commits.map((c) => (
+                  <li key={c.id}>
+                    <code className="repo-sha">{c.id.slice(0, 8)}</code>{" "}
+                    {c.message || <span className="soft">(no message)</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <ul className="repo-diff">
+              {seen.files.added.map((p) => (
+                <li key={`a${p}`} className="added">
+                  <span>added</span> {p}
+                </li>
+              ))}
+              {seen.files.modified.map((p) => (
+                <li key={`m${p}`} className="modified">
+                  <span>changed</span> {p}
+                </li>
+              ))}
+              {seen.files.deleted.map((p) => (
+                <li key={`d${p}`} className="deleted">
+                  <span>deleted</span> {p}
+                </li>
+              ))}
+            </ul>
+            <button
+              className="btn repo-merge-go"
+              type="button"
+              disabled={!canMerge || merge.isPending}
+              onClick={() => merge.mutate()}
+            >
+              {merge.isPending
+                ? "Merging…"
+                : canMerge
+                  ? `Move ${baseBranch} to ${seen.head_commit_id?.slice(0, 8)}`
+                  : "Nothing to merge"}
+            </button>
+          </>
+        )}
+      </section>
+
+      {note && <p className="state">{note}</p>}
+      {failure && <p className="state error">{failure}</p>}
+    </div>
+  );
+}
+
+/** The four states in a sentence each, and the refused one in a paragraph.
+ *
+ * `diverged` gets the most words on purpose: it is the only state where the
+ * person has to do something, and "cannot merge" without saying what to do
+ * instead is where a fast-forward-only rule turns into a dead end. */
+function MergeVerdict({ comparison }: { comparison: RepositoryComparison }) {
+  const { base, head, state, ahead_by: ahead, behind_by: behind, files } = comparison;
+  const touched = [...files.added, ...files.modified, ...files.deleted].sort();
+
+  if (state === "identical") {
+    return (
+      <p className="repo-merge-verdict identical">
+        <strong>{head}</strong> and <strong>{base}</strong> point at the same commit. Nothing
+        to merge.
+      </p>
+    );
+  }
+  if (state === "contained") {
+    return (
+      <p className="repo-merge-verdict contained">
+        <strong>{head}</strong> is already in <strong>{base}</strong>, which has moved{" "}
+        {behind} commit{behind === 1 ? "" : "s"} further. Nothing to merge.
+      </p>
+    );
+  }
+  if (state === "fast_forward") {
+    return (
+      <p className="repo-merge-verdict fast-forward">
+        <strong>{base}</strong> can fast-forward to <strong>{head}</strong>: {ahead} commit
+        {ahead === 1 ? "" : "s"} and {touched.length} file{touched.length === 1 ? "" : "s"}.
+        No merge commit — the pointer moves to commits that already exist.
+      </p>
+    );
+  }
+  return (
+    <div className="repo-merge-verdict diverged">
+      <p>
+        <strong>{head}</strong> and <strong>{base}</strong> have diverged: {ahead} commit
+        {ahead === 1 ? "" : "s"} on {head} that {base} does not have, and {behind} on {base}{" "}
+        that {head} does not.
+      </p>
+      <p>
+        Merging here is fast-forward only, so this cannot be resolved by moving a pointer.
+        Start a branch from <strong>{base}</strong> and commit{" "}
+        {touched.length === 0 ? "your work" : `these ${touched.length} files`} there.
+      </p>
+    </div>
+  );
+}
 
 function HistoryTab({
   wid,

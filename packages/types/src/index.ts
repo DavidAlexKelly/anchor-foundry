@@ -278,6 +278,39 @@ export interface RepositoryCommit {
   created_at: string;
 }
 
+/** One transform a publish would create or update (roadmap 2.5). */
+export interface PublishStep {
+  path: string;
+  /** The dataset the file declares it produces; also the model's name. */
+  output: string;
+  language: string;
+  model_id: string | null;
+  model_name: string;
+  /** Byte-identical to what is already live, so publishing writes nothing. */
+  unchanged: boolean;
+  renames: boolean;
+  inputs: { dataset_id: string; input_alias: string; dataset: string }[];
+  /** created / updated / unchanged. Absent from a plan, which has done nothing. */
+  action?: "created" | "updated" | "unchanged" | null;
+  version_number?: number | null;
+}
+
+/** A model this repository published from a file the commit no longer declares.
+ * Reported, never deleted: a transform that has run holds a dataset other
+ * things read, and removing a file is not the same act as deciding that
+ * dataset should stop being produced. */
+export interface PublishOrphan {
+  id: string;
+  name: string;
+  source_path: string;
+}
+
+export interface PublishPlan {
+  commit_id: string;
+  steps: PublishStep[];
+  orphaned: PublishOrphan[];
+}
+
 /** A whole snapshot: every file at a commit, path to content. A commit carries
  * a flat manifest rather than a tree, so this is one join. */
 export interface RepositoryTree {
@@ -289,6 +322,40 @@ export interface RepositoryDiff {
   added: string[];
   deleted: string[];
   modified: string[];
+}
+
+/** What merging `head` into `base` would do. Four states, and the name is the
+ * answer to "can I merge this":
+ *
+ *   identical    - the branches point at the same commit.
+ *   fast_forward - base's head is an ancestor of head's, so base can move.
+ *   contained    - head's history is already inside base's; nothing to merge.
+ *   diverged     - each has commits the other does not. Refused: merging here
+ *                  is fast-forward only (docs/decisions/0003).
+ */
+export type MergeState = "identical" | "fast_forward" | "contained" | "diverged";
+
+export interface RepositoryComparison {
+  base: string;
+  base_commit_id: string | null;
+  head: string;
+  head_commit_id: string | null;
+  state: MergeState;
+  /** Commits on `head` that `base` does not have, and the reverse. Both, not
+   * just the one that would land: a refused merge is only actionable if you
+   * can see what is on the other side too. */
+  ahead_by: number;
+  behind_by: number;
+  /** The landing commits, newest first. Capped for the screen; `ahead_by` is
+   * exact. */
+  commits: RepositoryCommit[];
+  /** Against `base`, not against the previous commit: what merging changes. */
+  files: RepositoryDiff;
+}
+
+export interface RepositoryMerge extends RepositoryComparison {
+  /** False for a merge that had nothing to do, which is not a failure. */
+  merged: boolean;
 }
 
 /** One input as the preview actually read it. `sampled` is the difference
@@ -1130,6 +1197,79 @@ export interface CodeChangeSet {
 // the proposal rather than in model_versions, which is what a run resolves
 // against and must never hold code nobody approved.
 
+/** One line of a side-by-side diff, carrying both sides' line numbers.
+ *
+ *   same    - present on both sides, unchanged
+ *   added   - only on the proposed side
+ *   removed - only on the live side
+ *   changed - a replacement, so both sides have text and they differ
+ */
+export interface CodeDiffRow {
+  kind: "same" | "added" | "removed" | "changed";
+  live_line: number | null;
+  live_text: string | null;
+  proposed_line: number | null;
+  proposed_text: string | null;
+}
+
+export interface CodeProposalComment {
+  id: string;
+  model_id: string;
+  /** Which column of the diff it hangs on. */
+  side: "live" | "proposed";
+  /** Null is a remark about the file rather than about a line. */
+  line: number | null;
+  body: string;
+  author_id: string | null;
+  author_email: string | null;
+  created_at: string;
+  /** The proposal's `files_updated_at` this was said about: a version, not a
+   * moment. */
+  anchored_at: string;
+  /** The proposal has been edited since, so the line this points at is not the
+   * line it was written about. Shown and marked, never hidden. */
+  outdated: boolean;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
+/** "I have read this file", per reviewer. Only marks against the *current*
+ * files are returned - one made before the last edit says somebody read a file
+ * that no longer exists in that form. */
+export interface CodeFileMark {
+  model_id: string;
+  reviewer_id: string;
+  reviewer_email: string | null;
+  marked_at: string;
+}
+
+/** A check result (db 0037).
+ *
+ *   pass  - it ran and found nothing
+ *   warn  - it found something a reviewer should see, which does not block
+ *   fail  - it found something that would break, which blocks applying
+ *   error - it could not run. Not a pass: nobody has been told anything about
+ *           the code.
+ */
+export type CodeCheckStatus = "pass" | "warn" | "fail" | "error";
+
+export interface CodeCheck {
+  id: string;
+  /** Null is a check about the proposal as a whole rather than about a file. */
+  model_id: string | null;
+  name: string;
+  status: CodeCheckStatus;
+  summary: string;
+  detail: Record<string, unknown>;
+  ran_at: string;
+  ran_by: string | null;
+  ran_by_email: string | null;
+  anchored_at: string;
+  /** The proposal moved after this ran, so it describes code nobody will
+   * apply. Shown, marked, and not counted as a gate. */
+  stale: boolean;
+}
+
 export interface CodeProposalFile {
   model_id: string;
   model_name: string;
@@ -1140,6 +1280,11 @@ export interface CodeProposalFile {
   base_version: number;
   current_version: number;
   diff: string;
+  /** The same comparison as `diff`, aligned into rows with line numbers. */
+  rows: CodeDiffRow[];
+  comments: CodeProposalComment[];
+  read_by: CodeFileMark[];
+  checks: CodeCheck[];
 }
 
 export interface CodeReview {
@@ -1170,6 +1315,12 @@ export interface CodeProposal {
 export interface CodeProposalDetail extends CodeProposal {
   files: CodeProposalFile[];
   reviews: CodeReview[];
+  /** The whole conversation in one list, for a timeline rather than the
+   * per-file view. Same rows as `files[].comments`, not a second store. */
+  comments: CodeProposalComment[];
+  /** Every check result, stale ones included: a check that went stale is
+   * information, and hiding it reads as "no checks have run". */
+  checks: CodeCheck[];
   /** Every reason this cannot be applied, in the words the API used. */
   blockers: string[];
 }

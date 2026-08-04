@@ -110,6 +110,33 @@ export const repositories = {
     request<import("./types").RepositoryBranch[]>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branches`,
     ),
+  createBranch: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { name: string; from_branch?: string; from_commit_id?: string },
+  ) =>
+    request<import("./types").RepositoryBranch>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branches`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  deleteBranch: (wid: string, pid: string, rid: string, name: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branches/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+  /** What merging `head` into `base` would do. Reads only - this is what the
+   * screen shows *before* anybody presses merge. */
+  compare: (wid: string, pid: string, rid: string, base: string, head: string) =>
+    request<import("./types").RepositoryComparison>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/compare` +
+        `?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`,
+    ),
+  merge: (wid: string, pid: string, rid: string, base: string, head: string) =>
+    request<import("./types").RepositoryMerge>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/merge`,
+      { method: "POST", body: JSON.stringify({ base, head }) },
+    ),
   tree: (wid: string, pid: string, rid: string, ref: { branch?: string; commitId?: string }) => {
     const q = new URLSearchParams();
     if (ref.commitId) q.set("commit_id", ref.commitId);
@@ -133,6 +160,18 @@ export const repositories = {
     request<import("./types").RepositoryCommit>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/commits`,
       { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** What publishing this commit would do. Reads only - this is what the
+   * screen shows before anybody presses publish (roadmap 2.5). */
+  publishPlan: (wid: string, pid: string, rid: string, ref: { branch?: string }) =>
+    request<import("./types").PublishPlan>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/publish` +
+        (ref.branch ? `?branch=${encodeURIComponent(ref.branch)}` : ""),
+    ),
+  publish: (wid: string, pid: string, rid: string, ref: { branch?: string }) =>
+    request<import("./types").PublishPlan>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/publish`,
+      { method: "POST", body: JSON.stringify(ref) },
     ),
   diff: (wid: string, pid: string, rid: string, toCommitId: string) =>
     request<import("./types").RepositoryDiff>(
@@ -921,6 +960,47 @@ export const code = {
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/reviews`,
       { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** Anchor a remark to a line, or to the file when `line` is absent. Viewer
+   * level, unlike a verdict: asking a question is not approving. */
+  comment: (
+    wid: string,
+    pid: string,
+    id: string,
+    input: { model_id: string; side: "live" | "proposed"; line?: number | null; body: string },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/comments`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  resolveComment: (
+    wid: string,
+    pid: string,
+    id: string,
+    commentId: string,
+    resolved: boolean,
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/comments/${commentId}`,
+      { method: "PATCH", body: JSON.stringify({ resolved }) },
+    ),
+  /** Per-file resolution. Cleared by an edit to the proposal, without a write. */
+  markFileRead: (
+    wid: string,
+    pid: string,
+    id: string,
+    input: { model_id: string; read: boolean },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/read`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  /** Run every check against the proposal's current files (roadmap 2.8).
+   * Editor level: it executes the proposed SQL against the project's data. */
+  runChecks: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/checks`,
+      { method: "POST" },
     ),
   applyProposal: (wid: string, pid: string, id: string) =>
     request<import("./types").CodeProposalDetail>(

@@ -26,11 +26,21 @@ from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import code as code_service
+from ..services import code_checks as check_service
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/code",
     tags=["code"],
 )
+
+
+def _dataset_storage():
+    """The one gateway `main.py` configured, not a second one pointed somewhere
+    else - the same reason `models.py` and `repositories.py` reach for it this
+    way."""
+    from . import datasets as dataset_routes
+
+    return dataset_routes._storage
 
 
 class FileEntry(BaseModel):
@@ -208,6 +218,70 @@ async def create_change_set(
 
 
 # ---- review-gated promotion (ROADMAP Code item 4) ---------------------------
+class DiffRowOut(BaseModel):
+    """One line of a side-by-side diff, carrying both sides' line numbers.
+
+    Line numbers rather than row indices, because a comment anchors to a line
+    of a file - an index into a rendering would move whenever the rendering
+    changed.
+    """
+    kind: str
+    live_line: int | None
+    live_text: str | None
+    proposed_line: int | None
+    proposed_text: str | None
+
+
+class ProposalCommentOut(BaseModel):
+    id: UUID
+    model_id: UUID
+    side: str
+    # None is a remark about the file rather than about a line.
+    line: int | None
+    body: str
+    author_id: UUID | None
+    author_email: str | None
+    created_at: datetime
+    # The proposal's `files_updated_at` this was said about - a version, not a
+    # moment. Returned because "outdated" without saying *what it was about*
+    # leaves a reader unable to tell which text the remark applies to.
+    anchored_at: datetime
+    # True when the proposal has been edited since: the line this points at is
+    # not the line it was written about. Shown and marked, never hidden.
+    outdated: bool
+    resolved_at: datetime | None
+    resolved_by: UUID | None
+
+
+class CheckOut(BaseModel):
+    id: UUID
+    # None is a check about the proposal as a whole rather than about a file.
+    model_id: UUID | None
+    name: str
+    # pass / warn / fail / error. `error` is not a pass: it means nobody has
+    # been told anything about the code.
+    status: str
+    summary: str
+    detail: dict[str, Any]
+    ran_at: datetime
+    ran_by: UUID | None
+    ran_by_email: str | None
+    anchored_at: datetime
+    # The proposal moved after this ran, so it describes code nobody will
+    # apply. Shown, marked, and not counted as a gate.
+    stale: bool
+
+
+class FileMarkOut(BaseModel):
+    """"I have read this file", per reviewer. Only marks made against the
+    *current* files are returned - a mark from before the last edit says
+    somebody read a file that no longer exists in that form."""
+    model_id: UUID
+    reviewer_id: UUID
+    reviewer_email: str | None
+    marked_at: datetime
+
+
 class ProposalFileOut(BaseModel):
     model_id: UUID
     model_name: str
@@ -217,6 +291,10 @@ class ProposalFileOut(BaseModel):
     base_version: int
     current_version: int
     diff: str
+    rows: list[DiffRowOut] = []
+    comments: list[ProposalCommentOut] = []
+    read_by: list[FileMarkOut] = []
+    checks: list[CheckOut] = []
 
 
 class ReviewOut(BaseModel):
@@ -247,6 +325,12 @@ class ProposalSummary(BaseModel):
 class ProposalDetail(ProposalSummary):
     files: list[ProposalFileOut]
     reviews: list[ReviewOut]
+    # The whole conversation in one list, for a caller that wants a timeline
+    # rather than the per-file view above. Same rows, not a second store.
+    comments: list[ProposalCommentOut] = []
+    # Every check result, including the stale ones: a check that went stale is
+    # information, and hiding it reads as "no checks have run".
+    checks: list[CheckOut] = []
     # Every reason this cannot be applied, so the UI can say which rule was
     # tripped rather than showing a disabled button with no explanation.
     blockers: list[str]
@@ -271,6 +355,22 @@ class ReviewIn(BaseModel):
 
 class ReviewPolicyIn(BaseModel):
     require_code_review: bool
+
+
+class CommentIn(BaseModel):
+    model_id: UUID
+    side: str = Field(pattern="^(live|proposed)$")
+    line: int | None = Field(default=None, ge=1)
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class ResolveIn(BaseModel):
+    resolved: bool
+
+
+class FileMarkIn(BaseModel):
+    model_id: UUID
+    read: bool
 
 
 def _detail(row: dict[str, Any]) -> ProposalDetail:
@@ -417,6 +517,94 @@ async def withdraw_proposal(
         row = await code_service.withdraw_proposal(
             conn, access.project_id, proposal_id, actor_id=access.auth.user_id
         )
+    return _detail(row)
+
+
+# ---- the review surface (ROADMAP.md phase 2, item 2.7) ----------------------
+@router.post("/proposals/{proposal_id}/comments", response_model=ProposalDetail,
+             status_code=201)
+async def add_proposal_comment(
+    proposal_id: UUID,
+    body: CommentIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ProposalDetail:
+    """Anchor a remark to a line, or to a file when `line` is absent.
+
+    **Viewer**, unlike reviewing. A verdict is editor-level because approving a
+    change is as consequential as making one; asking a question about line 14
+    is not a verdict, and a reviewer who cannot be asked to explain their own
+    code makes the conversation one-directional. The author may comment on
+    their own proposal for the same reason - what they may not do is approve
+    it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.add_comment(
+            conn, access.project_id, proposal_id,
+            model_id=body.model_id, side=body.side, line=body.line,
+            body=body.body, author_id=access.auth.user_id,
+        )
+    return _detail(row)
+
+
+@router.patch("/proposals/{proposal_id}/comments/{comment_id}",
+              response_model=ProposalDetail)
+async def resolve_proposal_comment(
+    proposal_id: UUID,
+    comment_id: UUID,
+    body: ResolveIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ProposalDetail:
+    """Settle a thread, or reopen one. Both directions: a comment marked
+    settled by mistake otherwise needs a second comment saying so."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.resolve_comment(
+            conn, access.project_id, proposal_id, comment_id,
+            resolved=body.resolved, actor_id=access.auth.user_id,
+        )
+    return _detail(row)
+
+
+@router.put("/proposals/{proposal_id}/read", response_model=ProposalDetail)
+async def mark_proposal_file_read(
+    proposal_id: UUID,
+    body: FileMarkIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ProposalDetail:
+    """Per-file resolution: "I have read this one", per reviewer.
+
+    Kept against the version that was read, so editing the proposal clears it
+    without a write - the same rule that makes an approval stop counting.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await code_service.mark_file_read(
+            conn, access.project_id, proposal_id,
+            model_id=body.model_id, read=body.read, reviewer_id=access.auth.user_id,
+        )
+    return _detail(row)
+
+
+# ---- checks (ROADMAP.md phase 2, item 2.8) ----------------------------------
+@router.post("/proposals/{proposal_id}/checks", response_model=ProposalDetail)
+async def run_proposal_checks(
+    proposal_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ProposalDetail:
+    """Run every check against the proposal's current files.
+
+    **Editor**, unlike commenting. A check executes the proposed SQL against
+    datasets in the project - the same act `POST /repositories/{id}/preview`
+    performs, and at the same floor, for the same reason: it runs code the
+    caller supplied rather than reading something already saved.
+
+    200 rather than 201: what comes back is the proposal, with the results on
+    it. Re-running replaces the previous answer rather than appending one.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await check_service.run_checks(
+            conn, access.project_id, proposal_id,
+            storage=_dataset_storage(), actor_id=access.auth.user_id,
+        )
+        row = await code_service.get_proposal(conn, access.project_id, proposal_id)
     return _detail(row)
 
 

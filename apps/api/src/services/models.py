@@ -50,7 +50,8 @@ from .storage import StorageGateway
 _COLUMNS = """
     id, project_id, name, description, language, code, output_dataset_id,
     trigger_mode, cron_schedule, next_run_at, upstream_watermark,
-    input_health_policy, created_by, created_at, updated_at
+    input_health_policy, source_repo_id, source_path,
+    created_by, created_at, updated_at
 """
 
 
@@ -223,7 +224,10 @@ async def _validate_and_set_inputs(
 
 
 # ---- definition history (migration 0024) ------------------------------------
-_VERSION_COLUMNS = "id, model_id, version_number, code, inputs, restored_from, created_by, created_at"
+_VERSION_COLUMNS = (
+    "id, model_id, version_number, code, inputs, restored_from, created_by, "
+    "created_at, source_commit_id, source_path"
+)
 
 
 def _inputs_snapshot(inputs: list[dict[str, Any]]) -> str:
@@ -252,6 +256,12 @@ async def _record_definition(
     created_by: UUID,
     restored_from: int | None = None,
     change_set_id: UUID | None = None,
+    # Where this code was authored, when it came from a repository (db 0033,
+    # written for the first time by item 2.5's publish). NULL for every version
+    # authored directly, and it stays NULL - back-filling a guess would be a
+    # fabricated record of where code came from.
+    source_commit_id: UUID | None = None,
+    source_path: str | None = None,
 ) -> dict[str, Any]:
     """Append a definition version. Numbering is max+1 within the model, read
     in the caller's transaction - two concurrent edits to one model would
@@ -261,17 +271,21 @@ async def _record_definition(
         conn,
         f"""
         INSERT INTO model_versions (model_id, version_number, code, inputs,
-                                    restored_from, created_by, change_set_id)
+                                    restored_from, created_by, change_set_id,
+                                    source_commit_id, source_path)
         VALUES (:mid,
                 COALESCE((SELECT max(version_number) FROM model_versions
                            WHERE model_id = :mid), 0) + 1,
-                :code, CAST(:inputs AS jsonb), :restored, :by, :cset)
+                :code, CAST(:inputs AS jsonb), :restored, :by, :cset,
+                :commit, :path)
         RETURNING {_VERSION_COLUMNS}
         """,
         {
             "mid": str(model_id), "code": code, "inputs": _inputs_snapshot(inputs),
             "restored": restored_from, "by": str(created_by),
             "cset": str(change_set_id) if change_set_id else None,
+            "commit": str(source_commit_id) if source_commit_id else None,
+            "path": source_path,
         },
     )
     assert row is not None
@@ -425,6 +439,12 @@ async def update(
     # makes a definition live - a gate on one screen is a gate on one screen,
     # and the Models editor and the Code surface are two of them.
     reviewed: bool = False,
+    # Set only by item 2.5's publish. It lifts the db 0038 refusal below and
+    # nothing else - in particular *not* the review gate, which a publish is
+    # subject to like every other way of changing what runs.
+    from_repository: bool = False,
+    source_commit_id: UUID | None = None,
+    source_path: str | None = None,
 ) -> dict[str, Any]:
     before = await get(conn, project_id, model_id)
     before_inputs = await list_inputs(conn, model_id)
@@ -432,6 +452,21 @@ async def update(
     # schedule and health policy are how and when it runs, and 0024 already
     # draws that line for versioning. Gating them would make a project that
     # requires review unable to pause a job.
+    if (
+        not from_repository
+        and (code is not None or inputs is not None)
+        and before.get("source_repo_id")
+    ):
+        # db 0038. Not merely "the next publish overwrites this" - it is worse
+        # if it does not, because until then the repository describes a
+        # pipeline that is not the one running, and lineage read from it would
+        # be wrong in a way nobody can see.
+        raise ValueError(
+            f"{before['name']} is authored in a repository, at "
+            f"{before['source_path']}. Edit the file and publish it - a direct "
+            "edit here would make the repository describe a pipeline that is "
+            "not the one running."
+        )
     if not reviewed and (code is not None or inputs is not None):
         gate = await fetch_one(
             conn,
@@ -504,6 +539,7 @@ async def update(
         await _record_definition(
             conn, model_id, code=str(row["code"]), inputs=effective_inputs,
             created_by=updated_by, change_set_id=change_set_id,
+            source_commit_id=source_commit_id, source_path=source_path,
         )
 
     if row["trigger_mode"] == "upstream" and not await list_inputs(conn, model_id):
