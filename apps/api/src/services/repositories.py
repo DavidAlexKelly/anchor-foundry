@@ -249,12 +249,157 @@ async def move_branch(
         raise ConflictError(
             f"branch {name!r} cannot fast-forward: its head ({current}) is not an "
             "ancestor of the commit you are moving it to, so the move would discard "
-            "commits. Rebase onto the branch instead."
+            f"commits. Start a branch from {name}'s head and commit the files there."
         )
     await conn.exec_driver_sql(
         "UPDATE code_branches SET head_commit_id = %s WHERE repo_id = %s AND name = %s",
         (str(to_commit), str(repo_id), name),
     )
+
+
+# ---- comparing and merging branches ------------------------------------------
+# Decision 0003 chose fast-forward only, and this is where that choice stops
+# being a rule in a document and becomes something a person runs into. The
+# comparison exists so they run into it *before* pressing the button: a merge
+# screen that only reports failure after the fact teaches people to press and
+# hope.
+#
+# Four states, and the names are the answer to "can I merge this":
+#
+#   identical     - the branches point at the same commit.
+#   fast_forward  - base's head is an ancestor of head's, so base can move.
+#   contained     - head's history is already inside base's; nothing to merge.
+#   diverged      - each branch has commits the other does not. Refused.
+#
+# `contained` is deliberately not an error. Merging a branch that has already
+# landed is a no-op, and calling a no-op a failure sends people looking for a
+# problem that is not there.
+MERGE_STATES = ("identical", "fast_forward", "contained", "diverged")
+
+# How many landing commits to describe. The state and the counts are exact; the
+# list is what fits on a screen.
+_COMPARE_COMMIT_LIMIT = 100
+
+
+async def _commit_rows(conn: AsyncConnection, ids: list[UUID]) -> list[dict[str, Any]]:
+    if not ids:
+        return []
+    rows = await fetch_all(
+        conn,
+        "SELECT id, parent_id, message, created_by, created_at FROM code_commits "
+        "WHERE id = ANY(CAST(:ids AS uuid[]))",
+        {"ids": [str(i) for i in ids]},
+    )
+    # Ordered by the walk, not by timestamp. Two commits made in the same second
+    # have an order in the history and no order in the clock, and the history is
+    # the one that is true.
+    by_id = {UUID(str(r["id"])): dict(r) for r in rows}
+    return [by_id[i] for i in ids if i in by_id]
+
+
+async def _head_of(conn: AsyncConnection, *, repo_id: UUID, name: str) -> UUID | None:
+    row = await branch_head(conn, repo_id=repo_id, name=name)
+    if row is None:
+        raise NotFoundError(f"branch {name!r} does not exist")
+    return UUID(str(row["head_commit_id"])) if row["head_commit_id"] else None
+
+
+async def compare_branches(
+    conn: AsyncConnection, *, repo_id: UUID, base: str, head: str
+) -> dict[str, Any]:
+    """What merging `head` into `base` would do, without doing it.
+
+    Both directions are counted, not just the one that would land. A person
+    looking at a refused merge needs to know what is on the other branch as
+    much as what is on theirs - that is the difference between "I can recreate
+    this" and "I do not know what I am missing".
+    """
+    if base == head:
+        raise ValueError("a branch cannot be merged into itself")
+    base_commit = await _head_of(conn, repo_id=repo_id, name=base)
+    head_commit = await _head_of(conn, repo_id=repo_id, name=head)
+
+    base_history = (
+        [UUID(str(c)) for c in await ancestors(conn, base_commit)] if base_commit else []
+    )
+    head_history = (
+        [UUID(str(c)) for c in await ancestors(conn, head_commit)] if head_commit else []
+    )
+    base_set, head_set = set(base_history), set(head_history)
+
+    if base_commit == head_commit:
+        state = "identical"
+    elif head_set <= base_set:
+        # Includes a head branch with no commits: an empty history is contained
+        # in every history, and merging it changes nothing.
+        state = "contained"
+    elif base_set <= head_set:
+        # Includes a base branch with no commits, which every commit descends
+        # from vacuously - the same case `move_branch` allows.
+        state = "fast_forward"
+    else:
+        state = "diverged"
+
+    landing = [c for c in head_history if c not in base_set]
+    stranded = [c for c in base_history if c not in head_set]
+
+    base_manifest = (
+        {} if base_commit is None else (await get_commit(conn, base_commit))["manifest"]
+    )
+    head_manifest = (
+        {} if head_commit is None else (await get_commit(conn, head_commit))["manifest"]
+    )
+    return {
+        "base": base,
+        "base_commit_id": base_commit,
+        "head": head,
+        "head_commit_id": head_commit,
+        "state": state,
+        "ahead_by": len(landing),
+        "behind_by": len(stranded),
+        "commits": await _commit_rows(conn, landing[:_COMPARE_COMMIT_LIMIT]),
+        "files": diff(base_manifest, head_manifest),
+    }
+
+
+async def merge_branch(
+    conn: AsyncConnection, *, repo_id: UUID, base: str, head: str
+) -> dict[str, Any]:
+    """Fast-forward `base` onto `head`, or refuse and say what diverged.
+
+    There is no merge commit because there is no merge: a fast-forward moves a
+    pointer, and the commits that arrive are the ones that were already made on
+    the other branch. That is the whole of what decision 0003 bought - branch,
+    commit, review, land - and the refusal below is the price it names.
+    """
+    comparison = await compare_branches(conn, repo_id=repo_id, base=base, head=head)
+    if comparison["state"] == "diverged":
+        changed = comparison["files"]
+        touched = sorted(
+            set(changed["added"]) | set(changed["deleted"]) | set(changed["modified"])
+        )
+        raise ConflictError(
+            f"{head!r} and {base!r} have diverged: {comparison['ahead_by']} commit"
+            f"{'' if comparison['ahead_by'] == 1 else 's'} on {head!r} that {base!r} "
+            f"does not have, and {comparison['behind_by']} on {base!r} that {head!r} "
+            f"does not. Merging here is fast-forward only, so this cannot be resolved "
+            f"by moving a pointer. Start a branch from {base!r} and commit "
+            + (
+                f"{len(touched)} file{'' if len(touched) == 1 else 's'} there: "
+                + ", ".join(touched[:10])
+                + (" …" if len(touched) > 10 else "")
+                if touched
+                else "your work there"
+            )
+        )
+    if comparison["state"] == "fast_forward":
+        assert comparison["head_commit_id"] is not None
+        await move_branch(
+            conn, repo_id=repo_id, name=base, to_commit=comparison["head_commit_id"]
+        )
+        return {**comparison, "merged": True}
+    # identical or contained: nothing moved, and nothing was wrong.
+    return {**comparison, "merged": False}
 
 
 async def create_branch(
@@ -299,7 +444,22 @@ async def delete_branch(conn: AsyncConnection, *, repo_id: UUID, name: str) -> N
     They are still referenced by anything published from them, and a version
     whose commit vanished would be a record that changed after the fact.
     Unreferenced commits are garbage, not errors (decision 0003).
+
+    The default branch is the exception, and the refusal is here rather than in
+    the route because it is a rule about the repository: deleting it does not
+    fail, it makes the repository *read as empty* - `read_tree` falls back to
+    the default branch and finds no row, which is the same answer a repository
+    nobody has committed to gives. Quietly indistinguishable from having lost
+    everything is the worst shape a delete can take.
     """
+    default = await fetch_one(
+        conn, "SELECT default_branch FROM code_repos WHERE id = :rid", {"rid": str(repo_id)}
+    )
+    if default is not None and default["default_branch"] == name:
+        raise ConflictError(
+            f"{name!r} is this repository's default branch, so deleting it would make "
+            "the repository open as empty. Change the default branch first."
+        )
     await conn.exec_driver_sql(
         "DELETE FROM code_branches WHERE repo_id = %s AND name = %s",
         (str(repo_id), name),

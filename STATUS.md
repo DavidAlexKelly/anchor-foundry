@@ -1737,6 +1737,26 @@ For the record, the answer: **a `published_version` can only point at a post-con
 
 **612 API tests green**, 1 new; two existing ones updated where their premises had changed. Re-verified in a browser that the builder still saves through the stricter route.
 
+### 91. Branches, and the merge that decision 0003 chose (this session)
+
+Roadmap 2.4 asked for create/switch/list/delete, a diff view, and fast-forward merge. §60 built the first four as service functions with an HTTP surface; what was missing was **the merge path and any screen at all**. Both are here.
+
+**Merging is a comparison plus a pointer move, and the comparison is the interesting half.** `compare_branches()` classifies two branches into one of four states — `identical`, `fast_forward`, `contained`, `diverged` — and reports both directions: how many commits `head` has that `base` does not, *and* the reverse. Only one of those numbers is needed to merge; the other is what makes a refusal actionable, because "I cannot merge this" without saying what is on the other side leaves somebody guessing at what they are missing.
+
+**`contained` is deliberately not an error.** Merging a branch that has already landed is a no-op, and calling a no-op a failure sends people looking for a problem that is not there — the second click of a double-click lands exactly here.
+
+**The refusal is where fast-forward-only earns its keep, and where it costs.** Decision 0003 chose it over three-way merge, on the grounds that merging text in a browser is a product in itself with production transforms as its blast radius. The cost is that two branches which both moved cannot be merged at all. So the refusal carries what it takes to act: both counts, and the files that would have to be re-committed on a branch cut from the base. `move_branch()`'s own refusal was also wrong in a small way that mattered — it advised a **rebase**, and there is no rebase here. It now names the recovery that exists.
+
+**The screen shows the verdict before the button, not after the failure.** A merge that can only report "no" once you have pressed it teaches people to press and hope, so the Branches tab runs the comparison as you pick the two refs and renders the sentence for whichever of the four states applies; the diverged one gets a paragraph and a disabled button rather than a live button and a 409. The button itself names the branch that moves and the commit it moves to. The API refusal stays as the backstop for the race where somebody commits between the comparison and the click.
+
+**The default branch can no longer be deleted**, and the check is in the service rather than the route because it is a rule about the repository. Deleting it does not fail: `read_tree` falls back to the default branch, finds no row, and the repository **opens as empty** — which is also what losing everything looks like. Quietly indistinguishable from catastrophe is the worst shape a delete can take.
+
+**Ten mutations, ten caught.** Treating `diverged` as mergeable, classifying it as `fast_forward`, classifying `contained` as `fast_forward`, never moving the branch, counting the landing commits against the wrong side, taking the file diff the wrong way round, ordering commits by the clock instead of by the history, allowing a branch to merge into itself, allowing the default branch to be deleted, and calling an empty base a divergence — every one of them turns the suite red.
+
+**626 API tests green**, 14 new (8 service, 6 route). The browser check drives the whole screen against real servers: both verdicts, a merge that moves `main` and is then reported as having nothing left to do, a delete, the default branch's delete being unavailable, and a created branch that the whole application switches to. It holds the head it measured *before* merging rather than comparing a live locator with itself — the failure shape §78–§86 kept producing.
+
+**One check failed for a real reason and was fixed rather than loosened**: `inner_text()` returns *rendered* text, so a tag styled `text-transform: uppercase` reads `DEFAULT`, not `default`. Worth knowing before writing the next assertion against a styled label.
+
 ---
 
 ## What's not started

@@ -110,6 +110,33 @@ export const repositories = {
     request<import("./types").RepositoryBranch[]>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branches`,
     ),
+  createBranch: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { name: string; from_branch?: string; from_commit_id?: string },
+  ) =>
+    request<import("./types").RepositoryBranch>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branches`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  deleteBranch: (wid: string, pid: string, rid: string, name: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branches/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+  /** What merging `head` into `base` would do. Reads only - this is what the
+   * screen shows *before* anybody presses merge. */
+  compare: (wid: string, pid: string, rid: string, base: string, head: string) =>
+    request<import("./types").RepositoryComparison>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/compare` +
+        `?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}`,
+    ),
+  merge: (wid: string, pid: string, rid: string, base: string, head: string) =>
+    request<import("./types").RepositoryMerge>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/merge`,
+      { method: "POST", body: JSON.stringify({ base, head }) },
+    ),
   tree: (wid: string, pid: string, rid: string, ref: { branch?: string; commitId?: string }) => {
     const q = new URLSearchParams();
     if (ref.commitId) q.set("commit_id", ref.commitId);

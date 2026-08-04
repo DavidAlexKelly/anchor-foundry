@@ -107,6 +107,34 @@ class DiffOut(BaseModel):
     modified: list[str]
 
 
+class CompareOut(BaseModel):
+    base: str
+    base_commit_id: UUID | None
+    head: str
+    head_commit_id: UUID | None
+    # One of repo_service.MERGE_STATES. A string rather than an enum here
+    # because the service owns the vocabulary and duplicating it as a second
+    # enum is a second place for it to drift.
+    state: str
+    ahead_by: int
+    behind_by: int
+    commits: list[CommitOut]
+    files: DiffOut
+
+
+class MergeOut(CompareOut):
+    # False for a merge that had nothing to do, which is not a failure.
+    merged: bool
+
+
+class MergeIn(BaseModel):
+    # `head` merges into `base`; `base` is the branch that moves. Named the way
+    # the comparison reads rather than "source"/"target", because the screen
+    # asks "what would merging this into that do".
+    base: str = Field(min_length=1, max_length=100)
+    head: str = Field(min_length=1, max_length=100)
+
+
 class PreviewIn(BaseModel):
     path: str = Field(min_length=1, max_length=1000)
     # The editor's buffer, not the commit. Previewing only what is committed
@@ -239,6 +267,73 @@ async def delete_branch(
     async with user_connection(access.auth.user_id) as conn:
         await repo_service.get_repository(conn, project_id=access.project_id, repo_id=repo_id)
         await repo_service.delete_branch(conn, repo_id=repo_id, name=name)
+
+
+@router.get("/{repo_id}/compare", response_model=CompareOut)
+async def compare_branches(
+    repo_id: UUID,
+    base: str = Query(..., min_length=1, max_length=100),
+    head: str = Query(..., min_length=1, max_length=100),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> CompareOut:
+    """What merging `head` into `base` would do. Viewer, because it does none
+    of it - this is the screen a reviewer reads before anybody merges."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(conn, project_id=access.project_id, repo_id=repo_id)
+        try:
+            result = await repo_service.compare_branches(
+                conn, repo_id=repo_id, base=base, head=head
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+    return CompareOut(**result)
+
+
+@router.post("/{repo_id}/merge", response_model=MergeOut)
+async def merge_branch(
+    repo_id: UUID,
+    body: MergeIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> MergeOut:
+    """Fast-forward `base` onto `head`, or refuse with what diverged.
+
+    200 rather than 201: nothing is created. A fast-forward moves a pointer to
+    commits that already existed, and a merge with nothing to do returns the
+    same shape with `merged: false`.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(conn, project_id=access.project_id, repo_id=repo_id)
+        try:
+            result = await repo_service.merge_branch(
+                conn, repo_id=repo_id, base=body.base, head=body.head
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        if result["merged"]:
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="repository.merge",
+                resource_type="code_repo",
+                resource_id=repo_id,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                metadata={
+                    "base": body.base,
+                    "head": body.head,
+                    "to_commit": str(result["head_commit_id"]),
+                    "commits": result["ahead_by"],
+                },
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+    return MergeOut(**result)
 
 
 # ---- content -----------------------------------------------------------------

@@ -291,6 +291,40 @@ export interface RepositoryDiff {
   modified: string[];
 }
 
+/** What merging `head` into `base` would do. Four states, and the name is the
+ * answer to "can I merge this":
+ *
+ *   identical    - the branches point at the same commit.
+ *   fast_forward - base's head is an ancestor of head's, so base can move.
+ *   contained    - head's history is already inside base's; nothing to merge.
+ *   diverged     - each has commits the other does not. Refused: merging here
+ *                  is fast-forward only (docs/decisions/0003).
+ */
+export type MergeState = "identical" | "fast_forward" | "contained" | "diverged";
+
+export interface RepositoryComparison {
+  base: string;
+  base_commit_id: string | null;
+  head: string;
+  head_commit_id: string | null;
+  state: MergeState;
+  /** Commits on `head` that `base` does not have, and the reverse. Both, not
+   * just the one that would land: a refused merge is only actionable if you
+   * can see what is on the other side too. */
+  ahead_by: number;
+  behind_by: number;
+  /** The landing commits, newest first. Capped for the screen; `ahead_by` is
+   * exact. */
+  commits: RepositoryCommit[];
+  /** Against `base`, not against the previous commit: what merging changes. */
+  files: RepositoryDiff;
+}
+
+export interface RepositoryMerge extends RepositoryComparison {
+  /** False for a merge that had nothing to do, which is not a failure. */
+  merged: boolean;
+}
+
 /** One input as the preview actually read it. `sampled` is the difference
  * between a number that is the answer and a number that looks like one. */
 export interface PreviewedInput {

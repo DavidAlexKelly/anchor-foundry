@@ -240,9 +240,11 @@ Python and SQL syntax first; language-server-grade IntelliSense is 2.9, not this
 
 Tree, create/rename/delete/move, tabbed editors, unsaved-state indicators, and a working-set concept so a half-finished edit survives navigating away. **Depends on** 2.1.
 
-### 2.4 Branches — **L, part done** (`STATUS.md` §60: create/list/delete, fast-forward moves and commit diffs exist; the UI and the merge path do not)
+### ~~2.4 Branches~~ — **done** (`STATUS.md` §60 create/list/delete, fast-forward moves and commit diffs; §91 the merge path and the Branches screen)
 
 Create from a branch, switch, list, delete. Commit to a branch. A diff view (the existing `services/code.py` diff logic already handles the trailing-newline case correctly — `STATUS.md` §46 — and should be reused, not rewritten). Fast-forward merge. **Depends on** 2.1.
+
+Merging is a comparison plus a pointer move: four states (`identical`, `fast_forward`, `contained`, `diverged`), both directions counted, and the screen shows the verdict before the button rather than after the failure. Divergence is refused — decision 0003 chose fast-forward only — with both counts and the files it would take to redo the work. The default branch cannot be deleted, because deleting it makes the repository *open as empty*.
 
 ### 2.5 Transforms authoring — **L, done** (`docs/decisions/0004-running-customer-code.md`; `STATUS.md` §63 declarations, §64 the runner task and empty role, §65 the container entrypoint, §66 the EFS scratch transport, §67 dispatch, §68 the substitution). Customer Python now runs in a container with an empty task role and no route out, on any deployment configured for it; a worker with no runner configured still uses `python_sandbox`, and a *half*-configured one refuses rather than downgrading quietly.
 

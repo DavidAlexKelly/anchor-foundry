@@ -299,3 +299,170 @@ async def test_a_published_version_pins_its_commit(conn, repo, fx) -> None:
         (str(model_id),),
     )
     assert version.fetchone() == ("SELECT 42", "m.sql")
+
+
+# ---- comparing and merging (roadmap 2.4) -------------------------------------
+async def _branch_at(conn, repo, name, commit_id):
+    return await repos.create_branch(
+        conn, repo_id=uuid.UUID(repo["id"]), name=name,
+        from_commit=commit_id, created_by=uuid.UUID(repo["owner"]),
+    )
+
+
+@pytest.mark.anyio
+async def test_a_branch_that_is_ahead_can_fast_forward(conn, repo) -> None:
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    first = await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    await _branch_at(conn, repo, side, first["id"])
+    second = await commit_files(conn, repo, {"a.sql": "2"}, branch=side)
+    third = await commit_files(conn, repo, {"a.sql": "2", "b.sql": "9"}, branch=side)
+
+    seen = await repos.compare_branches(
+        conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side
+    )
+    assert seen["state"] == "fast_forward"
+    assert seen["ahead_by"] == 2 and seen["behind_by"] == 0
+    # Newest first, and in the order of the history rather than of the clock:
+    # two commits made in the same second have an order in one and not in the
+    # other.
+    assert [c["id"] for c in seen["commits"]] == [third["id"], second["id"]]
+    # The files, against the *base*, not against the previous commit: what
+    # merging would change, which is the question the screen is asking.
+    assert seen["files"] == {"added": ["b.sql"], "deleted": [], "modified": ["a.sql"]}
+
+    done = await repos.merge_branch(
+        conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side
+    )
+    assert done["merged"] is True
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=trunk)
+    assert head["head_commit_id"] == third["id"]
+
+
+@pytest.mark.anyio
+async def test_comparing_does_not_merge(conn, repo) -> None:
+    """The whole point of a comparison is that it is safe to look at."""
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    first = await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    await _branch_at(conn, repo, side, first["id"])
+    await commit_files(conn, repo, {"a.sql": "2"}, branch=side)
+
+    await repos.compare_branches(conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side)
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=trunk)
+    assert head["head_commit_id"] == first["id"]
+
+
+@pytest.mark.anyio
+async def test_merging_something_already_landed_changes_nothing_and_is_not_an_error(
+    conn, repo
+) -> None:
+    """A no-op called a failure sends people looking for a problem that is not
+    there - and the second click of a double-click is exactly this case."""
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    first = await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    await _branch_at(conn, repo, side, first["id"])
+    second = await commit_files(conn, repo, {"a.sql": "2"}, branch=trunk)
+
+    seen = await repos.merge_branch(
+        conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side
+    )
+    assert seen["state"] == "contained"
+    assert seen["merged"] is False
+    assert seen["ahead_by"] == 0 and seen["behind_by"] == 1
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=trunk)
+    assert head["head_commit_id"] == second["id"]
+
+
+@pytest.mark.anyio
+async def test_identical_branches_have_nothing_to_merge(conn, repo) -> None:
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    made = await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    await _branch_at(conn, repo, side, made["id"])
+
+    seen = await repos.merge_branch(
+        conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side
+    )
+    assert seen["state"] == "identical"
+    assert seen["merged"] is False
+    assert seen["ahead_by"] == 0 and seen["behind_by"] == 0
+    assert seen["files"] == {"added": [], "deleted": [], "modified": []}
+
+
+@pytest.mark.anyio
+async def test_diverged_branches_are_refused_with_both_sides_and_the_files(
+    conn, repo
+) -> None:
+    """Fast-forward only (decision 0003). The refusal has to carry enough to
+    act on: what is on each side, and which files would have to move."""
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    first = await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    await _branch_at(conn, repo, side, first["id"])
+    on_trunk = await commit_files(conn, repo, {"a.sql": "1", "trunk.sql": "t"}, branch=trunk)
+    await commit_files(conn, repo, {"a.sql": "1", "side.sql": "s"}, branch=side)
+
+    seen = await repos.compare_branches(
+        conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side
+    )
+    assert seen["state"] == "diverged"
+    assert seen["ahead_by"] == 1 and seen["behind_by"] == 1
+
+    with pytest.raises(ConflictError) as caught:
+        await repos.merge_branch(
+            conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side
+        )
+    detail = str(caught.value.detail)
+    assert trunk in detail and side in detail
+    assert "side.sql" in detail and "trunk.sql" in detail
+
+    # And nothing moved.
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=trunk)
+    assert head["head_commit_id"] == on_trunk["id"]
+
+
+@pytest.mark.anyio
+async def test_a_branch_cannot_be_merged_into_itself(conn, repo) -> None:
+    tag = uuid.uuid4().hex[:6]
+    trunk = f"t-{tag}"
+    await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    with pytest.raises(ValueError):
+        await repos.compare_branches(
+            conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=trunk
+        )
+
+
+@pytest.mark.anyio
+async def test_an_empty_branch_fast_forwards_rather_than_diverging(conn, repo) -> None:
+    """A branch created before its first commit has no head, and every commit
+    descends from nothing. Calling that a divergence would strand a repository
+    at its own first merge."""
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    await _branch_at(conn, repo, trunk, None)
+    made = await commit_files(conn, repo, {"a.sql": "1"}, branch=side)
+
+    done = await repos.merge_branch(
+        conn, repo_id=uuid.UUID(repo["id"]), base=trunk, head=side
+    )
+    assert done["state"] == "fast_forward" and done["merged"] is True
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=trunk)
+    assert head["head_commit_id"] == made["id"]
+
+
+@pytest.mark.anyio
+async def test_the_default_branch_cannot_be_deleted(conn, repo) -> None:
+    """Deleting it does not fail - it makes the repository read as empty,
+    which is indistinguishable from having lost everything."""
+    default = (await conn.exec_driver_sql(
+        "SELECT default_branch FROM code_repos WHERE id = %s", (repo["id"],)
+    )).fetchone()[0]
+    await commit_files(conn, repo, {"a.sql": "1"}, branch=default)
+
+    with pytest.raises(ConflictError) as caught:
+        await repos.delete_branch(conn, repo_id=uuid.UUID(repo["id"]), name=default)
+    assert "default branch" in str(caught.value.detail)
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=default)
+    assert head is not None

@@ -240,6 +240,156 @@ def test_a_commit_from_another_repository_is_not_readable_here(
     assert r.status_code == 404, r.text
 
 
+# ---- comparing and merging (roadmap 2.4) -------------------------------------
+def test_a_comparison_says_what_merging_would_do_without_doing_it(
+    client: TestClient, fx: Fixture
+) -> None:
+    repo = make_repo(client, fx)
+    first = commit(client, fx, repo["id"], {"a.sql": "1"})
+    client.post(
+        f"{base(fx)}/{repo['id']}/branches",
+        headers=hdr(fx.editor_sub),
+        json={"name": "feature", "from_commit_id": first["id"]},
+    )
+    landed = commit(client, fx, repo["id"], {"a.sql": "2", "b.sql": "9"}, branch="feature")
+
+    # A viewer may look. Reading what a merge would do is reading.
+    r = client.get(
+        f"{base(fx)}/{repo['id']}/compare",
+        headers=hdr(fx.viewer_sub),
+        params={"base": "main", "head": "feature"},
+    )
+    assert r.status_code == 200, r.text
+    seen = r.json()
+    assert seen["state"] == "fast_forward"
+    assert seen["ahead_by"] == 1 and seen["behind_by"] == 0
+    assert [c["id"] for c in seen["commits"]] == [landed["id"]]
+    assert seen["files"]["added"] == ["b.sql"] and seen["files"]["modified"] == ["a.sql"]
+
+    # and main has not moved.
+    branches = {
+        b["name"]: b["head_commit_id"]
+        for b in client.get(
+            f"{base(fx)}/{repo['id']}/branches", headers=hdr(fx.viewer_sub)
+        ).json()
+    }
+    assert branches["main"] == first["id"]
+
+
+def test_merging_fast_forwards_the_branch(client: TestClient, fx: Fixture) -> None:
+    repo = make_repo(client, fx)
+    first = commit(client, fx, repo["id"], {"a.sql": "1"})
+    client.post(
+        f"{base(fx)}/{repo['id']}/branches",
+        headers=hdr(fx.editor_sub),
+        json={"name": "feature", "from_commit_id": first["id"]},
+    )
+    landed = commit(client, fx, repo["id"], {"a.sql": "2"}, branch="feature")
+
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/merge",
+        headers=hdr(fx.editor_sub),
+        json={"base": "main", "head": "feature"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["merged"] is True
+
+    branches = {
+        b["name"]: b["head_commit_id"]
+        for b in client.get(
+            f"{base(fx)}/{repo['id']}/branches", headers=hdr(fx.viewer_sub)
+        ).json()
+    }
+    assert branches["main"] == landed["id"]
+
+    # Merging again is a no-op rather than a failure: the second click of a
+    # double-click lands here.
+    again = client.post(
+        f"{base(fx)}/{repo['id']}/merge",
+        headers=hdr(fx.editor_sub),
+        json={"base": "main", "head": "feature"},
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["merged"] is False and again.json()["state"] == "identical"
+
+
+def test_a_diverged_merge_is_refused_and_names_the_files(
+    client: TestClient, fx: Fixture
+) -> None:
+    repo = make_repo(client, fx)
+    first = commit(client, fx, repo["id"], {"a.sql": "1"})
+    client.post(
+        f"{base(fx)}/{repo['id']}/branches",
+        headers=hdr(fx.editor_sub),
+        json={"name": "feature", "from_commit_id": first["id"]},
+    )
+    on_main = commit(client, fx, repo["id"], {"a.sql": "1", "main.sql": "m"})
+    commit(client, fx, repo["id"], {"a.sql": "1", "feature.sql": "f"}, branch="feature")
+
+    seen = client.get(
+        f"{base(fx)}/{repo['id']}/compare",
+        headers=hdr(fx.viewer_sub),
+        params={"base": "main", "head": "feature"},
+    ).json()
+    assert seen["state"] == "diverged"
+    assert seen["ahead_by"] == 1 and seen["behind_by"] == 1
+
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/merge",
+        headers=hdr(fx.editor_sub),
+        json={"base": "main", "head": "feature"},
+    )
+    assert r.status_code == 409, r.text
+    assert "feature.sql" in r.json()["detail"] and "main.sql" in r.json()["detail"]
+
+    branches = {
+        b["name"]: b["head_commit_id"]
+        for b in client.get(
+            f"{base(fx)}/{repo['id']}/branches", headers=hdr(fx.viewer_sub)
+        ).json()
+    }
+    assert branches["main"] == on_main["id"]
+
+
+def test_a_branch_cannot_be_merged_into_itself(client: TestClient, fx: Fixture) -> None:
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"a.sql": "1"})
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/merge",
+        headers=hdr(fx.editor_sub),
+        json={"base": "main", "head": "main"},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_merging_a_branch_that_does_not_exist_says_which(
+    client: TestClient, fx: Fixture
+) -> None:
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"a.sql": "1"})
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/merge",
+        headers=hdr(fx.editor_sub),
+        json={"base": "main", "head": "ghost"},
+    )
+    assert r.status_code == 404, r.text
+    assert "ghost" in r.json()["detail"]
+
+
+def test_the_default_branch_cannot_be_deleted(client: TestClient, fx: Fixture) -> None:
+    """Deleting it would make the repository open as empty, which is what a
+    repository that has lost everything also looks like."""
+    repo = make_repo(client, fx)
+    made = commit(client, fx, repo["id"], {"a.sql": "1"})
+    r = client.delete(
+        f"{base(fx)}/{repo['id']}/branches/main", headers=hdr(fx.editor_sub)
+    )
+    assert r.status_code == 409, r.text
+
+    tree = client.get(f"{base(fx)}/{repo['id']}/tree", headers=hdr(fx.viewer_sub)).json()
+    assert tree["commit_id"] == made["id"]
+
+
 # ---- permissions -------------------------------------------------------------
 def test_a_viewer_reads_and_cannot_write(client: TestClient, fx: Fixture) -> None:
     repo = make_repo(client, fx)
@@ -250,6 +400,7 @@ def test_a_viewer_reads_and_cannot_write(client: TestClient, fx: Fixture) -> Non
         ("post", f"{base(fx)}/{repo['id']}/commits",
          {"branch": "main", "files": {"a.sql": "1"}, "message": ""}),
         ("post", f"{base(fx)}/{repo['id']}/branches", {"name": "nope"}),
+        ("post", f"{base(fx)}/{repo['id']}/merge", {"base": "main", "head": "nope"}),
     ]:
         r = getattr(client, method)(path, headers=hdr(fx.viewer_sub), json=body)
         assert r.status_code == 403, (path, r.text)
