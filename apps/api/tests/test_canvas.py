@@ -426,3 +426,113 @@ def test_bad_filter_clauses_blame_the_request_not_the_saved_app(
                           {"property": "capacity", "op": "gt", "value": 40}]}})
     assert bad.status_code == 422, bad.text
     assert "not supported yet" in bad.json()["detail"]
+
+
+# ---- publishing pins a version (roadmap 1.7) ---------------------------------
+def _publish(client: TestClient, fx: Fixture, app_id: str, scope: str = "workspace") -> dict:
+    r = client.put(f"{base(fx)}/{app_id}/publish", headers=hdr(fx.admin_sub),
+                   json={"scope": scope})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _save(client: TestClient, fx: Fixture, app_id: str, definition: dict) -> dict:
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": definition})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _text_module(text: str) -> dict:
+    return _module({}, {"t1": {"type": {"resolvedName": "CanvasText"},
+                               "props": {"text": text}}})
+
+
+def test_publishing_pins_the_version_viewers_see(client: TestClient, fx: Fixture) -> None:
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("as published"))
+    published = _publish(client, fx, app_id)
+    assert published["published_version"] == published["current_version"] == 1
+
+
+def test_saving_after_publishing_does_not_move_the_viewers(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The failure this exists to remove: today every save is immediately what
+    everyone else sees, half-finished layouts included."""
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("as published"))
+    _publish(client, fx, app_id)
+    after = _save(client, fx, app_id, _text_module("still being worked on"))
+    assert after["current_version"] == 2
+    assert after["published_version"] == 1, "a save moved the published pointer"
+
+    seen = client.get(f"{wbase(fx)}/published-canvas-apps/{app_id}",
+                      headers=hdr(fx.viewer_sub))
+    assert seen.status_code == 200, seen.text
+    body = seen.json()
+    assert body["definition"]["layout"]["t1"]["props"]["text"] == "as published"
+    # The author's progress is still *reported* - "published v1, editing v2" is
+    # the sentence the builder needs, and one number cannot say it.
+    assert body["current_version"] == 2 and body["published_version"] == 1
+
+
+def test_publishing_again_moves_the_viewers_forward(client: TestClient, fx: Fixture) -> None:
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("first"))
+    _publish(client, fx, app_id)
+    _save(client, fx, app_id, _text_module("second"))
+    again = _publish(client, fx, app_id)
+    assert again["published_version"] == 2
+    seen = client.get(f"{wbase(fx)}/published-canvas-apps/{app_id}",
+                      headers=hdr(fx.viewer_sub)).json()
+    assert seen["definition"]["layout"]["t1"]["props"]["text"] == "second"
+
+
+def test_going_private_forgets_the_pin(client: TestClient, fx: Fixture) -> None:
+    """So a later re-publish pins what is current *then*, rather than
+    resurrecting a version nobody has looked at since."""
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("first"))
+    _publish(client, fx, app_id)
+    private = _publish(client, fx, app_id, scope="private")
+    assert private["published_version"] is None
+    _save(client, fx, app_id, _text_module("second"))
+    again = _publish(client, fx, app_id)
+    assert again["published_version"] == 2
+
+
+def test_a_published_app_that_was_never_saved_still_opens(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Publishing before saving pins nothing - there is no version row to point
+    at. Its viewers get the live (empty) definition, which is the same thing,
+    rather than a 404 for a row that does not exist."""
+    app_id = _new_app(client, fx)
+    published = _publish(client, fx, app_id)
+    assert published["published_version"] is None
+    seen = client.get(f"{wbase(fx)}/published-canvas-apps/{app_id}",
+                      headers=hdr(fx.viewer_sub))
+    assert seen.status_code == 200, seen.text
+
+
+def test_variables_resolve_against_the_published_version_not_the_live_one(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The evaluate route reads the document too, so it has to read the same
+    one the widgets do - otherwise a viewer's app renders one version and
+    resolves another."""
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _module(
+        {"v_a": {"id": "v_a", "kind": "string", "label": "A", "default": "published"}}))
+    _publish(client, fx, app_id)
+    _save(client, fx, app_id, _module(
+        {"v_a": {"id": "v_a", "kind": "string", "label": "A", "default": "unpublished"},
+         "v_b": {"id": "v_b", "kind": "string", "label": "B", "default": "new"}}))
+
+    r = client.post(f"{wbase(fx)}/published-canvas-apps/{app_id}/variables/evaluate",
+                    headers=hdr(fx.viewer_sub), json={"values": {}})
+    assert r.status_code == 200, r.text
+    values = r.json()["values"]
+    assert values["v_a"] == "published"
+    assert "v_b" not in values, "a variable added after publishing reached a viewer"

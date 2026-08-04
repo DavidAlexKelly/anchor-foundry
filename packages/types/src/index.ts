@@ -1026,6 +1026,10 @@ export interface CanvasApp {
   current_version: number;
   publish_scope: CanvasPublishScope;
   published_at: string | null;
+  /** The version viewers of a published app see. Null when nothing has been
+   * published; saving never changes it, so "published v3, editing v7" is a
+   * state the builder can and does show. */
+  published_version: number | null;
   created_at: string;
   updated_at: string;
 }

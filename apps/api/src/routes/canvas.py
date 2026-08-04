@@ -48,6 +48,11 @@ class CanvasAppOut(BaseModel):
     current_version: int
     publish_scope: str
     published_at: datetime | None
+    # The version viewers of a published app see (roadmap 1.7). Reported
+    # alongside `current_version` rather than instead of it: "published v3,
+    # editing v7" is the sentence an author needs, and it cannot be said with
+    # one number.
+    published_version: int | None
     created_at: datetime
     updated_at: datetime
 

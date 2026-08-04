@@ -64,9 +64,15 @@ function PublishDialog({
         Private apps are visible only to this project. Publishing lists the app under the
         workspace&apos;s Apps page, read-only, for everyone here or for specific groups.
         It shares the layout, not access to the data: every widget still reads as whoever
-        is looking. Publishing is not a snapshot either - each save you make from here is
-        immediately what they see.
+        is looking. Publishing pins the version they see: saving afterwards does not
+        change their view until you publish again.
       </p>
+      {app.publish_scope !== "private" && app.published_version !== app.current_version && (
+        <p className="login-note">
+          They are on v{app.published_version ?? 0}; you are editing v{app.current_version}.
+          Publishing again moves them to it.
+        </p>
+      )}
       <Field label="Visibility">
         <select value={scope} onChange={(e) => setScope(e.target.value as CanvasPublishScope)}>
           <option value="private">Private - this project only</option>
@@ -179,6 +185,13 @@ function TopBar({
         <p className="sub">
           v{app.current_version}
           {app.publish_scope !== "private" && ` · published (${app.publish_scope})`}
+          {/* The one thing an author of a published app has to be able to see:
+              whether what they are looking at is what everyone else is. Saving
+              no longer moves viewers (roadmap 1.7), which is only an
+              improvement if the difference is visible. */}
+          {app.publish_scope !== "private" &&
+            app.published_version !== app.current_version &&
+            ` · viewers see v${app.published_version ?? 0}`}
           {save.isSuccess && !failure && " · saved"}
         </p>
         {failure && <p className="state error">{failure}</p>}

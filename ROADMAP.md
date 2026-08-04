@@ -194,7 +194,7 @@ Three panels: left (Layout tree / Variables / Events, tabbed), centre (the modul
 
 **Depends on** 1.4.
 
-### 1.7 Publishing, sharing and permissions — **M**
+### 1.7 Publishing, sharing and permissions — **M, the version pointer is done** (`STATUS.md` §88: publishing pins a version, saving no longer moves viewers, and the builder says who is on what). **What remains**: widget-level visibility conditions. Per-module sharing already existed (`STATUS.md` §15: workspace-wide or to named groups).
 
 Published modules with a version pointer, so editing a live app does not change what users see until you publish. Per-module sharing. Widget-level visibility conditions driven by variables (a section that appears only when a set is non-empty — `is empty`/`is not empty` from 1.2 exist precisely for this).
 
