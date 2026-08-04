@@ -2,15 +2,18 @@
 
 /** The repository application (ROADMAP.md phase 2, section 2).
  *
- * Read-only. Editing arrives with the editor in item 2.2, and shipping a
- * viewer first is deliberate: it makes the storage layer decision 0003 settled
- * something a person can actually look at, and every question the editor will
- * need answered - which branch, which commit, what changed - is answered here
- * without a 2 MB dependency in the way.
+ * Four tabs, and they are the four questions a repository has to answer: what
+ * is in it (Files, with the editor and Preview), what happened to it (History),
+ * what else it could be (Branches, and the merge), and what it *does* to this
+ * project (Publish).
  *
  * A repository is a tree at a *ref*, so the ref is in the URL alongside the
  * open file. "Look at this file on this branch" has to be a link, or reviewing
  * anything means describing where to click.
+ *
+ * Nothing here makes a commit live. Publishing is a separate act on its own
+ * tab, and until somebody performs it a commit changes nothing about what runs
+ * - which is the property decision 0003 was chosen for.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +22,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, repositories as repoApi } from "@/lib/api";
 import type {
+  PublishPlan,
   RepositoryBranch,
   RepositoryComparison,
   RepositoryTree,
@@ -32,12 +36,13 @@ const CodeEditor = dynamic(
   { ssr: false, loading: () => <div className="code-editor-loading">Loading editor…</div> },
 );
 
-type Tab = "files" | "history" | "branches";
+type Tab = "files" | "history" | "branches" | "publish";
 
 const TAB_LABELS: Record<Tab, string> = {
   files: "Files",
   history: "History",
   branches: "Branches",
+  publish: "Publish",
 };
 
 export function RepositoryApplication({ resource }: { resource: ResolvedResource }) {
@@ -49,7 +54,10 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
   const rid = resource.kind_id;
 
   const requested = params.get("tab");
-  const tab: Tab = requested === "history" || requested === "branches" ? requested : "files";
+  const tab: Tab =
+    requested === "history" || requested === "branches" || requested === "publish"
+      ? requested
+      : "files";
   const branch = params.get("branch") ?? undefined;
   const commitId = params.get("commit") ?? undefined;
   const openPath = params.get("file") ?? undefined;
@@ -113,7 +121,7 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
 
         <div className="spacer" />
         <nav className="ds-tabs repo-tabs">
-          {(["files", "history", "branches"] as Tab[]).map((t) => (
+          {(["files", "history", "branches", "publish"] as Tab[]).map((t) => (
             <button
               key={t}
               type="button"
@@ -148,6 +156,15 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           rid={rid}
           branch={current}
           onOpenCommit={(id) => setParams({ commit: id, tab: "files", file: undefined })}
+        />
+      )}
+      {tab === "publish" && (
+        <PublishTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          branch={current}
+          pinned={!!commitId}
         />
       )}
       {tab === "branches" && (
@@ -357,6 +374,177 @@ function FilesTab({
   );
 }
 
+
+/** Publish: make the transforms declared at this commit the project's
+ * definitions (roadmap 2.5).
+ *
+ * The plan is shown before the button, for the same reason the merge screen
+ * shows a verdict first: every refusal a publish can make is knowable without
+ * publishing, and a screen that only reports them afterwards teaches people to
+ * press and hope.
+ *
+ * Two things this has to be honest about, and neither is the happy path:
+ *
+ *   * **a file whose source has not changed publishes nothing**, and says so
+ *     rather than manufacturing a version with an empty diff;
+ *   * **a model whose file has stopped declaring a transform is left alone**
+ *     and named. It holds a dataset other things read, and removing a file is
+ *     not the same act as deciding that dataset should stop being produced.
+ */
+function PublishTab({
+  wid,
+  pid,
+  rid,
+  branch,
+  pinned,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  pinned: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [result, setResult] = useState<PublishPlan | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const plan = useQuery({
+    queryKey: ["repo-publish-plan", rid, branch],
+    queryFn: () => repoApi.publishPlan(wid, pid, rid, { branch }),
+    retry: false,
+  });
+
+  const run = useMutation({
+    mutationFn: () => repoApi.publish(wid, pid, rid, { branch }),
+    onSuccess: (done) => {
+      setResult(done);
+      setFailure(null);
+      queryClient.invalidateQueries({ queryKey: ["repo-publish-plan", rid] });
+    },
+    onError: (e: Error) => {
+      setResult(null);
+      setFailure(e instanceof ApiError ? e.message : String(e));
+    },
+  });
+
+  // A plan is against a branch's head. Viewing a pinned commit is history, and
+  // publishing history would quietly make an old snapshot live.
+  if (pinned) {
+    return (
+      <p className="state">
+        You are looking at a commit rather than a branch. Publishing is against a
+        branch&apos;s head — go back to the branch to publish it.
+      </p>
+    );
+  }
+  if (plan.isPending) return <p className="state">Reading {branch}…</p>;
+
+  const steps = result?.steps ?? plan.data?.steps ?? [];
+  const orphaned = result?.orphaned ?? plan.data?.orphaned ?? [];
+  const refusal = plan.isError ? (plan.error as Error).message : null;
+  // After a publish, what is left to write is what the *result* says, not what
+  // the plan said before it ran - a button offering to publish two transforms
+  // it has just published is a small lie, and the next press proves it.
+  const writes = steps.filter((s) =>
+    s.action ? s.action !== "unchanged" && !result : !s.unchanged,
+  ).length;
+
+  return (
+    <div className="repo-publish">
+      <div className="repo-publish-head">
+        <div>
+          <h3>Publish {branch}</h3>
+          <p className="soft">
+            The transforms declared at this commit become this project&apos;s
+            definitions. The source is copied into a version, so deleting the branch
+            afterwards changes nothing about what runs.
+          </p>
+        </div>
+        <button
+          className="btn"
+          type="button"
+          disabled={!!refusal || run.isPending || steps.length === 0}
+          onClick={() => run.mutate()}
+        >
+          {run.isPending
+            ? "Publishing…"
+            : writes === 0 && steps.length > 0
+              ? "Nothing to publish"
+              : `Publish ${writes} transform${writes === 1 ? "" : "s"}`}
+        </button>
+      </div>
+
+      {refusal && <p className="state error">{refusal}</p>}
+      {failure && <p className="state error">{failure}</p>}
+      {result && (
+        <p className="state">
+          Published {result.steps.filter((s) => s.action !== "unchanged").length} of{" "}
+          {result.steps.length}.
+        </p>
+      )}
+
+      {steps.length > 0 && (
+        <table className="repo-publish-table">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Produces</th>
+              <th>Reads</th>
+              <th>What happens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {steps.map((s) => (
+              <tr key={s.path}>
+                <td>
+                  <code>{s.path}</code>
+                </td>
+                <td>
+                  <code>{s.output}</code>
+                  {s.renames && (
+                    <span className="soft"> (was {s.model_name})</span>
+                  )}
+                </td>
+                <td className="soft">
+                  {s.inputs.map((i) => `${i.input_alias} = ${i.dataset}`).join(", ") || "—"}
+                </td>
+                <td className={s.unchanged ? "soft" : ""}>
+                  {s.action ??
+                    (s.unchanged
+                      ? "unchanged"
+                      : s.model_id
+                        ? "updates the live definition"
+                        : "creates a transform")}
+                  {s.version_number ? ` (v${s.version_number})` : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {orphaned.length > 0 && (
+        <div className="repo-publish-orphans">
+          <strong>
+            {orphaned.length} transform{orphaned.length === 1 ? "" : "s"} published from
+            this repository {orphaned.length === 1 ? "is" : "are"} no longer declared here
+          </strong>
+          <ul>
+            {orphaned.map((o) => (
+              <li key={o.id}>
+                <code>{o.source_path}</code> produced {o.name}
+              </li>
+            ))}
+          </ul>
+          <p className="soft">
+            Left alone, not deleted — each still produces a dataset other things may
+            read. Delete the transform if it should stop running.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Branches: create, switch, delete, and merge (roadmap 2.4).
  *

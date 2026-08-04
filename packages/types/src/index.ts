@@ -278,6 +278,39 @@ export interface RepositoryCommit {
   created_at: string;
 }
 
+/** One transform a publish would create or update (roadmap 2.5). */
+export interface PublishStep {
+  path: string;
+  /** The dataset the file declares it produces; also the model's name. */
+  output: string;
+  language: string;
+  model_id: string | null;
+  model_name: string;
+  /** Byte-identical to what is already live, so publishing writes nothing. */
+  unchanged: boolean;
+  renames: boolean;
+  inputs: { dataset_id: string; input_alias: string; dataset: string }[];
+  /** created / updated / unchanged. Absent from a plan, which has done nothing. */
+  action?: "created" | "updated" | "unchanged" | null;
+  version_number?: number | null;
+}
+
+/** A model this repository published from a file the commit no longer declares.
+ * Reported, never deleted: a transform that has run holds a dataset other
+ * things read, and removing a file is not the same act as deciding that
+ * dataset should stop being produced. */
+export interface PublishOrphan {
+  id: string;
+  name: string;
+  source_path: string;
+}
+
+export interface PublishPlan {
+  commit_id: string;
+  steps: PublishStep[];
+  orphaned: PublishOrphan[];
+}
+
 /** A whole snapshot: every file at a commit, path to content. A commit carries
  * a flat manifest rather than a tree, so this is one join. */
 export interface RepositoryTree {

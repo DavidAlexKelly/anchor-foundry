@@ -1804,6 +1804,30 @@ Putting the second in front of the first is the whole item.
 
 **657 API tests green**, 14 new. The browser check drives the panel against real servers: the "nothing has run" state, running from the button, a `fail` with a real red pill that reaches the blocker list and disables Apply, and a proposal where everything passes. It needed a project with actual bytes behind its dataset — the dev seed's datasets have rows in Postgres and nothing on disk, which is a legitimate `error` and not a useful demonstration of anything else.
 
+### 94. Publishing a transform from a repository (this session)
+
+The half of roadmap 2.5 that stayed open. SQL transforms were authored in a textarea against a model; a repository was a place to keep files that nothing read. Migration 0033 had already written down the shape of the join, and then nothing wrote the columns it added:
+
+> "Repositories are where code is *authored*; publishing creates a `model_versions` row that copies the source in. The copy is the point — a record of what ran must not change when a branch does."
+
+**Publishing copies; it does not point.** A published version holds the source, the same as every other definition, and records the commit and path it came from. The test that matters is the one that deletes the branch afterwards and checks the transform still runs what it published.
+
+**Identity is (repository, path), not the model's name** — migration 0038. Identity by name would leave the old model running forever when a file's declared output changed, and start a second one, with nothing in the data afterwards to say which was which. A rename in the file now moves the same model.
+
+**A model authored in a repository refuses direct edits**, and the refusal sits beside the review gate in `models.update` because that is the function which makes a definition live. The reason is not the obvious one: an edit the next publish overwrites is bad, but an edit it *does not* overwrite is worse — until that publish, the repository describes a pipeline that is not the one running, and lineage read from it is wrong in a way nobody can see.
+
+**Publishing is subject to the review gate, and currently refuses under it.** Publishing changes what runs, so letting it through would make `require_code_review` avoidable by putting the code in a repository first — a gate with a documented way round it is not a gate. Reviewing a *publish* needs proposals that understand commits, which do not exist (§92: proposals reference models, repositories hold branches, nothing joins them). So a project that requires review is told, in a sentence, that it cannot publish yet. **That is a real limitation, stated rather than papered over**, and it is the shape of the next piece of work in this section.
+
+**A plan, separate from the act**, for the same reason 2.4's comparison is separate from its merge. Every refusal a publish can make is knowable without publishing — a missing input, two files claiming one output, a name already taken — so `plan()` raises all of them and `publish()` calls `plan()` rather than re-deriving them, which makes the two agree by construction.
+
+**Three refusals, each because the alternative is unrecoverable**: an input the project does not have is named rather than dropped (a transform that runs and is wrong is worse than one that will not publish); two files declaring the same output are refused naming both (applying them in filename order makes the winner depend on what the files are called); and a name already taken by a hand-written transform is refused rather than adopted (silent adoption is how a publish deletes work nobody asked it to touch).
+
+**An orphan is reported, never deleted.** A file that stops declaring a transform — deleted, or edited to drop its declaration, which are the same thing as far as the pipeline is concerned — leaves a model that still produces a dataset other things read. Removing a file is not the same act as deciding that dataset should stop being produced.
+
+**674 API tests green**, 18 new. Twelve mutations, twelve caught after one survived: nothing tested the file that *keeps existing* and loses its declaration, only the one deleted outright.
+
+The browser check drives the Publish tab against real servers: the plan listing only declared files, the button naming how many it would write, publishing, and a second visit finding nothing to do. Two small dishonesties were fixed after looking at the screenshot — the button still offered to publish transforms it had just published, and a full-page empty-state style was being used for a one-line result.
+
 ---
 
 ## What's not started

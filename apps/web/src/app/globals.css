@@ -1180,6 +1180,30 @@ button { font: inherit; cursor: pointer; }
 .repo-merge-commits { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 3px; font-size: 12.5px; }
 .repo-merge-go { margin-top: 10px; }
 
+/* ---- publishing from a repository (ROADMAP phase 2, 2.5) ------------------ */
+.repo-publish { display: grid; gap: 12px; }
+.repo-publish-head { display: flex; align-items: flex-start; gap: 20px; }
+.repo-publish-head h3 { font-size: 14px; margin: 0 0 4px; }
+.repo-publish-head p { margin: 0; font-size: 12.5px; max-width: 70ch; }
+.repo-publish-head .btn { margin-left: auto; white-space: nowrap; }
+.repo-publish-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.repo-publish-table th, .repo-publish-table td {
+  padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.repo-publish-table th { font-weight: 600; color: var(--ink-soft); font-size: 11.5px; }
+.repo-publish-table code { font-family: var(--font-mono); font-size: 11.5px; }
+.repo-publish-orphans {
+  border: 1px solid var(--brass); border-radius: var(--radius);
+  background: var(--brass-wash); padding: 10px 12px; font-size: 12.5px;
+}
+.repo-publish-orphans ul { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 3px; }
+.repo-publish-orphans p { margin: 0; }
+/* `.state` is a whole-page empty state with 48px of air. Inside the publish
+   panel it is a one-line result sitting between two things, so it keeps the
+   colour and loses the padding. */
+.repo-publish > .state { padding: 0; text-align: left; }
+
 /* ---- the review surface (ROADMAP phase 2, 2.7) ---------------------------- */
 /* Reviewing takes the page rather than a sidebar column. Two columns of source
    in a 300px panel is a diff nobody can read, which is the whole point of the

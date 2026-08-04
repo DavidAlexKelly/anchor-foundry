@@ -78,6 +78,11 @@ class ModelOut(BaseModel):
     # 'ignore' | 'warn' | 'block' - what a run does when an input dataset's
     # data-quality health is 'fail' (migration 0022).
     input_health_policy: str = "ignore"
+    # Set when this transform is authored in a repository (db 0038). A model
+    # with a source repository refuses direct edits, so the UI needs to know
+    # before it offers an editor.
+    source_repo_id: UUID | None = None
+    source_path: str | None = None
     last_run_status: str | None = None
     last_run_at: datetime | None = None
     inputs: list[ModelInputOut] = []
@@ -130,6 +135,11 @@ class ModelVersionOut(BaseModel):
     # Set when this version was made by restoring an earlier one, so the
     # history reads "reverted to v2" rather than showing old code reappearing.
     restored_from: int | None
+    # Where this code was authored, when it came from a repository (db 0033,
+    # written by item 2.5's publish). NULL on every version authored directly,
+    # and it stays NULL - back-filling a guess would fabricate provenance.
+    source_commit_id: UUID | None = None
+    source_path: str | None = None
     created_by_email: str | None = None
     created_at: datetime
 

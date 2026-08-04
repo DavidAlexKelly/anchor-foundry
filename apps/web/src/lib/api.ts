@@ -161,6 +161,18 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/commits`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** What publishing this commit would do. Reads only - this is what the
+   * screen shows before anybody presses publish (roadmap 2.5). */
+  publishPlan: (wid: string, pid: string, rid: string, ref: { branch?: string }) =>
+    request<import("./types").PublishPlan>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/publish` +
+        (ref.branch ? `?branch=${encodeURIComponent(ref.branch)}` : ""),
+    ),
+  publish: (wid: string, pid: string, rid: string, ref: { branch?: string }) =>
+    request<import("./types").PublishPlan>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/publish`,
+      { method: "POST", body: JSON.stringify(ref) },
+    ),
   diff: (wid: string, pid: string, rid: string, toCommitId: string) =>
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,

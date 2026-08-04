@@ -7,8 +7,11 @@ gives it a data model, and this gives it a door.
 
 Role floors match every other project-scoped resource: read = viewer, write =
 editor. Committing is a write to the repository, not to what it produces -
-publishing a transform from a commit is a separate act with its own review
-gate (`STATUS.md` §47), and this module deliberately does not do it.
+publishing a transform from a commit is a separate act, at its own endpoint
+(item 2.5), and a commit changes nothing about what runs until somebody
+performs it. A project that requires code review refuses to publish at all,
+with a sentence saying why: reviewing a publish needs proposals that understand
+commits, and they do not.
 
 Creating a repository registers it in the resource registry automatically
 (db 0032's trigger), so a new repository appears in the project browser and
@@ -32,6 +35,7 @@ from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
 from ..services import transform_declarations as declarations
+from ..services import transform_publish as publish_service
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(
@@ -133,6 +137,43 @@ class MergeIn(BaseModel):
     # asks "what would merging this into that do".
     base: str = Field(min_length=1, max_length=100)
     head: str = Field(min_length=1, max_length=100)
+
+
+class PublishStepOut(BaseModel):
+    path: str
+    output: str
+    language: str
+    model_id: UUID | None
+    model_name: str
+    # True when the source is byte-identical to what is already live, so
+    # publishing writes nothing for this file.
+    unchanged: bool
+    renames: bool
+    inputs: list[dict[str, Any]]
+    # created / updated / unchanged. Absent from a plan, which has not done
+    # anything yet.
+    action: str | None = None
+    version_number: int | None = None
+
+
+class OrphanOut(BaseModel):
+    """A model this repository published from a file the commit no longer has.
+    Reported, never deleted: a transform that has run holds a dataset other
+    things read."""
+    id: UUID
+    name: str
+    source_path: str
+
+
+class PublishPlanOut(BaseModel):
+    commit_id: UUID
+    steps: list[PublishStepOut]
+    orphaned: list[OrphanOut]
+
+
+class PublishIn(BaseModel):
+    branch: str | None = None
+    commit_id: UUID | None = None
 
 
 class PreviewIn(BaseModel):
@@ -437,6 +478,108 @@ async def diff_commits(
             else (await repo_service.get_commit(conn, UUID(str(base_id))))["manifest"]
         )
     return DiffOut(**repo_service.diff(base, target["manifest"]))
+
+
+# ---- publishing (ROADMAP.md phase 2, item 2.5) -------------------------------
+async def _publish_target(conn, access, repo_id: UUID, branch, commit_id) -> tuple[dict, UUID]:
+    repo = await repo_service.get_repository(
+        conn, project_id=access.project_id, repo_id=repo_id
+    )
+    ref = await publish_service.resolve_commit(
+        conn, repo_id=repo_id, branch=branch, commit_id=commit_id,
+        default_branch=str(repo["default_branch"]),
+    )
+    return repo, ref
+
+
+@router.get("/{repo_id}/publish", response_model=PublishPlanOut)
+async def plan_publish(
+    repo_id: UUID,
+    branch: str | None = Query(default=None),
+    commit_id: UUID | None = Query(default=None),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> PublishPlanOut:
+    """What publishing this commit would do, without doing it.
+
+    Viewer, because it does none of it - and separate from the POST for the
+    same reason 2.4's comparison is separate from its merge: a screen that can
+    only report a problem after the button has been pressed teaches people to
+    press and hope.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        _, ref = await _publish_target(conn, access, repo_id, branch, commit_id)
+        try:
+            steps = await publish_service.plan(
+                conn, project_id=access.project_id, workspace_id=access.workspace_id,
+                repo_id=repo_id, commit_id=ref,
+            )
+        except publish_service.PublishError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        left = await publish_service.orphaned(
+            conn, project_id=access.project_id, repo_id=repo_id,
+            workspace_id=access.workspace_id, commit_id=ref,
+        )
+    return PublishPlanOut(
+        commit_id=ref,
+        steps=[PublishStepOut(**s) for s in steps],
+        orphaned=[OrphanOut(**{k: o[k] for k in ("id", "name", "source_path")}) for o in left],
+    )
+
+
+@router.post("/{repo_id}/publish", response_model=PublishPlanOut)
+async def publish_transforms(
+    repo_id: UUID,
+    body: PublishIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> PublishPlanOut:
+    """Make the declared transforms at this commit the project's definitions.
+
+    One transaction for the whole commit: a commit is a snapshot, and half of
+    one landing would leave a pipeline matching no state the repository has ever
+    been in.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        _, ref = await _publish_target(conn, access, repo_id, body.branch, body.commit_id)
+        try:
+            steps = await publish_service.publish(
+                conn, project_id=access.project_id, workspace_id=access.workspace_id,
+                repo_id=repo_id, commit_id=ref, actor_id=access.auth.user_id,
+            )
+        except publish_service.PublishError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        left = await publish_service.orphaned(
+            conn, project_id=access.project_id, repo_id=repo_id,
+            workspace_id=access.workspace_id, commit_id=ref,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="repository.publish",
+            resource_type="code_repo",
+            resource_id=repo_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={
+                "commit_id": str(ref),
+                "transforms": [
+                    {"path": s["path"], "output": s["output"], "action": s["action"]}
+                    for s in steps
+                ],
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return PublishPlanOut(
+        commit_id=ref,
+        steps=[PublishStepOut(**{**s, "model_id": s["model_id"]}) for s in steps],
+        orphaned=[OrphanOut(**{k: o[k] for k in ("id", "name", "source_path")}) for o in left],
+    )
 
 
 # ---- preview (ROADMAP.md phase 2, item 2.6) ----------------------------------
