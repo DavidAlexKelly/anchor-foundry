@@ -23,7 +23,8 @@ import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ApiError, code as codeApi } from "@/lib/api";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { CodeFile, CodeHistoryEntry, CodeProposalDetail } from "@/lib/types";
+import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
+import type { CodeFile, CodeHistoryEntry } from "@/lib/types";
 
 function DiffText({ text }: { text: string }) {
   if (!text.trim()) {
@@ -87,144 +88,6 @@ function HistoryList({
   );
 }
 
-/**
- * One open proposal (ROADMAP Code item 4): what it would change, who has said
- * what about it, and — if it cannot be applied — every reason why, in the
- * API's own words. A disabled button with no explanation leaves somebody
- * guessing which rule they tripped.
- */
-function ProposalPanel({
-  workspaceId,
-  projectId,
-  proposalId,
-  canEdit,
-  onClose,
-  onChanged,
-}: {
-  workspaceId: string;
-  projectId: string;
-  proposalId: string;
-  canEdit: boolean;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const [comment, setComment] = useState("");
-  const detail = useQuery({
-    queryKey: ["code-proposal", proposalId],
-    queryFn: () => codeApi.proposal(workspaceId, projectId, proposalId),
-  });
-  const act = useMutation({
-    mutationFn: async (action: "approve" | "request_changes" | "apply" | "withdraw") => {
-      if (action === "apply") return codeApi.applyProposal(workspaceId, projectId, proposalId);
-      if (action === "withdraw") return codeApi.withdrawProposal(workspaceId, projectId, proposalId);
-      return codeApi.review(workspaceId, projectId, proposalId, { verdict: action, comment });
-    },
-    onSuccess: async () => {
-      setComment("");
-      await detail.refetch();
-      onChanged();
-    },
-  });
-
-  const p: CodeProposalDetail | undefined = detail.data;
-  return (
-    <div className="code-detail">
-      <div className="canvas-settings-head">
-        <strong>{p?.summary ?? "Proposal"}</strong>
-        <button
-          type="button"
-          className="btn quiet"
-          style={{ padding: "3px 9px", fontSize: 12 }}
-          onClick={onClose}
-        >
-          Close
-        </button>
-      </div>
-      {detail.isPending && <p className="canvas-widget-empty">Loading…</p>}
-      {p && (
-        <>
-          <p className="code-log-meta">
-            {p.state} · {p.created_by_email ?? "unknown"} ·{" "}
-            {new Date(p.created_at).toLocaleString()}
-          </p>
-          {p.description && <p>{p.description}</p>}
-          {p.files.map((f) => (
-            <div key={f.model_id}>
-              <p className="code-change-file">
-                {f.path}{" "}
-                <span className="code-tree-meta">
-                  proposed against v{f.base_version}
-                  {f.base_version !== f.current_version && ` · live is now v${f.current_version}`}
-                </span>
-              </p>
-              <DiffText text={f.diff} />
-            </div>
-          ))}
-          {p.reviews.length > 0 && (
-            <ul className="code-log">
-              {p.reviews.map((r) => (
-                <li key={r.id} className="code-log-meta">
-                  <span className={`chip${r.verdict === "approve" ? "" : " brass"}`}>
-                    {r.verdict === "approve" ? "approved" : "changes requested"}
-                  </span>{" "}
-                  {r.reviewer_email ?? "unknown"}
-                  {r.comment ? ` — ${r.comment}` : ""}
-                </li>
-              ))}
-            </ul>
-          )}
-          {p.blockers.length > 0 && (
-            <ul className="code-blockers">
-              {p.blockers.map((b) => (
-                <li key={b}>{b}</li>
-              ))}
-            </ul>
-          )}
-          {act.isError && (
-            <div className="form-error">
-              {act.error instanceof ApiError ? act.error.message : "That didn't work."}
-            </div>
-          )}
-          {canEdit && p.state === "open" && (
-            <>
-              <input
-                type="text"
-                value={comment}
-                placeholder="Comment (optional)"
-                aria-label="Review comment"
-                onChange={(e) => setComment(e.target.value)}
-              />
-              <div className="row-actions">
-                <button type="button" className="btn quiet" onClick={() => act.mutate("approve")}>
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  className="btn quiet"
-                  onClick={() => act.mutate("request_changes")}
-                >
-                  Request changes
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={p.blockers.length > 0 || act.isPending}
-                  onClick={() => act.mutate("apply")}
-                >
-                  Apply
-                </button>
-                <button type="button" className="btn quiet" onClick={() => act.mutate("withdraw")}>
-                  Withdraw
-                </button>
-              </div>
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
 export default function CodePage() {
   const params = useParams<{ workspace: string; project: string }>();
   const { workspace } = useWorkspaceBySlug(params.workspace);
@@ -234,6 +97,9 @@ export default function CodePage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [summary, setSummary] = useState("");
+  // Prefilled, and editable to nothing. A template that cannot be emptied is a
+  // template that gets submitted with its headings still blank.
+  const [description, setDescription] = useState(DESCRIPTION_TEMPLATE);
   const [viewing, setViewing] = useState<CodeHistoryEntry | null>(null);
   const [openProposal, setOpenProposal] = useState<string | null>(null);
 
@@ -293,6 +159,7 @@ export default function CodePage() {
   const refreshAll = async () => {
     setDrafts({});
     setSummary("");
+    setDescription(DESCRIPTION_TEMPLATE);
     await queryClient.invalidateQueries({ queryKey: ["code-tree", project?.id] });
     await queryClient.invalidateQueries({ queryKey: ["code-history", project?.id] });
     await queryClient.invalidateQueries({ queryKey: ["code-proposals", project?.id] });
@@ -311,6 +178,7 @@ export default function CodePage() {
     mutationFn: () =>
       codeApi.propose(workspace!.id, project!.id, {
         summary,
+        description,
         changes: Object.entries(drafts).map(([model_id, code]) => ({ model_id, code })),
       }),
     onSuccess: async (created) => {
@@ -373,7 +241,30 @@ export default function CodePage() {
         </div>
       )}
 
-      {files.length > 0 && (
+      {openProposal && workspace && project && (
+        <div className="code-review-mode">
+          <div className="canvas-settings-head">
+            <strong>Reviewing a proposal</strong>
+            <button
+              type="button"
+              className="btn quiet"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              onClick={() => setOpenProposal(null)}
+            >
+              Back to the editor
+            </button>
+          </div>
+          <ReviewSurface
+            workspaceId={workspace.id}
+            projectId={project.id}
+            proposalId={openProposal}
+            canReview={canEdit}
+            onChanged={refreshAll}
+          />
+        </div>
+      )}
+
+      {files.length > 0 && !openProposal && (
         <div className="code-shell">
           <aside className="code-tree">
             <p className="field-label">Files</p>
@@ -432,6 +323,16 @@ export default function CodePage() {
                   aria-label="Change summary"
                   onChange={(e) => setSummary(e.target.value)}
                 />
+                {reviewRequired && (
+                  <textarea
+                    className="code-description"
+                    rows={7}
+                    value={description}
+                    aria-label="Proposal description"
+                    placeholder="What this changes, why, and how it was checked"
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                )}
                 {(save.isError || propose.isError) && (
                   <div className="form-error">
                     {(save.error ?? propose.error) instanceof ApiError
@@ -511,16 +412,6 @@ export default function CodePage() {
                   ))}
                 </ul>
               </>
-            )}
-            {openProposal && workspace && project && (
-              <ProposalPanel
-                workspaceId={workspace.id}
-                projectId={project.id}
-                proposalId={openProposal}
-                canEdit={canEdit}
-                onClose={() => setOpenProposal(null)}
-                onChanged={refreshAll}
-              />
             )}
             <p className="field-label">History</p>
             {history.data && <HistoryList entries={history.data} onOpen={setViewing} />}

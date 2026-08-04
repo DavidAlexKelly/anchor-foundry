@@ -949,6 +949,40 @@ export const code = {
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/reviews`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** Anchor a remark to a line, or to the file when `line` is absent. Viewer
+   * level, unlike a verdict: asking a question is not approving. */
+  comment: (
+    wid: string,
+    pid: string,
+    id: string,
+    input: { model_id: string; side: "live" | "proposed"; line?: number | null; body: string },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/comments`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  resolveComment: (
+    wid: string,
+    pid: string,
+    id: string,
+    commentId: string,
+    resolved: boolean,
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/comments/${commentId}`,
+      { method: "PATCH", body: JSON.stringify({ resolved }) },
+    ),
+  /** Per-file resolution. Cleared by an edit to the proposal, without a write. */
+  markFileRead: (
+    wid: string,
+    pid: string,
+    id: string,
+    input: { model_id: string; read: boolean },
+  ) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/read`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
   applyProposal: (wid: string, pid: string, id: string) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/apply`,

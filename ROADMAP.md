@@ -260,9 +260,11 @@ Run the transform against a limited sample of its inputs, without committing, an
 
 **Python previews are refused with a sentence and are the remaining half.** Customer Python runs in an isolated task (decision 0004), so previewing it means dispatching Fargate and waiting — a job with a status rather than an HTTP response. That needs a preview-run record and something to poll, which is its own item.
 
-### 2.7 Pull request review UI — **M**
+### ~~2.7 Pull request review UI~~ — **done** (`STATUS.md` §92, migration 0036)
 
 Anchor already has proposals, reviews, blockers and the review gate. What it lacks is the *review surface*: side-by-side diffs, inline comments anchored to lines, per-file resolution, a description template. Build the UI onto the existing service rather than a second workflow beside it.
+
+Built onto the existing service, as asked. One idea carries it: a remark about a line is a claim about a *version* of the file, so a comment records the `files_updated_at` it was written against and goes outdated — shown and marked, never hidden — when the proposal is edited. The same derivation gives per-file resolution its meaning. The alignment is computed from `SequenceMatcher` opcodes server-side, not by parsing a unified diff in the browser. The description template is built in rather than per project: a configurable one belongs in the repository, and proposals are not connected to repositories.
 
 ### 2.8 Checks — **M**
 

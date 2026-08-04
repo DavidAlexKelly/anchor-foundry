@@ -386,3 +386,296 @@ def test_the_proposal_list_filters_by_state(
     client.post(f"{cbase(fx)}/proposals/{proposal['id']}/withdraw", headers=hdr(fx.editor_sub))
     still_open = client.get(f"{cbase(fx)}/proposals?state=open", headers=hdr(fx.viewer_sub))
     assert proposal["id"] not in {p["id"] for p in still_open.json()}
+
+
+# ---- the review surface (ROADMAP.md phase 2, item 2.7) -----------------------
+def test_a_side_by_side_diff_carries_both_sides_line_numbers() -> None:
+    """A comment anchors to a line of a file. Recovering that from a unified
+    diff means re-reading hunk headers and counting, so it is computed from
+    the opcodes instead."""
+    from src.services.code import side_by_side
+
+    rows = side_by_side("a\nb\nc", "a\nB\nc\nd")
+    assert [(r["kind"], r["live_line"], r["proposed_line"]) for r in rows] == [
+        ("same", 1, 1),
+        ("changed", 2, 2),
+        ("same", 3, 3),
+        ("added", None, 4),
+    ]
+    assert rows[1]["live_text"] == "b" and rows[1]["proposed_text"] == "B"
+
+
+def test_an_uneven_replacement_pairs_what_it_can_and_no_more() -> None:
+    """Three lines becoming five is three changes and two additions, not five
+    of anything - the alignment has to stop where the pairing does."""
+    from src.services.code import side_by_side
+
+    rows = side_by_side("1\n2\n3", "a\nb\nc\nd\ne")
+    kinds = [r["kind"] for r in rows]
+    assert kinds == ["changed", "changed", "changed", "added", "added"]
+    assert [r["proposed_line"] for r in rows] == [1, 2, 3, 4, 5]
+    assert [r["live_line"] for r in rows] == [1, 2, 3, None, None]
+
+
+def test_a_deletion_is_one_sided() -> None:
+    from src.services.code import side_by_side
+
+    rows = side_by_side("keep\ngone\n", "keep\n")
+    assert [(r["kind"], r["live_text"], r["proposed_text"]) for r in rows] == [
+        ("same", "keep", "keep"),
+        ("removed", "gone", None),
+    ]
+
+
+def test_a_comment_anchors_to_a_line_and_comes_back_on_the_file(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "side": "proposed", "line": 1,
+              "body": "why is val needed here?"},
+    )
+    assert r.status_code == 201, r.text
+    detail = r.json()
+    assert len(detail["comments"]) == 1
+    comment = detail["comments"][0]
+    assert comment["line"] == 1 and comment["side"] == "proposed"
+    assert comment["outdated"] is False and comment["resolved_at"] is None
+    assert comment["author_email"]
+    # And it arrives on the file it hangs on, not only in the timeline.
+    assert [c["id"] for c in detail["files"][0]["comments"]] == [comment["id"]]
+
+
+def test_a_viewer_may_comment_but_still_may_not_approve(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """A verdict is editor-level because approving a change is as consequential
+    as making one. Asking a question about a line is not a verdict."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    said = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "side": "proposed", "line": 1, "body": "a question"},
+    )
+    assert said.status_code == 201, said.text
+    approved = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/reviews", headers=hdr(fx.viewer_sub),
+        json={"verdict": "approve", "comment": ""},
+    )
+    assert approved.status_code == 403, approved.text
+
+
+def test_the_author_may_answer_a_question_on_their_own_proposal(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """They may not approve it - that is checked elsewhere - but a proposal
+    whose author cannot reply is a one-directional conversation."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.editor_sub),
+        json={"model_id": model, "side": "proposed", "line": 1, "body": "because X"},
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_editing_a_proposal_outdates_the_comments_written_about_it(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """Line 14 of the code somebody read is not line 14 of the code somebody
+    else will apply. The comment is marked, not hidden: it said something true
+    about the code it was written against."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "side": "proposed", "line": 1, "body": "on the old text"},
+    )
+    edited = client.patch(
+        f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.editor_sub),
+        json={"changes": [{"model_id": model, "code": "SELECT id, val, val*2 AS d FROM raw"}]},
+    )
+    assert edited.status_code == 200, edited.text
+    assert len(edited.json()["comments"]) == 1
+    assert edited.json()["comments"][0]["outdated"] is True
+    assert edited.json()["comments"][0]["body"] == "on the old text"
+
+
+def test_a_comment_cannot_hang_on_a_file_the_proposal_does_not_change(
+    client: TestClient, fx: Fixture, model: str, source: str
+) -> None:
+    """A remark that exists and renders nowhere is worse than one refused."""
+    other = client.post(
+        f"{pbase(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:6]}", "code": "SELECT id FROM raw",
+              "inputs": [{"dataset_id": source, "input_alias": "raw"}]},
+    ).json()["id"]
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": other, "side": "proposed", "line": 1, "body": "nowhere"},
+    )
+    assert r.status_code == 422, r.text
+    assert "does not change that file" in r.json()["detail"]
+
+
+def test_a_comment_can_be_settled_and_unsettled(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    made = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "side": "proposed", "line": 1, "body": "settle me"},
+    ).json()["comments"][0]
+
+    on = client.patch(
+        f"{cbase(fx)}/proposals/{p['id']}/comments/{made['id']}",
+        headers=hdr(fx.viewer_sub), json={"resolved": True},
+    )
+    assert on.status_code == 200, on.text
+    assert on.json()["comments"][0]["resolved_at"] is not None
+
+    off = client.patch(
+        f"{cbase(fx)}/proposals/{p['id']}/comments/{made['id']}",
+        headers=hdr(fx.viewer_sub), json={"resolved": False},
+    )
+    assert off.json()["comments"][0]["resolved_at"] is None
+
+
+def test_resolution_survives_an_edit_while_the_anchor_does_not(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """Two different claims. "This line moved" is derived from the files;
+    "we settled this" is a decision somebody made, and unsettling it silently
+    would put the conversation back without anybody saying anything."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    made = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "side": "proposed", "line": 1, "body": "settled"},
+    ).json()["comments"][0]
+    client.patch(f"{cbase(fx)}/proposals/{p['id']}/comments/{made['id']}",
+                 headers=hdr(fx.viewer_sub), json={"resolved": True})
+
+    after = client.patch(
+        f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.editor_sub),
+        json={"changes": [{"model_id": model, "code": "SELECT id, val, 1 AS z FROM raw"}]},
+    ).json()
+    assert after["comments"][0]["outdated"] is True
+    assert after["comments"][0]["resolved_at"] is not None
+
+
+def test_marking_a_file_read_is_per_reviewer_and_cleared_by_an_edit(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """The same rule an approval follows: a mark from before the last edit
+    says somebody read a file that no longer exists in that form."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    marked = client.put(
+        f"{cbase(fx)}/proposals/{p['id']}/read", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "read": True},
+    )
+    assert marked.status_code == 200, marked.text
+    read_by = marked.json()["files"][0]["read_by"]
+    assert len(read_by) == 1 and read_by[0]["reviewer_email"]
+
+    after = client.patch(
+        f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.editor_sub),
+        json={"changes": [{"model_id": model, "code": "SELECT id, val, 2 AS z FROM raw"}]},
+    )
+    assert after.json()["files"][0]["read_by"] == []
+
+
+def test_unmarking_a_file_removes_only_that_reviewers_mark(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    for sub in (fx.viewer_sub, fx.admin_sub):
+        client.put(f"{cbase(fx)}/proposals/{p['id']}/read", headers=hdr(sub),
+                   json={"model_id": model, "read": True})
+    both = client.get(f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.viewer_sub))
+    assert len(both.json()["files"][0]["read_by"]) == 2
+
+    cleared = client.put(
+        f"{cbase(fx)}/proposals/{p['id']}/read", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "read": False},
+    )
+    assert len(cleared.json()["files"][0]["read_by"]) == 1
+
+
+def test_a_closed_proposal_cannot_be_commented_on(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    client.post(f"{cbase(fx)}/proposals/{p['id']}/withdraw", headers=hdr(fx.editor_sub))
+    r = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "side": "proposed", "line": 1, "body": "too late"},
+    )
+    assert r.status_code == 422, r.text
+    assert "closed" in r.json()["detail"]
+
+
+def test_the_proposal_detail_carries_aligned_rows_for_every_file(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    detail = client.get(
+        f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.viewer_sub)
+    ).json()
+    rows = detail["files"][0]["rows"]
+    assert rows and all(r["kind"] in ("same", "added", "removed", "changed") for r in rows)
+    # The proposed side of the rows reconstructs the proposed file exactly -
+    # a rendering that cannot be read back is a rendering that can drift.
+    rebuilt = "\n".join(
+        r["proposed_text"] for r in rows if r["proposed_text"] is not None
+    )
+    assert rebuilt == detail["files"][0]["code"].rstrip("\n")
+
+
+def test_an_outsider_cannot_comment(client: TestClient, fx: Fixture, model: str) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    for sub in (fx.outsider_sub, fx.foreign_sub):
+        r = client.post(
+            f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(sub),
+            json={"model_id": model, "side": "proposed", "line": 1, "body": "hello"},
+        )
+        assert r.status_code in (403, 404), (sub, r.text)
+
+
+def test_a_comment_is_anchored_to_a_version_not_to_a_moment(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """The anchor is the proposal's own `files_updated_at`, not the API's
+    clock. Two clocks deciding whether a comment is current is one clock too
+    many - and the one that matters is the one the files are stamped with."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    detail = client.post(
+        f"{cbase(fx)}/proposals/{p['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": model, "side": "proposed", "line": 1, "body": "anchored"},
+    ).json()
+    assert detail["comments"][0]["anchored_at"] == detail["files_updated_at"]
+
+
+def test_a_comment_belonging_to_another_proposal_is_not_resolvable_here(
+    client: TestClient, fx: Fixture, model: str, source: str
+) -> None:
+    """An id in a path is never trusted to belong to the resource in the path -
+    the same rule the repository routes enforce for commits."""
+    other_model = client.post(
+        f"{pbase(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": f"Second {uuid.uuid4().hex[:6]}", "code": "SELECT id FROM raw",
+              "inputs": [{"dataset_id": source, "input_alias": "raw"}]},
+    ).json()["id"]
+    one = propose(client, fx, model, "SELECT id, val FROM raw")
+    two = propose(client, fx, other_model, "SELECT id, val FROM raw", summary="Other")
+    made = client.post(
+        f"{cbase(fx)}/proposals/{two['id']}/comments", headers=hdr(fx.viewer_sub),
+        json={"model_id": other_model, "side": "proposed", "line": 1, "body": "over here"},
+    ).json()["comments"][0]
+
+    r = client.patch(
+        f"{cbase(fx)}/proposals/{one['id']}/comments/{made['id']}",
+        headers=hdr(fx.viewer_sub), json={"resolved": True},
+    )
+    assert r.status_code == 404, r.text
+
+    still = client.get(f"{cbase(fx)}/proposals/{two['id']}", headers=hdr(fx.viewer_sub))
+    assert still.json()["comments"][0]["resolved_at"] is None

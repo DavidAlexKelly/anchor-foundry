@@ -1164,6 +1164,52 @@ export interface CodeChangeSet {
 // the proposal rather than in model_versions, which is what a run resolves
 // against and must never hold code nobody approved.
 
+/** One line of a side-by-side diff, carrying both sides' line numbers.
+ *
+ *   same    - present on both sides, unchanged
+ *   added   - only on the proposed side
+ *   removed - only on the live side
+ *   changed - a replacement, so both sides have text and they differ
+ */
+export interface CodeDiffRow {
+  kind: "same" | "added" | "removed" | "changed";
+  live_line: number | null;
+  live_text: string | null;
+  proposed_line: number | null;
+  proposed_text: string | null;
+}
+
+export interface CodeProposalComment {
+  id: string;
+  model_id: string;
+  /** Which column of the diff it hangs on. */
+  side: "live" | "proposed";
+  /** Null is a remark about the file rather than about a line. */
+  line: number | null;
+  body: string;
+  author_id: string | null;
+  author_email: string | null;
+  created_at: string;
+  /** The proposal's `files_updated_at` this was said about: a version, not a
+   * moment. */
+  anchored_at: string;
+  /** The proposal has been edited since, so the line this points at is not the
+   * line it was written about. Shown and marked, never hidden. */
+  outdated: boolean;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
+/** "I have read this file", per reviewer. Only marks against the *current*
+ * files are returned - one made before the last edit says somebody read a file
+ * that no longer exists in that form. */
+export interface CodeFileMark {
+  model_id: string;
+  reviewer_id: string;
+  reviewer_email: string | null;
+  marked_at: string;
+}
+
 export interface CodeProposalFile {
   model_id: string;
   model_name: string;
@@ -1174,6 +1220,10 @@ export interface CodeProposalFile {
   base_version: number;
   current_version: number;
   diff: string;
+  /** The same comparison as `diff`, aligned into rows with line numbers. */
+  rows: CodeDiffRow[];
+  comments: CodeProposalComment[];
+  read_by: CodeFileMark[];
 }
 
 export interface CodeReview {
@@ -1204,6 +1254,9 @@ export interface CodeProposal {
 export interface CodeProposalDetail extends CodeProposal {
   files: CodeProposalFile[];
   reviews: CodeReview[];
+  /** The whole conversation in one list, for a timeline rather than the
+   * per-file view. Same rows as `files[].comments`, not a second store. */
+  comments: CodeProposalComment[];
   /** Every reason this cannot be applied, in the words the API used. */
   blockers: string[];
 }
