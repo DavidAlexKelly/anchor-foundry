@@ -1245,6 +1245,11 @@ button { font: inherit; cursor: pointer; }
    column rather than trailing the label and wrapping. */
 .canvas-filter-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
+.canvas-table-pager {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px;
+}
+.canvas-table-pager .canvas-widget-empty { margin: 0; font-variant-numeric: tabular-nums; }
+
 .canvas-button-wrap { display: inline-flex; align-items: center; gap: 6px; }
 .canvas-button-wrap .canvas-widget-empty { margin: 0; }
 

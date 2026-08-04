@@ -301,6 +301,7 @@ async def evaluate_object_set(
     filters: tuple[Any, ...],
     limit: int,
     offset: int,
+    sort: str = "recent",
 ) -> tuple[list[dict[str, Any]], int]:
     """A filtered set and its size, Postgres edition (roadmap 1.2).
 
@@ -323,7 +324,7 @@ async def evaluate_object_set(
         SELECT i.id, i.object_type_id, i.primary_key, i.properties, i.updated_at
           FROM object_instances i
          WHERE {predicate}
-         ORDER BY i.updated_at DESC, i.id
+         ORDER BY {_order_by(sort)}
          LIMIT :limit OFFSET :offset
         """,
         {**params, "limit": max(1, min(limit, INSTANCE_PAGE_SIZE)), "offset": max(0, offset)},
@@ -334,6 +335,31 @@ async def evaluate_object_set(
         params,
     )
     return [dict(r) for r in rows], int(total_row["n"]) if total_row else 0
+
+
+def _order_by(sort: str) -> str:
+    """One of `object_sets.SORTS`, as SQL.
+
+    Interpolated into the statement rather than bound, which is safe only
+    because the value is looked up in a fixed table here - it never reaches SQL
+    unless it matched one of four literals. An unknown sort falls back to the
+    default rather than raising: the route validates first, so reaching this
+    with anything else means something bypassed it, and ordering by the default
+    is a better answer than a 500 for a difference nobody can see.
+
+    Every one of them ties on `primary_key`, so rows sharing an `updated_at` -
+    routine after a bulk sync, which writes them in one instant - page
+    consistently, and identically to the OpenSearch store.
+    """
+    from . import object_sets
+
+    clauses = {
+        "key": "i.primary_key ASC",
+        "-key": "i.primary_key DESC",
+        "oldest": "i.updated_at ASC, i.primary_key ASC",
+        "recent": "i.updated_at DESC, i.primary_key ASC",
+    }
+    return clauses.get(sort, clauses[object_sets.DEFAULT_SORT])
 
 
 def _set_predicate(

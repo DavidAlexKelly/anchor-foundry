@@ -754,6 +754,8 @@ export function CanvasObjectTable({
   searchParameter = null,
   objectSetVariable = null,
   pageSize = 25,
+  columns = "",
+  sort = "recent",
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -766,6 +768,15 @@ export function CanvasObjectTable({
    * same thing and stay for apps that have not been rewired. */
   objectSetVariable?: string | null;
   pageSize?: number;
+  /** Which properties to show, in order, comma-separated. Blank means all of
+   * them - a table that showed nothing until somebody configured it would look
+   * broken on the first drop. */
+  columns?: string;
+  /** One of the server's `object_sets.SORTS`. Sorting *by a property* is
+   * refused there rather than here, because untyped properties would order
+   * differently on the two stores; the settings panel therefore offers what
+   * the server accepts rather than a column-header click that sometimes 422s. */
+  sort?: string;
 }) {
   const {
     id: nodeId,
@@ -778,14 +789,35 @@ export function CanvasObjectTable({
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
   const usingSet = !!objectSetVariable;
+  const [offset, setOffset] = useState(0);
+
+  // Paging is *runtime* state, like a page or a variable value (decision 0002
+  // §3): a saved app opens on the first page for every viewer. It also has to
+  // reset when the set changes, or narrowing a filter while on page 3 leaves a
+  // viewer looking at an empty table that has rows.
+  const setKey = JSON.stringify(setDefinition ?? null);
+  const [lastKey, setLastKey] = useState(setKey);
+  if (setKey !== lastKey) {
+    setLastKey(setKey);
+    setOffset(0);
+  }
 
   const setPage = useQuery({
-    queryKey: ["canvas-object-set", objectSetVariable, JSON.stringify(setDefinition ?? null), pageSize],
-    queryFn: () => objApi.evaluateObjectSet(workspaceId, setDefinition, { limit: pageSize }),
+    queryKey: ["canvas-object-set", objectSetVariable, setKey, pageSize, offset, sort],
+    queryFn: () =>
+      objApi.evaluateObjectSet(workspaceId, setDefinition, {
+        limit: pageSize,
+        offset,
+        sort,
+      }),
     // Not until the definition has resolved. Querying with `undefined` would
     // ask the server to evaluate nothing and render "0 objects", which is an
     // answer this widget does not have yet.
     enabled: usingSet && !!setDefinition,
+    // The previous page stays on screen while the next one loads, rather than
+    // the table emptying and jumping - the rows are about to be replaced, not
+    // gone.
+    placeholderData: (previous) => previous,
   });
 
   const effectiveTypeId = usingSet
@@ -818,7 +850,17 @@ export function CanvasObjectTable({
     enabled: !!objectTypeId,
   });
 
-  const properties = type.data?.properties ?? [];
+  const all = type.data?.properties ?? [];
+  // Configured order wins, and a name that matches nothing is dropped rather
+  // than rendered as an empty column: a property can be removed from the type
+  // long after a table was pointed at it.
+  const wanted = String(columns || "")
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean);
+  const properties = wanted.length
+    ? wanted.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
+    : all;
 
   // One shape for both paths, so everything below reads the same. The set path
   // returns `instances`; the explore path returns `items`.
@@ -908,7 +950,30 @@ export function CanvasObjectTable({
               </tbody>
             </table>
           </div>
-          {total > rows.length && (
+          {usingSet && total > rows.length && (
+            <div className="canvas-table-pager">
+              <button
+                type="button"
+                className="btn quiet"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - pageSize))}
+              >
+                Previous
+              </button>
+              <span className="canvas-widget-empty">
+                {offset + 1}–{offset + rows.length} of {total.toLocaleString()}
+              </span>
+              <button
+                type="button"
+                className="btn quiet"
+                disabled={offset + rows.length >= total}
+                onClick={() => setOffset(offset + pageSize)}
+              >
+                Next
+              </button>
+            </div>
+          )}
+          {!usingSet && total > rows.length && (
             <p className="canvas-widget-empty">
               Showing the first {rows.length} of {total.toLocaleString()}.
             </p>
@@ -924,7 +989,7 @@ function ObjectTableSettings() {
   const { declared } = useCanvasVariables();
   const {
     objectTypeId, filterProperty, filterParameter, searchParameter,
-    objectSetVariable, pageSize,
+    objectSetVariable, pageSize, columns, sort,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -933,6 +998,8 @@ function ObjectTableSettings() {
     searchParameter: node.data.props.searchParameter,
     objectSetVariable: node.data.props.objectSetVariable,
     pageSize: node.data.props.pageSize,
+    columns: node.data.props.columns,
+    sort: node.data.props.sort,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const types = useQuery({
@@ -1029,7 +1096,7 @@ function ObjectTableSettings() {
         <span className="field-hint">Substring across every property — for a search box</span>
       </label>
       <label className="field">
-        <span className="field-label">Rows</span>
+        <span className="field-label">Rows per page</span>
         <input
           type="number"
           value={pageSize ?? 25}
@@ -1040,6 +1107,37 @@ function ObjectTableSettings() {
           }
         />
       </label>
+      <label className="field">
+        <span className="field-label">Columns</span>
+        <input
+          type="text"
+          value={columns ?? ""}
+          placeholder="every property"
+          onChange={(e) => setProp((p: { columns: string }) => (p.columns = e.target.value))}
+        />
+        <span className="field-hint">
+          Property names in the order to show them. Blank shows all of them.
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Sort by</span>
+        <select
+          value={sort ?? "recent"}
+          onChange={(e) => setProp((p: { sort: string }) => (p.sort = e.target.value))}
+        >
+          <option value="recent">Last changed, newest first</option>
+          <option value="oldest">Last changed, oldest first</option>
+          <option value="key">Key, A–Z</option>
+          <option value="-key">Key, Z–A</option>
+        </select>
+        {/* Not a click on a column header, deliberately. Properties are stored
+            untyped, so the server refuses to order by one - and a header that
+            sometimes errored would be worse than one that never invited the
+            click. See `object_sets.SORTS`. */}
+        <span className="field-hint">
+          Sorting by a property needs its declared type behind it — see the ontology roadmap
+        </span>
+      </label>
     </>
   );
 }
@@ -1048,7 +1146,7 @@ CanvasObjectTable.craft = {
   displayName: "Object table",
   props: {
     objectTypeId: null, filterProperty: null, filterParameter: null,
-    searchParameter: null, pageSize: 25,
+    searchParameter: null, pageSize: 25, columns: "", sort: "recent",
   },
   related: { settings: ObjectTableSettings },
 };
