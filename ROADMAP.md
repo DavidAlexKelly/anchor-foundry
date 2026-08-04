@@ -163,7 +163,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 ### 1.5 The widget library — **XL, and incremental**
 
 Anchor has eight: Container, Text, Filter, Dataset table, Object table, Map, Chart, Action form.
-Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button, §82 the Filter List, §83 and §84 upgraded the Object Table, and Metric Card is done (§74).
+Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button, §82 the Filter List, §83 and §84 upgraded the Object Table, §86 the Map, §87 the Action form, and Metric Card is done (§74).
 
 Build toward Foundry's set, in the order below (roughly descending value per unit of work):
 
@@ -175,8 +175,8 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 | 1 | ~~**Metric Card**~~ | **Done** (`STATUS.md` §74) |
 | 2 | ~~**Tabs**~~ | **Done** (`STATUS.md` §77), and it navigates through the event system rather than around it |
 | 2 | **Charts** (upgrade) | Object-set input rather than dataset-only; drill-down emitting a filtered set |
-| 2 | **Map** (upgrade) | Object-set input; selection emitting a set. The clustering and pan work (`STATUS.md` §37) carries over |
-| 2 | **Inline Action Form** | Editing objects from inside the app; upgrade of the existing Action form |
+| 2 | **Map** (upgrade) | **Object-set input and pin selection done** (`STATUS.md` §86); the clustering and pan work (§37) carried over unchanged. **What remains**: selection emitting a *set* — drawing an area and filtering by it needs numeric comparison on lat/lon, which is the same untyped-property blocker as ordered operators, numeric aggregations and property sorts |
+| 2 | ~~**Inline Action Form**~~ | **Done** (`STATUS.md` §87): bound to a `single_object` variable, the form edits the object somebody picked, prefilled with its current values, and writes the result back into the variable so nothing on screen shows what you just replaced |
 | 3 | **Object List / Card List** | Card-shaped alternative to the table |
 | 3 | **Pivot Table** | Cross-tab over an object set |
 | 3 | **Search / Prominent Terms Filter** | Foundry's example apps lean on these |
@@ -186,9 +186,11 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 
 **Rule for every widget:** it consumes input variables and emits output variables. A widget that reaches directly for a dataset id is a widget that cannot be wired to anything, which is the flaw in the current eight.
 
-### 1.6 The builder shell — **M**
+### 1.6 The builder shell — **M, the three panels exist** (`STATUS.md` §79 the layout tree, §85 the events panel). **What remains**: nothing structural — Edit/View already exist as Preview and the viewer route.
 
 Three panels: left (Layout tree / Variables / Events, tabbed), centre (the module), right (configuration for the selection). Plus **Edit and View modes** — Workshop's edit/preview split is not a nicety, it is how you check an app before publishing it. Anchor's viewer route (`/[workspace]/apps/[appId]`, `STATUS.md` §44) is the seed of View mode.
+
+*Deviation: **Variables and Events are on the right, beside the selected widget's settings; the left holds the layout tree and the widget palette.** Both panels are things you open *because of* a widget you just selected — wiring the button you are looking at, binding the table you just dropped — and putting them a column away from the settings you arrived from would make every wiring job a diagonal. The left column keeps what you reach for before selecting anything: the structure, and the things you can add.*
 
 **Depends on** 1.4.
 

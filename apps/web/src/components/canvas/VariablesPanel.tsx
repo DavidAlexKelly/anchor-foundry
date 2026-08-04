@@ -42,21 +42,26 @@ const KINDS: WorkshopVariableKind[] = [
   "object_set",
 ];
 
-/** Matches `TRANSFORMS` in the service. `object_property` and
- * `object_set_aggregation` are deliberately absent - they read the ontology,
- * so the API refuses them until they are built, and offering them here would
- * be offering a choice that fails on save. */
+/** Matches `TRANSFORMS` in the service. `object_set_aggregation` is
+ * deliberately absent - it reads the ontology, so the API refuses it until it
+ * is built, and offering it here would be offering a choice that fails on
+ * save. `object_property` used to be absent for the same reason and is here
+ * now (§84): a `single_object` variable holds the object somebody picked, so
+ * reading a property off it needs no round trip. */
 const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] = [
   { value: "concat", label: "Join text", arity: "one or more" },
   { value: "if_else", label: "If / else", arity: "condition, then, else" },
   { value: "cast", label: "Convert type", arity: "one" },
   { value: "is_empty", label: "Is empty", arity: "one" },
   { value: "is_not_empty", label: "Is not empty", arity: "one" },
+  { value: "object_property", label: "A property of an object", arity: "one" },
 ];
 
-/** Only offered on `object_set` variables, and the only thing offered there -
- * narrowing a set is what a derived object set *is*. */
-const SET_TRANSFORM: WorkshopTransform = "filter_set";
+/** Offered on `object_set` variables, and the only things offered there -
+ * narrowing a set is what a derived object set *is*. Two ways to narrow one:
+ * `filter_set` against a value a control holds, `narrow_set` against a list of
+ * clauses a Filter List writes. */
+const SET_TRANSFORMS: WorkshopTransform[] = ["filter_set", "narrow_set"];
 
 const CAST_TARGETS = ["string", "number", "boolean"] as const;
 
@@ -73,6 +78,7 @@ function slotLabels(transform: WorkshopTransform): string[] {
   if (transform === "if_else") return ["Condition", "Then", "Else"];
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
+  if (transform === "object_property") return ["Object"];
   return ["Value"];
 }
 
@@ -420,6 +426,26 @@ function DerivationEditor({
         </label>
       )}
 
+      {derivation.transform === "object_property" && (
+        <label>
+          Property
+          <input
+            value={String(derivation.config?.property ?? "")}
+            readOnly={readOnly}
+            placeholder="e.g. name"
+            onChange={(e) =>
+              onChange({
+                ...derivation,
+                config: { ...derivation.config, property: e.target.value },
+              })
+            }
+          />
+          {/* Readable by name because it is not one of the properties: a row's
+              key is its own field (`STATUS.md` §84). */}
+          <span className="field-hint">primary_key reads the object&apos;s key</span>
+        </label>
+      )}
+
       {!readOnly && (
         <button type="button" className="btn quiet" onClick={onClear}>
           Stop deriving
@@ -472,8 +498,12 @@ function ObjectSetEditor({
     enabled: !!base?.object_type_id,
   });
 
+  const transform = variable.derivation?.transform ?? SET_TRANSFORMS[0]!;
+  const byClauses = transform === "narrow_set";
+  const arrays = Object.values(variables).filter((v) => v.kind === "array");
+
   function setDerivation(patch: Record<string, unknown>) {
-    const d = variable.derivation ?? { transform: SET_TRANSFORM, inputs: [], config: {} };
+    const d = variable.derivation ?? { transform: SET_TRANSFORMS[0]!, inputs: [], config: {} };
     onChange({ ...variable, derivation: { ...d, ...patch } as WorkshopVariable["derivation"] });
   }
 
@@ -489,7 +519,7 @@ function ObjectSetEditor({
               const { object_set: _dropped, ...rest } = variable;
               onChange({
                 ...rest,
-                derivation: { transform: SET_TRANSFORM, inputs: [], config: { op: "eq" } },
+                derivation: { transform: SET_TRANSFORMS[0]!, inputs: [], config: { op: "eq" } },
               });
             } else {
               const { derivation: _dropped, ...rest } = variable;
@@ -544,8 +574,31 @@ function ObjectSetEditor({
               ))}
             </select>
           </label>
+          {/* Two ways to narrow a set, and they differ in *who* chooses the
+              properties: one filter the app author fixed, or a list the viewer
+              builds in a Filter List. `narrow_set` therefore carries no
+              property or operator - see `services/workshop_variables.py`. */}
           <label>
-            Filter value from
+            Narrowed by
+            <select
+              value={transform}
+              disabled={readOnly}
+              onChange={(e) =>
+                setDerivation({
+                  transform: e.target.value,
+                  // A property and an operator left behind by the other shape
+                  // would be saved as debris nobody put there.
+                  config: e.target.value === "narrow_set" ? {} : { op: "eq" },
+                  inputs: [variable.derivation?.inputs?.[0] ?? ""].filter(Boolean),
+                })
+              }
+            >
+              <option value="filter_set">One value, on a property you choose</option>
+              <option value="narrow_set">A filter list the viewer builds</option>
+            </select>
+          </label>
+          <label>
+            {byClauses ? "Filter clauses from" : "Filter value from"}
             <select
               value={variable.derivation?.inputs?.[1] ?? ""}
               disabled={readOnly}
@@ -556,13 +609,15 @@ function ObjectSetEditor({
               }
             >
               <option value="">Choose a variable…</option>
-              {scalars.map((v) => (
+              {(byClauses ? arrays : scalars).map((v) => (
                 <option key={v.id} value={v.id}>
                   {v.label}
                 </option>
               ))}
             </select>
           </label>
+          {!byClauses && (
+            <>
           <label>
             Property
             <input
@@ -594,6 +649,8 @@ function ObjectSetEditor({
               <option value="in">is one of</option>
             </select>
           </label>
+            </>
+          )}
           <p className="soft" style={{ margin: 0, fontSize: 11 }}>
             An unset filter shows the whole set rather than nothing.
           </p>

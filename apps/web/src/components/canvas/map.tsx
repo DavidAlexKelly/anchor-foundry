@@ -27,6 +27,10 @@ export interface MapPoint {
   label: string;
   lat: number;
   lon: number;
+  /** The object this pin stands for, when there is one. Carried so a click can
+   * emit it as a `single_object` variable; absent for dataset rows, which are
+   * not objects and have nothing to emit. */
+  instance?: import("@/lib/types").ObjectInstance;
 }
 
 const WIDTH = 640;

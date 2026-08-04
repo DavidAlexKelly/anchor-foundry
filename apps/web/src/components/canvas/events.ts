@@ -62,7 +62,15 @@ export interface EventContext {
    *
    * Separate from `payload`, which is flattened for `{{...}}` interpolation
    * and cannot say which of its keys is the primary key. */
-  object?: { object_type_id?: string; primary_key: unknown; properties: Record<string, unknown> };
+  object?: {
+    /** The instance's own id. Carried because it is what the *write* APIs
+     * take: an action executes against an instance id, so an object you can
+     * look at but not edit would be half a reference. */
+    id?: string;
+    object_type_id?: string;
+    primary_key: unknown;
+    properties: Record<string, unknown>;
+  };
   openUrl?: (url: string) => void;
 }
 

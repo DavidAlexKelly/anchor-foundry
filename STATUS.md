@@ -1603,6 +1603,76 @@ Verified in a browser: before any click the derived label is empty rather than b
 
 ---
 
+### 85. The events panel: wiring an app without writing the document (this session)
+
+Roadmap 1.6's third panel, and the thing that had been quietly missing since §76: **the event system could only be authored by writing JSON.** Every event in this repo's demo module was put there by a seed script. A widget library and a variable graph are not an application builder if the thing that connects them is unreachable from the builder.
+
+The panel lists the module's events by the widget they fire from, opens one to show its trigger and its ordered effects, and edits all of it: add and delete events, add, configure, reorder and remove effects.
+
+**It offers only what the server accepts.** Trigger widgets come from the Craft tree, triggers from what that widget can actually fire, variables from the declared ones *minus the derived*, pages from the pages and overlays that exist. That is §77's lesson applied deliberately rather than after the fact: a rule that tolerates a missing piece needs a construction that cannot omit it. Every refusal in `workshop_events.py` is a shape this panel cannot build.
+
+**Effect order is numbered and reorderable, because it is semantic.** Effects run in configured order and setting a variable copies immediately, so the same two effects the other way round produce a different result. A list you could not reorder would hide the one thing about an event that is not obvious from reading it.
+
+**Changing an effect's type clears its config.** A `page` left behind by a navigate would ride along inside a `set_variable` and be saved as debris nobody put there.
+
+**Nothing here validates.** The server does. This panel's job is to make the invalid unbuildable, not to re-implement the rules — a second copy of them is a second thing to keep in step, which this repo already has enough of.
+
+**The working events run in Preview before they are saved**, the way an unsaved variable already resolves. The builder now holds all three parts of the document — layout, variables, events — and `moduleFrom` writes all three in one save, which is the same argument its docstring already made for two.
+
+**Two panels caught up with the last two slices.** The variables panel offered `filter_set` as the only way to narrow a set and refused to offer `object_property` at all — both true when written, both stale after §82 and §84. It now offers `narrow_set` ("a filter list the viewer builds") beside `filter_set` ("one value, on a property you choose"), hiding the property and operator fields for the former since it has neither, and offers `object_property` with its property field. `object_set_aggregation` is still absent, still for its original reason.
+
+Verified in a browser: the three seeded events read back correctly with their effects in order; only the three writable variables are offered as `set_variable` targets (the four derived ones absent); `navigate` offers the two pages and the overlay; a new event wired from the panel — header button, clicked, opens the overlay — saves without a refusal and **runs on click in Preview**.
+
+**603 API tests green**, unchanged: this is a builder surface over rules that already existed and are already covered. The check that matters here is the browser one.
+
+**A check that picked the wrong widget.** The first run wired the event to "the first thing called Button" and asserted a click on the header's button ran it — which it did not, because the overlay has a button too. Fixed by naming the one it means. The same shape as §84's row that was on another page: an assertion that is precise about the outcome and vague about the subject.
+
+---
+
+### 86. The Map over an object set (this session)
+
+Roadmap 1.5's last priority-2 widget that could not be wired to anything. The map now reads an `object_set` variable — the same set the table, the chart and the card read, narrowed once on the server — and a pin click emits the object it stands for.
+
+**One trigger, worded for where it fires.** A pin click means what a row click means: an object was picked. It is therefore the *same* trigger, `row_select`, and the events panel labels it "Pin selected" on a map and "Row selected" on a table. A second trigger name meaning the same thing would be a second thing every document, every panel and every refusal has to know about, bought with nothing but a nicer word in one place.
+
+**The instance travels with the pin.** `MapPoint` gained an optional instance, so the click can hand over the whole object the way §84's row click does — and it stays optional, because a dataset row is not an object and has nothing to emit.
+
+**The set names the type, so the author does not.** With a set bound, the geopoint picker offers the properties of *that set's* type and the inline type/filter fields are hidden — the same ordering the object table uses, for the same reason: offering both invites configuring both and wondering which won.
+
+**What is not built, and why it is not effort.** The roadmap asks for selection emitting a *set* — draw an area, filter everything by it. That needs numeric comparison on latitude and longitude, which is exactly what `ORDERED_OPERATORS` refuses: properties are stored untyped, so a bounding box would compare text on one store and numbers on the other. It is the same blocker as numeric aggregations (§74), property sorts (§83) and ordered filters, and it now has four things waiting behind it — which is the strongest argument yet that honouring declared property types in the index is the next piece of real work in the ontology.
+
+Verified in a browser: nine pins for the whole set, five after the Filter List narrows it to the north — the map moving with everything else because it reads the same variable — and a pin click opening the detail overlay with `S1 · Aberdeen Yard · open`, read off the emitted object by three `object_property` variables.
+
+**A fourth check that could not fail, caught the same way.** The narrowing assertion compared a Playwright locator's count with itself: locators are live, so `before` was re-evaluated after the filter and the check compared 5 with 5. Counted into an integer first. That is now four in this session (§78, §80, §83, here), and the pattern has not varied — the check held a *reference* to the thing it was measuring instead of a measurement.
+
+**603 API tests green**, unchanged: this is a widget reading an endpoint that already existed, and the browser check is what covers it.
+
+---
+
+### 87. The inline action form, and a cluster of features behind one missing capability (this session)
+
+**First, the thing I set out to do and did not.** The intended next item was honouring declared property types in the instance index — the blocker behind ordered filters, numeric aggregations (§74), property sorts (§83) and map area selection (§86). It cannot be done honestly *in this sandbox*, and the reason is worth writing down rather than discovering twice:
+
+The whole point of that work is that the two stores must agree — `ORDERED_OPERATORS` exists because the first implementation shipped and the cross-store test caught Postgres and OpenSearch ordering `250` and `40` differently. Postgres can be tested here for real. OpenSearch cannot: the tests drive `tests/opensearch_fixture_server.py`, which says in its own docstring that it has no analyzers and **no mapping enforcement**. Numeric mapping verified against it would be verifying my own stub's arithmetic. There is no Docker daemon in this environment and `artifacts.opensearch.org` is not reachable through the proxy, so a real cluster cannot be stood up either. Whoever picks this up needs a real OpenSearch; the code is not the hard part, the agreement is. **Not blocked in general — blocked here**, which is a different sentence and the useful one.
+
+**What I built instead**: roadmap 1.5's Inline Action Form, which §84 had just made possible.
+
+**The form takes its subject from a `single_object` variable.** Bound, the record dropdown disappears and the form edits the object somebody picked — which is the whole difference between a form *beside* an app and a form *in* one. Unbound it keeps the dropdown, so apps built before this still work.
+
+**The fields start at the object's current values** and are re-seeded whenever the subject changes. A form still holding the last object's edits when you pick a new one is an edit about to go to the wrong record.
+
+**It writes the updated object back into the variable.** This is §84's stated cost being paid: a `single_object` variable holds the object as it was when it was picked, so after a write every reader of it would show the values you had just replaced — the staleness argument at its most visible. The widget that changed the object is the one place that knows what it now says, so it writes it back, and it invalidates the object-set queries the table, the map and the filter list read.
+
+**The emitted object gained its instance id.** An action executes against an instance id, so an object you can look at but not edit would be half a reference — the same argument §84 made for carrying the type and the key.
+
+Verified in a browser: clicking a row opens a modal that says "Editing S1" with `status` prefilled to `open`, no record dropdown; changing it to `closed` and submitting saves, the detail line above the form moves to `closed` immediately, and the table underneath shows `closed` when the modal closes. The check puts the fixture back afterwards.
+
+**A silent no-op in my own tooling, worth naming.** The instance id did not arrive on the first run because a `str.replace` in my edit script matched nothing — I had asserted on some replacements in that script and not on that one, and Python's `replace` returns the string unchanged rather than failing. Every scripted edit in this session now asserts its target exists. The symptom was a form that said "nothing picked yet" while an object was plainly picked, which cost a debugging pass to trace back to an edit that never happened.
+
+**603 API tests green**, unchanged: the action execute path already existed and is already covered — what changed is which widget calls it and with what.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
@@ -1638,6 +1708,7 @@ Verified in a browser: before any click the derived label is empty rather than b
 - **Worker jobs' per-candidate `except` tuples are the single most repeated bug in this codebase** - §14 (twice, `sync_configs.py`), §16 (`instance_syncs.py`, `StorageKeyError`), and §21 (`sync_configs.py` again, the *same* `StorageKeyError` gap §16 fixed one file over). Every occurrence has the same shape: a job calls something that raises an exception type the isolation tuple doesn't name, so one bad candidate crashes the whole batch instead of failing alone. When adding or editing a scheduled job, enumerate every exception type on the call path rather than the ones a first test run happens to exercise - and when fixing one job, check its siblings for the identical gap.
 - **RLS policies that read another RLS-protected table are a recurring bug class in this codebase** - 0008 (users), 0009 (canvas_apps↔canvas_app_shares), and now 0015 (canvas_apps↔projects) all hit the same shape: a policy's `USING` clause subqueries a table whose own policy can legitimately hide the exact row the first policy needs, so the check silently fails closed instead of erroring loudly. Worth a systematic pass if another cross-table RLS policy gets added - the fix is always the same (`SECURITY DEFINER` helper resolving just the needed column, bypassing RLS internally) but nothing currently catches the pattern except noticing a feature silently doesn't work.
 - **`npm run build` while `next dev` is running corrupts the dev server.** Both write `apps/web/.next`, so a production build under a running dev server leaves it serving 500s with `Cannot find module './vendor-chunks/@tanstack.js'` on every route - which reads as a broken page rather than a broken cache, and cost a debugging detour in §47. Recovery: stop the dev server, `rm -rf apps/web/.next`, restart. Run the two in sequence, never concurrently.
+- **Four features are waiting on one missing capability: the instance index does not honour declared property types.** Ordered filters (`gt`/`lt`), numeric aggregations (`sum`/`avg`/`min`/`max`, §74), sorting a table by a property (§83) and selecting an area on a map (§86) are each refused for the same reason — properties are stored untyped, so a comparison means one thing on Postgres and another on OpenSearch. Every refusal says so in a sentence. **It cannot be built in this sandbox**: the OpenSearch side is tested against `tests/opensearch_fixture_server.py`, which has no mapping enforcement by design, and there is no Docker daemon and no reachable OpenSearch artifact host here, so the cross-store agreement — the entire point — cannot be demonstrated. It needs a real cluster, not more code.
 - **Two sources feeding one object type produce two instances for the same primary key** (found in §83). Instance identity is `(source_id, primary_key)` — `instance_store._doc_id` — so pointing a second dataset at an object type that already has one duplicates every overlapping key instead of updating it, and a set over that type returns each duplicated object twice. Nothing errors. Multi-source object types are a legitimate Foundry pattern (a union of feeds into one type), so the honest fix is to make identity `(object_type_id, primary_key)` and decide what happens when two sources disagree about the same object's properties — an ontology decision with a backfill behind it. Until then, one source per object type.
 - **Craft.js gives a canvas widget its children as one Fragment, not a list.** `React.Children.toArray(children)` therefore returns a one-element array however many widgets the node contains, and nothing errors — §78's sections all rendered as a single column until this was found. Any canvas widget that needs to treat its children individually (a section, a grid, anything positional) must go through `childList()` in `widgets.tsx` rather than `React.Children` directly.
 - **An undefined CSS custom property is silently nothing, not an error.** `background: var(--surface)` in a repo whose variable is `--panel` renders transparent, and a structural browser check will pass straight through it — this bit twice (§78's overlay panel, and `.repo-preview-table th` before it). A check on something that must be *visible* should assert a computed colour, not just the element's presence.

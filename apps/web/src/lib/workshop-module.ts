@@ -66,14 +66,18 @@ export function hasLayout(definition: unknown): boolean {
  */
 export function moduleFrom(
   definition: unknown,
-  parts: { layout?: LayoutNodes; variables?: Record<string, WorkshopVariable> },
+  parts: {
+    layout?: LayoutNodes;
+    variables?: Record<string, WorkshopVariable>;
+    events?: Record<string, WorkshopEvent>;
+  },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
     variables: parts.variables ?? current?.variables ?? {},
-    events: current?.events ?? {},
+    events: parts.events ?? current?.events ?? {},
     ...(current?.broken_bindings ? { broken_bindings: current.broken_bindings } : {}),
   };
 }
@@ -123,4 +127,8 @@ export function usagesOf(
  * the exact failure this format removes. */
 export function newVariableId(): string {
   return `v_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function newEventId(): string {
+  return `e_${Math.random().toString(36).slice(2, 10)}`;
 }
