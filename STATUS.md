@@ -1697,6 +1697,28 @@ Verified in a browser with two sessions side by side: the author publishes, chan
 
 ---
 
+### 89. Visibility conditions, and 1.7 finished (this session)
+
+The rest of roadmap 1.7: a layout node can be bound to a variable and shows only while that variable is truthy. Foundry's own example of the feature is "a section that appears only when a set is non-empty".
+
+**The condition is a variable, not an expression.** `is_empty`/`is_not_empty` have been in the variable graph since item 1.2 — the roadmap says they exist "precisely for this" — so anything a viewer's state can decide is already expressible as a derivation. An expression language here would be a second grammar to validate, explain, and keep in step with the first, bought for nothing.
+
+**It lives on the layout nodes, not on every widget.** Section and Container carry `visibleWhen`. Hiding a section hides what is in it, which is what "this part of the page does not apply yet" means; a single widget that needs hiding goes in a container, which is one node rather than a new concept, and the alternative was a prop on all fourteen widgets.
+
+**Unresolved means visible.** `undefined` is "the first resolve has not come back yet", and a section that vanished until it did would flash on every load. Only an explicitly falsy value hides — the rule §81's button gate already follows, now shared by both through one hook.
+
+**In the builder a hidden node renders anyway, marked** `HIDDEN UNLESS ANY FILTER CHOSEN`. Hiding it there would make it uneditable and hide from the author that it exists, which is the argument §77 made for pages and is the same argument. The marker never reaches a viewer.
+
+**A visibility binding is a usage**, so `visibleWhen` joined the mirrored `REFERENCE_PROPS` lists and deleting the variable a section depends on is refused rather than quietly making the section permanent.
+
+Verified in a browser: the builder shows the demo's results section marked as conditional; the running app opens with it absent and its Filter List present; ticking a filter reveals the section with its table, chart and card; unticking hides it again.
+
+**611 API tests green**, 2 new.
+
+**Roadmap item 1.7 is now done**, and with it every item in section 1 except the pieces named as blocked or deferred: drag-to-resize (an affordance over numbers that exist), chart drill-down, and the four features behind the typed-property index.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

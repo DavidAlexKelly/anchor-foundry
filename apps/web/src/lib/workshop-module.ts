@@ -92,6 +92,7 @@ export const REFERENCE_PROPS = [
   "variable",
   "objectSetVariable",
   "enabledVariable",
+  "visibleWhen",
 ] as const;
 
 export interface Usage {

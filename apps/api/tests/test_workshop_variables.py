@@ -1069,3 +1069,22 @@ def test_writing_from_a_source_and_a_value_at_once_is_refused() -> None:
                  "config": {"variable": "v_a", "from": "object", "value": "{{name}}"}}])},
             layout={"btn": node({})},
         )
+
+
+# ---- widget visibility (roadmap 1.7) -----------------------------------------
+def test_a_section_shown_only_when_a_variable_is_truthy_counts_as_a_usage() -> None:
+    """`visibleWhen` is a reference like any other, so deleting the variable a
+    section's visibility depends on is refused rather than quietly making the
+    section permanent."""
+    layout = {"sec": {"type": {"resolvedName": "CanvasSection"},
+                      "props": {"direction": "rows", "visibleWhen": "v_any"},
+                      "nodes": []}}
+    declared = wv.parse({"v_any": var("v_any", kind="boolean", label="Anything chosen")})
+    assert wv.usages(layout, declared)["v_any"] == [{"node": "sec", "prop": "visibleWhen"}]
+
+
+def test_a_visibility_binding_to_a_variable_nothing_declares_is_refused() -> None:
+    layout = {"sec": {"type": {"resolvedName": "CanvasSection"},
+                      "props": {"visibleWhen": "v_gone"}, "nodes": []}}
+    with pytest.raises(wv.VariableError, match="does not declare"):
+        wv.validate_module(module({}, layout))
