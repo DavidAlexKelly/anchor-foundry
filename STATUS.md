@@ -1629,6 +1629,26 @@ Verified in a browser: the three seeded events read back correctly with their ef
 
 ---
 
+### 86. The Map over an object set (this session)
+
+Roadmap 1.5's last priority-2 widget that could not be wired to anything. The map now reads an `object_set` variable — the same set the table, the chart and the card read, narrowed once on the server — and a pin click emits the object it stands for.
+
+**One trigger, worded for where it fires.** A pin click means what a row click means: an object was picked. It is therefore the *same* trigger, `row_select`, and the events panel labels it "Pin selected" on a map and "Row selected" on a table. A second trigger name meaning the same thing would be a second thing every document, every panel and every refusal has to know about, bought with nothing but a nicer word in one place.
+
+**The instance travels with the pin.** `MapPoint` gained an optional instance, so the click can hand over the whole object the way §84's row click does — and it stays optional, because a dataset row is not an object and has nothing to emit.
+
+**The set names the type, so the author does not.** With a set bound, the geopoint picker offers the properties of *that set's* type and the inline type/filter fields are hidden — the same ordering the object table uses, for the same reason: offering both invites configuring both and wondering which won.
+
+**What is not built, and why it is not effort.** The roadmap asks for selection emitting a *set* — draw an area, filter everything by it. That needs numeric comparison on latitude and longitude, which is exactly what `ORDERED_OPERATORS` refuses: properties are stored untyped, so a bounding box would compare text on one store and numbers on the other. It is the same blocker as numeric aggregations (§74), property sorts (§83) and ordered filters, and it now has four things waiting behind it — which is the strongest argument yet that honouring declared property types in the index is the next piece of real work in the ontology.
+
+Verified in a browser: nine pins for the whole set, five after the Filter List narrows it to the north — the map moving with everything else because it reads the same variable — and a pin click opening the detail overlay with `S1 · Aberdeen Yard · open`, read off the emitted object by three `object_property` variables.
+
+**A fourth check that could not fail, caught the same way.** The narrowing assertion compared a Playwright locator's count with itself: locators are live, so `before` was re-evaluated after the filter and the check compared 5 with 5. Counted into an integer first. That is now four in this session (§78, §80, §83, here), and the pattern has not varied — the check held a *reference* to the thing it was measuring instead of a measurement.
+
+**603 API tests green**, unchanged: this is a widget reading an endpoint that already existed, and the browser check is what covers it.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

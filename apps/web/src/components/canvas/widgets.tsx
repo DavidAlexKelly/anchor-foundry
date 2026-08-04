@@ -1177,6 +1177,7 @@ CanvasObjectTable.craft = {
  */
 export function CanvasMap({
   source = "objects",
+  objectSetVariable = null,
   objectTypeId = null,
   locationProperty = null,
   labelProperty = null,
@@ -1193,6 +1194,12 @@ export function CanvasMap({
   limit = 500,
 }: {
   source?: "objects" | "dataset";
+  /** An `object_set` variable to plot (roadmap 1.5). When set, this map reads
+   * the same set the table and the chart do, narrowed once on the server -
+   * rather than running its own type-and-filter query beside them and drifting
+   * from what the rest of the app is showing. Takes precedence over the inline
+   * type/filter props, as it does on every other set-aware widget. */
+  objectSetVariable?: string | null;
   objectTypeId?: string | null;
   locationProperty?: string | null;
   labelProperty?: string | null;
@@ -1209,11 +1216,23 @@ export function CanvasMap({
   limit?: number;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, projectId } = useCanvasEnv();
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
+  const eventContext = useEventContext(undefined, useOverlayIds());
+  const usingSet = source === "objects" && !!objectSetVariable;
+
+  const setPage = useQuery({
+    queryKey: ["canvas-map-set", objectSetVariable, JSON.stringify(setDefinition ?? null), limit],
+    queryFn: () =>
+      objApi.evaluateObjectSet(workspaceId, setDefinition, { limit: Math.min(limit, 200) }),
+    enabled: usingSet && !!setDefinition,
+  });
 
   const usesProperty = !!filterProperty && filterValue !== undefined && filterValue !== null
     && filterValue !== "";
@@ -1235,7 +1254,7 @@ export function CanvasMap({
           : { q: searchValue ? String(searchValue) : undefined }),
         limit: objectLimit,
       }),
-    enabled: source === "objects" && !!objectTypeId && !!locationProperty,
+    enabled: source === "objects" && !usingSet && !!objectTypeId && !!locationProperty,
   });
 
   const sql = mapQuery({
@@ -1252,7 +1271,7 @@ export function CanvasMap({
     const collected: MapPoint[] = [];
     let bad = 0;
     if (source === "objects") {
-      for (const instance of objectPage.data?.items ?? []) {
+      for (const instance of (usingSet ? setPage.data?.instances : objectPage.data?.items) ?? []) {
         const at = toLatLon(instance.properties[locationProperty!]);
         if (!at) {
           bad += 1;
@@ -1262,6 +1281,10 @@ export function CanvasMap({
         collected.push({
           id: instance.id,
           label: label === null || label === undefined ? instance.primary_key : String(label),
+          // The instance rides along so a pin click can emit the object it
+          // stands for, the way a row click does (§84). Without it the map
+          // would be the one widget that can show an object and not hand it on.
+          instance,
           ...at,
         });
       }
@@ -1283,17 +1306,24 @@ export function CanvasMap({
       });
     }
     return { points: collected, unplaceable: bad };
-  }, [source, objectPage.data, datasetRows.data, locationProperty, labelProperty]);
+  }, [source, usingSet, setPage.data, objectPage.data, datasetRows.data,
+      locationProperty, labelProperty]);
 
   const needs =
     source === "objects"
-      ? !objectTypeId ? "pick an object type in Settings"
+      ? usingSet
+        ? !locationProperty ? "pick the geopoint property to plot" : null
+        : !objectTypeId ? "pick an object type in Settings"
         : !locationProperty ? "pick the geopoint property to plot"
         : null
       : !datasetId ? "pick a dataset in Settings"
         : sql === null ? "pick a location column, or a latitude and longitude pair"
         : null;
-  const query = source === "objects" ? objectPage : datasetRows;
+  const query = source === "objects" ? (usingSet ? setPage : objectPage) : datasetRows;
+  // Pin selection (roadmap 1.5). The map does not decide what a click *means*
+  // any more than the table does: it says an object was picked and the
+  // module's events say what happens.
+  const pinEvents = eventsFor(moduleEvents, nodeId, "row_select");
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
@@ -1304,13 +1334,41 @@ export function CanvasMap({
           {query.error instanceof ApiError ? query.error.message : "Couldn't load these points."}
         </p>
       )}
+      {usingSet && variablesPending && (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      )}
       {!needs && query.data && (
         <MapCanvas
           points={points}
           unplaceable={unplaceable}
-          total={source === "objects" ? objectPage.data?.total : undefined}
+          total={
+            source === "objects"
+              ? (usingSet ? setPage.data?.total : objectPage.data?.total)
+              : undefined
+          }
           atLimit={
             source === "dataset" && (datasetRows.data?.rows.length ?? 0) >= (limit ?? 500)
+          }
+          onSelect={
+            pinEvents.length > 0
+              ? (point) =>
+                  runEvents(pinEvents, {
+                    ...eventContext,
+                    payload: {
+                      primary_key: point.instance?.primary_key,
+                      ...(point.instance?.properties ?? {}),
+                    },
+                    object: point.instance
+                      ? {
+                          object_type_id:
+                            (setDefinition as { object_type_id?: string } | undefined)
+                              ?.object_type_id ?? objectTypeId ?? undefined,
+                          primary_key: point.instance.primary_key,
+                          properties: point.instance.properties,
+                        }
+                      : undefined,
+                  })
+              : undefined
           }
         />
       )}
@@ -1324,6 +1382,7 @@ function MapSettings() {
     source, objectTypeId, locationProperty, labelProperty, datasetId,
     locationColumn, latColumn, lonColumn, labelColumn,
     filterProperty, filterColumn, filterOperator, filterParameter, searchParameter,
+    objectSetVariable,
     actions: { setProp },
   } = useNode((node) => ({
     source: node.data.props.source,
@@ -1340,16 +1399,25 @@ function MapSettings() {
     filterOperator: node.data.props.filterOperator,
     filterParameter: node.data.props.filterParameter,
     searchParameter: node.data.props.searchParameter,
+    objectSetVariable: node.data.props.objectSetVariable,
   }));
+  const { declared } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  // The type behind the bound set, so the geopoint picker can offer that
+  // type's properties - the set names its type, so the author does not.
+  const setTypeId =
+    (declared[objectSetVariable ?? ""]?.object_set as { object_type_id?: string } | undefined)
+      ?.object_type_id ?? null;
+  const effectiveTypeId = objectSetVariable ? setTypeId : objectTypeId;
   const types = useQuery({
     queryKey: ["object-types", workspaceId],
     queryFn: () => objApi.listTypes(workspaceId),
     enabled: source === "objects",
   });
   const detail = useQuery({
-    queryKey: ["object-type", objectTypeId],
-    queryFn: () => objApi.getType(workspaceId, objectTypeId!),
-    enabled: source === "objects" && !!objectTypeId,
+    queryKey: ["object-type", effectiveTypeId],
+    queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
+    enabled: source === "objects" && !!effectiveTypeId,
   });
   const datasetList = useQuery({
     queryKey: ["datasets", workspaceId, projectId],
@@ -1376,7 +1444,30 @@ function MapSettings() {
       </label>
       {source === "objects" ? (
         <>
+          {/* The variable binding comes first because it *replaces* the type
+              and filter fields under it - the same ordering the object table
+              uses, for the same reason: offering them equally invites
+              configuring both and wondering which won. */}
           <label className="field">
+            <span className="field-label">Object set variable</span>
+            <select
+              value={objectSetVariable || ""}
+              onChange={(e) =>
+                setProp((p: Record<string, unknown>) => {
+                  p.objectSetVariable = e.target.value || null;
+                })
+              }
+            >
+              <option value="">Not bound — use the type below</option>
+              {setVariables.map((v) => (
+                <option key={v.id} value={v.id}>{v.label || v.id}</option>
+              ))}
+            </select>
+            <span className="field-hint">
+              Reads the same set as every other widget bound to it
+            </span>
+          </label>
+          <label className="field" hidden={!!objectSetVariable}>
             <span className="field-label">Object type</span>
             <select
               value={objectTypeId || ""}
@@ -1399,7 +1490,7 @@ function MapSettings() {
             <span className="field-label">Location property</span>
             <select
               value={locationProperty || ""}
-              disabled={!objectTypeId}
+              disabled={!effectiveTypeId}
               onChange={(e) =>
                 setProp((p: { locationProperty: string | null }) => (p.locationProperty = e.target.value || null))
               }
@@ -1409,7 +1500,7 @@ function MapSettings() {
                 <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
               ))}
             </select>
-            {objectTypeId && geopoints.length === 0 && (
+            {effectiveTypeId && geopoints.length === 0 && (
               <span className="field-hint">This type has no geopoint property</span>
             )}
           </label>
@@ -1588,7 +1679,8 @@ function MapSettings() {
 CanvasMap.craft = {
   displayName: "Map",
   props: {
-    source: "objects", objectTypeId: null, locationProperty: null, labelProperty: null,
+    source: "objects",
+    objectSetVariable: null, objectTypeId: null, locationProperty: null, labelProperty: null,
     datasetId: null, locationColumn: null, latColumn: null, lonColumn: null, labelColumn: null,
     filterProperty: null, filterColumn: null, filterOperator: "equals",
     filterParameter: null, searchParameter: null, limit: 500,

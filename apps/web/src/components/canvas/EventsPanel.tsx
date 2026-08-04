@@ -35,9 +35,23 @@ import { newEventId } from "@/lib/workshop-module";
  * a trigger anybody can fire — offering it would be offering an event that
  * never runs, which is the failure the server's refusals exist to prevent one
  * step later. */
-const TRIGGERS: { on: string; label: string; widgets: string[] }[] = [
+const TRIGGERS: {
+  on: string;
+  label: string;
+  widgets: string[];
+  /** A different wording for the same trigger on a particular widget. "Row
+   * selected" on a map reads as a mistake; a second trigger name meaning the
+   * same thing would be a second thing every document, every panel and every
+   * refusal has to know about. One trigger, worded for where it fires. */
+  labels?: Record<string, string>;
+}[] = [
   { on: "click", label: "Clicked", widgets: ["CanvasButton", "CanvasTabs"] },
-  { on: "row_select", label: "Row selected", widgets: ["CanvasObjectTable"] },
+  {
+    on: "row_select",
+    label: "Row selected",
+    widgets: ["CanvasObjectTable", "CanvasMap"],
+    labels: { CanvasMap: "Pin selected" },
+  },
   {
     on: "change",
     label: "Changed",
@@ -73,7 +87,7 @@ export interface PageCandidate {
 function triggersFor(widget: string): { on: string; label: string }[] {
   return TRIGGERS.filter((t) => t.widgets.includes(widget)).map((t) => ({
     on: t.on,
-    label: t.label,
+    label: t.labels?.[widget] ?? t.label,
   }));
 }
 

@@ -163,7 +163,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 ### 1.5 The widget library — **XL, and incremental**
 
 Anchor has eight: Container, Text, Filter, Dataset table, Object table, Map, Chart, Action form.
-Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button, §82 the Filter List, §83 and §84 upgraded the Object Table, and Metric Card is done (§74).
+Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button, §82 the Filter List, §83 and §84 upgraded the Object Table, §86 the Map, and Metric Card is done (§74).
 
 Build toward Foundry's set, in the order below (roughly descending value per unit of work):
 
@@ -175,7 +175,7 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 | 1 | ~~**Metric Card**~~ | **Done** (`STATUS.md` §74) |
 | 2 | ~~**Tabs**~~ | **Done** (`STATUS.md` §77), and it navigates through the event system rather than around it |
 | 2 | **Charts** (upgrade) | Object-set input rather than dataset-only; drill-down emitting a filtered set |
-| 2 | **Map** (upgrade) | Object-set input; selection emitting a set. The clustering and pan work (`STATUS.md` §37) carries over |
+| 2 | **Map** (upgrade) | **Object-set input and pin selection done** (`STATUS.md` §86); the clustering and pan work (§37) carried over unchanged. **What remains**: selection emitting a *set* — drawing an area and filtering by it needs numeric comparison on lat/lon, which is the same untyped-property blocker as ordered operators, numeric aggregations and property sorts |
 | 2 | **Inline Action Form** | Editing objects from inside the app; upgrade of the existing Action form |
 | 3 | **Object List / Card List** | Card-shaped alternative to the table |
 | 3 | **Pivot Table** | Cross-tab over an object set |
