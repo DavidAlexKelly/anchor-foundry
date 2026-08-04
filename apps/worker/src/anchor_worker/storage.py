@@ -38,6 +38,8 @@ class StorageGateway(Protocol):
 
     def local_path(self, key: str) -> str: ...
 
+    def size(self, key: str) -> int | None: ...
+
     def delete_prefix(self, prefix: str) -> None: ...
 
 
@@ -71,6 +73,10 @@ class LocalStorageGateway:
         if not path.is_file():
             raise FileNotFoundError(key)
         return str(path)
+
+    def size(self, key: str) -> int | None:
+        path = self._path(key)
+        return path.stat().st_size if path.is_file() else None
 
     def delete_prefix(self, prefix: str) -> None:
         if ".." in prefix or not prefix.startswith("workspaces/"):
@@ -107,6 +113,13 @@ class S3StorageGateway:
         self._client.download_fileobj(self._bucket, key, handle)
         handle.close()
         return handle.name
+
+    def size(self, key: str) -> int | None:
+        validate_key(key)
+        try:
+            return int(self._client.head_object(Bucket=self._bucket, Key=key)["ContentLength"])
+        except Exception:
+            return None
 
     def delete_prefix(self, prefix: str) -> None:
         if ".." in prefix or not prefix.startswith("workspaces/"):

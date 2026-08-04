@@ -879,6 +879,30 @@ button { font: inherit; cursor: pointer; }
 .ds-tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
 
 .ds-note { font-size: 12.5px; margin: 0 0 10px; }
+/* ---- time travel (ROADMAP phase 2, 3.3) ----------------------------------- */
+.ds-timetravel {
+  margin: 0 0 12px; padding: 8px 12px; font-size: 12.5px;
+  background: var(--brass-wash); border: 1px solid var(--brass);
+  border-radius: var(--radius); color: var(--ink);
+}
+.ds-timetravel button {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; color: var(--accent-deep); text-decoration: underline;
+}
+.ds-view-version {
+  background: none; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 2px 8px; font-size: 11.5px; cursor: pointer; color: var(--ink-soft);
+}
+.ds-view-version:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-deep); }
+.ds-view-version:disabled { opacity: 0.45; cursor: default; }
+.ds-gone { color: var(--danger); font-size: 12px; }
+.ds-retention {
+  margin: 12px 0 0; font-size: 12.5px; color: var(--ink-soft); max-width: 75ch;
+}
+.ds-sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
 
 /* Wide tables scroll inside their own box; the page never scrolls sideways. */
 .ds-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }

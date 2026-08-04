@@ -42,13 +42,23 @@ export function DatasetApplication({ resource }: { resource: ResolvedResource })
   const pid = resource.project_id!;
   const did = resource.kind_id;
 
-  function selectTab(next: Tab) {
+  // Which version is being read, if not the current one (roadmap 3.3). In the
+  // URL beside the tab, so "look at this dataset as it was at v2" is a link
+  // rather than a sequence of clicks to describe.
+  const versionParam = Number(params.get("version"));
+  const version = Number.isInteger(versionParam) && versionParam > 0 ? versionParam : null;
+
+  function setParams(next: Record<string, string | undefined>) {
     const search = new URLSearchParams(params.toString());
-    search.set("tab", next);
+    for (const [key, value] of Object.entries(next)) {
+      if (value === undefined) search.delete(key);
+      else search.set(key, value);
+    }
     // replace, not push: flicking between tabs should not bury the page the
     // reader arrived from under a stack of back-button steps.
     router.replace(`?${search.toString()}`, { scroll: false });
   }
+  const selectTab = (next: Tab) => setParams({ tab: next });
 
   return (
     <div className="ds-app">
@@ -66,10 +76,28 @@ export function DatasetApplication({ resource }: { resource: ResolvedResource })
         ))}
       </nav>
 
+      {version !== null && (
+        <TimeTravelBanner
+          wid={wid}
+          pid={pid}
+          did={did}
+          version={version}
+          onLeave={() => setParams({ version: undefined })}
+        />
+      )}
+
       <div className="ds-panel">
-        {tab === "preview" && <PreviewTab wid={wid} pid={pid} did={did} />}
-        {tab === "schema" && <SchemaTab wid={wid} pid={pid} did={did} />}
-        {tab === "history" && <HistoryTab wid={wid} pid={pid} did={did} />}
+        {tab === "preview" && <PreviewTab wid={wid} pid={pid} did={did} version={version} />}
+        {tab === "schema" && <SchemaTab wid={wid} pid={pid} did={did} version={version} />}
+        {tab === "history" && (
+          <HistoryTab
+            wid={wid}
+            pid={pid}
+            did={did}
+            viewing={version}
+            onView={(n) => setParams({ version: String(n), tab: "preview" })}
+          />
+        )}
         {tab === "lineage" && <LineageTab resource={resource} />}
         {tab === "details" && <DetailsTab wid={wid} pid={pid} did={did} />}
       </div>
@@ -107,10 +135,59 @@ function Table({ result }: { result: TabularResult }) {
   );
 }
 
-function PreviewTab({ wid, pid, did }: { wid: string; pid: string; did: string }) {
+/** Says loudly that what is on screen is not the dataset as it is now.
+ *
+ * Above the panel rather than inside a tab, because every tab under it is
+ * showing the same past - a banner one tab has and another does not is how
+ * somebody reads an old schema as the current one. */
+function TimeTravelBanner({
+  wid,
+  pid,
+  did,
+  version,
+  onLeave,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  version: number;
+  onLeave: () => void;
+}) {
+  const versions = useQuery({
+    queryKey: ["ds-versions", did],
+    queryFn: () => datasetApi.versions(wid, pid, did),
+  });
+  const current = versions.data?.[0]?.version_number;
+  const row = versions.data?.find((v) => v.version_number === version);
+  return (
+    <p className="ds-timetravel">
+      Viewing <strong>v{version}</strong>
+      {current ? ` of ${current}` : ""}
+      {row ? ` — ${row.row_count.toLocaleString()} rows as it was on ${new Date(row.created_at).toLocaleString()}` : ""}
+      .{" "}
+      <button type="button" onClick={onLeave}>
+        Back to the current version
+      </button>
+    </p>
+  );
+}
+
+function PreviewTab({
+  wid,
+  pid,
+  did,
+  version,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  version: number | null;
+}) {
   const preview = useQuery({
-    queryKey: ["ds-preview", did],
-    queryFn: () => datasetApi.preview(wid, pid, did),
+    // The version is part of the key: without it, switching versions would
+    // serve the previous one's rows from cache under a banner naming the new.
+    queryKey: ["ds-preview", did, version],
+    queryFn: () => datasetApi.preview(wid, pid, did, version ?? undefined),
   });
   if (preview.isPending) return <p className="state">Loading rows…</p>;
   if (preview.isError) return <p className="state error">{(preview.error as Error).message}</p>;
@@ -126,14 +203,24 @@ function PreviewTab({ wid, pid, did }: { wid: string; pid: string; did: string }
   );
 }
 
-function SchemaTab({ wid, pid, did }: { wid: string; pid: string; did: string }) {
+function SchemaTab({
+  wid,
+  pid,
+  did,
+  version,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  version: number | null;
+}) {
   // Profiling is computed once per version and cached on the version row
   // (migration 0019), so asking for it here costs nothing after the first
   // time - which is why the schema tab can show statistics rather than just
-  // column names.
+  // column names, and why profiling an *old* version is cheap to look at twice.
   const profile = useQuery({
-    queryKey: ["ds-profile", did],
-    queryFn: () => datasetApi.profile(wid, pid, did),
+    queryKey: ["ds-profile", did, version],
+    queryFn: () => datasetApi.profile(wid, pid, did, version ?? undefined),
   });
   if (profile.isPending) return <p className="state">Profiling columns…</p>;
   if (profile.isError) return <p className="state error">{(profile.error as Error).message}</p>;
@@ -178,10 +265,38 @@ function SchemaTab({ wid, pid, did }: { wid: string; pid: string; did: string })
   );
 }
 
-function HistoryTab({ wid, pid, did }: { wid: string; pid: string; did: string }) {
+function bytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = n / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
+}
+
+function HistoryTab({
+  wid,
+  pid,
+  did,
+  viewing,
+  onView,
+}: {
+  wid: string;
+  pid: string;
+  did: string;
+  viewing: number | null;
+  onView: (version: number) => void;
+}) {
   const versions = useQuery({
     queryKey: ["ds-versions", did],
     queryFn: () => datasetApi.versions(wid, pid, did),
+  });
+  const retention = useQuery({
+    queryKey: ["ds-retention", did],
+    queryFn: () => datasetApi.retention(wid, pid, did),
   });
   if (versions.isPending) return <p className="state">Loading history…</p>;
   if (versions.isError) return <p className="state error">{(versions.error as Error).message}</p>;
@@ -191,7 +306,8 @@ function HistoryTab({ wid, pid, did }: { wid: string; pid: string; did: string }
     <>
       <p className="soft ds-note">
         Every commit to this dataset. A version&apos;s contents never change once
-        written, which is what makes the row counts below comparable.
+        written, which is what makes the row counts below comparable — and what
+        makes any of them readable years later.
       </p>
       <div className="ds-scroll">
         <table className="ds-table">
@@ -201,7 +317,9 @@ function HistoryTab({ wid, pid, did }: { wid: string; pid: string; did: string }
               <th scope="col">Rows</th>
               <th scope="col">Columns</th>
               <th scope="col">Produced by</th>
+              <th scope="col">Kept</th>
               <th scope="col">When</th>
+              <th scope="col"><span className="ds-sr">View</span></th>
             </tr>
           </thead>
           <tbody>
@@ -222,13 +340,44 @@ function HistoryTab({ wid, pid, did }: { wid: string; pid: string; did: string }
                   </td>
                   <td>{v.table_schema.length}</td>
                   <td>{v.produced_by_kind ?? <span className="soft">—</span>}</td>
+                  <td>
+                    {v.size_bytes == null ? (
+                      // Not the same as "small": the object is not where the
+                      // row says it is, so this version cannot be read.
+                      <span className="ds-gone">not stored</span>
+                    ) : (
+                      bytes(v.size_bytes)
+                    )}
+                  </td>
                   <td>{new Date(v.created_at).toLocaleString()}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="ds-view-version"
+                      disabled={viewing === v.version_number || v.size_bytes == null}
+                      onClick={() => onView(v.version_number)}
+                    >
+                      {viewing === v.version_number ? "Viewing" : "View"}
+                    </button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+      {retention.data && (
+        <p className="ds-retention">
+          Keeping {retention.data.versions} version
+          {retention.data.versions === 1 ? "" : "s"} of this dataset costs{" "}
+          <strong>{bytes(retention.data.total_bytes)}</strong>. Nothing is deleted
+          automatically — old versions are what makes the rows above readable.
+          {retention.data.unmeasured > 0 &&
+            ` ${retention.data.unmeasured} version${
+              retention.data.unmeasured === 1 ? " is" : "s are"
+            } no longer in storage and not counted here.`}
+        </p>
+      )}
     </>
   );
 }

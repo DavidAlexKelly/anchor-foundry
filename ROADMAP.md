@@ -294,9 +294,11 @@ Full-page app at `/r/{id}` with tabs Preview / Schema / Details / History / Line
 
 Profiling per column (min/max/null rate/distinct) surfaced in the Schema tab, where it belongs.
 
-### 3.3 Time travel — **M**
+### ~~3.3 Time travel~~ — **done** (`STATUS.md` §96, `docs/decisions/0005-dataset-retention.md`)
 
 Browse a dataset at a previous version. Needs a decision on retention, and it is the one item here that has a storage bill attached — say so in the item rather than in the invoice.
+
+No migration was needed: every version's bytes have always been written to their own key and nothing has ever deleted one, so the bill was already being paid and nothing said so. `preview`, `profile` and `query` now take a version, described by that version's own schema rather than the current one's; the History tab reports what each version costs and what they cost together. Retention is decided in 0005 — keep everything by default, and when expiry is built it deletes bytes and keeps rows, because `model_runs.output_version` points at versions and deleting those rows would make history lie.
 
 ---
 

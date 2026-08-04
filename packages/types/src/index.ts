@@ -608,10 +608,25 @@ export interface DatasetHealth {
 /** One committed version of a dataset. The row a "time travel" view browses,
  * and the reason a record of what a dataset *was* does not change when the
  * dataset does. */
+/** What keeping every version of a dataset costs (roadmap 3.3). Time travel is
+ * only possible because nothing deletes an old version, and that bill has
+ * always been paid without being shown — see docs/decisions/0005. */
+export interface DatasetRetention {
+  versions: number;
+  /** Summed over the versions whose object was found. `unmeasured` says how
+   * many were not, so a total is never quietly short. */
+  total_bytes: number;
+  unmeasured: number;
+  current_version: number;
+}
+
 export interface DatasetVersion {
   id: string;
   version_number: number;
   row_count: number;
+  /** What this version costs to keep. Null means the object is not where the
+   * row says it is — a different state from "this version is small". */
+  size_bytes?: number | null;
   table_schema: { name: string; data_type: string }[];
   /** What produced it: an upload, a sync, a model run. Null for versions
    * written before this was recorded. */

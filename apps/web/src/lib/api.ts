@@ -362,13 +362,24 @@ export const datasets = {
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/fork`,
       { method: "POST", body: JSON.stringify(input) },
     ),
-  preview: (wid: string, pid: string, did: string) =>
+  /** A sample of the rows. `version` reads an earlier one (roadmap 3.3);
+   * omitted is the current one, which is what every caller meant before time
+   * travel existed and still means. */
+  preview: (wid: string, pid: string, did: string, version?: number) =>
     request<import("./types").TabularResult>(
-      `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview`,
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview` +
+        (version ? `?version=${version}` : ""),
     ),
-  profile: (wid: string, pid: string, did: string) =>
+  profile: (wid: string, pid: string, did: string, version?: number) =>
     request<import("./types").DatasetProfile>(
-      `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile`,
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile` +
+        (version ? `?version=${version}` : ""),
+    ),
+  /** What keeping every version of this dataset costs. Time travel is only
+   * possible because nothing deletes one (docs/decisions/0005). */
+  retention: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetRetention>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/retention`,
     ),
   health: (wid: string, pid: string, did: string) =>
     request<import("./types").DatasetHealth>(

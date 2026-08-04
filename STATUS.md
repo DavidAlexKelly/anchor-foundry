@@ -1848,6 +1848,26 @@ The browser check drives the Publish tab against real servers: the plan listing 
 
 **One omission from §93 caught while here**: `code_proposal_checks` was never added to `verify_schema.py`'s `POST_SPEC_TABLES`, so the verifier would have reported it as an unexplained extra table.
 
+### 96. Time travel, and the bill that was already being paid (this session)
+
+Roadmap 3.3: *"Browse a dataset at a previous version. Needs a decision on retention, and it is the one item here that has a storage bill attached — say so in the item rather than in the invoice."*
+
+**The finding that shaped the whole item: every version's bytes have always been kept.** Since migration 0003 each version has been written to its own key — `datasets/{id}/v{n}/data.parquet` — and nothing has ever deleted one. A dataset synced hourly for a year is 8,760 complete copies of itself. Nobody decided that; it fell out of writing versioned keys and never writing a sweeper, and the first time it becomes visible is on a bill.
+
+So time travel needed **no migration and no backfill**. What was missing was a way to *ask* for a version: `preview`, `profile` and `query` now take one, and `dataset_versions.s3_manifest_key` — written since 0003, read by nothing — is where they look.
+
+**A version is described by its own schema and row count, not the current one's.** Reading v1's rows against v7's column list would describe the data wrongly in exactly the case somebody looks at an old version: to find out what changed.
+
+**The bill is now on the screen.** Each version reports its size, and `GET /datasets/{id}/retention` totals them. `null` size is its own state — the object is not where the row says it is, which is different from "this version is small" — and the total says how many were unmeasured so it is never quietly short.
+
+**The retention decision is written down** (`docs/decisions/0005-dataset-retention.md`) rather than left implied. Default: keep everything, because a default that expires data would silently delete it on every existing deployment the moment it shipped, to fix a problem none of them have reported. When expiry is built it must **delete bytes and keep rows** — `model_runs.output_version` points at versions, and deleting those rows would make history lie. Nothing is protected except the current version; in particular a version a model run points at is *not*, because protecting those protects almost everything and a policy that cannot expire anything is not a policy.
+
+**702 API tests green**, 13 new; the worker's 74 re-run because `size()` was mirrored into its copy of `storage.py` to keep the two in step. Nine mutations, nine caught after two rounds.
+
+**The two rounds are the interesting part.** The first left one survivor — profiling an old version and caching it against the current one — which survived only because the fixture had two versions and the test asked for v1, which is also what the broken code defaulted to. Rebuilding the fixture with **three** differently-shaped versions and asking for the *middle* one killed it. That change then broke a different check: v1 and v3 both had three rows, so the query test could no longer tell "read version 1" from "ignored the parameter". It now asks for v2, the only one with a different count. **A fixture where the interesting case is neither the first nor the last is worth more than a fixture with more rows in it.**
+
+One test found a real hole in itself: it deleted `v1/data.parquet` by globbing, and matched the *source* dataset's v1 rather than the one under test — so the assertion about a shrinking total passed while measuring nothing. Scoped to the dataset id.
+
 ---
 
 ## What's not started

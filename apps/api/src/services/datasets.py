@@ -402,13 +402,45 @@ async def list_versions(
     return await fetch_all(
         conn,
         """
-        SELECT id, version_number, row_count, table_schema, produced_by_kind, created_at
+        SELECT id, version_number, row_count, table_schema, produced_by_kind,
+               s3_manifest_key, created_at
           FROM dataset_versions
          WHERE dataset_id = :did
          ORDER BY version_number DESC
         """,
         {"did": str(dataset_id)},
     )
+
+
+async def version_location(
+    conn: AsyncConnection, project_id: UUID, dataset_id: UUID, version_number: int
+) -> dict[str, Any]:
+    """Where a particular version's bytes live, plus what it said about itself.
+
+    Time travel (roadmap 3.3) is possible at all because every version has
+    always been written to its own key - `datasets/{id}/v{n}/data.parquet` - so
+    nothing was overwritten and nothing needs migrating. What was missing is a
+    way to *ask* for one.
+
+    The schema and row count come from the version row rather than from the
+    dataset, because that is the whole point: reading v3's rows against v7's
+    column list would describe the data wrongly in exactly the case somebody is
+    looking at an old version to find out what changed.
+    """
+    await get(conn, project_id, dataset_id)
+    row = await fetch_one(
+        conn,
+        """
+        SELECT id, version_number, s3_manifest_key, table_schema, row_count,
+               produced_by_kind, produced_by_id, created_at
+          FROM dataset_versions
+         WHERE dataset_id = :did AND version_number = :n
+        """,
+        {"did": str(dataset_id), "n": version_number},
+    )
+    if row is None:
+        raise NotFoundError(f"version {version_number} of this dataset")
+    return dict(row)
 
 
 async def add_version(
