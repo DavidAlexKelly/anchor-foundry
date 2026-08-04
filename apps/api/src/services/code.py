@@ -400,7 +400,8 @@ definition. Nothing runs a proposal, and nothing can.
 
 _PROPOSAL_COLUMNS = """
     id, project_id, summary, description, state, change_set_id,
-    created_by, created_at, files_updated_at, closed_by, closed_at
+    created_by, created_at, files_updated_at, closed_by, closed_at,
+    source_repo_id, source_commit_id
 """
 
 
@@ -480,19 +481,47 @@ async def create_proposal(
     description: str,
     changes: list[dict[str, Any]],
     created_by: UUID,
+    # A proposal to *publish a commit* rather than to change named transforms
+    # (db 0039). Mutually exclusive with `changes`: one describes files typed
+    # into the proposal, the other describes files that already exist in a
+    # repository, and a proposal that was both would have two answers to "what
+    # is being reviewed".
+    source_repo_id: UUID | None = None,
+    source_commit_id: UUID | None = None,
 ) -> dict[str, Any]:
+    commit_backed = source_commit_id is not None
+    if commit_backed and changes:
+        raise ValueError(
+            "a proposal proposes a commit or a set of files, not both"
+        )
+    if not commit_backed and not changes:
+        raise ValueError("a proposal needs at least one file")
     row = await fetch_one(
         conn,
         """
-        INSERT INTO code_proposals (project_id, summary, description, created_by)
-        VALUES (:pid, :summary, :descr, :by) RETURNING id
+        INSERT INTO code_proposals (project_id, summary, description, created_by,
+                                    source_repo_id, source_commit_id)
+        VALUES (:pid, :summary, :descr, :by, :repo, :commit) RETURNING id
         """,
         {"pid": str(project_id), "summary": summary, "descr": description,
-         "by": str(created_by)},
+         "by": str(created_by),
+         "repo": str(source_repo_id) if source_repo_id else None,
+         "commit": str(source_commit_id) if source_commit_id else None},
     )
     assert row is not None
     proposal_id = UUID(str(row["id"]))
-    await _write_files(conn, project_id, proposal_id, changes)
+    if commit_backed:
+        # Nothing is written: the files are the commit's, and the commit is
+        # immutable. But the plan is run now so a commit that cannot be
+        # published is refused at the door rather than becoming a proposal
+        # nobody can apply.
+        # `plan()` refuses a commit that declares nothing, so an empty list
+        # cannot reach here - the refusal always arrives as `unpublishable`.
+        _, unpublishable = await proposal_files(conn, project_id, proposal_id)
+        if unpublishable:
+            raise ValueError(unpublishable)
+    else:
+        await _write_files(conn, project_id, proposal_id, changes)
     return await get_proposal(conn, project_id, proposal_id)
 
 
@@ -595,10 +624,131 @@ def _blockers(proposal: dict[str, Any], files: list[dict[str, Any]],
     return reasons
 
 
+async def _version_at(conn: AsyncConnection, model_id: UUID, at: Any) -> int:
+    """The model's version number as of a moment.
+
+    What a commit-backed proposal has instead of a stored `base_version`
+    (db 0039). Versions are append-only and carry their own timestamps, so
+    "which version was this proposed against" is a question the data already
+    answers - and one computed from the data cannot disagree with it.
+    """
+    row = await fetch_one(
+        conn,
+        "SELECT COALESCE(max(version_number), 0) AS n FROM model_versions "
+        "WHERE model_id = :mid AND created_at <= :at",
+        {"mid": str(model_id), "at": at},
+    )
+    return int(row["n"]) if row else 0
+
+
+async def _files_from_commit(
+    conn: AsyncConnection, project_id: UUID, proposal: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """A commit-backed proposal's files, derived rather than stored.
+
+    The commit is immutable, so this is the same answer every time it is asked
+    - which is a stronger guarantee than 0031's stored files give, not a weaker
+    one: there is no way to swap the code out from under an approval, because
+    there is nothing to swap.
+    """
+    from . import transform_publish as publish_service
+
+    workspace = await fetch_one(
+        conn, "SELECT workspace_id FROM projects WHERE id = :pid",
+        {"pid": str(project_id)},
+    )
+    assert workspace is not None
+    try:
+        steps = await publish_service.plan(
+            conn,
+            project_id=project_id,
+            workspace_id=UUID(str(workspace["workspace_id"])),
+            repo_id=UUID(str(proposal["source_repo_id"])),
+            commit_id=UUID(str(proposal["source_commit_id"])),
+        )
+    except publish_service.PublishError as exc:
+        # The commit has not changed, so this can only mean the *project* has -
+        # an input dataset deleted, a name taken by something else. Surfaced as
+        # a blocker rather than a 500, because it is a true statement about the
+        # proposal: it cannot be applied, and this is why.
+        return [{"unpublishable": str(exc)}]
+
+    files: list[dict[str, Any]] = []
+    for step in steps:
+        model_id = UUID(str(step["model_id"])) if step["model_id"] else None
+        live = ""
+        base = current = 0
+        if model_id is not None:
+            row = await fetch_one(
+                conn, "SELECT code FROM models WHERE id = :mid", {"mid": str(model_id)}
+            )
+            live = str(row["code"]) if row else ""
+            base = await _version_at(conn, model_id, proposal["files_updated_at"])
+            current = await _current_version(conn, model_id)
+        files.append({
+            "model_id": step["model_id"],
+            "model_name": step["model_name"],
+            "language": step["language"],
+            # The repository path, not the derived `models/x.sql` one: this is
+            # the file a reviewer is looking at, and it is the anchor a comment
+            # on a not-yet-created transform hangs on.
+            "path": step["path"],
+            "code": step["code"],
+            # The declared inputs, already resolved to datasets by the plan. A
+            # file that would *create* a transform has no `model_inputs` rows
+            # to look them up in, so carrying them here is what makes such a
+            # file checkable at all.
+            "inputs": step["inputs"],
+            "base_version": base,
+            "current_version": current,
+            "diff": "\n".join(
+                difflib.unified_diff(
+                    live.splitlines(), str(step["code"]).splitlines(),
+                    fromfile=f"{step['path']} (live, v{current})"
+                    if model_id else "/dev/null",
+                    tofile=f"{step['path']} (proposed)", n=3, lineterm="",
+                )
+            ),
+            "rows": side_by_side(live, str(step["code"])),
+        })
+    return files
+
+
+async def proposal_files(
+    conn: AsyncConnection, project_id: UUID, proposal_id: UUID,
+    proposal: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """A proposal's files, however they are held, plus a reason there are none.
+
+    The one place that knows a proposal has two shapes (db 0039). Everything
+    downstream - the review surface, the comment anchors, the checks - reads
+    this rather than either table, so a second kind of proposal cannot be half
+    supported.
+    """
+    proposal = proposal or await _proposal_row(conn, project_id, proposal_id)
+    if not proposal["source_commit_id"]:
+        return await _files_from_rows(conn, project_id, proposal_id), None
+    files = await _files_from_commit(conn, project_id, proposal)
+    if files and "unpublishable" in files[0]:
+        return [], str(files[0]["unpublishable"])
+    return files, None
+
+
 async def get_proposal(
     conn: AsyncConnection, project_id: UUID, proposal_id: UUID
 ) -> dict[str, Any]:
     proposal = await _proposal_row(conn, project_id, proposal_id)
+    files, unpublishable = await proposal_files(
+        conn, project_id, proposal_id, proposal
+    )
+    return await _assemble_proposal(
+        conn, project_id, proposal_id, proposal, files, unpublishable
+    )
+
+
+async def _files_from_rows(
+    conn: AsyncConnection, project_id: UUID, proposal_id: UUID
+) -> list[dict[str, Any]]:
     paths = {str(e["id"]): e for e in await tree(conn, project_id)}
     file_rows = await fetch_all(
         conn,
@@ -642,6 +792,17 @@ async def get_proposal(
             # in the browser would be a second implementation of the diff.
             "rows": side_by_side(str(row["current_code"]), str(row["code"])),
         })
+    return files
+
+
+async def _assemble_proposal(
+    conn: AsyncConnection,
+    project_id: UUID,
+    proposal_id: UUID,
+    proposal: dict[str, Any],
+    files: list[dict[str, Any]],
+    unpublishable: str | None,
+) -> dict[str, Any]:
     reviews = [dict(r) for r in await fetch_all(
         conn,
         """
@@ -659,10 +820,16 @@ async def get_proposal(
         conn, proposal_id, proposal["files_updated_at"]
     )
     for f in files:
-        key = str(f["model_id"])
-        f["comments"] = [c for c in comments if str(c["model_id"]) == key]
+        key = anchor_key(f["model_id"], f.get("path"))
+        f["comments"] = [c for c in comments if _anchor_of(c) == key]
         f["read_by"] = marks.get(key, [])
-        f["checks"] = [c for c in checks if str(c["model_id"]) == key]
+        f["checks"] = [c for c in checks if _anchor_of(c) == key]
+    blockers = _blockers(proposal, files, reviews, checks)
+    if unpublishable:
+        # Not an error: the commit is fine and has not moved. Something in the
+        # project has, and this says which - the same shape every other blocker
+        # takes, so the surface renders it without knowing it is special.
+        blockers.insert(0, unpublishable)
     return {
         **proposal,
         "files": files,
@@ -675,7 +842,7 @@ async def get_proposal(
         # went stale is information, and hiding it would read as "no checks
         # have run" when in fact they have and the code moved.
         "checks": checks,
-        "blockers": _blockers(proposal, files, reviews, checks),
+        "blockers": blockers,
     }
 
 
@@ -724,6 +891,8 @@ async def apply_proposal(
     detail = await get_proposal(conn, project_id, proposal_id)
     if detail["blockers"]:
         raise ValueError("; ".join(detail["blockers"]))
+    if detail["source_commit_id"]:
+        return await _apply_publish(conn, project_id, proposal_id, detail, actor_id)
     change_set = await apply_change_set(
         conn,
         project_id,
@@ -741,6 +910,65 @@ async def apply_proposal(
          WHERE id = :id RETURNING id
         """,
         {"cid": str(change_set["id"]), "by": str(actor_id), "id": str(proposal_id)},
+    )
+    return await get_proposal(conn, project_id, proposal_id)
+
+
+async def _apply_publish(
+    conn: AsyncConnection,
+    project_id: UUID,
+    proposal_id: UUID,
+    detail: dict[str, Any],
+    actor_id: UUID,
+) -> dict[str, Any]:
+    """Apply a commit-backed proposal by publishing its commit.
+
+    A change set is created around it so a publish of four files reads as one
+    entry in the project's history rather than four, and so `code_proposals`'
+    own constraint - applied implies a change set - keeps meaning what it says.
+    """
+    from . import transform_publish as publish_service
+
+    workspace = await fetch_one(
+        conn, "SELECT workspace_id FROM projects WHERE id = :pid",
+        {"pid": str(project_id)},
+    )
+    assert workspace is not None
+    row = await fetch_one(
+        conn,
+        """
+        INSERT INTO code_change_sets (project_id, summary, description, created_by)
+        VALUES (:pid, :summary, :descr, :by)
+        RETURNING id
+        """,
+        {"pid": str(project_id), "summary": detail["summary"],
+         "descr": detail["description"], "by": str(actor_id)},
+    )
+    assert row is not None
+    change_set_id = UUID(str(row["id"]))
+    try:
+        await publish_service.publish(
+            conn,
+            project_id=project_id,
+            workspace_id=UUID(str(workspace["workspace_id"])),
+            repo_id=UUID(str(detail["source_repo_id"])),
+            commit_id=UUID(str(detail["source_commit_id"])),
+            actor_id=actor_id,
+            # The review is what applying a proposal *is*. This lifts the gate
+            # that refuses a direct publish, and nothing else.
+            reviewed=True,
+            change_set_id=change_set_id,
+        )
+    except publish_service.PublishError as exc:
+        raise ValueError(str(exc)) from exc
+    await fetch_one(
+        conn,
+        """
+        UPDATE code_proposals
+           SET state = 'applied', change_set_id = :cid, closed_by = :by, closed_at = now()
+         WHERE id = :id RETURNING id
+        """,
+        {"cid": str(change_set_id), "by": str(actor_id), "id": str(proposal_id)},
     )
     return await get_proposal(conn, project_id, proposal_id)
 
@@ -849,21 +1077,24 @@ async def _assert_open_proposal(
 
 
 async def _assert_proposal_file(
-    conn: AsyncConnection, proposal_id: UUID, model_id: UUID
+    conn: AsyncConnection, project_id: UUID, proposal_id: UUID,
+    model_id: UUID | None, source_path: str | None,
 ) -> None:
     """A comment has to hang on a file the proposal actually changes.
 
     Without this, a comment can be anchored to any model in any project the
     caller can reach, and it would render nowhere - a remark that exists and
     cannot be read is worse than one that was refused.
+
+    Checked against the proposal's *derived* file list rather than against
+    `code_proposal_files`, because a commit-backed proposal has no rows there
+    (db 0039) and every one of its comments would otherwise be refused.
     """
-    row = await fetch_one(
-        conn,
-        "SELECT model_id FROM code_proposal_files "
-        "WHERE proposal_id = :pid AND model_id = :mid",
-        {"pid": str(proposal_id), "mid": str(model_id)},
-    )
-    if row is None:
+    if (model_id is None) == (source_path is None):
+        raise ValueError("a comment hangs on a model or on a path, not both or neither")
+    files, _ = await proposal_files(conn, project_id, proposal_id)
+    wanted = anchor_key(model_id, source_path)
+    if not any(anchor_key(f["model_id"], f.get("path")) == wanted for f in files):
         raise ValueError("this proposal does not change that file")
 
 
@@ -872,7 +1103,8 @@ async def add_comment(
     project_id: UUID,
     proposal_id: UUID,
     *,
-    model_id: UUID,
+    model_id: UUID | None,
+    source_path: str | None,
     side: str,
     line: int | None,
     body: str,
@@ -892,17 +1124,20 @@ async def add_comment(
         raise ValueError("line numbers start at 1")
     if not body.strip():
         raise ValueError("a comment needs something in it")
-    await _assert_proposal_file(conn, proposal_id, model_id)
+    await _assert_proposal_file(conn, project_id, proposal_id, model_id, source_path)
     row = await fetch_one(
         conn,
         """
         INSERT INTO code_proposal_comments
-            (proposal_id, model_id, side, line, body, author_id, anchored_at)
-        VALUES (:pid, :mid, CAST(:side AS code_comment_side), :line, :body, :by, :anchor)
+            (proposal_id, model_id, source_path, side, line, body, author_id,
+             anchored_at)
+        VALUES (:pid, :mid, :path, CAST(:side AS code_comment_side), :line, :body,
+                :by, :anchor)
         RETURNING id
         """,
         {
-            "pid": str(proposal_id), "mid": str(model_id), "side": side, "line": line,
+            "pid": str(proposal_id), "mid": str(model_id) if model_id else None,
+            "path": source_path, "side": side, "line": line,
             "body": body.strip(), "by": str(author_id),
             # The anchor is the proposal's own timestamp, not `now()`: the
             # question is which version of the files this was said about, and
@@ -947,7 +1182,8 @@ async def mark_file_read(
     project_id: UUID,
     proposal_id: UUID,
     *,
-    model_id: UUID,
+    model_id: UUID | None,
+    source_path: str | None,
     read: bool,
     reviewer_id: UUID,
 ) -> dict[str, Any]:
@@ -957,26 +1193,45 @@ async def mark_file_read(
     the proposal changed is one statement and cannot leave a half-state.
     """
     proposal = await _assert_open_proposal(conn, project_id, proposal_id)
-    await _assert_proposal_file(conn, proposal_id, model_id)
+    await _assert_proposal_file(conn, project_id, proposal_id, model_id, source_path)
+    mid = str(model_id) if model_id else None
     if read:
         await conn.exec_driver_sql(
             """
             INSERT INTO code_proposal_file_marks
-                (proposal_id, model_id, reviewer_id, anchored_at)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (proposal_id, model_id, reviewer_id)
+                (proposal_id, model_id, source_path, reviewer_id, anchored_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (proposal_id, model_id, source_path, reviewer_id)
             DO UPDATE SET marked_at = now(), anchored_at = EXCLUDED.anchored_at
             """,
-            (str(proposal_id), str(model_id), str(reviewer_id),
+            (str(proposal_id), mid, source_path, str(reviewer_id),
              proposal["files_updated_at"]),
         )
     else:
         await conn.exec_driver_sql(
-            "DELETE FROM code_proposal_file_marks "
-            "WHERE proposal_id = %s AND model_id = %s AND reviewer_id = %s",
-            (str(proposal_id), str(model_id), str(reviewer_id)),
+            "DELETE FROM code_proposal_file_marks WHERE proposal_id = %s "
+            "AND model_id IS NOT DISTINCT FROM %s "
+            "AND source_path IS NOT DISTINCT FROM %s AND reviewer_id = %s",
+            (str(proposal_id), mid, source_path, str(reviewer_id)),
         )
     return await get_proposal(conn, project_id, proposal_id)
+
+
+def anchor_key(model_id: Any, source_path: Any) -> str:
+    """Which file a comment, mark or check is about.
+
+    A model when there is one, and the repository path when there is not - a
+    commit-backed proposal may create transforms that do not exist until it is
+    applied (db 0039), and a remark about one of those has nothing else stable
+    to hang on. Prefixed so a path can never collide with a uuid.
+    """
+    if model_id:
+        return f"model:{model_id}"
+    return f"path:{source_path}"
+
+
+def _anchor_of(row: dict[str, Any]) -> str:
+    return anchor_key(row.get("model_id"), row.get("source_path"))
 
 
 async def _comments(conn: AsyncConnection, proposal_id: UUID,
@@ -984,7 +1239,8 @@ async def _comments(conn: AsyncConnection, proposal_id: UUID,
     rows = await fetch_all(
         conn,
         """
-        SELECT c.id, c.model_id, c.side, c.line, c.body, c.author_id, c.created_at,
+        SELECT c.id, c.model_id, c.source_path, c.side, c.line, c.body,
+               c.author_id, c.created_at,
                c.anchored_at, c.resolved_at, c.resolved_by,
                (SELECT u.email FROM users u WHERE u.id = c.author_id) AS author_email
           FROM code_proposal_comments c
@@ -1006,7 +1262,7 @@ async def _file_marks(conn: AsyncConnection, proposal_id: UUID,
     rows = await fetch_all(
         conn,
         """
-        SELECT m.model_id, m.reviewer_id, m.marked_at, m.anchored_at,
+        SELECT m.model_id, m.source_path, m.reviewer_id, m.marked_at, m.anchored_at,
                (SELECT u.email FROM users u WHERE u.id = m.reviewer_id) AS reviewer_email
           FROM code_proposal_file_marks m
          WHERE m.proposal_id = :pid
@@ -1020,5 +1276,5 @@ async def _file_marks(conn: AsyncConnection, proposal_id: UUID,
         # rule 0031 already applies to approvals.
         if r["anchored_at"] < files_updated_at:
             continue
-        by_model.setdefault(str(r["model_id"]), []).append(dict(r))
+        by_model.setdefault(_anchor_of(dict(r)), []).append(dict(r))
     return by_model

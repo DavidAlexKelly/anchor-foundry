@@ -234,7 +234,8 @@ class DiffRowOut(BaseModel):
 
 class ProposalCommentOut(BaseModel):
     id: UUID
-    model_id: UUID
+    model_id: UUID | None
+    source_path: str | None = None
     side: str
     # None is a remark about the file rather than about a line.
     line: int | None
@@ -255,8 +256,10 @@ class ProposalCommentOut(BaseModel):
 
 class CheckOut(BaseModel):
     id: UUID
-    # None is a check about the proposal as a whole rather than about a file.
+    # None on both is a check about the proposal as a whole. `source_path`
+    # carries the file when it has no model yet (db 0039).
     model_id: UUID | None
+    source_path: str | None = None
     name: str
     # pass / warn / fail / error. `error` is not a pass: it means nobody has
     # been told anything about the code.
@@ -276,14 +279,17 @@ class FileMarkOut(BaseModel):
     """"I have read this file", per reviewer. Only marks made against the
     *current* files are returned - a mark from before the last edit says
     somebody read a file that no longer exists in that form."""
-    model_id: UUID
+    model_id: UUID | None
+    source_path: str | None = None
     reviewer_id: UUID
     reviewer_email: str | None
     marked_at: datetime
 
 
 class ProposalFileOut(BaseModel):
-    model_id: UUID
+    # None for a file that would *create* a transform: a commit-backed proposal
+    # publishes files that may have no model until it is applied.
+    model_id: UUID | None
     model_name: str
     language: str
     path: str | None
@@ -309,6 +315,9 @@ class ReviewOut(BaseModel):
 class ProposalSummary(BaseModel):
     id: UUID
     project_id: UUID
+    # Set when this proposal asks to publish a repository commit (db 0039).
+    source_repo_id: UUID | None = None
+    source_commit_id: UUID | None = None
     summary: str
     description: str
     state: str
@@ -339,7 +348,10 @@ class ProposalDetail(ProposalSummary):
 class ProposalIn(BaseModel):
     summary: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
-    changes: list[FileChange] = Field(min_length=1)
+    # Files typed into the proposal, or a commit to publish - never both.
+    changes: list[FileChange] = Field(default_factory=list)
+    source_repo_id: UUID | None = None
+    source_commit_id: UUID | None = None
 
 
 class ProposalPatch(BaseModel):
@@ -358,7 +370,11 @@ class ReviewPolicyIn(BaseModel):
 
 
 class CommentIn(BaseModel):
-    model_id: UUID
+    # One of the two, never both: a commit-backed proposal (db 0039) may create
+    # transforms that do not exist yet, and a remark about one of those has
+    # only its repository path to hang on.
+    model_id: UUID | None = None
+    source_path: str | None = Field(default=None, max_length=1000)
     side: str = Field(pattern="^(live|proposed)$")
     line: int | None = Field(default=None, ge=1)
     body: str = Field(min_length=1, max_length=4000)
@@ -369,7 +385,8 @@ class ResolveIn(BaseModel):
 
 
 class FileMarkIn(BaseModel):
-    model_id: UUID
+    model_id: UUID | None = None
+    source_path: str | None = Field(default=None, max_length=1000)
     read: bool
 
 
@@ -412,6 +429,8 @@ async def create_proposal(
             summary=body.summary, description=body.description,
             changes=[c.model_dump() for c in body.changes],
             created_by=access.auth.user_id,
+            source_repo_id=body.source_repo_id,
+            source_commit_id=body.source_commit_id,
         )
         await audit.record(
             conn,
@@ -540,7 +559,8 @@ async def add_proposal_comment(
     async with user_connection(access.auth.user_id) as conn:
         row = await code_service.add_comment(
             conn, access.project_id, proposal_id,
-            model_id=body.model_id, side=body.side, line=body.line,
+            model_id=body.model_id, source_path=body.source_path,
+            side=body.side, line=body.line,
             body=body.body, author_id=access.auth.user_id,
         )
     return _detail(row)
@@ -578,7 +598,8 @@ async def mark_proposal_file_read(
     async with user_connection(access.auth.user_id) as conn:
         row = await code_service.mark_file_read(
             conn, access.project_id, proposal_id,
-            model_id=body.model_id, read=body.read, reviewer_id=access.auth.user_id,
+            model_id=body.model_id, source_path=body.source_path,
+            read=body.read, reviewer_id=access.auth.user_id,
         )
     return _detail(row)
 

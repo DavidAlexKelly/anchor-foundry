@@ -52,6 +52,18 @@ export const DESCRIPTION_TEMPLATE = `## What this changes
 ## How it was checked
 `;
 
+/** Which file a comment or a mark is about: the model when there is one, and
+ * the repository path when there is not. A commit-backed proposal may create
+ * transforms that do not exist until it is applied (db 0039). */
+function anchorOf(file: CodeProposalFile): {
+  model_id?: string | null;
+  source_path?: string | null;
+} {
+  return file.model_id
+    ? { model_id: file.model_id }
+    : { source_path: file.path };
+}
+
 export function ReviewSurface({
   workspaceId,
   projectId,
@@ -103,7 +115,8 @@ export function ReviewSurface({
 
   const say = useMutation({
     mutationFn: (input: {
-      model_id: string;
+      model_id?: string | null;
+      source_path?: string | null;
       side: "live" | "proposed";
       line: number | null;
       body: string;
@@ -120,7 +133,11 @@ export function ReviewSurface({
   });
 
   const mark = useMutation({
-    mutationFn: (input: { model_id: string; read: boolean }) =>
+    mutationFn: (input: {
+      model_id?: string | null;
+      source_path?: string | null;
+      read: boolean;
+    }) =>
       codeApi.markFileRead(workspaceId, projectId, proposalId, input),
     onSuccess: landed,
     onError: fail,
@@ -160,6 +177,14 @@ export function ReviewSurface({
         </div>
       </header>
 
+      {p.source_commit_id && (
+        <p className="review-source">
+          Applying this <strong>publishes</strong> commit{" "}
+          <code>{p.source_commit_id.slice(0, 8)}</code>. Its files are the commit&apos;s,
+          so nobody can change the code after it has been approved — and a file that
+          creates a transform has no version to compare against yet.
+        </p>
+      )}
       {p.description && <pre className="review-description">{p.description}</pre>}
 
       <ChecksPanel
@@ -172,14 +197,17 @@ export function ReviewSurface({
 
       {p.files.map((file) => (
         <FileReview
-          key={file.model_id}
+          // Not `model_id`: a commit-backed proposal's files may all have none
+          // until it is applied, and React silently duplicates or drops
+          // children that share a key.
+          key={file.model_id ?? file.path}
           file={file}
           open={open}
           onSay={(side, line, body) =>
-            say.mutate({ model_id: file.model_id, side, line, body })
+            say.mutate({ ...anchorOf(file), side, line, body })
           }
           onSettle={(id, resolved) => settle.mutate({ id, resolved })}
-          onMark={(read) => mark.mutate({ model_id: file.model_id, read })}
+          onMark={(read) => mark.mutate({ ...anchorOf(file), read })}
           busy={say.isPending || mark.isPending}
         />
       ))}
@@ -341,6 +369,8 @@ function FileReview({
   const [draft, setDraft] = useState("");
   const [collapsed, setCollapsed] = useState(false);
 
+  // A file with no model has no versions at all, so 0 !== 0 is false and this
+  // reads correctly without a special case.
   const stale = file.base_version !== file.current_version;
   const fileComments = file.comments.filter((c) => c.line === null);
 
@@ -367,7 +397,9 @@ function FileReview({
           {collapsed ? "▸" : "▾"} {file.path ?? file.model_name}
         </button>
         <span className="code-tree-meta">
-          proposed against v{file.base_version}
+          {file.model_id
+            ? `proposed against v${file.base_version}`
+            : "new — this file would create a transform"}
           {stale && ` · live is now v${file.current_version}`}
         </span>
         {file.read_by.length > 0 && (

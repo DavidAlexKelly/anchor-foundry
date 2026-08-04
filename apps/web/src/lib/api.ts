@@ -362,13 +362,24 @@ export const datasets = {
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/fork`,
       { method: "POST", body: JSON.stringify(input) },
     ),
-  preview: (wid: string, pid: string, did: string) =>
+  /** A sample of the rows. `version` reads an earlier one (roadmap 3.3);
+   * omitted is the current one, which is what every caller meant before time
+   * travel existed and still means. */
+  preview: (wid: string, pid: string, did: string, version?: number) =>
     request<import("./types").TabularResult>(
-      `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview`,
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/preview` +
+        (version ? `?version=${version}` : ""),
     ),
-  profile: (wid: string, pid: string, did: string) =>
+  profile: (wid: string, pid: string, did: string, version?: number) =>
     request<import("./types").DatasetProfile>(
-      `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile`,
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile` +
+        (version ? `?version=${version}` : ""),
+    ),
+  /** What keeping every version of this dataset costs. Time travel is only
+   * possible because nothing deletes one (docs/decisions/0005). */
+  retention: (wid: string, pid: string, did: string) =>
+    request<import("./types").DatasetRetention>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/retention`,
     ),
   health: (wid: string, pid: string, did: string) =>
     request<import("./types").DatasetHealth>(
@@ -945,7 +956,14 @@ export const code = {
   propose: (
     wid: string,
     pid: string,
-    input: { summary: string; description?: string; changes: { model_id: string; code: string }[] },
+    input: {
+      summary: string;
+      description?: string;
+      /** Files typed into the proposal, or a commit to publish - never both. */
+      changes?: { model_id: string; code: string }[];
+      source_repo_id?: string;
+      source_commit_id?: string;
+    },
   ) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals`,
@@ -967,7 +985,14 @@ export const code = {
     wid: string,
     pid: string,
     id: string,
-    input: { model_id: string; side: "live" | "proposed"; line?: number | null; body: string },
+    input: {
+      /** One of these, never both: a file with no model yet anchors by path. */
+      model_id?: string | null;
+      source_path?: string | null;
+      side: "live" | "proposed";
+      line?: number | null;
+      body: string;
+    },
   ) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/comments`,
@@ -989,7 +1014,7 @@ export const code = {
     wid: string,
     pid: string,
     id: string,
-    input: { model_id: string; read: boolean },
+    input: { model_id?: string | null; source_path?: string | null; read: boolean },
   ) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/read`,

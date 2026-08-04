@@ -248,7 +248,7 @@ Merging is a comparison plus a pointer move: four states (`identical`, `fast_for
 
 ### ~~2.5 Transforms authoring~~ — **done** (`docs/decisions/0004-running-customer-code.md`; `STATUS.md` §63 declarations, §64 the runner task and empty role, §65 the container entrypoint, §66 the EFS scratch transport, §67 dispatch, §68 the substitution). Customer Python now runs in a container with an empty task role and no route out, on any deployment configured for it; a worker with no runner configured still uses `python_sandbox`, and a *half*-configured one refuses rather than downgrading quietly.
 
-Both halves are now done. `STATUS.md` §94 built the relocation: a file that declares a transform (`-- output:` / `-- input:`, or the Python decorator) publishes to a model definition, identified by (repository, path) so a rename moves the same model rather than starting a second one, and the source is *copied* into a version so deleting the branch changes nothing about what runs. A model authored in a repository refuses direct edits. **One limitation, stated rather than papered over: a project that requires code review cannot publish**, because reviewing a publish needs proposals that understand commits and proposals reference models. That join is the next piece of work in this section.
+Both halves are now done. `STATUS.md` §94 built the relocation: a file that declares a transform (`-- output:` / `-- input:`, or the Python decorator) publishes to a model definition, identified by (repository, path) so a rename moves the same model rather than starting a second one, and the source is *copied* into a version so deleting the branch changes nothing about what runs. A model authored in a repository refuses direct edits. **That join is now built** (`STATUS.md` §95, migration 0039): a proposal can name a repository commit, its files are derived from that commit rather than stored, and applying it publishes. A project that requires review opens a proposal for the commit and publishes by applying it, so the gate holds rather than being routed around.
 
 One thing named rather than assumed: a run whose infrastructure failed is recorded as a failed run with a message saying so, because `model_runs.status` has no value between succeeded and failed; giving that its own status is a migration and a screen (`STATUS.md` §68).
 
@@ -266,7 +266,7 @@ Run the transform against a limited sample of its inputs, without committing, an
 
 Anchor already has proposals, reviews, blockers and the review gate. What it lacks is the *review surface*: side-by-side diffs, inline comments anchored to lines, per-file resolution, a description template. Build the UI onto the existing service rather than a second workflow beside it.
 
-Built onto the existing service, as asked. One idea carries it: a remark about a line is a claim about a *version* of the file, so a comment records the `files_updated_at` it was written against and goes outdated — shown and marked, never hidden — when the proposal is edited. The same derivation gives per-file resolution its meaning. The alignment is computed from `SequenceMatcher` opcodes server-side, not by parsing a unified diff in the browser. The description template is built in rather than per project: a configurable one belongs in the repository, and proposals are not connected to repositories.
+Built onto the existing service, as asked, and since extended to review a *publish* as well as a change to named transforms (`STATUS.md` §95). One idea carries it: a remark about a line is a claim about a *version* of the file, so a comment records the `files_updated_at` it was written against and goes outdated — shown and marked, never hidden — when the proposal is edited. The same derivation gives per-file resolution its meaning. The alignment is computed from `SequenceMatcher` opcodes server-side, not by parsing a unified diff in the browser. The description template is built in rather than per project: a configurable one belongs in the repository, and proposals are not connected to repositories.
 
 ### ~~2.8 Checks~~ — **done** (`STATUS.md` §93, migration 0037)
 
@@ -294,9 +294,11 @@ Full-page app at `/r/{id}` with tabs Preview / Schema / Details / History / Line
 
 Profiling per column (min/max/null rate/distinct) surfaced in the Schema tab, where it belongs.
 
-### 3.3 Time travel — **M**
+### ~~3.3 Time travel~~ — **done** (`STATUS.md` §96, `docs/decisions/0005-dataset-retention.md`)
 
 Browse a dataset at a previous version. Needs a decision on retention, and it is the one item here that has a storage bill attached — say so in the item rather than in the invoice.
+
+No migration was needed: every version's bytes have always been written to their own key and nothing has ever deleted one, so the bill was already being paid and nothing said so. `preview`, `profile` and `query` now take a version, described by that version's own schema rather than the current one's; the History tab reports what each version costs and what they cost together. Retention is decided in 0005 — keep everything by default, and when expiry is built it deletes bytes and keeps rows, because `model_runs.output_version` points at versions and deleting those rows would make history lie.
 
 ---
 
@@ -307,8 +309,10 @@ Closest to parity already. Two applications, both mostly re-presentation:
 ### 4.1 Object Explorer — **M**
 Workspace-wide search, type filtering, saved searches, link traversal. The explorer (`STATUS.md` §32) and traversal (§33) exist; this is the full-page app around them.
 
-### 4.2 Ontology Manager — **M**
+### ~~4.2 Ontology Manager~~ — **done** (`STATUS.md` §97)
 Type and link management, property types, change history (§34, §35) as a proper application rather than a settings page.
+
+An object type opens at `/r/{id}` with Objects, Properties, Links and History. It was the last resource kind whose card said "building in roadmap item 4.2" instead of opening something. Properties are shown as *declared* rather than inferred from untyped stored values; a version is shown as it was, dropped properties included; links appear in both directions, and one with no join mapped says it is not traversable.
 
 ---
 

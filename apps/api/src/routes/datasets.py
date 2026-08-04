@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import anyio
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -82,6 +82,9 @@ class DatasetUpdate(BaseModel):
 class QueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=20_000)
     max_rows: int = Field(default=engine.MAX_RESULT_ROWS, ge=1, le=engine.MAX_RESULT_ROWS)
+    # Query an earlier version (roadmap 3.3). None is the current one, which is
+    # what every caller before time travel meant and still means.
+    version: int | None = Field(default=None, ge=1)
 
 
 class TabularOut(BaseModel):
@@ -98,6 +101,26 @@ class VersionOut(BaseModel):
     table_schema: list[dict[str, str]]
     produced_by_kind: str | None
     created_at: datetime
+    # What keeping this version costs (roadmap 3.3). None means the object is
+    # not where the row says it is - which is worth showing as its own state,
+    # because it is the difference between "this version is expensive" and
+    # "this version cannot be read".
+    size_bytes: int | None = None
+
+
+class RetentionOut(BaseModel):
+    """What this dataset is costing, said where somebody can see it.
+
+    Time travel is only possible because every version's bytes have always been
+    kept, and nothing has ever said so. The roadmap asked for this in the item
+    rather than in the invoice.
+    """
+    versions: int
+    # Sum over the versions whose object was found; `unmeasured` says how many
+    # were not, so a total is never quietly short.
+    total_bytes: int
+    unmeasured: int
+    current_version: int
 
 
 class ColumnProfileOut(BaseModel):
@@ -376,11 +399,35 @@ async def delete_dataset(
 
 
 # ---- data access ------------------------------------------------------------
-async def _parquet_path(access: ProjectAccess, dataset_id: UUID) -> tuple[str, dict[str, Any]]:
+async def _parquet_path(
+    access: ProjectAccess, dataset_id: UUID, version: int | None = None
+) -> tuple[str, dict[str, Any]]:
+    """The bytes to read, and what the row says about them.
+
+    `version=None` is the current one. A named version reads *that* version's
+    key and returns *that* version's schema and row count (roadmap 3.3) -
+    reading old rows against the current column list is how a time-travel view
+    quietly describes the data wrongly.
+    """
     async with user_connection(access.auth.user_id) as conn:
-        row = await ds_service.get(conn, access.project_id, dataset_id)
+        if version is None:
+            row = await ds_service.get(conn, access.project_id, dataset_id)
+            key = str(row["s3_location"])
+        else:
+            row = await ds_service.version_location(
+                conn, access.project_id, dataset_id, version
+            )
+            key = str(row["s3_manifest_key"] or "")
+    if not key:
+        # A version row written before this key was recorded, or by a path that
+        # did not set it. Its metadata is true and its bytes are unaddressable,
+        # which is a different thing from the file being missing.
+        raise ConflictError(
+            f"version {version} has no stored file recorded, so its rows cannot be "
+            "read. Its schema and row count are still what it reported."
+        )
     try:
-        path = await anyio.to_thread.run_sync(_storage.local_path, str(row["s3_location"]))
+        path = await anyio.to_thread.run_sync(_storage.local_path, key)
     except FileNotFoundError as exc:
         # The row exists and its bytes do not. Rare, and entirely knowable:
         # storage cleared under a dev machine, a bucket lifecycle rule, a
@@ -399,9 +446,11 @@ async def _parquet_path(access: ProjectAccess, dataset_id: UUID) -> tuple[str, d
 @router.get("/{dataset_id}/preview", response_model=TabularOut)
 async def preview_dataset(
     dataset_id: UUID,
+    version: int | None = Query(default=None, ge=1),
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> TabularOut:
-    path, _ = await _parquet_path(access, dataset_id)
+    """A sample of the rows. `version` reads an earlier one (roadmap 3.3)."""
+    path, _ = await _parquet_path(access, dataset_id, version)
     result = await anyio.to_thread.run_sync(engine.preview, path)
     return _tabular(result)
 
@@ -409,17 +458,19 @@ async def preview_dataset(
 @router.get("/{dataset_id}/profile", response_model=DatasetProfileOut)
 async def profile_dataset(
     dataset_id: UUID,
+    version: int | None = Query(default=None, ge=1),
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> DatasetProfileOut:
-    """Per-column statistics for the dataset's current version.
+    """Per-column statistics, for the current version or an earlier one.
 
     Computed on first request and cached on the version row (migration 0019):
     a version's data never changes, so the answer is valid forever once
-    written. Viewer-level like preview and query - this is a read of data the
-    caller can already see, just aggregated.
+    written - which is also why profiling an *old* version costs nothing the
+    second time somebody looks. Viewer-level like preview and query: a read of
+    data the caller can already see, aggregated.
     """
-    path, row = await _parquet_path(access, dataset_id)
-    version_number = int(row["current_version"])
+    path, row = await _parquet_path(access, dataset_id, version)
+    version_number = version or int(row["current_version"])
 
     async with user_connection(access.auth.user_id) as conn:
         cached = await ds_service.get_cached_profile(conn, dataset_id, version_number)
@@ -565,7 +616,7 @@ async def query_dataset(
     request: Request,
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> TabularOut:
-    path, _ = await _parquet_path(access, dataset_id)
+    path, _ = await _parquet_path(access, dataset_id, body.version)
     result = await anyio.to_thread.run_sync(engine.query, path, body.sql, body.max_rows)
     async with user_connection(access.auth.user_id) as conn:
         await audit.record(
@@ -577,7 +628,8 @@ async def query_dataset(
             resource_id=dataset_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            metadata={"sql": body.sql[:200], "rows_returned": result.total_rows},
+            metadata={"sql": body.sql[:200], "rows_returned": result.total_rows,
+                      "version": body.version},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
@@ -634,6 +686,39 @@ async def export_dataset(
     )
 
 
+@router.get("/{dataset_id}/retention", response_model=RetentionOut)
+async def dataset_retention(
+    dataset_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> RetentionOut:
+    """What keeping every version of this dataset costs.
+
+    Nothing deletes an old version today (docs/decisions/0005), so this number
+    only grows. Reporting it is the point: a cost nobody can see is a cost
+    nobody manages, and this one arrives as a line on a bill months later.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        current = await ds_service.get(conn, access.project_id, dataset_id)
+        rows = await ds_service.list_versions(conn, access.project_id, dataset_id)
+    total = 0
+    unmeasured = 0
+    for row in rows:
+        key = row.get("s3_manifest_key")
+        size = (
+            await anyio.to_thread.run_sync(_storage.size, str(key)) if key else None
+        )
+        if size is None:
+            unmeasured += 1
+        else:
+            total += size
+    return RetentionOut(
+        versions=len(rows),
+        total_bytes=total,
+        unmeasured=unmeasured,
+        current_version=int(current["current_version"]),
+    )
+
+
 @router.get("/{dataset_id}/versions", response_model=list[VersionOut])
 async def list_versions(
     dataset_id: UUID,
@@ -648,6 +733,14 @@ async def list_versions(
             import json
 
             data["table_schema"] = json.loads(data["table_schema"])
+        # One HEAD per version. A dataset has tens of these, not thousands, and
+        # the alternative - storing the size at write time - is a second copy of
+        # a fact the object store already holds and would silently go wrong the
+        # first time anything touched the bucket directly.
+        key = data.pop("s3_manifest_key", None)
+        data["size_bytes"] = (
+            await anyio.to_thread.run_sync(_storage.size, str(key)) if key else None
+        )
         out.append(VersionOut(**data))
     return out
 

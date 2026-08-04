@@ -1828,6 +1828,66 @@ The half of roadmap 2.5 that stayed open. SQL transforms were authored in a text
 
 The browser check drives the Publish tab against real servers: the plan listing only declared files, the button naming how many it would write, publishing, and a second visit finding nothing to do. Two small dishonesties were fixed after looking at the screenshot — the button still offered to publish transforms it had just published, and a full-page empty-state style was being used for a one-line result.
 
+### 95. Joining the two halves of Code Repositories (this session)
+
+§92 exposed a gap and §94 made it load-bearing: **proposals reference `models`, repositories hold branches, and nothing joined them.** The consequence was concrete — a project with `require_code_review` on could not publish from a repository at all, because letting a publish through would make the gate avoidable by putting the code in a repository first. §94 stated that limitation rather than papering over it. This closes it.
+
+**A proposal can name a commit.** Migration 0039 adds `source_repo_id` / `source_commit_id` to `code_proposals`; when set, applying the proposal *publishes* rather than writing a change set, and the direct-publish refusal now says where to go instead.
+
+**A commit-backed proposal stores no files, and that is the stronger property, not a shortcut.** 0031 keeps `files_updated_at` and invalidates approvals whenever the proposed code changes, because approve-then-swap-the-code is how arbitrary code gets past a reviewer who read something else. A commit is immutable, so for this kind of proposal the code under review **cannot** change — there is nothing to swap. Its files are derived from the commit's declared transforms at read time, through the same `plan()` the Publish tab uses, so the screen and the write cannot disagree.
+
+**What can still move underneath is the live definition**, which is what `code_proposal_files.base_version` guards for a stored proposal. A commit-backed one derives the same thing: the model's version *as of the proposal's `files_updated_at`*, computed from `model_versions.created_at`. Versions are append-only and carry their own timestamps, so the question is one the data already answers — and an answer computed from the data cannot disagree with it. The test that matters is two proposals over the same file where one lands first: the other goes stale and is refused.
+
+**Comments needed a second anchor.** `code_proposal_comments.model_id` was NOT NULL, which is right for a change to an existing transform and impossible for a file that will *create* one. A comment on such a file anchors to its repository path instead — the thing that is stable across the publish, and the thing the reviewer is looking at. The same applies to checks and to "I have read this file", and `anchor_key()` is the one place that decides which.
+
+**Applying a commit proposal creates a change set around the publish**, so four files land as one entry in the project's history rather than four — and 0031's own `(state = 'applied') = (change_set_id IS NOT NULL)` keeps meaning what it says.
+
+**689 API tests green**, 15 new. Thirteen mutations; three survived a first pass and two were real gaps — nothing tested that a commit-backed proposal goes stale when another lands first, and nothing tested a comment naming *both* a model the proposal really changes and a path (the anchor lookup catches a wrong model on its own; that case reaches the database's own CHECK as a 500). The third survivor was an unreachable guard, deleted rather than tested: `plan()` already refuses a commit that declares nothing.
+
+**Two real bugs the join exposed in the browser, both fixed.** The Code page rendered its open-proposals list only when the project already had transforms — so a proposal that would create the *first* ones was unreachable, which is exactly the case this whole feature exists for. And the review surface keyed each file on `model_id`, which is null for every file of a commit-backed proposal: React duplicates or drops children that share a key, silently.
+
+**One omission from §93 caught while here**: `code_proposal_checks` was never added to `verify_schema.py`'s `POST_SPEC_TABLES`, so the verifier would have reported it as an unexplained extra table.
+
+### 96. Time travel, and the bill that was already being paid (this session)
+
+Roadmap 3.3: *"Browse a dataset at a previous version. Needs a decision on retention, and it is the one item here that has a storage bill attached — say so in the item rather than in the invoice."*
+
+**The finding that shaped the whole item: every version's bytes have always been kept.** Since migration 0003 each version has been written to its own key — `datasets/{id}/v{n}/data.parquet` — and nothing has ever deleted one. A dataset synced hourly for a year is 8,760 complete copies of itself. Nobody decided that; it fell out of writing versioned keys and never writing a sweeper, and the first time it becomes visible is on a bill.
+
+So time travel needed **no migration and no backfill**. What was missing was a way to *ask* for a version: `preview`, `profile` and `query` now take one, and `dataset_versions.s3_manifest_key` — written since 0003, read by nothing — is where they look.
+
+**A version is described by its own schema and row count, not the current one's.** Reading v1's rows against v7's column list would describe the data wrongly in exactly the case somebody looks at an old version: to find out what changed.
+
+**The bill is now on the screen.** Each version reports its size, and `GET /datasets/{id}/retention` totals them. `null` size is its own state — the object is not where the row says it is, which is different from "this version is small" — and the total says how many were unmeasured so it is never quietly short.
+
+**The retention decision is written down** (`docs/decisions/0005-dataset-retention.md`) rather than left implied. Default: keep everything, because a default that expires data would silently delete it on every existing deployment the moment it shipped, to fix a problem none of them have reported. When expiry is built it must **delete bytes and keep rows** — `model_runs.output_version` points at versions, and deleting those rows would make history lie. Nothing is protected except the current version; in particular a version a model run points at is *not*, because protecting those protects almost everything and a policy that cannot expire anything is not a policy.
+
+**702 API tests green**, 13 new; the worker's 74 re-run because `size()` was mirrored into its copy of `storage.py` to keep the two in step. Nine mutations, nine caught after two rounds.
+
+**The two rounds are the interesting part.** The first left one survivor — profiling an old version and caching it against the current one — which survived only because the fixture had two versions and the test asked for v1, which is also what the broken code defaulted to. Rebuilding the fixture with **three** differently-shaped versions and asking for the *middle* one killed it. That change then broke a different check: v1 and v3 both had three rows, so the query test could no longer tell "read version 1" from "ignored the parameter". It now asks for v2, the only one with a different count. **A fixture where the interesting case is neither the first nor the last is worth more than a fixture with more rows in it.**
+
+One test found a real hole in itself: it deleted `v1/data.parquet` by globbing, and matched the *source* dataset's v1 rather than the one under test — so the assertion about a shrinking total passed while measuring nothing. Scoped to the dataset id.
+
+### 97. The Ontology Manager, and the last resource that was not an application (this session)
+
+Roadmap 4.2. An object type now opens as its own full-page application at `/r/{id}` — Objects, Properties, Links, History — rather than as a card saying "open in Objects" and sending you to a workspace page to find it again.
+
+**It is the last kind that resolved to a placeholder.** `datasets` got theirs in §56, repositories in §62; `object_type` was the remaining one whose card literally read *"building in roadmap item 4.2"*. Section 0's whole argument is that a resource opens as an application; this is that argument applied to the one place it had not been.
+
+**Almost no new behaviour.** Properties, links, versions and instances are services that have existed since §31–§35. What is new is that they are in one place keyed by the resource id, so "look at this object type" is a link.
+
+Three things it takes care over, all about reading rather than editing:
+
+- **A property's type is shown as declared, not inferred.** The instance store keeps properties untyped (§87), so a screen that guessed from values would disagree with the declaration exactly when they had drifted — which is the moment somebody is looking.
+- **A version is shown as it was**, including properties the type no longer has. The seeded example deliberately *drops* a property between v1 and v2, because a history that rendered every version with the current shape would look right and be worthless.
+- **Links are shown in both directions.** A link this type is the target of is as much a fact about it as one it is the source of. A link with no join mapped says "not traversable" rather than leaving an empty cell — db 0027 calls that a valid ontology statement that cannot yet be traversed, and it is worth saying so.
+
+**One simplification found while writing it**: the links list already carries `from_display_name` / `to_display_name`, so the second query I had written to resolve type names was removed rather than kept.
+
+**702 API tests green**, unchanged — this item added no server code, which is the honest measure of how much of it already existed. The browser check drives all four tabs against real servers, including the dropped property appearing in v1 and not in the current columns.
+
+Seeding it needed three corrections that are worth knowing: `SourceCreate` takes `column_mappings` as **column → property**, `LinkTypeCreate` takes `from_type_id`/`to_type_id` rather than the `*_object_type_id` names the *response* uses, and there is no `many_to_one` cardinality.
+
 ---
 
 ## What's not started

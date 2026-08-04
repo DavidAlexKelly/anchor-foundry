@@ -49,6 +49,15 @@ class StorageGateway(Protocol):
         short-lived."""
         ...
 
+    def size(self, key: str) -> int | None:
+        """Bytes stored under this key, or None if it is not there.
+
+        None rather than an exception: the caller is adding up what a dataset
+        costs to keep (roadmap 3.3), and one missing object should leave the
+        rest of the total readable rather than turning a report into an error.
+        """
+        ...
+
     def delete_prefix(self, prefix: str) -> None:
         """Remove every object under prefix (dataset deletion)."""
         ...
@@ -84,6 +93,10 @@ class LocalStorageGateway:
         if not path.is_file():
             raise FileNotFoundError(key)
         return str(path)
+
+    def size(self, key: str) -> int | None:
+        path = self._path(key)
+        return path.stat().st_size if path.is_file() else None
 
     def delete_prefix(self, prefix: str) -> None:
         # Prefix ends at the dataset directory: workspaces/<ws>/datasets/<id>/
@@ -121,6 +134,16 @@ class S3StorageGateway:
         self._client.download_fileobj(self._bucket, key, handle)
         handle.close()
         return handle.name
+
+    def size(self, key: str) -> int | None:
+        validate_key(key)
+        try:
+            return int(self._client.head_object(Bucket=self._bucket, Key=key)["ContentLength"])
+        except Exception:
+            # HEAD on a missing key is a 404 through botocore's ClientError, and
+            # a report that adds up what is stored should not fail because one
+            # object is not.
+            return None
 
     def delete_prefix(self, prefix: str) -> None:
         if ".." in prefix or not prefix.startswith("workspaces/"):

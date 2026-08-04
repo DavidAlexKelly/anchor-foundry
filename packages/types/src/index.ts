@@ -608,10 +608,25 @@ export interface DatasetHealth {
 /** One committed version of a dataset. The row a "time travel" view browses,
  * and the reason a record of what a dataset *was* does not change when the
  * dataset does. */
+/** What keeping every version of a dataset costs (roadmap 3.3). Time travel is
+ * only possible because nothing deletes an old version, and that bill has
+ * always been paid without being shown — see docs/decisions/0005. */
+export interface DatasetRetention {
+  versions: number;
+  /** Summed over the versions whose object was found. `unmeasured` says how
+   * many were not, so a total is never quietly short. */
+  total_bytes: number;
+  unmeasured: number;
+  current_version: number;
+}
+
 export interface DatasetVersion {
   id: string;
   version_number: number;
   row_count: number;
+  /** What this version costs to keep. Null means the object is not where the
+   * row says it is — a different state from "this version is small". */
+  size_bytes?: number | null;
   table_schema: { name: string; data_type: string }[];
   /** What produced it: an upload, a sync, a model run. Null for versions
    * written before this was recorded. */
@@ -1214,7 +1229,11 @@ export interface CodeDiffRow {
 
 export interface CodeProposalComment {
   id: string;
-  model_id: string;
+  /** One of these two, never both. A commit-backed proposal may create
+   * transforms that do not exist yet, and a remark about one of those has only
+   * its repository path to hang on (db 0039). */
+  model_id: string | null;
+  source_path?: string | null;
   /** Which column of the diff it hangs on. */
   side: "live" | "proposed";
   /** Null is a remark about the file rather than about a line. */
@@ -1237,7 +1256,8 @@ export interface CodeProposalComment {
  * files are returned - one made before the last edit says somebody read a file
  * that no longer exists in that form. */
 export interface CodeFileMark {
-  model_id: string;
+  model_id: string | null;
+  source_path?: string | null;
   reviewer_id: string;
   reviewer_email: string | null;
   marked_at: string;
@@ -1255,8 +1275,10 @@ export type CodeCheckStatus = "pass" | "warn" | "fail" | "error";
 
 export interface CodeCheck {
   id: string;
-  /** Null is a check about the proposal as a whole rather than about a file. */
+  /** Null on both is a check about the proposal as a whole. `source_path`
+   * carries the file when it has no model yet (db 0039). */
   model_id: string | null;
+  source_path?: string | null;
   name: string;
   status: CodeCheckStatus;
   summary: string;
@@ -1271,7 +1293,9 @@ export interface CodeCheck {
 }
 
 export interface CodeProposalFile {
-  model_id: string;
+  /** Null for a file that would *create* a transform: a commit-backed proposal
+   * publishes files that may have no model until it is applied. */
+  model_id: string | null;
   model_name: string;
   language: "sql" | "python";
   path: string | null;
@@ -1299,6 +1323,11 @@ export interface CodeReview {
 export interface CodeProposal {
   id: string;
   project_id: string;
+  /** Set when this proposal asks to publish a repository commit rather than to
+   * change named transforms (db 0039). Its files are derived from the commit,
+   * and applying it publishes. */
+  source_repo_id?: string | null;
+  source_commit_id?: string | null;
   summary: string;
   description: string;
   state: "open" | "applied" | "withdrawn";

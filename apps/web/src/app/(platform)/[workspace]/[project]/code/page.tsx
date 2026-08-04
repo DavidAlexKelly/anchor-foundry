@@ -230,15 +230,49 @@ export default function CodePage() {
       {tree.isError && (
         <div className="state error">Couldn&apos;t load this project&apos;s code.</div>
       )}
-      {tree.data && files.length === 0 && (
+      {tree.data && files.length === 0 && !openProposal && (
         <div className="empty">
           <h2>No transforms yet</h2>
           <p>
             A project&apos;s models are its code. Create one under{" "}
-            <Link href={`/${params.workspace}/${params.project}/models`}>Models</Link> and
-            it appears here as a file.
+            <Link href={`/${params.workspace}/${params.project}/models`}>Models</Link>, or
+            publish one from a repository, and it appears here as a file.
           </p>
         </div>
+      )}
+
+      {/* Outside the shell below, deliberately. A project whose only proposal
+          publishes a repository commit has no transforms *yet* - so a list
+          rendered only when there are files would make the one thing worth
+          looking at the one thing you cannot reach. */}
+      {!openProposal && proposals.data && proposals.data.length > 0 && (
+        <section className="code-open-proposals">
+          <p className="field-label">Open proposals</p>
+          <ul className="code-log">
+            {proposals.data.map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className="code-log-entry"
+                  onClick={() => {
+                    setViewing(null);
+                    setOpenProposal(p.id);
+                  }}
+                >
+                  <span className="code-log-summary">{p.summary}</span>
+                  <span className="code-log-meta">
+                    <span className="chip brass">
+                      {p.source_commit_id
+                        ? `publishes ${p.source_commit_id.slice(0, 8)}`
+                        : `${p.file_count} file${p.file_count === 1 ? "" : "s"}`}
+                    </span>
+                    {p.created_by_email ?? "unknown"}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {openProposal && workspace && project && (
@@ -386,33 +420,6 @@ export default function CodePage() {
           </section>
 
           <aside className="code-side">
-            {proposals.data && proposals.data.length > 0 && (
-              <>
-                <p className="field-label">Open proposals</p>
-                <ul className="code-log">
-                  {proposals.data.map((p) => (
-                    <li key={p.id}>
-                      <button
-                        type="button"
-                        className="code-log-entry"
-                        onClick={() => {
-                          setViewing(null);
-                          setOpenProposal(p.id);
-                        }}
-                      >
-                        <span className="code-log-summary">{p.summary}</span>
-                        <span className="code-log-meta">
-                          <span className="chip brass">
-                            {p.file_count} file{p.file_count === 1 ? "" : "s"}
-                          </span>
-                          {p.created_by_email ?? "unknown"}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
             <p className="field-label">History</p>
             {history.data && <HistoryList entries={history.data} onOpen={setViewing} />}
             {viewing && (

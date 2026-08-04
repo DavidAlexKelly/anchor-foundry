@@ -19,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { ApplicationShell, ResourceSummary } from "@/components/application-shell";
 import { DatasetApplication } from "@/components/applications/dataset-app";
+import { ObjectTypeApplication } from "@/components/applications/object-type-app";
 import { RepositoryApplication } from "@/components/applications/repository-app";
 import { resources as resourcesApi } from "@/lib/api";
 import { ApiError } from "@/lib/api";
@@ -28,7 +29,7 @@ import type { ResolvedResource, ResourceKind } from "@/lib/types";
  * a real application. `href` is null for kinds whose current home cannot be
  * linked to for one resource. */
 const APPLICATIONS: Record<
-  Exclude<ResourceKind, "dataset" | "code_repo">,
+  Exclude<ResourceKind, "dataset" | "code_repo" | "object_type">,
   { buildingIn: string; label: string; href: (r: ResolvedResource) => string | null }
 > = {
   model: {
@@ -40,11 +41,6 @@ const APPLICATIONS: Record<
     buildingIn: "roadmap section 1 (Workshop)",
     label: "Open in Canvas",
     href: (r) => (r.project_slug ? `/${r.workspace_slug}/${r.project_slug}/canvas` : null),
-  },
-  object_type: {
-    buildingIn: "roadmap item 4.2 (Ontology Manager)",
-    label: "Open in Objects",
-    href: (r) => `/${r.workspace_slug}`,
   },
   connection: {
     buildingIn: "not yet scheduled",
@@ -92,6 +88,13 @@ export default function ResourcePage() {
     return (
       <ApplicationShell resource={resource.data}>
         <RepositoryApplication resource={resource.data} />
+      </ApplicationShell>
+    );
+  }
+  if (resource.data.kind === "object_type") {
+    return (
+      <ApplicationShell resource={resource.data}>
+        <ObjectTypeApplication resource={resource.data} />
       </ApplicationShell>
     );
   }

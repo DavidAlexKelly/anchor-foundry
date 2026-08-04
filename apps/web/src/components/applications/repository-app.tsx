@@ -20,7 +20,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ApiError, repositories as repoApi } from "@/lib/api";
+import { ApiError, code as codeApi, repositories as repoApi } from "@/lib/api";
+import { DESCRIPTION_TEMPLATE } from "@/components/code/review-surface";
 import type {
   PublishPlan,
   RepositoryBranch,
@@ -407,6 +408,7 @@ function PublishTab({
   const queryClient = useQueryClient();
   const [result, setResult] = useState<PublishPlan | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
 
   const plan = useQuery({
     queryKey: ["repo-publish-plan", rid, branch],
@@ -427,6 +429,30 @@ function PublishTab({
     },
   });
 
+  // Whether this project gates code changes. A gated project cannot publish
+  // directly - it opens a proposal for the commit and publishes by applying
+  // it, which is what makes the gate hold rather than be routed around.
+  const policy = useQuery({
+    queryKey: ["code-review-policy", pid],
+    queryFn: () => codeApi.reviewPolicy(wid, pid),
+  });
+  const gated = policy.data?.require_code_review ?? false;
+
+  const propose = useMutation({
+    mutationFn: (input: { summary: string; commit_id: string }) =>
+      codeApi.propose(wid, pid, {
+        summary: input.summary,
+        description: DESCRIPTION_TEMPLATE,
+        source_repo_id: rid,
+        source_commit_id: input.commit_id,
+      }),
+    onSuccess: (made) => {
+      setFailure(null);
+      setOpened(made.id);
+    },
+    onError: (e: Error) => setFailure(e instanceof ApiError ? e.message : String(e)),
+  });
+
   // A plan is against a branch's head. Viewing a pinned commit is history, and
   // publishing history would quietly make an old snapshot live.
   if (pinned) {
@@ -442,6 +468,7 @@ function PublishTab({
   const steps = result?.steps ?? plan.data?.steps ?? [];
   const orphaned = result?.orphaned ?? plan.data?.orphaned ?? [];
   const refusal = plan.isError ? (plan.error as Error).message : null;
+  const commitId = result?.commit_id ?? plan.data?.commit_id ?? null;
   // After a publish, what is left to write is what the *result* says, not what
   // the plan said before it ran - a button offering to publish two transforms
   // it has just published is a small lie, and the next press proves it.
@@ -459,23 +486,52 @@ function PublishTab({
             definitions. The source is copied into a version, so deleting the branch
             afterwards changes nothing about what runs.
           </p>
+          {gated && (
+            <p className="repo-publish-gated">
+              This project requires code review, so a commit is not published
+              directly — open a proposal for it, and applying that proposal publishes.
+            </p>
+          )}
         </div>
-        <button
-          className="btn"
-          type="button"
-          disabled={!!refusal || run.isPending || steps.length === 0}
-          onClick={() => run.mutate()}
-        >
-          {run.isPending
-            ? "Publishing…"
-            : writes === 0 && steps.length > 0
-              ? "Nothing to publish"
-              : `Publish ${writes} transform${writes === 1 ? "" : "s"}`}
-        </button>
+        {gated ? (
+          <button
+            className="btn"
+            type="button"
+            disabled={!!refusal || propose.isPending || steps.length === 0 || !commitId}
+            onClick={() =>
+              commitId &&
+              propose.mutate({
+                summary: `Publish ${branch} (${commitId.slice(0, 8)})`,
+                commit_id: commitId,
+              })
+            }
+          >
+            {propose.isPending ? "Opening…" : "Open a proposal"}
+          </button>
+        ) : (
+          <button
+            className="btn"
+            type="button"
+            disabled={!!refusal || run.isPending || steps.length === 0}
+            onClick={() => run.mutate()}
+          >
+            {run.isPending
+              ? "Publishing…"
+              : writes === 0 && steps.length > 0
+                ? "Nothing to publish"
+                : `Publish ${writes} transform${writes === 1 ? "" : "s"}`}
+          </button>
+        )}
       </div>
 
       {refusal && <p className="state error">{refusal}</p>}
       {failure && <p className="state error">{failure}</p>}
+      {opened && (
+        <p className="state">
+          Proposal opened. Review it under Code in this project; applying it
+          publishes this commit.
+        </p>
+      )}
       {result && (
         <p className="state">
           Published {result.steps.filter((s) => s.action !== "unchanged").length} of{" "}

@@ -80,6 +80,7 @@ async def _record(
     *,
     proposal_id: UUID,
     model_id: UUID | None,
+    source_path: str | None,
     name: str,
     status: str,
     summary: str,
@@ -94,15 +95,17 @@ async def _record(
     await conn.exec_driver_sql(
         """
         INSERT INTO code_proposal_checks
-            (proposal_id, model_id, name, status, summary, detail, ran_by, anchored_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (proposal_id, model_id, name) DO UPDATE
+            (proposal_id, model_id, source_path, name, status, summary, detail,
+             ran_by, anchored_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (proposal_id, model_id, source_path, name) DO UPDATE
             SET status = EXCLUDED.status, summary = EXCLUDED.summary,
                 detail = EXCLUDED.detail, ran_at = now(),
                 ran_by = EXCLUDED.ran_by, anchored_at = EXCLUDED.anchored_at
         """,
         (
-            str(proposal_id), str(model_id) if model_id else None, name, status,
+            str(proposal_id), str(model_id) if model_id else None, source_path,
+            name, status,
             summary, json.dumps(detail), str(ran_by) if ran_by else None, anchored_at,
         ),
     )
@@ -128,29 +131,40 @@ async def run_checks(
         raise ValueError("this proposal is closed, so there is nothing to check")
     anchor = proposal["files_updated_at"]
 
-    files = await fetch_all(
-        conn,
-        """
-        SELECT f.model_id, f.code, m.name AS model_name, m.language,
-               m.output_dataset_id
-          FROM code_proposal_files f JOIN models m ON m.id = f.model_id
-         WHERE f.proposal_id = :pid
-         ORDER BY m.name
-        """,
-        {"pid": str(proposal_id)},
+    # Through the proposal's own file list rather than `code_proposal_files`:
+    # a commit-backed proposal has no rows there (db 0039) and every check on
+    # one would otherwise find nothing to do and report success by silence.
+    from . import code as code_service
+
+    files, unpublishable = await code_service.proposal_files(
+        conn, project_id, proposal_id
     )
+    if unpublishable:
+        raise ValueError(unpublishable)
     if not files:
         raise ValueError("this proposal has no files to check")
 
-    for row in files:
-        model_id = UUID(str(row["model_id"]))
+    for entry in files:
+        model_id = UUID(str(entry["model_id"])) if entry["model_id"] else None
+        row = dict(entry)
+        if model_id is not None:
+            live = await fetch_one(
+                conn, "SELECT output_dataset_id FROM models WHERE id = :mid",
+                {"mid": str(model_id)},
+            )
+            row["output_dataset_id"] = live["output_dataset_id"] if live else None
+        else:
+            # A file that would create a transform writes a dataset nothing has
+            # yet, so there is no schema to be incompatible with.
+            row["output_dataset_id"] = None
+        path = entry.get("path") if model_id is None else None
         schema, ran = await _check_transform_runs(
-            conn, proposal_id, row, model_id=model_id, storage=storage,
-            actor_id=actor_id, anchor=anchor,
+            conn, proposal_id, row, model_id=model_id, source_path=path,
+            storage=storage, actor_id=actor_id, anchor=anchor,
         )
         await _check_schema_compatible(
-            conn, proposal_id, row, model_id=model_id, produced=schema,
-            transform_ran=ran, actor_id=actor_id, anchor=anchor,
+            conn, proposal_id, row, model_id=model_id, source_path=path,
+            produced=schema, transform_ran=ran, actor_id=actor_id, anchor=anchor,
         )
 
     return await list_checks(conn, proposal_id, anchor)
@@ -161,7 +175,8 @@ async def _check_transform_runs(
     proposal_id: UUID,
     row: Any,
     *,
-    model_id: UUID,
+    model_id: UUID | None,
+    source_path: str | None,
     storage: Any,
     actor_id: UUID | None,
     anchor: Any,
@@ -178,7 +193,8 @@ async def _check_transform_runs(
         # API. `error` rather than `pass` - nobody has been told anything about
         # this code, and saying "pass" would be a claim we have not earned.
         await _record(
-            conn, proposal_id=proposal_id, model_id=model_id, name=name, status="error",
+            conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="error",
             summary=(
                 "Python transforms run in an isolated task rather than in the API, so "
                 "this check cannot run on them here. It has not passed - it has not run."
@@ -187,7 +203,18 @@ async def _check_transform_runs(
         )
         return None, False
 
-    inputs = await model_service.list_inputs(conn, model_id)
+    inputs = (
+        await model_service.list_inputs(conn, model_id)
+        if model_id is not None
+        # A file that would create a transform has no `model_inputs` rows yet.
+        # The plan already resolved its declared inputs to datasets, so they
+        # arrive on the entry - which is also what makes this checkable at all.
+        else [
+            {"dataset_id": i["dataset_id"], "input_alias": i["input_alias"],
+             "dataset_name": i.get("dataset", "")}
+            for i in (row.get("inputs") or [])
+        ]
+    )
     paths: dict[str, str] = {}
     for item in inputs:
         location = await fetch_one(
@@ -196,7 +223,8 @@ async def _check_transform_runs(
         )
         if location is None or not location["s3_location"]:
             await _record(
-                conn, proposal_id=proposal_id, model_id=model_id, name=name, status="error",
+                conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="error",
                 summary=(
                     f"{item['dataset_name']} has no stored data yet, so there is nothing "
                     "to run this against."
@@ -211,7 +239,8 @@ async def _check_transform_runs(
             )
         except FileNotFoundError:
             await _record(
-                conn, proposal_id=proposal_id, model_id=model_id, name=name, status="error",
+                conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="error",
                 summary=(
                     f"{item['dataset_name']} has a version recorded but no bytes behind "
                     "it, so this check could not read it."
@@ -230,14 +259,16 @@ async def _check_transform_runs(
         # anybody approves it. `fail`, and the engine's own message - it is
         # already phrased for whoever wrote the SQL.
         await _record(
-            conn, proposal_id=proposal_id, model_id=model_id, name=name, status="fail",
+            conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="fail",
             summary=str(exc), detail={}, ran_by=actor_id, anchored_at=anchor,
         )
         return None, False
 
     sampled = any(p.sampled for p in previewed)
     await _record(
-        conn, proposal_id=proposal_id, model_id=model_id, name=name, status="pass",
+        conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="pass",
         summary=(
             f"Runs, and produces {len(result.columns)} column"
             f"{'' if len(result.columns) == 1 else 's'}"
@@ -259,7 +290,8 @@ async def _check_schema_compatible(
     proposal_id: UUID,
     row: Any,
     *,
-    model_id: UUID,
+    model_id: UUID | None,
+    source_path: str | None,
     produced: list[Any] | None,
     transform_ran: bool,
     actor_id: UUID | None,
@@ -275,7 +307,8 @@ async def _check_schema_compatible(
     name = "schema_compatible"
     if not transform_ran or produced is None:
         await _record(
-            conn, proposal_id=proposal_id, model_id=model_id, name=name, status="error",
+            conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="error",
             summary="The transform did not run, so there is no schema to compare.",
             detail={}, ran_by=actor_id, anchored_at=anchor,
         )
@@ -284,7 +317,8 @@ async def _check_schema_compatible(
     output_id = row["output_dataset_id"]
     if output_id is None:
         await _record(
-            conn, proposal_id=proposal_id, model_id=model_id, name=name, status="pass",
+            conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="pass",
             summary="This transform has not written a dataset yet, so nothing can break.",
             detail={}, ran_by=actor_id, anchored_at=anchor,
         )
@@ -300,7 +334,8 @@ async def _check_schema_compatible(
     changes = engine.diff_schemas(previous, produced)
     if not changes:
         await _record(
-            conn, proposal_id=proposal_id, model_id=model_id, name=name, status="pass",
+            conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="pass",
             summary=(
                 f"Leaves {dataset['name']}'s schema as it is."
                 if previous
@@ -320,7 +355,8 @@ async def _check_schema_compatible(
         # allows it for the reason written there: a policy people keep
         # switching off is a policy nobody leaves on.
         await _record(
-            conn, proposal_id=proposal_id, model_id=model_id, name=name, status="pass",
+            conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="pass",
             summary=(
                 f"Adds {', '.join(c['name'] for c in added)} to {dataset['name']}. "
                 "Adding a column does not break a reader."
@@ -335,7 +371,8 @@ async def _check_schema_compatible(
     )
     if strict:
         await _record(
-            conn, proposal_id=proposal_id, model_id=model_id, name=name, status="fail",
+            conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="fail",
             summary=(
                 f"This {what} on {dataset['name']}, which is strict - the write would be "
                 "refused when the transform ran. Applying this would produce a failed "
@@ -346,7 +383,8 @@ async def _check_schema_compatible(
         )
         return
     await _record(
-        conn, proposal_id=proposal_id, model_id=model_id, name=name, status="warn",
+        conn, proposal_id=proposal_id, model_id=model_id,
+            source_path=source_path, name=name, status="warn",
         summary=(
             f"This {what} on {dataset['name']}. The dataset is permissive so the write "
             "would be allowed, but anything reading those columns breaks."
@@ -362,7 +400,8 @@ async def list_checks(
     rows = await fetch_all(
         conn,
         """
-        SELECT c.id, c.model_id, c.name, CAST(c.status AS text) AS status,
+        SELECT c.id, c.model_id, c.source_path, c.name,
+               CAST(c.status AS text) AS status,
                c.summary, c.detail, c.ran_at, c.ran_by, c.anchored_at,
                (SELECT u.email FROM users u WHERE u.id = c.ran_by) AS ran_by_email
           FROM code_proposal_checks c
