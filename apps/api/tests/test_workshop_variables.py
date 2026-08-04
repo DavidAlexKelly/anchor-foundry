@@ -158,12 +158,17 @@ def test_a_transform_configured_with_the_wrong_number_of_inputs_is_refused() -> 
         )
 
 
-def test_the_ontology_transforms_say_they_are_not_built_rather_than_failing_oddly() -> None:
-    """`object_property` and `object_set_aggregation` need the instance store,
-    so they are a round trip rather than a pure function. Returning None for
-    them would make every caller guess which of its results were real."""
+def test_the_ontology_transform_says_it_is_not_built_rather_than_failing_oddly() -> None:
+    """An aggregate over a set needs the instance store, so it is a round trip
+    rather than a pure function. Returning None for it would make every caller
+    guess which of its results were real.
+
+    `object_property` used to be the other example here and is now built (§84):
+    its premise was that a `single_object` variable holds a key to fetch, and
+    it holds the object the viewer picked, so there is no round trip to wait
+    for. See the tests at the bottom of this file."""
     with pytest.raises(wv.VariableError, match="not built yet"):
-        wv.parse({"v_a": var("v_a", derivation={"transform": "object_property"})})
+        wv.parse({"v_a": var("v_a", derivation={"transform": "object_set_aggregation"})})
 
 
 # ---- what the transforms mean ------------------------------------------------
@@ -603,8 +608,11 @@ def test_setting_a_derived_variable_is_refused_and_says_what_to_set_instead() ->
 
 
 def test_an_unbuilt_effect_says_so_rather_than_saving_a_dead_click() -> None:
+    # `navigate` used to be the example here and is built as of item 1.4
+    # (`test_navigate_is_built_now_and_accepted`); `run_action` still waits on
+    # binding an action's parameters to variables.
     with pytest.raises(we.EventError, match="not built yet"):
-        we.parse({"e_1": event("e_1", effects=[{"type": "navigate", "config": {}}])},
+        we.parse({"e_1": event("e_1", effects=[{"type": "run_action", "config": {}}])},
                  layout={"btn": node({})})
 
 
@@ -640,4 +648,424 @@ def test_the_save_path_refuses_a_bad_event_too() -> None:
         wv.validate_module(
             {"format": 2, "layout": {}, "variables": {},
              "events": {"e_1": event("e_1", node="gone")}}
+        )
+
+
+# ---- pages and navigate (roadmap phase 2, item 1.4) --------------------------
+def page_node(title: str = "Page") -> dict:
+    return {"type": {"resolvedName": "CanvasPage"}, "props": {"title": title}, "nodes": []}
+
+
+def layout_with_pages(*page_ids: str, extra: dict | None = None) -> dict:
+    layout = {"ROOT": {"type": {"resolvedName": "CanvasContainer"},
+                       "nodes": [*page_ids, *(extra or {})]}}
+    for pid in page_ids:
+        layout[pid] = page_node(pid)
+    layout.update(extra or {})
+    return layout
+
+
+def test_pages_are_read_from_the_layout_in_the_order_it_lists_them() -> None:
+    """Read rather than stored beside it, the same way usages are: a second
+    copy of the fact disagrees the moment something deletes a node without
+    knowing to update it. The order is ROOT's child order, which is what
+    somebody arranged in the builder."""
+    layout = layout_with_pages("p_two", "p_one", extra={"tabs": node({})})
+    assert we.pages(layout) == ["p_two", "p_one"]
+
+
+def test_a_layout_with_no_pages_has_none() -> None:
+    assert we.pages({"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["t"]},
+                     "t": node({})}) == []
+
+
+def test_navigate_is_built_now_and_accepted() -> None:
+    events = we.parse(
+        {"e_1": event("e_1", node="tabs", effects=[
+            {"type": "navigate", "config": {"page": "p_one"}}])},
+        layout=layout_with_pages("p_one", extra={"tabs": node({})}),
+    )
+    assert events["e_1"].effects[0].type == "navigate"
+
+
+def test_navigating_to_a_widget_that_is_not_a_page_is_refused() -> None:
+    """Not a smaller version of navigating to a page - it is a click that would
+    do nothing, and saying so at save is the only moment anybody can fix it."""
+    with pytest.raises(we.EventError, match="a widget rather than a page"):
+        we.parse(
+            {"e_1": event("e_1", node="tabs", effects=[
+                {"type": "navigate", "config": {"page": "tbl"}}])},
+            layout=layout_with_pages("p_one", extra={"tabs": node({}), "tbl": node({})}),
+        )
+
+
+def test_navigating_to_a_page_that_is_not_there_is_refused() -> None:
+    with pytest.raises(we.EventError, match="does not contain"):
+        we.parse(
+            {"e_1": event("e_1", node="tabs", effects=[
+                {"type": "navigate", "config": {"page": "p_gone"}}])},
+            layout=layout_with_pages("p_one", extra={"tabs": node({})}),
+        )
+
+
+def test_the_two_effects_still_waiting_on_something_say_so() -> None:
+    """`run_action` and `export` remain refused, each blocked on something
+    real rather than on effort."""
+    for kind in ("run_action", "export"):
+        with pytest.raises(we.EventError, match="not built yet"):
+            we.parse({"e_1": event("e_1", effects=[{"type": kind, "config": {}}])},
+                     layout={"btn": node({})})
+
+
+# ---- overlays (roadmap phase 2, item 1.4) ------------------------------------
+def overlay_node(title: str = "Overlay") -> dict:
+    return {"type": {"resolvedName": "CanvasOverlay"}, "props": {"title": title}, "nodes": []}
+
+
+def test_overlays_are_read_from_the_layout_like_pages() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["p_a", "o_a", "tbl"]},
+        "p_a": page_node("A"), "o_a": overlay_node("Detail"), "tbl": node({}),
+    }
+    assert we.pages(layout) == ["p_a"]
+    assert we.overlays(layout) == ["o_a"]
+
+
+def test_navigate_accepts_an_overlay_as_well_as_a_page() -> None:
+    """One effect, two destinations. What differs is what the browser does:
+    a page replaces, an overlay covers and can be closed back."""
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["p_a", "o_a", "btn"]},
+        "p_a": page_node("A"), "o_a": overlay_node("Detail"), "btn": node({}),
+    }
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "navigate", "config": {"page": "o_a"}}])},
+        layout=layout,
+    )
+    assert events["e_1"].effects[0].config["page"] == "o_a"
+
+
+def test_closing_an_overlay_is_its_own_effect() -> None:
+    """Not "navigate to nothing": closing returns you to the page underneath,
+    which navigate has no way to name."""
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "close_overlay", "config": {}}])},
+        layout={"btn": node({})},
+    )
+    assert events["e_1"].effects[0].type == "close_overlay"
+
+
+def test_navigating_to_a_plain_widget_still_names_both_kinds() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["p_a", "tbl"]},
+        "p_a": page_node("A"), "tbl": node({}),
+    }
+    with pytest.raises(we.EventError, match="page or an overlay"):
+        we.parse(
+            {"e_1": event("e_1", node="tbl", effects=[
+                {"type": "navigate", "config": {"page": "tbl"}}])},
+            layout=layout,
+        )
+
+
+# ---- the module header (roadmap phase 2, item 1.4) ---------------------------
+def header_node(title: str = "") -> dict:
+    return {"type": {"resolvedName": "CanvasHeader"}, "props": {"title": title}, "nodes": []}
+
+
+def test_a_header_is_read_from_the_layout_like_a_page() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h", "p_a"]},
+        "h": header_node("Sites"), "p_a": page_node("A"),
+    }
+    assert we.headers(layout) == ["h"]
+    # And it is not a page: a header is always showing, so navigating to it
+    # would mean nothing.
+    assert we.pages(layout) == ["p_a"]
+
+
+def test_one_header_is_fine() -> None:
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h", "p_a"]},
+        "h": header_node("Sites"), "p_a": page_node("A"),
+    }
+    assert wv.validate_module(module({}, layout)) == {}
+
+
+def test_a_second_header_is_refused_and_the_message_counts_them() -> None:
+    """Two nodes both claiming to be *the* module-wide toolbar is a document
+    no renderer can settle, so the refusal happens where every route passes."""
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h1", "h2", "p_a"]},
+        "h1": header_node("Sites"), "h2": header_node("Also sites"), "p_a": page_node("A"),
+    }
+    with pytest.raises(wv.VariableError) as raised:
+        wv.validate_module(module({}, layout))
+    assert "one header" in str(raised.value)
+    assert "has 2" in str(raised.value)
+
+
+def test_navigating_to_a_header_is_refused() -> None:
+    """It is always showing. A click that "goes to" it would do nothing."""
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["h", "btn"]},
+        "h": header_node("Sites"), "btn": node({}),
+    }
+    with pytest.raises(we.EventError, match="page or an overlay"):
+        we.parse(
+            {"e_1": event("e_1", effects=[{"type": "navigate", "config": {"page": "h"}}])},
+            layout=layout,
+        )
+
+
+# ---- the Button widget (roadmap 1.5, and 1.3's missing trigger source) --------
+def test_a_button_gated_on_a_variable_counts_as_a_usage() -> None:
+    """`enabledVariable` is a reference like any other, so deleting the
+    variable a button is gated on is refused rather than quietly making the
+    button permanently pressable."""
+    layout = {"btn": {"type": {"resolvedName": "CanvasButton"},
+                      "props": {"label": "Clear", "enabledVariable": "v_selected"},
+                      "nodes": []}}
+    declared = wv.parse({"v_selected": var("v_selected", label="Selected")})
+    found = wv.usages(layout, declared)
+    assert found["v_selected"] == [{"node": "btn", "prop": "enabledVariable"}]
+    assert wv.validate_module(
+        module({"v_selected": var("v_selected", label="Selected")}, layout)
+    ) != {}
+
+
+def test_a_button_gated_on_a_variable_nothing_declares_is_refused() -> None:
+    layout = {"btn": {"type": {"resolvedName": "CanvasButton"},
+                      "props": {"label": "Clear", "enabledVariable": "v_gone"},
+                      "nodes": []}}
+    with pytest.raises(wv.VariableError, match="does not declare"):
+        wv.validate_module(module({}, layout))
+
+
+# ---- narrow_set: the Filter List's derivation (roadmap 1.5) ------------------
+def narrowing_module() -> dict[str, wv.Variable]:
+    return wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            ),
+            "v_clauses": var("v_clauses", kind="array", label="Chosen filters"),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "narrow_set", "inputs": ["v_sites", "v_clauses"]},
+            ),
+        }
+    )
+
+
+def test_narrow_set_applies_the_clauses_a_widget_wrote() -> None:
+    """A Filter List narrows on properties the *viewer* picks, so what varies
+    is the list of clauses rather than one configured property."""
+    variables = narrowing_module()
+    resolved = wv.evaluate(variables, {"v_clauses": [
+        {"property": "region", "op": "eq", "value": "north"},
+        {"property": "status", "op": "in", "value": ["open", "closed"]},
+    ]})
+    assert resolved["v_visible"]["filters"] == [
+        {"property": "region", "op": "eq", "value": "north"},
+        {"property": "status", "op": "in", "value": ["open", "closed"]},
+    ]
+
+
+def test_narrow_set_with_nothing_chosen_is_the_whole_set() -> None:
+    """Not an empty one: a viewer who has touched nothing should see
+    everything, the rule `filter_set` already follows."""
+    variables = narrowing_module()
+    for empty in ({}, {"v_clauses": None}, {"v_clauses": []}):
+        assert wv.evaluate(variables, empty)["v_visible"]["filters"] == [], empty
+
+
+def test_narrow_set_keeps_the_filters_the_base_set_already_had() -> None:
+    variables = wv.parse(
+        {
+            "v_sites": object_set_var(
+                "v_sites", label="Open sites",
+                object_set={"object_type_id": TYPE_ID,
+                            "filters": [{"property": "status", "op": "eq", "value": "open"}]},
+            ),
+            "v_clauses": var("v_clauses", kind="array", label="Chosen filters"),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "narrow_set", "inputs": ["v_sites", "v_clauses"]},
+            ),
+        }
+    )
+    resolved = wv.evaluate(
+        variables, {"v_clauses": [{"property": "region", "op": "eq", "value": "north"}]}
+    )
+    assert [f["property"] for f in resolved["v_visible"]["filters"]] == ["status", "region"]
+
+
+def test_narrow_set_refuses_clauses_it_cannot_mean_rather_than_dropping_them() -> None:
+    """The clauses come from a browser, so they get the same parse every set
+    gets. A dropped clause is a set wider than the viewer asked for."""
+    variables = narrowing_module()
+    with pytest.raises(wv.VariableError, match="not supported yet"):
+        wv.evaluate(variables, {"v_clauses": [
+            {"property": "capacity", "op": "gt", "value": 40}]})
+    with pytest.raises(wv.VariableError, match="unknown filter operator"):
+        wv.evaluate(variables, {"v_clauses": [
+            {"property": "region", "op": "regex", "value": "^n"}]})
+    with pytest.raises(wv.VariableError, match="no value"):
+        wv.evaluate(variables, {"v_clauses": [{"property": "region", "op": "eq"}]})
+
+
+def test_narrow_set_refuses_something_that_is_not_a_list() -> None:
+    variables = narrowing_module()
+    with pytest.raises(wv.VariableError, match="list of filter clauses"):
+        wv.evaluate(variables, {"v_clauses": {"property": "region"}})
+
+
+def test_narrow_set_needs_two_inputs() -> None:
+    with pytest.raises(wv.VariableError, match="narrow_set needs exactly two inputs"):
+        wv.parse({
+            "v_sites": object_set_var(
+                "v_sites", label="All sites",
+                object_set={"object_type_id": TYPE_ID, "filters": []},
+            ),
+            "v_visible": object_set_var(
+                "v_visible", label="Visible",
+                derivation={"transform": "narrow_set", "inputs": ["v_sites"]},
+            ),
+        })
+
+
+# ---- object_property, and what a single_object variable holds (§84) ----------
+CLICKED = {
+    "object_type_id": TYPE_ID,
+    "primary_key": "S1",
+    "properties": {"name": "Aberdeen Yard", "status": "open"},
+}
+
+
+def picking_module() -> dict[str, wv.Variable]:
+    return wv.parse(
+        {
+            "v_site": var("v_site", kind="single_object", label="Selected site"),
+            "v_name": var("v_name", label="Name",
+                          derivation={"transform": "object_property", "inputs": ["v_site"],
+                                      "config": {"property": "name"}}),
+        }
+    )
+
+
+def test_a_property_of_the_object_a_viewer_picked() -> None:
+    resolved = wv.evaluate(picking_module(), {"v_site": CLICKED})
+    assert resolved["v_name"] == "Aberdeen Yard"
+
+
+def test_the_primary_key_is_readable_by_name() -> None:
+    """It is not in `properties` - a row's key is its own field - so without
+    this it would be the one thing about an object an app could not show."""
+    variables = wv.parse({
+        "v_site": var("v_site", kind="single_object", label="Selected site"),
+        "v_key": var("v_key", label="Key",
+                     derivation={"transform": "object_property", "inputs": ["v_site"],
+                                 "config": {"property": "primary_key"}}),
+    })
+    assert wv.evaluate(variables, {"v_site": CLICKED})["v_key"] == "S1"
+
+
+def test_nothing_picked_reads_as_empty_rather_than_failing() -> None:
+    """A detail panel before the first click is an ordinary state."""
+    for empty in ({}, {"v_site": None}, {"v_site": ""}):
+        assert wv.evaluate(picking_module(), empty)["v_name"] is None, empty
+
+
+def test_a_property_that_the_object_does_not_have_is_empty() -> None:
+    assert wv.evaluate(
+        wv.parse({
+            "v_site": var("v_site", kind="single_object", label="Selected site"),
+            "v_x": var("v_x", label="Capacity",
+                       derivation={"transform": "object_property", "inputs": ["v_site"],
+                                   "config": {"property": "capacity"}}),
+        }),
+        {"v_site": CLICKED},
+    )["v_x"] is None
+
+
+def test_reading_a_property_of_something_that_is_not_an_object_is_refused() -> None:
+    """A wired-wrongly document, not an ordinary state - a variable holding a
+    string cannot have properties, and rendering blank would hide it."""
+    with pytest.raises(wv.VariableError, match="not an object"):
+        wv.evaluate(picking_module(), {"v_site": "S1"})
+
+
+def test_object_property_chains_into_another_transform() -> None:
+    """The point of it being a transform rather than a widget feature: the
+    property feeds the same graph everything else does."""
+    variables = wv.parse({
+        "v_site": var("v_site", kind="single_object", label="Selected"),
+        "v_name": var("v_name", label="Name",
+                      derivation={"transform": "object_property", "inputs": ["v_site"],
+                                  "config": {"property": "name"}}),
+        "v_status": var("v_status", label="Status",
+                        derivation={"transform": "object_property", "inputs": ["v_site"],
+                                    "config": {"property": "status"}}),
+        "v_label": var("v_label", label="Label",
+                       derivation={"transform": "concat", "inputs": ["v_name", "v_status"],
+                                   "config": {"separator": " - "}}),
+    })
+    assert wv.evaluate(variables, {"v_site": CLICKED})["v_label"] == "Aberdeen Yard - open"
+
+
+def test_object_property_needs_one_input_and_a_property() -> None:
+    with pytest.raises(wv.VariableError, match="exactly one input"):
+        wv.parse({"v_a": var("v_a", label="A"), "v_b": var("v_b", label="B"),
+                  "v_x": var("v_x", label="X",
+                             derivation={"transform": "object_property",
+                                         "inputs": ["v_a", "v_b"],
+                                         "config": {"property": "name"}})})
+    with pytest.raises(wv.VariableError, match="needs a property to read"):
+        wv.parse({"v_a": var("v_a", kind="single_object", label="A"),
+                  "v_x": var("v_x", label="X",
+                             derivation={"transform": "object_property", "inputs": ["v_a"],
+                                         "config": {}})})
+
+
+def test_an_aggregation_over_a_set_is_still_refused_and_says_why() -> None:
+    """The other store transform did not move: it needs the instance store,
+    which `/object-sets/aggregate` is what answers."""
+    with pytest.raises(wv.VariableError, match="not built yet"):
+        wv.parse({"v_set": object_set_var(
+                      "v_set", label="Set",
+                      object_set={"object_type_id": TYPE_ID, "filters": []}),
+                  "v_n": var("v_n", kind="number", label="Count",
+                             derivation={"transform": "object_set_aggregation",
+                                         "inputs": ["v_set"], "config": {}})})
+
+
+def test_a_row_click_may_write_the_whole_object() -> None:
+    events = we.parse(
+        {"e_1": event("e_1", node="tbl", on="row_select", effects=[
+            {"type": "set_variable", "config": {"variable": "v_site", "from": "object"}}])},
+        layout={"tbl": node({})},
+        variables=wv.parse({"v_site": var("v_site", kind="single_object", label="Site")}),
+    )
+    assert events["e_1"].effects[0].config["from"] == "object"
+
+
+def test_writing_from_an_unknown_source_is_refused() -> None:
+    with pytest.raises(we.EventError, match="expected one of"):
+        we.parse(
+            {"e_1": event("e_1", effects=[
+                {"type": "set_variable", "config": {"variable": "v_a", "from": "row"}}])},
+            layout={"btn": node({})},
+        )
+
+
+def test_writing_from_a_source_and_a_value_at_once_is_refused() -> None:
+    """Two ways of saying what to write, and no rule for which wins."""
+    with pytest.raises(we.EventError, match="one or the other"):
+        we.parse(
+            {"e_1": event("e_1", effects=[
+                {"type": "set_variable",
+                 "config": {"variable": "v_a", "from": "object", "value": "{{name}}"}}])},
+            layout={"btn": node({})},
         )

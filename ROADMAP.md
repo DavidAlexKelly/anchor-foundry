@@ -110,7 +110,9 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 §73 the object-set half — a variable of kind `object_set` holding a definition, a `filter_set` derivation that narrows one set from another, an object table that reads a set variable, and the panel to configure both. Verified end to end in a browser: dataset → object type → set → filter → table, live.
 
-**What remains** are the two ontology transforms, `object_property` and `object_set_aggregation`. Both need a round trip against the instance store rather than a pure function, and both are what a Metric Card wants — so they are better built with item 1.5's widgets than ahead of them. The API refuses them with a sentence in the meantime.
+**What remains** is one ontology transform, `object_set_aggregation`. It needs a round trip against the instance store rather than a pure function, and it is what a Metric Card wants — which §74 answered with an aggregation *endpoint* instead, so this may never need to be a transform at all. The API refuses it with a sentence in the meantime.
+
+*`object_property` is **built** (`STATUS.md` §84), and the reason it stopped needing a round trip is worth recording: it was listed here on the assumption that a `single_object` variable holds a **key to fetch**. It holds **the object the viewer picked** — type, key and properties — so reading a property is a lookup in a value the evaluator already has. The cost of that choice is that the value is a snapshot of the click rather than a live read; the reference travels with it, so a widget that needs current values can re-read, and an object set re-evaluates on every resolve regardless.*
 
 **What Foundry does.** Typed variables are the wiring. Types: **object set**, **single object**, string, numeric, boolean, date/timestamp, array (of boolean, date, numeric, geopoint, geoshape, string, timestamp or struct), and object-set-filter variables. Object set variables are initialised from an object type or another object set, then optionally filtered by property values or Filter variables, or **pivoted to linked objects via a Search Around**. Variables also support **transformations**: string concatenation, if/else, casting between primitives, `is empty`/`is not empty`, `object property` (a property of a single object), and `object set aggregation` (an aggregate over a property of a set) — and transformations chain, referencing earlier ones.
 
@@ -130,7 +132,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.1.
 
-### 1.3 Events — **M, the model and the first trigger are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals). **What remains**: more trigger sources (a Button Group widget, dropdown select/deselect), and the three effects refused with a reason — `navigate` waits on 1.4's pages and overlays, `run_action` on binding an action's parameters to variables, `export` on a download surface the viewer route lacks.
+### 1.3 Events — **M, the model and three trigger sources are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals; §77: tabs; §81: a button's click, the primary trigger surface). **What remains**: dropdown select/deselect as a trigger, and the two effects still refused with a reason — `run_action` waits on binding an action's parameters to variables, `export` on a download surface the viewer route lacks. (`navigate` was the third; 1.4 built it, and `close_overlay` alongside it.)
 
 **What Foundry does.** Events trigger behaviour when a user acts. They fire from many widgets — Button Group, Object Table on row selection, String Dropdown on select/deselect, Tabs. A button's **On click** can trigger an action, trigger a set of events, open a URL, or begin an export; when it triggers an action you can additionally fire events at points in the action lifecycle (on submission start, on successful completion). Events execute **sequentially in configured order**, but do not wait for the downstream computation of previous events. Setting a variable copies the value immediately, so the next event sees it.
 
@@ -138,13 +140,21 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.2.
 
-### 1.4 Layouts — **L**
+### 1.4 Layouts — **L, pages, tabs, sections and overlays done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`; §79: the Layout sidebar; §80: the module header). **What remains**: drag-to-resize, deliberately deferred below. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
 
 **What Foundry does.** A module has a **header** (persistent toolbar for module-wide title, tabs and buttons), **pages**, **sections**, and **overlays**. A default page starts as two vertically divided sections. Sections subdivide a page and can be configured as columns, rows, tabs or toolbars, each containing widgets or further layout. Overlays are contextual layers over a page — modals and drawers — for content that should not navigate you away. A **Tabs widget** triggers events to navigate between pages and overlays. Layout elements are edited from a Layout sidebar panel or by selecting them in the module view.
 
-**What exists today.** One page, free-form drag-and-drop, no header, no sections, no overlays.
+**What exists today.** Pages, a Tabs widget, sections as columns or rows with proportional widths, overlays as modals or drawers, a Layout sidebar listing every node in the document, and a module header. No drag-to-resize.
 
 **Build.** The layout tree from 1.1 with those node types; the Layout sidebar; drag-to-resize sections; the Tabs widget wired to the event system. Responsive rules per section type.
+
+*Deviation, deliberate: **drag-to-resize is not built and a section's proportions are typed instead.** A drag handle is an affordance over the same numbers, and building it first would have meant a layout nobody could describe in the saved document. The numbers are there now (`weights: "1,2"`), so the handle can arrive without a format change.*
+
+*Deviation: **a toolbar is not a section type.** Foundry lists columns, rows, tabs and toolbars; a tabbed section is the Tabs widget over pages, which is the same idea one level up, and a toolbar is a row with different padding rather than a different concept. Naming them separately would have made three of the four the same code with a label.*
+
+*The header **is** a node type, by the same test the toolbar failed: it differs in behaviour, not decoration. It is pinned while the page beneath it scrolls, and a module may have at most one — a rule the server enforces, since two nodes both claiming to be the module-wide toolbar is a document no renderer can settle. It persists across page changes structurally rather than by special case: it is not inside a page, and only pages hide themselves when another page is showing.*
+
+*Correction to 1.3's list of blocked effects: `navigate` is built and takes a page **or** an overlay, and **`close_overlay` was added as a fourth effect**. It is not "navigate to nothing" — closing an overlay returns you to the page underneath, which navigate has no way to name.*
 
 **Watch for.** This is the item where "as close to Workshop's UI as possible" costs the most and pays the most — a Workshop user opening Anchor recognises the three-panel shell (Layout/Variables sidebar, canvas, widget configuration) before they recognise any individual widget.
 
@@ -153,16 +163,17 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 ### 1.5 The widget library — **XL, and incremental**
 
 Anchor has eight: Container, Text, Filter, Dataset table, Object table, Map, Chart, Action form.
+Item 1.4 added Page, Section, Overlay, Tabs and Header; §81 added Button, §82 the Filter List, §83 and §84 upgraded the Object Table, and Metric Card is done (§74).
 
 Build toward Foundry's set, in the order below (roughly descending value per unit of work):
 
 | Priority | Widget | Notes |
 |---|---|---|
-| 1 | **Filter List** | The canonical Workshop widget. Property-aware filters over an object set, emitting an object set variable. Anchor's Filter emits a scalar — this is a rewrite, not an extension |
-| 1 | **Object Table** (upgrade) | Row selection emitting single-object and object-set variables; column config; sorting; server-side paging |
-| 1 | **Button Group** | The event system's primary trigger surface |
-| 1 | **Metric Card** | A configurable card highlighting a key metric; the natural consumer of object-set aggregation |
-| 2 | **Tabs** | Navigation between pages and overlays |
+| 1 | ~~**Filter List**~~ | **Done** (`STATUS.md` §82). Property-aware filters over an object set, with each value's count, driving a `narrow_set` derivation. It writes *clauses*, not a set: object sets resolve on the server, so a widget that wrote one would be a second place sets come from with no rule for which wins |
+| 1 | ~~**Object Table** (upgrade)~~ | **Done** (`STATUS.md` §83, §84): column config, server-side paging, sorting — by key or by when a row last changed, with property sorts refused for the untyped-property reason ordered operators are — and row selection writing the whole object into a `single_object` variable |
+| 1 | ~~**Button Group**~~ | **Done** (`STATUS.md` §81) as a **Button**: one button is one node, and a group is a row of them in a Section. A trigger is `(node, on)`, so a multi-button node would need every event to name *which* button — a format change to express what the layout already expresses |
+| 1 | ~~**Metric Card**~~ | **Done** (`STATUS.md` §74) |
+| 2 | ~~**Tabs**~~ | **Done** (`STATUS.md` §77), and it navigates through the event system rather than around it |
 | 2 | **Charts** (upgrade) | Object-set input rather than dataset-only; drill-down emitting a filtered set |
 | 2 | **Map** (upgrade) | Object-set input; selection emitting a set. The clustering and pan work (`STATUS.md` §37) carries over |
 | 2 | **Inline Action Form** | Editing objects from inside the app; upgrade of the existing Action form |

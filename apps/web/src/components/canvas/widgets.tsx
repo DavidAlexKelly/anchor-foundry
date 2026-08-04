@@ -13,12 +13,13 @@ import React, { useState } from "react";
 import { actions as actionApi, ApiError, datasets as dsApi, objects as objApi } from "@/lib/api";
 import {
   useCanvasEnv,
+  useCanvasPage,
   useCanvasParameter,
   useCanvasParameters,
   useCanvasVariable,
   useCanvasVariables,
 } from "./context";
-import { eventsFor, interpolate, run as runEvents } from "./events";
+import { eventsFor, interpolate, run as runEvents, useEventContext } from "./events";
 import {
   chartQuery,
   distinctValuesQuery,
@@ -143,6 +144,247 @@ CanvasText.craft = {
   displayName: "Text",
   props: { text: "Text", tag: "p" },
   related: { settings: TextSettings },
+};
+
+// ---- Filter List -----------------------------------------------------------
+/**
+ * The canonical Workshop widget (roadmap 1.5, priority 1): property-aware
+ * filters over an object set.
+ *
+ * **It reads a set and writes clauses; a derivation makes the narrowed set.**
+ * The widget does not produce an object-set variable directly, and that is the
+ * design rather than a shortcut. Object-set variables resolve on the server -
+ * that is what makes "how many are there" and "the next page" answerable at
+ * all (`services/object_sets.py`) - so a widget that wrote a set would be a
+ * second place sets come from, with no rule for which one wins. Instead the
+ * widget writes a plain list of clauses, and a `narrow_set` variable applies
+ * them to the input set. Widgets write values; derivations make sets.
+ *
+ * **The options are the data's, with counts, not a list somebody typed.** Each
+ * property's values come from `/object-sets/group` against the *input* set, so
+ * they are always the values that actually exist, and each carries how many
+ * rows it accounts for. A hand-typed list goes stale the first time a new
+ * value appears - the argument that made object links derived rather than
+ * stored (§37) and dropdown options come from a column (Canvas item 1).
+ *
+ * **Counts come from the unfiltered input set on purpose.** Recomputing them
+ * against the *narrowed* set would make every count go to zero except the ones
+ * you already picked, and a filter list whose other options all read "0" tells
+ * you nothing about what selecting them would do.
+ */
+export function CanvasFilterList({
+  objectSetVariable = null,
+  variable = null,
+  properties = "",
+  title = "Filters",
+}: {
+  /** The set to offer filters over. */
+  objectSetVariable?: string | null;
+  /** The variable this widget writes its clauses into. A `narrow_set`
+   * derivation reads it and the input set, and produces the filtered set
+   * every other widget then points at. */
+  variable?: string | null;
+  /** Property api_names to offer, comma-separated. Blank means "none yet" -
+   * a filter list over every property of a wide type would be a wall. */
+  properties?: string;
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const { set } = useCanvasParameters();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const chosen = useCanvasParameter(variable);
+
+  const names = String(properties || "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  // What is currently selected, per property, read back from the variable this
+  // widget writes - so the checkboxes reflect the document's state rather than
+  // a second copy of it held here.
+  const selected: Record<string, string[]> = {};
+  for (const clause of Array.isArray(chosen) ? chosen : []) {
+    const c = clause as { property?: string; op?: string; value?: unknown };
+    if (!c.property) continue;
+    selected[c.property] = Array.isArray(c.value) ? c.value.map(String) : [String(c.value)];
+  }
+
+  const toggle = (property: string, value: string) => {
+    const current = selected[property] ?? [];
+    const next = current.includes(value)
+      ? current.filter((v) => v !== value)
+      : [...current, value];
+    const merged = { ...selected, [property]: next };
+    const clauses = Object.entries(merged)
+      .filter(([, values]) => values.length > 0)
+      // One value is `eq`, several are `in`. Both mean the same thing on both
+      // stores; sending a one-element `in` would work too, but `eq` is what a
+      // reader of the saved document expects to see for a single choice.
+      .map(([prop, values]) =>
+        values.length === 1
+          ? { property: prop, op: "eq", value: values[0] }
+          : { property: prop, op: "in", value: values },
+      );
+    if (variable) set(variable, clauses);
+  };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      <p className="field-label">{title}</p>
+      {!objectSetVariable || !variable ? (
+        <p className="canvas-widget-empty">
+          Filter list - point it at an object set and at the variable it writes in Settings
+        </p>
+      ) : names.length === 0 ? (
+        <p className="canvas-widget-empty">Choose properties to filter on in Settings</p>
+      ) : (
+        names.map((property) => (
+          <FilterListProperty
+            key={property}
+            workspaceId={workspaceId}
+            definition={setDefinition}
+            property={property}
+            selected={selected[property] ?? []}
+            onToggle={(value) => toggle(property, value)}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+function FilterListProperty({
+  workspaceId,
+  definition,
+  property,
+  selected,
+  onToggle,
+}: {
+  workspaceId: string;
+  definition: unknown;
+  property: string;
+  selected: string[];
+  onToggle: (value: string) => void;
+}) {
+  const result = useQuery({
+    queryKey: ["canvas-filter-list", property, JSON.stringify(definition ?? null)],
+    queryFn: () => objApi.groupObjectSet(workspaceId, definition, property),
+    enabled: !!definition,
+  });
+  return (
+    <fieldset className="canvas-filter-group">
+      <legend>{property}</legend>
+      {result.isError && (
+        <p className="canvas-widget-empty">Couldn&apos;t read this property&apos;s values.</p>
+      )}
+      {result.data?.truncated && (
+        <p className="canvas-widget-empty">showing the most common values</p>
+      )}
+      {(result.data?.groups ?? []).map((group) => (
+        <label key={group.value} className="canvas-filter-option">
+          <input
+            type="checkbox"
+            checked={selected.includes(group.value)}
+            onChange={() => onToggle(group.value)}
+          />
+          <span>{group.value}</span>
+          <span className="canvas-filter-count">{group.count}</span>
+        </label>
+      ))}
+      {result.data && result.data.groups.length === 0 && (
+        <p className="canvas-widget-empty">no values</p>
+      )}
+    </fieldset>
+  );
+}
+
+function FilterListSettings() {
+  const {
+    objectSetVariable,
+    variable,
+    properties,
+    title,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    variable: node.data.props.variable,
+    properties: node.data.props.properties,
+    title: node.data.props.title,
+  }));
+  const { declared } = useCanvasVariables();
+  const sets = Object.values(declared).filter((v) => v.kind === "object_set");
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable ?? ""}
+          onChange={(e) =>
+            setProp(
+              (p: { objectSetVariable: string | null }) =>
+                (p.objectSetVariable = e.target.value || null),
+            )
+          }
+        >
+          <option value="">Pick a set</option>
+          {sets.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">The set the options are read from</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Writes its filters to</span>
+        <select
+          value={variable ?? ""}
+          onChange={(e) =>
+            setProp((p: { variable: string | null }) => (p.variable = e.target.value || null))
+          }
+        >
+          <option value="">Pick a variable</option>
+          {arrays.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">
+          An array variable. Point a narrow_set variable at it and the set to get the
+          filtered set other widgets read.
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Properties</span>
+        <input
+          value={properties ?? ""}
+          placeholder="region, status"
+          onChange={(e) =>
+            setProp((p: { properties: string }) => (p.properties = e.target.value))
+          }
+        />
+        <span className="field-hint">Comma-separated property names to offer</span>
+      </label>
+    </>
+  );
+}
+
+CanvasFilterList.craft = {
+  displayName: "Filter list",
+  props: { objectSetVariable: null, variable: null, properties: "", title: "Filters" },
+  related: { settings: FilterListSettings },
 };
 
 // ---- Parameter (filter control) --------------------------------------------
@@ -512,6 +754,8 @@ export function CanvasObjectTable({
   searchParameter = null,
   objectSetVariable = null,
   pageSize = 25,
+  columns = "",
+  sort = "recent",
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -524,26 +768,56 @@ export function CanvasObjectTable({
    * same thing and stay for apps that have not been rewired. */
   objectSetVariable?: string | null;
   pageSize?: number;
+  /** Which properties to show, in order, comma-separated. Blank means all of
+   * them - a table that showed nothing until somebody configured it would look
+   * broken on the first drop. */
+  columns?: string;
+  /** One of the server's `object_sets.SORTS`. Sorting *by a property* is
+   * refused there rather than here, because untyped properties would order
+   * differently on the two stores; the settings panel therefore offers what
+   * the server accepts rather than a column-header click that sometimes 422s. */
+  sort?: string;
 }) {
   const {
     id: nodeId,
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId } = useCanvasEnv();
-  const { setMany } = useCanvasParameters();
+  const eventContext = useEventContext(undefined, useOverlayIds());
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
   const usingSet = !!objectSetVariable;
+  const [offset, setOffset] = useState(0);
+
+  // Paging is *runtime* state, like a page or a variable value (decision 0002
+  // §3): a saved app opens on the first page for every viewer. It also has to
+  // reset when the set changes, or narrowing a filter while on page 3 leaves a
+  // viewer looking at an empty table that has rows.
+  const setKey = JSON.stringify(setDefinition ?? null);
+  const [lastKey, setLastKey] = useState(setKey);
+  if (setKey !== lastKey) {
+    setLastKey(setKey);
+    setOffset(0);
+  }
 
   const setPage = useQuery({
-    queryKey: ["canvas-object-set", objectSetVariable, JSON.stringify(setDefinition ?? null), pageSize],
-    queryFn: () => objApi.evaluateObjectSet(workspaceId, setDefinition, { limit: pageSize }),
+    queryKey: ["canvas-object-set", objectSetVariable, setKey, pageSize, offset, sort],
+    queryFn: () =>
+      objApi.evaluateObjectSet(workspaceId, setDefinition, {
+        limit: pageSize,
+        offset,
+        sort,
+      }),
     // Not until the definition has resolved. Querying with `undefined` would
     // ask the server to evaluate nothing and render "0 objects", which is an
     // answer this widget does not have yet.
     enabled: usingSet && !!setDefinition,
+    // The previous page stays on screen while the next one loads, rather than
+    // the table emptying and jumping - the rows are about to be replaced, not
+    // gone.
+    placeholderData: (previous) => previous,
   });
 
   const effectiveTypeId = usingSet
@@ -576,7 +850,17 @@ export function CanvasObjectTable({
     enabled: !!objectTypeId,
   });
 
-  const properties = type.data?.properties ?? [];
+  const all = type.data?.properties ?? [];
+  // Configured order wins, and a name that matches nothing is dropped rather
+  // than rendered as an empty column: a property can be removed from the type
+  // long after a table was pointed at it.
+  const wanted = String(columns || "")
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean);
+  const properties = wanted.length
+    ? wanted.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
+    : all;
 
   // One shape for both paths, so everything below reads the same. The set path
   // returns `instances`; the explore path returns `items`.
@@ -642,10 +926,22 @@ export function CanvasObjectTable({
                       rowsAreClickable
                         ? () =>
                             runEvents(rowEvents, {
-                              setVariables: setMany,
+                              ...eventContext,
                               payload: {
                                 primary_key: instance.primary_key,
                                 ...instance.properties,
+                              },
+                              // The same row twice, deliberately: flattened
+                              // above for `{{...}}` in a label, and whole here
+                              // for a `single_object` variable, which needs to
+                              // know which field is the key.
+                              object: {
+                                // The table's own type, not the row's: every
+                                // row in one table is one type, and the row
+                                // payload does not carry it.
+                                object_type_id: effectiveTypeId ?? undefined,
+                                primary_key: instance.primary_key,
+                                properties: instance.properties,
                               },
                             })
                         : undefined
@@ -666,7 +962,30 @@ export function CanvasObjectTable({
               </tbody>
             </table>
           </div>
-          {total > rows.length && (
+          {usingSet && total > rows.length && (
+            <div className="canvas-table-pager">
+              <button
+                type="button"
+                className="btn quiet"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - pageSize))}
+              >
+                Previous
+              </button>
+              <span className="canvas-widget-empty">
+                {offset + 1}–{offset + rows.length} of {total.toLocaleString()}
+              </span>
+              <button
+                type="button"
+                className="btn quiet"
+                disabled={offset + rows.length >= total}
+                onClick={() => setOffset(offset + pageSize)}
+              >
+                Next
+              </button>
+            </div>
+          )}
+          {!usingSet && total > rows.length && (
             <p className="canvas-widget-empty">
               Showing the first {rows.length} of {total.toLocaleString()}.
             </p>
@@ -682,7 +1001,7 @@ function ObjectTableSettings() {
   const { declared } = useCanvasVariables();
   const {
     objectTypeId, filterProperty, filterParameter, searchParameter,
-    objectSetVariable, pageSize,
+    objectSetVariable, pageSize, columns, sort,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -691,6 +1010,8 @@ function ObjectTableSettings() {
     searchParameter: node.data.props.searchParameter,
     objectSetVariable: node.data.props.objectSetVariable,
     pageSize: node.data.props.pageSize,
+    columns: node.data.props.columns,
+    sort: node.data.props.sort,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   const types = useQuery({
@@ -787,7 +1108,7 @@ function ObjectTableSettings() {
         <span className="field-hint">Substring across every property — for a search box</span>
       </label>
       <label className="field">
-        <span className="field-label">Rows</span>
+        <span className="field-label">Rows per page</span>
         <input
           type="number"
           value={pageSize ?? 25}
@@ -798,6 +1119,37 @@ function ObjectTableSettings() {
           }
         />
       </label>
+      <label className="field">
+        <span className="field-label">Columns</span>
+        <input
+          type="text"
+          value={columns ?? ""}
+          placeholder="every property"
+          onChange={(e) => setProp((p: { columns: string }) => (p.columns = e.target.value))}
+        />
+        <span className="field-hint">
+          Property names in the order to show them. Blank shows all of them.
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Sort by</span>
+        <select
+          value={sort ?? "recent"}
+          onChange={(e) => setProp((p: { sort: string }) => (p.sort = e.target.value))}
+        >
+          <option value="recent">Last changed, newest first</option>
+          <option value="oldest">Last changed, oldest first</option>
+          <option value="key">Key, A–Z</option>
+          <option value="-key">Key, Z–A</option>
+        </select>
+        {/* Not a click on a column header, deliberately. Properties are stored
+            untyped, so the server refuses to order by one - and a header that
+            sometimes errored would be worse than one that never invited the
+            click. See `object_sets.SORTS`. */}
+        <span className="field-hint">
+          Sorting by a property needs its declared type behind it — see the ontology roadmap
+        </span>
+      </label>
     </>
   );
 }
@@ -806,7 +1158,7 @@ CanvasObjectTable.craft = {
   displayName: "Object table",
   props: {
     objectTypeId: null, filterProperty: null, filterParameter: null,
-    searchParameter: null, pageSize: 25,
+    searchParameter: null, pageSize: 25, columns: "", sort: "recent",
   },
   related: { settings: ObjectTableSettings },
 };
@@ -1805,9 +2157,644 @@ CanvasMetricCard.craft = {
   related: { settings: MetricCardSettings },
 };
 
+/** Which top-level nodes are overlays rather than pages.
+ *
+ * Read from the tree, like the page list, rather than passed down: a widget
+ * firing a `navigate` has no other way to know whether its target covers the
+ * page or replaces it, and a second stored copy of that fact would disagree
+ * with the tree the first time somebody changed a node's type.
+ */
+function useOverlayIds(): Set<string> {
+  const { query } = useEditor();
+  try {
+    const ids = (query.node("ROOT").get().data.nodes ?? []) as string[];
+    return new Set(ids.filter((id) => query.node(id).get()?.data?.name === "CanvasOverlay"));
+  } catch {
+    return new Set();
+  }
+}
+
+/** The children of a canvas node, one entry per child widget.
+ *
+ * Craft.js hands a canvas node its children as a *single* Fragment holding one
+ * element per child, and `React.Children.toArray` does not look inside a
+ * Fragment - so the obvious `toArray(children)` returns a one-element array no
+ * matter how many widgets the section contains. A section built on it laid
+ * everything out in one column and looked, from the outside, like a section
+ * that simply did not work; nothing errored. Unwrap the Fragment, once, here.
+ */
+function childList(children: React.ReactNode): React.ReactNode[] {
+  const top = React.Children.toArray(children);
+  const only = top.length === 1 ? top[0] : null;
+  if (React.isValidElement(only) && only.type === React.Fragment) {
+    return React.Children.toArray((only.props as { children?: React.ReactNode }).children);
+  }
+  return top;
+}
+
+/** A section: the thing that stops an app being one column (roadmap 1.4).
+ *
+ * Foundry's sections subdivide a page as columns, rows, tabs or toolbars.
+ * Columns and rows are here; a tabbed section is the Tabs widget over pages,
+ * which is the same idea one level up, and a toolbar is a row with different
+ * padding rather than a different concept.
+ *
+ * **Widths are proportions, not pixels.** A section's children share the space
+ * by weight, so a two-column split stays a two-column split on a narrower
+ * screen instead of overflowing. Drag-to-resize is a UI affordance over these
+ * same numbers and is not built - the numbers are, so an app can be laid out
+ * today and the handle can arrive later without a format change.
+ *
+ * **Below a threshold, columns stack.** A three-column section on a phone is
+ * three unreadable columns; the roadmap asks for responsive rules per section
+ * type, and for a column section the rule is "stop being columns".
+ */
+export function CanvasSection({
+  direction = "columns",
+  weights = "",
+  gap = 12,
+  children,
+}: {
+  direction?: "columns" | "rows";
+  /** Comma-separated proportions, one per child: "2,1" is two-thirds and a
+   * third. Blank, or short, means equal - a section should lay out sensibly
+   * before anybody has configured it. */
+  weights?: string;
+  gap?: number;
+  children?: React.ReactNode;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const parts = childList(children);
+  const parsed = String(weights || "")
+    .split(",")
+    .map((w) => Number(w.trim()))
+    .filter((w) => Number.isFinite(w) && w > 0);
+
+  return (
+    <div
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-section canvas-section--${direction}`}
+    >
+      {/* A section fills itself with its children, so in the builder there is
+          otherwise nowhere to click that is the section rather than a widget
+          inside it - and its settings (proportions, direction, gap) would be
+          unreachable. The label is that click target, and says what the
+          section is doing, the way a page's label does. */}
+      {mode === "edit" && (
+        <p className="canvas-section-label">
+          {direction === "columns" ? "Columns" : "Rows"}
+          {parsed.length > 1 ? ` · ${parsed.join(":")}` : ""}
+        </p>
+      )}
+      <div className="canvas-section-parts" style={{ gap }}>
+        {parts.map((child, index) => (
+          <div
+            key={index}
+            className="canvas-section-part"
+            // `flex-grow` rather than a width: the children then share whatever
+            // is left after gaps, so the arithmetic does not have to know how
+            // many gaps there are.
+            style={{ flexGrow: parsed[index] ?? 1, flexBasis: 0, minWidth: 0 }}
+          >
+            {child}
+          </div>
+        ))}
+        {parts.length === 0 && (
+          <p className="canvas-widget-empty">Section - drop widgets in to split the page</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SectionSettings() {
+  const {
+    direction,
+    weights,
+    gap,
+    actions: { setProp },
+  } = useNode((node) => ({
+    direction: node.data.props.direction,
+    weights: node.data.props.weights,
+    gap: node.data.props.gap,
+  }));
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Arrange as</span>
+        <select
+          value={direction ?? "columns"}
+          onChange={(e) => setProp((p: { direction: string }) => (p.direction = e.target.value))}
+        >
+          <option value="columns">Columns</option>
+          <option value="rows">Rows</option>
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Proportions</span>
+        <input
+          value={weights ?? ""}
+          placeholder="equal"
+          onChange={(e) => setProp((p: { weights: string }) => (p.weights = e.target.value))}
+        />
+        <span className="field-hint">
+          One number per widget, e.g. 2,1 for two-thirds and a third
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Gap</span>
+        <input
+          type="number"
+          value={gap ?? 12}
+          onChange={(e) => setProp((p: { gap: number }) => (p.gap = Number(e.target.value)))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasSection.craft = {
+  displayName: "Section",
+  props: { direction: "columns", weights: "", gap: 12 },
+  isCanvas: true,
+  related: { settings: SectionSettings },
+};
+
+/** The module header (roadmap 1.4).
+ *
+ * Foundry's persistent toolbar: the module-wide title, the tabs that move
+ * between pages, and any buttons that apply to the whole module.
+ *
+ * **Why this is a node type and a toolbar section is not** (§78 refused that
+ * one as "a row with different padding"): a header differs in *behaviour*,
+ * not decoration. It is pinned while the page beneath it scrolls, and there
+ * is **at most one per module** — a rule the server enforces, because two
+ * things both claiming to be the module-wide toolbar is a document nobody can
+ * render sensibly.
+ *
+ * It persists across page changes for a structural reason rather than a
+ * special case: it is not inside a page, and only pages hide themselves when
+ * another page is showing.
+ */
+export function CanvasHeader({
+  title = "",
+  sticky = true,
+  children,
+}: {
+  title?: string;
+  sticky?: boolean;
+  children?: React.ReactNode;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  // `{{v_id}}` like every other text, so a header can name what the viewer is
+  // looking at rather than only what the app is called.
+  const { resolved } = useCanvasVariables();
+  return (
+    <header
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-header${sticky ? " canvas-header--sticky" : ""}`}
+    >
+      {title.trim() && <p className="canvas-header-title">{interpolate(title, resolved)}</p>}
+      {children}
+    </header>
+  );
+}
+
+function HeaderSettings() {
+  const {
+    title,
+    sticky,
+    actions: { setProp },
+  } = useNode((node) => ({ title: node.data.props.title, sticky: node.data.props.sticky }));
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+        <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Stays put while the page scrolls</span>
+        <input
+          type="checkbox"
+          checked={sticky ?? true}
+          onChange={(e) => setProp((p: { sticky: boolean }) => (p.sticky = e.target.checked))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasHeader.craft = {
+  displayName: "Header",
+  props: { title: "", sticky: true },
+  isCanvas: true,
+  related: { settings: HeaderSettings },
+};
+
+/** A page (roadmap 1.4).
+ *
+ * A page is a **node in the layout tree**, not a separate document. That keeps
+ * decision 0002's "the layout is a Craft.js tree" true, keeps the builder
+ * editing one tree, and means the set of pages is *read* from the layout
+ * rather than stored beside it — a second copy of that fact would disagree
+ * with the first the moment somebody deleted a page.
+ *
+ * **In the builder every page is visible**, stacked and labelled. Hiding all
+ * but one would make the other pages uneditable without a page switcher in the
+ * chrome, and would hide from the author that they exist. In the running app
+ * exactly one shows.
+ */
+export function CanvasPage({
+  title = "Page",
+  children,
+}: {
+  title?: string;
+  children?: React.ReactNode;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { current } = useCanvasPage();
+  const { query } = useEditor();
+
+  // No page selected yet means "show the first one". Read from the tree rather
+  // than seeded into state at mount: the layout decides which page is first,
+  // and a copy of that decision in state would disagree the moment somebody
+  // reordered them.
+  let active = current === nodeId;
+  if (current === null) {
+    try {
+      const root = query.node("ROOT").get();
+      const first = (root.data.nodes ?? []).find(
+        (id: string) => query.node(id).get()?.data?.name === "CanvasPage",
+      );
+      active = first === nodeId;
+    } catch {
+      active = true; // no tree to ask (a bare render); showing beats blanking
+    }
+  }
+
+  if (mode === "run" && !active) return null;
+
+  return (
+    <section
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-page${active ? " on" : ""}`}
+    >
+      {mode === "edit" && (
+        <p className="canvas-page-label">
+          {title}
+          {active ? " · shown first" : ""}
+        </p>
+      )}
+      {children}
+    </section>
+  );
+}
+
+function PageSettings() {
+  const {
+    title,
+    actions: { setProp },
+  } = useNode((node) => ({ title: node.data.props.title }));
+  return (
+    <label className="field">
+      <span className="field-label">Page title</span>
+      <input
+        value={title ?? ""}
+        onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+      />
+      <span className="field-hint">Shown on a Tabs widget</span>
+    </label>
+  );
+}
+
+CanvasPage.craft = {
+  displayName: "Page",
+  props: { title: "Page" },
+  isCanvas: true,
+  related: { settings: PageSettings },
+};
+
+/** An overlay: a layer over the page rather than a page you go to.
+ *
+ * Foundry's modals and drawers, for content that should not navigate you away.
+ * The same kind of node as a page, so `navigate` targets either and the
+ * difference is what the browser does with it - and the difference matters:
+ * closing an overlay returns you to the page underneath, which "navigate to
+ * a page" has no way to express.
+ *
+ * **In the builder it renders inline**, like a page, so it is editable and
+ * visible. It only becomes a layer in the running app.
+ */
+export function CanvasOverlay({
+  title = "Overlay",
+  variant = "modal",
+  children,
+}: {
+  title?: string;
+  variant?: "modal" | "drawer";
+  children?: React.ReactNode;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { overlay, closeOverlay } = useCanvasPage();
+  const open = overlay === nodeId;
+
+  if (mode === "run" && !open) return null;
+
+  const body = (
+    <section
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className={`canvas-overlay canvas-overlay--${variant}`}
+      role={mode === "run" ? "dialog" : undefined}
+      aria-modal={mode === "run" ? true : undefined}
+      aria-label={title}
+    >
+      <div className="canvas-overlay-head">
+        <strong>{title}</strong>
+        {mode === "run" && (
+          <button type="button" className="btn quiet" onClick={closeOverlay}>
+            Close
+          </button>
+        )}
+        {mode === "edit" && <span className="soft">overlay</span>}
+      </div>
+      {children}
+    </section>
+  );
+
+  if (mode !== "run") return body;
+  return (
+    // The scrim closes it. An overlay you can only leave through its own
+    // button is one a viewer gets stuck in the moment that button is off
+    // screen.
+    <div className="canvas-scrim" onClick={closeOverlay}>
+      <div onClick={(e) => e.stopPropagation()}>{body}</div>
+    </div>
+  );
+}
+
+function OverlaySettings() {
+  const {
+    title,
+    variant,
+    actions: { setProp },
+  } = useNode((node) => ({ title: node.data.props.title, variant: node.data.props.variant }));
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Shows as</span>
+        <select
+          value={variant ?? "modal"}
+          onChange={(e) => setProp((p: { variant: string }) => (p.variant = e.target.value))}
+        >
+          <option value="modal">Modal (centred)</option>
+          <option value="drawer">Drawer (from the side)</option>
+        </select>
+      </label>
+    </>
+  );
+}
+
+CanvasOverlay.craft = {
+  displayName: "Overlay",
+  props: { title: "Overlay", variant: "modal" },
+  isCanvas: true,
+  related: { settings: OverlaySettings },
+};
+
+/** Tabs: one button per page, navigating through the event system.
+ *
+ * It does not call `go` directly. A tab click fires the module's `click`
+ * events for this widget exactly as a button would, so "what does this tab
+ * do" is answered by the same list as every other trigger — and a tab can set
+ * a variable on the way if somebody wires one. The common case (a tab per
+ * page, navigating to it) is generated by the settings panel rather than
+ * hardcoded here.
+ */
+export function CanvasTabs() {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { query } = useEditor();
+  const { current, go } = useCanvasPage();
+  const eventContext = useEventContext(undefined, useOverlayIds());
+  const { events: moduleEvents } = useCanvasVariables();
+
+  const pages: { id: string; title: string }[] = [];
+  try {
+    for (const id of query.node("ROOT").get().data.nodes ?? []) {
+      const node = query.node(id).get();
+      if (node?.data?.name === "CanvasPage") {
+        pages.push({ id, title: String(node.data.props.title ?? "Page") });
+      }
+    }
+  } catch {
+    /* no tree to ask */
+  }
+  const activeId = current ?? pages[0]?.id ?? null;
+
+  return (
+    <nav
+      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      className="canvas-tabs"
+      aria-label="Pages"
+    >
+      {pages.length === 0 && <span className="canvas-widget-empty">Add a page to this app</span>}
+      {pages.map((page) => (
+        <button
+          key={page.id}
+          type="button"
+          className={`canvas-tab${page.id === activeId ? " on" : ""}`}
+          aria-current={page.id === activeId}
+          onClick={() => {
+            const wired = eventsFor(moduleEvents, nodeId, "click");
+            if (wired.length > 0) {
+              runEvents(wired, { ...eventContext,
+                                 payload: { page: page.id, title: page.title } });
+            }
+            // The tab still navigates when nothing is wired. A tab bar that
+            // did nothing until somebody configured an event would look
+            // broken, and "go to the page this tab is for" is the only thing
+            // a tab could reasonably mean.
+            go(page.id);
+          }}
+        >
+          {page.title}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+CanvasTabs.craft = { displayName: "Tabs", props: {} };
+
+/** A button: the event system's primary trigger surface (roadmap 1.5, and the
+ * trigger source 1.3 was missing).
+ *
+ * **One button is one node, and Foundry's "Button Group" is a row of them in
+ * a Section.** A trigger is `(node, on)` — so a group holding several buttons
+ * would need a third part naming *which* button, in every event, in the saved
+ * format, to express something the layout already expresses. The row is the
+ * grouping; the node is the button.
+ *
+ * **A button with nothing wired to it does nothing, and says so in the
+ * builder.** Unlike Tabs, there is no default meaning to fall back on: a tab
+ * self-evidently goes to its page, while a button could mean anything. Silence
+ * would be indistinguishable from a broken click, so the builder labels it.
+ *
+ * **`enabledVariable` is what makes it a widget rather than a control.** The
+ * rule for every widget in item 1.5 is that it consumes input variables and
+ * emits output variables: this one consumes a variable to decide whether it
+ * can be pressed at all — "Clear selection", greyed out until something is
+ * selected — and emits whatever its events write.
+ */
+export function CanvasButton({
+  label = "Button",
+  style = "primary",
+  enabledVariable = null,
+}: {
+  label?: string;
+  style?: "primary" | "quiet" | "danger";
+  /** A variable that must be truthy for the button to be pressable. Unset
+   * means always pressable — an app whose buttons are all dead until somebody
+   * declares a variable would look broken. */
+  enabledVariable?: string | null;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { resolved, events: moduleEvents } = useCanvasVariables();
+  const eventContext = useEventContext(undefined, useOverlayIds());
+
+  const wired = eventsFor(moduleEvents, nodeId, "click");
+  const gate = enabledVariable ? resolved[enabledVariable] : undefined;
+  // Only an explicitly falsy value disables. `undefined` is "not resolved
+  // yet", which must not read as "not allowed" - a button that is dead until
+  // the first resolve lands is a button people click twice.
+  const disabled =
+    mode === "edit" || (!!enabledVariable && gate !== undefined && !gate);
+
+  return (
+    <span ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-button-wrap">
+      <button
+        type="button"
+        className={`btn${style === "primary" ? "" : ` ${style}`}`}
+        disabled={disabled}
+        onClick={() => {
+          if (mode === "edit") return;
+          if (wired.length > 0) runEvents(wired, eventContext);
+        }}
+      >
+        {interpolate(label ?? "", resolved)}
+      </button>
+      {mode === "edit" && wired.length === 0 && (
+        <span className="canvas-widget-empty"> nothing wired to this click yet</span>
+      )}
+    </span>
+  );
+}
+
+function ButtonSettings() {
+  const {
+    label,
+    style,
+    enabledVariable,
+    actions: { setProp },
+  } = useNode((node) => ({
+    label: node.data.props.label,
+    style: node.data.props.style,
+    enabledVariable: node.data.props.enabledVariable,
+  }));
+  const { declared } = useCanvasVariables();
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          value={label ?? ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+        <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Style</span>
+        <select
+          value={style ?? "primary"}
+          onChange={(e) => setProp((p: { style: string }) => (p.style = e.target.value))}
+        >
+          <option value="primary">Primary</option>
+          <option value="quiet">Quiet</option>
+          <option value="danger">Danger</option>
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Pressable when</span>
+        <select
+          value={enabledVariable ?? ""}
+          onChange={(e) =>
+            setProp(
+              (p: { enabledVariable: string | null }) =>
+                (p.enabledVariable = e.target.value || null),
+            )
+          }
+        >
+          <option value="">Always</option>
+          {Object.values(declared).map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">
+          The button is greyed out while this variable is empty or false
+        </span>
+      </label>
+    </>
+  );
+}
+
+CanvasButton.craft = {
+  displayName: "Button",
+  props: { label: "Button", style: "primary", enabledVariable: null },
+  related: { settings: ButtonSettings },
+};
+
 export const CANVAS_RESOLVER = {
+  CanvasHeader,
+  CanvasPage,
+  CanvasOverlay,
+  CanvasSection,
+  CanvasTabs,
+  CanvasButton,
   CanvasContainer,
   CanvasText,
+  CanvasFilterList,
   CanvasParameterControl,
   CanvasDatasetTable,
   CanvasObjectTable,
@@ -1818,8 +2805,15 @@ export const CANVAS_RESOLVER = {
 };
 
 export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: string }[] = [
+  { key: "CanvasHeader", label: "Header", hint: "A toolbar above every page; one per module" },
+  { key: "CanvasPage", label: "Page", hint: "A screen of the app; Tabs move between them" },
+  { key: "CanvasSection", label: "Section", hint: "Split a page into columns or rows" },
+  { key: "CanvasOverlay", label: "Overlay", hint: "A modal or drawer over the page" },
+  { key: "CanvasTabs", label: "Tabs", hint: "One button per page" },
+  { key: "CanvasButton", label: "Button", hint: "Runs the events wired to its click" },
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
+  { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },

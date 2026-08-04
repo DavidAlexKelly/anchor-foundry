@@ -1169,6 +1169,10 @@ class ObjectSetIn(BaseModel):
     definition: dict[str, Any]
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
+    # Validated in the handler rather than by an enum here, so an unsupported
+    # sort gets the sentence explaining what it would take (`object_sets`)
+    # instead of Pydantic's list of permitted literals.
+    sort: str | None = None
 
 
 class ObjectSetOut(BaseModel):
@@ -1285,6 +1289,7 @@ async def evaluate_object_set(
     which is the whole reason object sets are a server concept.
     """
     definition = object_sets.parse(body.definition)
+    sort = object_sets.parse_sort(body.sort)
     async with user_connection(access.auth.user_id) as conn:
         # Confirms the type is in this workspace before it is used as a filter
         # - an id from a request body is never trusted to be in scope (§10).
@@ -1296,6 +1301,7 @@ async def evaluate_object_set(
             filters=definition.filters,
             limit=body.limit,
             offset=body.offset,
+            sort=sort,
         )
     return ObjectSetOut(
         instances=[InstanceOut(**{**r, "properties": _jsonb(r["properties"])}) for r in rows],

@@ -123,6 +123,7 @@ class InstanceStoreGateway(Protocol):
         filters: "tuple[Any, ...]",
         limit: int,
         offset: int,
+        sort: str = "recent",
     ) -> tuple[list[dict[str, Any]], int]:
         """One page of a filtered set, and how many are in it (roadmap 1.2).
 
@@ -207,6 +208,24 @@ def _index_name(search_prefix: str) -> str:
     # index names must be lowercase with no leading "-" or "_" - search_prefix
     # is always lowercase-slug-derived so this is safe without re-validating.
     return f"{search_prefix}object-instances"
+
+
+def _sort_clause(sort: str) -> list[dict[str, str]]:
+    """One of `object_sets.SORTS`, as an OpenSearch sort.
+
+    Every one of them ties on `primary_key` last, so two rows that share an
+    `updated_at` - which a bulk sync makes routine, since it writes them in the
+    same instant - come back in the same order on both stores and on every
+    page. Without that, "the next page" can repeat a row it already showed and
+    skip one it never did, and nothing about the symptom points at the sort.
+    """
+    if sort == "key":
+        return [{"primary_key": "asc"}]
+    if sort == "-key":
+        return [{"primary_key": "desc"}]
+    if sort == "oldest":
+        return [{"updated_at": "asc"}, {"primary_key": "asc"}]
+    return [{"updated_at": "desc"}, {"primary_key": "asc"}]
 
 
 # Namespace for deterministic instance ids. Fixed forever: changing it would
@@ -579,6 +598,7 @@ class OpenSearchInstanceStore:
         filters: tuple[Any, ...],
         limit: int,
         offset: int,
+        sort: str = "recent",
     ) -> tuple[list[dict[str, Any]], int]:
         """Roadmap 1.2. Filters become query clauses rather than a post-filter
         over a page, which is the whole reason this is server-side.
@@ -599,7 +619,7 @@ class OpenSearchInstanceStore:
         clauses = self._set_clauses(object_type_id, filters)
         body = {
             "query": {"bool": clauses},
-            "sort": [{"updated_at": "desc"}],
+            "sort": _sort_clause(sort),
             "from": offset,
             "size": limit,
         }
@@ -868,6 +888,7 @@ class PostgresInstanceStore:
         filters: tuple[Any, ...],
         limit: int,
         offset: int,
+        sort: str = "recent",
     ) -> tuple[list[dict[str, Any]], int]:
         """`search_prefix` ignored, as everywhere else on this store: Postgres
         scopes by RLS and object_type_id."""
@@ -875,6 +896,7 @@ class PostgresInstanceStore:
 
         return await instances_service.evaluate_object_set(
             self._conn,
+            sort=sort,
             object_type_id=object_type_id,
             filters=filters,
             limit=limit,

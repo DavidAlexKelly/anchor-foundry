@@ -25,6 +25,8 @@
  * document and concerns itself with *when* things happen.
  */
 
+import { useCanvasPage, useCanvasParameters } from "./context";
+
 export interface WorkshopEffect {
   type: string;
   config?: Record<string, unknown>;
@@ -37,12 +39,30 @@ export interface WorkshopEventDef {
 }
 
 export interface EventContext {
+  /** Go to a page (roadmap 1.4). Absent in a context that has no pages, in
+   * which case a navigate effect is skipped rather than throwing — see the
+   * note on unknown effects below. */
+  goToPage?: (nodeId: string) => void;
+  /** Open a node as an overlay over the current page, and close it again. */
+  openOverlay?: (nodeId: string) => void;
+  closeOverlay?: () => void;
+  /** Which node ids are overlays rather than pages. `navigate` accepts either
+   * and this is how it tells them apart - read from the tree by the caller,
+   * because the effect itself has no view of the layout. */
+  overlayIds?: Set<string>;
   /** Applies every variable write from this run, once, at the end. Called with
    * the accumulated map rather than per effect so one click is one render. */
   setVariables: (values: Record<string, unknown>) => void;
   /** What the widget knows about the thing that was acted on — the clicked
    * row, the chosen option. `{{...}}` in an effect's value reads from here. */
   payload?: Record<string, unknown>;
+  /** The *object* the trigger was about, whole: type, key and properties.
+   * What a `set_variable` with `from: "object"` writes into a `single_object`
+   * variable, and what `object_property` then reads a property out of.
+   *
+   * Separate from `payload`, which is flattened for `{{...}}` interpolation
+   * and cannot say which of its keys is the primary key. */
+  object?: { object_type_id?: string; primary_key: unknown; properties: Record<string, unknown> };
   openUrl?: (url: string) => void;
 }
 
@@ -73,6 +93,34 @@ export function interpolate(template: string, payload: Record<string, unknown>):
   });
 }
 
+/** Everything a widget needs to run an event, assembled once.
+ *
+ * Widgets used to build this by hand, and the first one to do so forgot
+ * `goToPage` — so a `navigate` effect was silently skipped and a row click
+ * that should have changed page did nothing. Skipping an effect whose
+ * capability is absent is the right *runtime* rule (see the note in `run`),
+ * which is exactly why the capability must not be absent by accident. One
+ * hook, so there is nothing to forget.
+ */
+export function useEventContext(
+  payload?: Record<string, unknown>,
+  overlayIds?: Set<string>,
+  object?: EventContext["object"],
+): EventContext {
+  const { setMany } = useCanvasParameters();
+  const { go, openOverlay, closeOverlay } = useCanvasPage();
+  return {
+    setVariables: setMany,
+    goToPage: go,
+    openOverlay,
+    closeOverlay,
+    overlayIds,
+    openUrl: (url: string) => window.open(url, "_blank", "noopener,noreferrer"),
+    payload,
+    object,
+  };
+}
+
 /** Run one widget's events for one act.
  *
  * Returns the variables it wrote, mostly so tests can assert on them without a
@@ -93,9 +141,23 @@ export function run(
       if (effect.type === "set_variable") {
         const target = String(config.variable ?? "");
         if (!target) continue;
+        if (config.from === "object") {
+          // Nothing picked writes nothing, rather than writing undefined: an
+          // effect that cleared the variable it was meant to fill would be
+          // indistinguishable from one that ran and found nothing.
+          if (context.object) written[target] = context.object;
+          continue;
+        }
         const raw = config.value;
         written[target] =
           typeof raw === "string" ? interpolate(raw, { ...payload, ...written }) : raw;
+      } else if (effect.type === "navigate") {
+        const target = String(config.page ?? "");
+        if (!target) continue;
+        if (context.overlayIds?.has(target)) context.openOverlay?.(target);
+        else context.goToPage?.(target);
+      } else if (effect.type === "close_overlay") {
+        context.closeOverlay?.();
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })

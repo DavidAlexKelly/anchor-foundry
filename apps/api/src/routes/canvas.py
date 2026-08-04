@@ -287,7 +287,6 @@ async def evaluate_variables(
     document = _parse_json(row["definition"])
     try:
         variables = variables_service.validate_module(document)
-        resolved = variables_service.evaluate(variables, body.values)
     except variables_service.VariableError as exc:
         # A saved app whose document no longer validates. Reachable: the module
         # could have been written before a rule existed, or by something other
@@ -295,6 +294,17 @@ async def evaluate_variables(
         # otherwise sees widgets quietly bound to nothing.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    try:
+        resolved = variables_service.evaluate(variables, body.values)
+    except variables_service.VariableError as exc:
+        # Not the same failure, and not the same fault. The document is fine;
+        # what arrived with the request is not - a Filter List can send filter
+        # clauses, and `narrow_set` refuses ones it cannot mean rather than
+        # dropping them. Blaming the saved app for a bad request would send
+        # whoever reads this to the wrong place entirely.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
     return EvaluateVariablesOut(
         values=resolved, order=variables_service.evaluation_order(variables)
@@ -388,9 +398,15 @@ async def evaluate_published_variables(
     document = _parse_json(row["definition"])
     try:
         variables = variables_service.validate_module(document)
-        resolved = variables_service.evaluate(variables, body.values)
     except variables_service.VariableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    try:
+        resolved = variables_service.evaluate(variables, body.values)
+    except variables_service.VariableError as exc:
+        # The values, not the document - see the note on the project-scoped one.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     return EvaluateVariablesOut(
         values=resolved, order=variables_service.evaluation_order(variables)
     )

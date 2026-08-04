@@ -1411,6 +1411,198 @@ Roadmap item 1.3. An event is a **trigger** — which widget, what happened — 
 
 ---
 
+### 77. Pages, tabs, and the effect that was waiting on them (this session)
+
+The first slice of roadmap item 1.4. An app can have more than one screen: a `Page` widget, a `Tabs` widget, and the `navigate` effect §76 refused for want of somewhere to navigate to.
+
+Verified in a browser: a two-page app whose tab bar lists Browse and Selected; the running app opens on the first page; clicking a row **sets a variable and changes page** — two effects of one event, in order; the tab bar goes back.
+
+**A page is a node in the layout tree, not a separate document.** That keeps decision 0002's "the layout is a Craft.js tree" true, keeps the builder editing one tree, and means the set of pages is *read* from the layout rather than stored beside it — the same argument `usages()` makes: a second copy of a fact disagrees with the first the moment something deletes a node without knowing to update it.
+
+**Which page is showing is runtime state, never persisted** — the rule variable values already follow (decision 0002 §3). A published app opens on its first page for every viewer, not on whatever page the last person was looking at; a saved app is not a saved session. `current` starts null and a page reads that as "show me if I am the first", rather than state being seeded with the first page's id at mount: the *layout* decides which page is first, and a copy of that decision in state would disagree the moment somebody reordered them.
+
+**In the builder every page is visible**, stacked and labelled; in the running app exactly one renders. Hiding all but one in the builder would make the other pages uneditable without a page switcher in the chrome, and would hide from the author that they exist at all.
+
+**Tabs go through the event system rather than calling `go` directly**, so "what does this tab do" is answered by the same list as every other trigger and a tab can set a variable on the way. It still navigates when nothing is wired — a tab bar that did nothing until somebody configured an event would look broken, and "go to the page this tab is for" is the only thing a tab could reasonably mean.
+
+**The server refuses navigating to a widget that is not a page.** Not a smaller version of navigating to a page: a click that would do nothing, and save time is the only moment anybody can fix it.
+
+**A bug my own design hid, and the fix.** The first browser run showed the row click setting the variable but *not* changing page. Cause: `run()` skips an effect whose capability is absent, and the object table assembled its event context by hand and forgot `goToPage`. The skip is the right runtime rule — a click that does part of its job beats one that throws mid-list — which is exactly why the capability must not go missing by accident. There is now one `useEventContext()` hook that assembles all three capabilities, so a widget has nothing to forget. The lesson is the general one: a rule that tolerates a missing piece needs a construction that cannot omit it.
+
+One stale test updated honestly rather than around: `test_an_unbuilt_effect_says_so` used `navigate` as its example and now uses `run_action`, with a comment saying why. `run_action` and `export` remain refused — binding an action's parameters to variables is its own design question, and export needs a download surface the viewer route lacks.
+
+**567 API tests green**, 6 of them new for pages.
+
+**What is left in 1.4:** sections (columns, rows, toolbars), overlays, the Layout sidebar, and drag-to-resize. Pages were the piece the rest hangs off and the one blocking an effect.
+
+---
+
+### 78. Sections and overlays: a page that is not one column (this session)
+
+The second slice of 1.4. A `Section` widget splits a page into columns or rows, and an `Overlay` widget puts a modal or a drawer over the page instead of navigating away from it.
+
+Verified in a browser, in both modes: the running app lays the demo app out as a 1:2 split — metric card and chart stacked on the left, object table on the right; a row click opens a modal showing the clicked row with the page still underneath; Close returns to it; at 700px wide the columns stack. In the builder, dropping a widget into a column puts it in that column, and editing the proportions from `2,1` to `1,1` re-lays out live.
+
+**Widths are proportions, not pixels.** A section's children share the space by weight (`weights: "1,2"`), so a two-column split stays a two-column split on a narrower screen instead of overflowing, and the arithmetic never has to know how many gaps there are (`flex-grow`, `flex-basis: 0`).
+
+**Drag-to-resize is deliberately not built.** It is an affordance over these same numbers. Building the handle first would have meant a layout nobody could describe in the saved document; the numbers exist now, so the handle can arrive without a format change.
+
+**A toolbar is not a section type**, though Foundry lists one. A tabbed section is the Tabs widget over pages — the same idea one level up — and a toolbar is a row with different padding. Three of the four would have been the same code with a different label.
+
+**An overlay is the same kind of node as a page, and `navigate` takes either.** What differs is what the browser does: a page replaces, an overlay covers. **Closing is its own effect** (`close_overlay`) rather than "navigate to nothing", because closing returns you to the page underneath — which navigate has no way to name. In the builder an overlay renders inline like a page, so it stays editable and visible; only the running app makes it a layer.
+
+**Below 900px a column section stops being columns.** That is the roadmap's "responsive rules per section type": rows are already a stack and need no rule.
+
+**The bug that made every section one column, and why nothing errored.** Craft.js hands a canvas node its children as a *single* Fragment holding one element per child, and `React.Children.toArray` does not look inside a Fragment — so the obvious `toArray(children)` returned a one-element array no matter what the section contained. Every section rendered as one column and looked, from the outside, like a feature that simply did not work. There is now one `childList()` helper with the explanation attached, so the next canvas widget that needs its children individually does not rediscover it.
+
+**A check that passed while the modal was invisible.** Every structural assertion about the overlay — it opens, it shows the clicked row, the page is still underneath, Close returns — passed while the panel was fully transparent, because the CSS named `var(--surface)` and there is no `--surface`; an undefined custom property is not an error, it just computes to nothing. The check now asserts the pixels too (the scrim covers the viewport and dims, the panel is opaque). The same typo was already in `.repo-preview-table th`, where it left a sticky header transparent and rows scrolling under it; fixed in passing.
+
+**A section needs somewhere to click that is the section.** Its children fill it, so the settings panel for proportions, direction and gap was unreachable — settings you cannot open are not settings. In the builder a section now carries a small label ("COLUMNS · 1:2"), the way a page does, and that label is the click target. The Layout sidebar, still to come, is the general answer.
+
+**571 API tests green**, 4 of them new for overlays. All four were mutation-tested: dropping overlays from `navigate`'s accepted targets, making `overlays()` return pages, removing `close_overlay` from the saved effects, and making `pages()` ignore its widget argument each fail at least one test.
+
+**What is left in 1.4:** the Layout sidebar, drag-to-resize, and a module header.
+
+---
+
+### 79. The Layout sidebar (this session)
+
+The third slice of 1.4, and the panel Foundry's own docs name: layout elements are edited "from a Layout sidebar panel or by selecting them in the module view". Both, not either — selecting in the view is the fast path for a widget you can see, and the tree is the only way to reach one you cannot.
+
+**It closes a structural hole, not a convenience gap.** A section is filled by its children and a page by its sections, so a container has no pixels of its own to click. §78 had to give sections a builder label purely to make their settings reachable, and that trick does not generalise — not to a container three levels down, not to an empty one. A tree does: every node in the document gets exactly one row whether or not it has any area on screen.
+
+**It holds no state.** Craft's node map *is* the layout (decision 0002), so the panel reads the editor's state and renders it. There is nothing here that can disagree with what is being edited — the same argument `pages()` and `usages()` make server-side, applied to the builder.
+
+**Each row carries what distinguishes it from its siblings** — a page's title, a section's direction and proportions, a widget's bound variable. A page of four sections would otherwise be four identical rows, which is a tree that tells you the shape and not the thing.
+
+**Rows never wrap.** The indent is the only thing showing the nesting, so a wrapped row would make the one signal ambiguous; the detail truncates instead.
+
+**Stacked above the widget palette rather than tabbed with it.** The right-hand column tabs Widget against Variables because they answer different questions about different things and one is usually irrelevant. These two are both about the document in front of you, and an author dropping a widget wants to see where it landed — a tab would trade a scroll for a click on every edit.
+
+Verified in a browser: eleven rows for the demo module's eleven nodes in tree order, indent tracking depth across four levels, clicking a section's row opening its proportions, an overlay reachable the same way, and deleting a widget removing its row.
+
+**What is left in 1.4:** the module header, and drag-to-resize.
+
+---
+
+### 80. The module header (this session)
+
+The last structural piece of 1.4: Foundry's persistent toolbar, holding the module-wide title, the tabs that move between pages, and any module-wide buttons.
+
+**Why this is a node type when §78 refused to make a toolbar one.** That refusal said a toolbar is "a row with different padding rather than a different concept", and the test it failed is the right one to apply here: a header differs in *behaviour*. It is pinned while the page beneath it scrolls, and there is at most one per module. Decoration would not have earned a node type; those two rules do.
+
+**It persists across page changes structurally, not by special case.** It is not inside a page, and only pages hide themselves when another page is showing — so nothing in the header had to be taught about pages at all.
+
+**At most one, enforced by the server.** Two nodes both claiming to be *the* module-wide toolbar is a document no renderer can settle. The refusal counts what it found — "a module may have one header and this one has 2" — because a number is something an author can act on where "invalid header" is not. It lives in `validate_module`, not the builder: a document can arrive by any route, and a rule only the builder applies is not a rule.
+
+**A header is not a navigation target.** It is always showing, so `navigate` refuses it exactly as it refuses any other non-page widget — which came out of the existing check for free, and there is a test pinning that so it stays that way.
+
+Verified in a browser: the header renders above the page in the running app with the tab bar inside it, survives a page change, and its title reads a variable (`Sites · {{v_region}}` becomes `Sites · north` when the filter is set). The live API refuses a second header with the counted message.
+
+**A check that would have passed either way, caught and fixed.** The first stickiness assertion scrolled 84px against a header sitting 259px down the page — the header could not have left the viewport whether or not it was sticky. Re-run against a short viewport it now scrolls 404px past that offset and asserts the header is at y=0, which only a sticky one can be. Same lesson as §78's transparent modal: an assertion that cannot fail is not evidence.
+
+**575 API tests green**, 4 new for the header, all mutation-tested: dropping the one-header rule, making the limit two, and making a header count as a page each fail at least one test.
+
+**1.4 is done bar drag-to-resize**, which stays deferred for §78's reason — it is an affordance over numbers that already exist and can arrive without a format change.
+
+---
+
+### 81. The Button: the event system's primary trigger surface (this session)
+
+Roadmap 1.5's third priority-1 widget, and the trigger source 1.3 was missing. A button runs whatever events are wired to its click.
+
+**One button is one node, and Foundry's "Button Group" is a row of them in a Section.** A trigger is `(node, on)`. A node holding several buttons would need a third part naming *which* button — in every event, in the saved format — to express something the layout already expresses. The row is the grouping; the node is the button. This is the same test §80 applied to the header and §78 applied to toolbar sections: a new concept has to earn itself against what the format already says.
+
+**`enabledVariable` is what makes it a widget rather than a control.** Item 1.5's rule is that a widget consumes input variables and emits output variables; this one consumes a variable to decide whether it can be pressed at all — "Clear Aberdeen Yard (open)", greyed out until something is selected — and emits whatever its events write. It is a reference prop, so deleting the variable a button is gated on is refused like any other usage rather than quietly making the button permanently live.
+
+**Only an explicitly falsy value disables it.** `undefined` means "not resolved yet", and a button dead until the first resolve lands is a button people click twice. Unset means always pressable, for the same reason: an app whose buttons are all dead until somebody declares a variable looks broken.
+
+**A button with nothing wired says so, in the builder.** Unlike Tabs there is no default meaning to fall back on — a tab self-evidently goes to its page, a button could mean anything — so silence would be indistinguishable from a broken click.
+
+**What the browser check found: the modal was right and the check was wrong.** The first run tried to click the header's button while the overlay was open and Playwright reported the scrim intercepting it — which is a modal doing its job. The demo module now has two buttons, and both are better for it: the header's clears the selection, the modal's own clears *and* closes, which is the `close_overlay` effect a modal's action needs and a button on the page beneath cannot reach.
+
+Verified in a browser: the header button starts gated shut, opens when a row is selected, and its label interpolates the selection; the header button is genuinely unreachable behind the scrim (asserted with `elementFromPoint`, not assumed); the modal's button runs both its effects in order; and once the modal is gone the header's button clears the variable and gates itself shut again.
+
+**577 API tests green** at the time, 2 new for the button's gate. Both mutation-tested, along with the mirrored `REFERENCE_PROPS` list: dropping `enabledVariable` from the server's copy fails three tests, and dropping it from the browser's copy fails the mirror test that exists for exactly this.
+
+---
+
+### 82. The Filter List, and the derivation under it (this session)
+
+Roadmap 1.5's first priority-1 widget and, the roadmap says, "the canonical Workshop widget": property-aware filters over an object set. It is a rewrite rather than an extension — Anchor's existing Filter emits a scalar for one configured property, and this one lets a viewer narrow on several properties and several values at once.
+
+**It writes clauses; a derivation makes the set.** The widget does not produce an object-set variable directly, and that is the design rather than a shortcut. Object sets resolve on the server — that is what makes "how many are there" and "the next page" answerable at all — so a widget that wrote a set would be a second place sets come from, with no rule for which one wins. Instead the widget writes a plain list of clauses into an `array` variable, and a new **`narrow_set`** derivation applies them to the input set. Widgets write values; derivations make sets.
+
+**`narrow_set` carries no property or operator, unlike `filter_set`.** Which properties a Filter List narrows on is what the *viewer* chooses, so it belongs to the value rather than to the declaration. That is the whole difference between the two transforms, and why the older one is still right for "a dropdown drives one fixed filter".
+
+**The clauses are runtime data and get the same parse every object set gets.** They arrive from a browser, so unknown operators, ordered comparisons and missing values are refused with the sentence `object_sets.parse` already writes, rather than dropped. A dropped clause is a set wider than the viewer asked for — the failure decision 0002 exists to remove.
+
+**A bug this introduced, and the fix.** `/variables/evaluate` wrapped validation *and* evaluation in one `except VariableError`, reporting both as 409 "this saved app no longer validates". That was true when only the document could fail. Now a Filter List sends clauses with the request, so a bad clause is a bad **request** against a perfectly good document — and a 409 would send whoever read it to edit an app with nothing wrong with it. The two calls are now separate: 409 for the document, 422 for the values, on both the project-scoped and published routes.
+
+**The options are the data's own values with counts, not a list somebody typed**, read from `/object-sets/group` — the same endpoint the chart uses. A hand-typed list goes stale the first time a new value appears, the argument that made object links derived rather than stored (§37).
+
+**The counts come from the unfiltered input set on purpose.** Recomputing them against the narrowed set would make every unpicked option read "0", which tells a viewer nothing about what picking it would do.
+
+**One value is `eq`, several are `in`.** A one-element `in` would work identically on both stores, but `eq` is what a reader of the saved document expects to see for a single choice.
+
+Verified in a browser, against the demo app rebuilt around it: a group per configured property with the real values and counts (`north 3`, `south 2`); every row shown before anything is picked; one value narrows 5 rows to 3; a second property narrows to 2; a second value of that property widens back to 3 (an OR within a property, AND across them); the metric card and chart move with the table because all three read the same set; and clearing every checkbox is the whole set again rather than an empty one.
+
+**584 API tests green**, 7 new. All mutation-tested: trusting clauses instead of parsing them, dropping the base set's own filters, making an empty choice mean an empty set, and blaming a bad request on the saved app each fail at least one test.
+
+---
+
+### 83. The Object Table upgrade: columns, a sort, and real paging (this session)
+
+Roadmap 1.5's second priority-1 item. Three of its four parts: which columns to show and in what order, a server-side sort, and paging that fetches a page rather than truncating one.
+
+**Sorting is by key or by when a row last changed, and sorting by a property is refused.** The same refusal `ORDERED_OPERATORS` makes and for the same reason: instance properties are stored untyped, so ordering by one means choosing between "250 after 40" and "250 before 40" on the caller's behalf, and the two stores would choose differently. A table sorted one way on Postgres and another on OpenSearch is the invisible kind of wrong. The refusal says what it would take — the declared property type behind the index — so it is a sentence somebody can act on, not a "no".
+
+**The settings panel offers the four sorts rather than making column headers clickable.** A header that errored on some columns and not others would be worse than one that never invited the click.
+
+**Every sort ties on the primary key**, on both stores. A bulk sync writes every row in one instant, so `updated_at` ties are the normal case, not the rare one — and without a tiebreak two pages of one sort can share a row and miss another, with nothing about the symptom pointing at the sort.
+
+**Paging is runtime state and resets when the set changes.** Same rule as pages and variable values (decision 0002 §3): a saved app opens on page one for every viewer. The reset matters more than it sounds — narrowing a filter while on page 3 would otherwise leave a viewer looking at an empty table that has rows.
+
+**A test that could not fail, caught by mutation testing.** The paging test asserted no row repeats and none is missed, which passed *with the tiebreak removed* — a small table comes back in a stable order from a sequential scan by accident. It now also asserts that tied timestamps fall through to ascending keys, which is the whole of what the tiebreak promises and is checkable. Third time this session that a green check turned out to be checking nothing (§78's transparent modal, §80's stickiness); the pattern is always the same — the assertion was about the shape of the result rather than the thing the code decides.
+
+**A finding, not fixed here: two sources feeding one object type produce two instances per primary key.** Instance identity is `(source_id, primary_key)`, so pointing a second dataset at an existing object type duplicates every overlapping key rather than updating it. Hit while growing the demo fixture from five rows to nine. Left as a finding because multi-source object types are a real Foundry pattern and changing instance identity is an ontology decision with a backfill behind it, not a footnote in a widget upgrade. It is in the rough edges below.
+
+Verified in a browser: the three configured columns in the configured order with the fourth property absent; three rows a page sorted by key; "1–3 of 9" with Previous dead on the first page; Next fetching S4–S6 from the server and Previous returning to exactly the page left; and picking a filter while on page 3 returning to page 1 with rows on it.
+
+**592 API tests green**, 9 new — including a cross-store case per sort, extending the check that already stops a *filter* meaning two things to cover ordering. All mutation-tested: accepting any property as a sort, dropping the key tiebreak on Postgres, reversing OpenSearch's descending key sort, and ignoring the sort argument entirely each fail at least one test.
+
+**What remains in the Object Table item:** row selection emitting a *single-object* variable rather than the text payload it emits today. That is an events question rather than a table one — it turns on what a `single_object` variable holds, a key to fetch or the row you clicked — and it is recorded that way in the roadmap.
+
+---
+
+### 84. What a single-object variable holds, and `object_property` (this session)
+
+The last part of roadmap 1.5's Object Table item — row selection emitting a single-object variable — which also settles a question left open since 1.2 and turns one of its two refused transforms on.
+
+**The decision: a `single_object` variable holds the object the viewer picked**, whole — `object_type_id`, `primary_key`, `properties` — not a key to fetch later. Three consequences, and the middle one is the price:
+
+*Reading a property is a lookup, not a round trip*, which is why `object_property` left `STORE_TRANSFORMS`. It was there on the assumption that the variable holds a key; the fetch it was waiting for does not need to happen.
+
+*The value is a snapshot of the click.* If the object changes afterwards, a widget reading it keeps showing what was clicked until something clicks again. That is the honest reading of "the row you picked", and it is why the reference travels with the snapshot — a widget that needs live values has the type and the key to re-read with, and an object *set* re-evaluates on every resolve regardless.
+
+*Nothing here is persisted*, so this does not make a saved app a saved session (decision 0002 §3). The objection that keeps object-set variables holding a definition rather than rows does not apply to a value that only ever exists for one viewing — which is exactly why that objection is written down where it is.
+
+**`set_variable` gained a `from`, not a magic template token.** `{"variable": "v_site", "from": "object"}` writes the object the trigger was about. A list rather than a boolean, because "the set the trigger was about" is the obvious next one and would otherwise arrive as a second flag. Giving both a `from` and a `value` is refused: two ways of saying what to write, and no rule for which wins.
+
+**The primary key is readable by name.** It is not inside `properties` — a row's key is its own field — so without this it would be the one thing about an object an app could not show.
+
+**Nothing picked reads as empty; a wrong-shaped value is refused.** A detail panel before the first click is an ordinary state. A variable holding a string cannot have properties, and rendering blank there would hide a document wired wrongly.
+
+**The table hands over the same row twice, deliberately**: flattened as `payload` for `{{...}}` in a label, and whole as `object` for a `single_object` variable — which needs to know which field is the key, and a flattened map cannot say.
+
+Verified in a browser: before any click the derived label is empty rather than broken; clicking Carlisle Works writes the object and three separate `object_property` variables read the key, the name and the status off it (`S3 · Carlisle Works · closed`); picking another row moves every reader at once; clearing the object empties everything derived from it.
+
+**603 API tests green**, 11 new. All mutation-tested: reading a non-object as blank, making the primary key unreadable, making "nothing picked" an error, accepting a `from` and a `value` together, and accepting any `from` name each fail at least one test.
+
+**One stale test updated honestly rather than around**: the case asserting that "the ontology transforms" are unbuilt now names only `object_set_aggregation`, with a comment saying `object_property` moved and why.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
@@ -1446,7 +1638,10 @@ Roadmap item 1.3. An event is a **trigger** — which widget, what happened — 
 - **Worker jobs' per-candidate `except` tuples are the single most repeated bug in this codebase** - §14 (twice, `sync_configs.py`), §16 (`instance_syncs.py`, `StorageKeyError`), and §21 (`sync_configs.py` again, the *same* `StorageKeyError` gap §16 fixed one file over). Every occurrence has the same shape: a job calls something that raises an exception type the isolation tuple doesn't name, so one bad candidate crashes the whole batch instead of failing alone. When adding or editing a scheduled job, enumerate every exception type on the call path rather than the ones a first test run happens to exercise - and when fixing one job, check its siblings for the identical gap.
 - **RLS policies that read another RLS-protected table are a recurring bug class in this codebase** - 0008 (users), 0009 (canvas_apps↔canvas_app_shares), and now 0015 (canvas_apps↔projects) all hit the same shape: a policy's `USING` clause subqueries a table whose own policy can legitimately hide the exact row the first policy needs, so the check silently fails closed instead of erroring loudly. Worth a systematic pass if another cross-table RLS policy gets added - the fix is always the same (`SECURITY DEFINER` helper resolving just the needed column, bypassing RLS internally) but nothing currently catches the pattern except noticing a feature silently doesn't work.
 - **`npm run build` while `next dev` is running corrupts the dev server.** Both write `apps/web/.next`, so a production build under a running dev server leaves it serving 500s with `Cannot find module './vendor-chunks/@tanstack.js'` on every route - which reads as a broken page rather than a broken cache, and cost a debugging detour in §47. Recovery: stop the dev server, `rm -rf apps/web/.next`, restart. Run the two in sequence, never concurrently.
-- Native HTML5 drag-and-drop (what Craft.js's toolbox uses to create new widgets) can't be reliably driven by Playwright automation - `dragTo()` and manual mouse event sequences both no-op against it. Verify that specific interaction with a real mouse in a real browser; every other canvas interaction (select, edit, save, preview, publish) was verified via automation and works.
+- **Two sources feeding one object type produce two instances for the same primary key** (found in §83). Instance identity is `(source_id, primary_key)` — `instance_store._doc_id` — so pointing a second dataset at an object type that already has one duplicates every overlapping key instead of updating it, and a set over that type returns each duplicated object twice. Nothing errors. Multi-source object types are a legitimate Foundry pattern (a union of feeds into one type), so the honest fix is to make identity `(object_type_id, primary_key)` and decide what happens when two sources disagree about the same object's properties — an ontology decision with a backfill behind it. Until then, one source per object type.
+- **Craft.js gives a canvas widget its children as one Fragment, not a list.** `React.Children.toArray(children)` therefore returns a one-element array however many widgets the node contains, and nothing errors — §78's sections all rendered as a single column until this was found. Any canvas widget that needs to treat its children individually (a section, a grid, anything positional) must go through `childList()` in `widgets.tsx` rather than `React.Children` directly.
+- **An undefined CSS custom property is silently nothing, not an error.** `background: var(--surface)` in a repo whose variable is `--panel` renders transparent, and a structural browser check will pass straight through it — this bit twice (§78's overlay panel, and `.repo-preview-table th` before it). A check on something that must be *visible* should assert a computed colour, not just the element's presence.
+- ~~Native HTML5 drag-and-drop (what Craft.js's toolbox uses to create new widgets) can't be reliably driven by Playwright automation - `dragTo()` and manual mouse event sequences both no-op against it.~~ **Corrected in §78**: Craft.js's `connectors.create` listens for *pointer* events, not the HTML5 drag API, so `dragTo()` fails but a `mouse.down` → `mouse.move(..., steps=N)` → `mouse.up` sequence drives it fine — the `steps` argument is the part that matters, since a single jump gives Craft no intermediate move to compute a drop target from. Dropping a widget into a section is verified by automation on that basis.
 - **`TEST_ADMIN_DSN` must contain a literal `?` (e.g. `...devpass@localhost:5432/platform?sslmode=disable`), not just `.../platform`** - `tests/test_connections.py`'s source-database fixture builds its isolated test database's DSN via `ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")`; if `ADMIN_DSN` has no `?` suffix the `.replace()` silently no-ops and every statement meant for the fixture's own throwaway `conn_source_test` database (a `public.orders` table, a `public.recent_orders` view, a blanket `GRANT ALL ON ALL TABLES` to a scratch login role) runs against the real shared `platform` database instead. This session hit it directly: a malformed DSN during this session's final regression run polluted the shared dev Postgres with exactly those objects and grants, breaking every other suite's fixtures with `DependentObjectsStillExist` on an unrelated `DROP ROLE`. Fixed by using a correctly-suffixed DSN and manually reverting the pollution (`REVOKE`/`DROP VIEW`/`DROP TABLE`/`DROP ROLE`) - not a product bug, but worth getting right the first time since the failure mode is silent until a much later, unrelated test trips over it.
 - **Worker jobs' discovery functions are global across every workspace by design** (§14, §16 - RLS-blind on purpose, since a scoped connection can't discover work in workspaces it doesn't know about), which means running the worker test suite's `run_due_object_source_syncs`/`run_due_sync_configs`/etc. against the *real* dev `platform` database (rather than a disposable one) will also pick up and act on any real, non-test source/connection that happens to be due at that moment - including one left over from manual browser verification in this same session, whose `LOCAL_STORAGE_ROOT` differed between the manual run and the pytest run and so failed with a stale storage-path error the next time discovery found it due. Point `WORKER_DATABASE_URL` at a disposable database for routine worker test runs where possible; if it must be the shared dev database, expect real dev-sandbox rows to occasionally get touched by test runs and vice versa.
 - **A failed `cdk deploy` (CREATE_FAILED) can leave the automatic rollback stuck in `DELETE_FAILED`**, found live re-deploying the §17 dry-run stack after a bad build. Two independent causes, both structural to how CloudFormation handles these resource types, not bugs in this repo's code: (1) RDS `deletionProtection: true` blocks CloudFormation from deleting the DB instance during *any* CFN-driven deletion, including its own automatic rollback of a botched CREATE - not just a deliberate `delete-stack` on an established stack - because CFN checks the template's declared property, not the live value, so this triggers even on a stack that was never touched out-of-band; (2) a VPC-joined OpenSearch domain that's still mid-creation when something else fails can get cancelled without CloudFormation ever actually issuing it a `DeleteDomain` call, leaving it (and its ENI) alive and blocking every security group/subnet that depends on it - confirmed via `describe-domain` reporting `Processing: false, Deleted: false` on a domain that had, in fact, finished creating. Recovery (documented as a runbook the first two times, since there's no clean prevention for the OpenSearch half): disable + directly delete the RDS instance, directly `delete-domain` the OpenSearch domain if `describe-domain` shows it was never told to, then retry `delete-stack`. For the RDS half specifically, `data-stores.ts`'s `deletionProtection` prop (default `true`, unchanged for real deploys) is now overridable via `-c deletionProtection=false` for exactly this kind of dry-run stack that expects to be torn down repeatedly - the control plane's own deploys never pass this key, so real customer stacks keep the safe default.

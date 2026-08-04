@@ -540,6 +540,26 @@ button { font: inherit; cursor: pointer; }
   position: sticky;
   top: 16px;
 }
+/* ---- the Layout sidebar (ROADMAP phase 2, 1.4) ---------------------------- */
+/* Capped and scrollable: a deep module's tree would otherwise push the widget
+   palette off the bottom of a laptop screen, and both are wanted at once. */
+.canvas-layout-tree { max-height: 320px; overflow: auto; margin-bottom: 4px; }
+/* One line per node, always: a row that wrapped would make the indent - the
+   only thing showing the nesting - ambiguous. The detail truncates instead. */
+.canvas-tree-row {
+  display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left;
+  border: 0; background: none; padding: 4px 6px; border-radius: 4px;
+  cursor: pointer; font-size: 12.5px; color: var(--ink); overflow: hidden;
+}
+.canvas-tree-row:hover { background: var(--accent-wash); }
+.canvas-tree-row.on { background: var(--accent-wash); box-shadow: inset 2px 0 0 var(--accent); }
+.canvas-tree-label { font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
+.canvas-tree-detail {
+  color: var(--ink-soft); font-size: 11.5px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.canvas-toolbox-heading { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+
 .canvas-palette-item {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -1115,7 +1135,9 @@ button { font: inherit; cursor: pointer; }
   padding: 5px 9px; text-align: left; border-bottom: 1px solid var(--line);
   white-space: nowrap;
 }
-.repo-preview-table th { position: sticky; top: 0; background: var(--surface); font-weight: 600; }
+/* --panel, not --surface: there is no --surface, and an undefined custom
+   property leaves the header transparent, so rows scroll underneath it. */
+.repo-preview-table th { position: sticky; top: 0; background: var(--panel); font-weight: 600; }
 .repo-preview-table th .soft { display: block; font-weight: 400; font-size: 10.5px; }
 .repo-preview-table td { font-family: var(--font-mono); }
 
@@ -1171,3 +1193,105 @@ button { font: inherit; cursor: pointer; }
    clickable and does nothing is worse than one that looks inert. */
 .row-clickable { cursor: pointer; }
 .row-clickable:hover { background: var(--surface-2, rgba(0, 0, 0, 0.04)); }
+
+/* ---- pages and tabs (ROADMAP phase 2, 1.4) -------------------------------- */
+/* In the builder every page is visible and labelled, because the alternative
+   is pages you cannot edit without a switcher in the chrome. In the running
+   app exactly one renders and this styling never applies. */
+.canvas-page { display: grid; gap: 10px; }
+.canvas-shell .canvas-page {
+  border: 1px dashed var(--line); border-radius: var(--radius);
+  padding: 10px; position: relative;
+}
+.canvas-shell .canvas-page.on { border-color: var(--line-strong); }
+.canvas-page-label {
+  margin: 0; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+.canvas-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+.canvas-tab {
+  padding: 6px 12px; background: none; border: 0; cursor: pointer;
+  font-size: 13px; color: var(--ink-soft); border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.canvas-tab:hover { color: var(--ink); }
+.canvas-tab.on { color: var(--ink); border-bottom-color: var(--accent-deep); font-weight: 600; }
+
+/* ---- the module header (ROADMAP phase 2, 1.4) ----------------------------- */
+.canvas-header {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 0 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+/* Pinned while the page beneath it scrolls - the behaviour that makes a
+   header a node type rather than a container with a border. */
+.canvas-header--sticky { position: sticky; top: 0; z-index: 20; }
+.canvas-header-title { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 700; }
+
+/* ---- the Filter List (ROADMAP phase 2, 1.5) ------------------------------- */
+/* Capped: a filter list is a column of choices, and stretching one across a
+   whole page leaves each count marooned a foot from its label. */
+.canvas-filter-group { border: 0; padding: 0; margin: 0 0 12px; max-width: 320px; }
+.canvas-filter-group legend {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-soft); padding: 0 0 4px;
+}
+.canvas-filter-option {
+  display: flex; align-items: center; gap: 8px; padding: 2px 0;
+  font-size: 13px; cursor: pointer;
+}
+.canvas-filter-option span:first-of-type { flex: 1 1 auto; min-width: 0; }
+/* The count is the point of showing options this way, so it gets its own
+   column rather than trailing the label and wrapping. */
+.canvas-filter-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+
+.canvas-table-pager {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px;
+}
+.canvas-table-pager .canvas-widget-empty { margin: 0; font-variant-numeric: tabular-nums; }
+
+.canvas-button-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.canvas-button-wrap .canvas-widget-empty { margin: 0; }
+
+/* ---- sections (ROADMAP phase 2, 1.4) -------------------------------------- */
+.canvas-section { min-width: 0; }
+.canvas-section-parts { display: flex; min-width: 0; }
+.canvas-section--columns > .canvas-section-parts { flex-direction: row; }
+.canvas-section--rows > .canvas-section-parts { flex-direction: column; }
+.canvas-section-part { min-width: 0; }
+.canvas-section-label {
+  font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-soft); margin: 0 0 4px; cursor: pointer;
+}
+/* The responsive rule the roadmap asks for, per section type: a column
+   section stops being columns rather than becoming three unreadable ones.
+   Rows are already a stack, so they need no rule. */
+@media (max-width: 900px) {
+  .canvas-section--columns > .canvas-section-parts { flex-direction: column; }
+}
+
+/* ---- overlays (ROADMAP phase 2, 1.4) -------------------------------------- */
+.canvas-shell .canvas-overlay {
+  border: 1px dashed var(--brass); border-radius: var(--radius); padding: 10px;
+  display: grid; gap: 10px;
+}
+.canvas-overlay-head { display: flex; align-items: center; justify-content: space-between; }
+.canvas-scrim {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35);
+  display: flex; align-items: center; justify-content: center; z-index: 40;
+}
+/* A raised panel, not the builder's dashed placeholder - the dashed border
+   above marks "this node is an overlay" while arranging the page, and an app
+   in front of a viewer should show no trace of it. */
+.canvas-scrim .canvas-overlay {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px; display: grid; gap: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  max-height: 80vh; overflow: auto;
+}
+.canvas-scrim .canvas-overlay--modal { width: min(680px, 92vw); }
+/* A drawer is the same layer pinned to one edge and full height, not a
+   different component. */
+.canvas-scrim:has(.canvas-overlay--drawer) { justify-content: flex-end; align-items: stretch; }
+.canvas-scrim .canvas-overlay--drawer {
+  width: min(460px, 92vw); max-height: none; border-radius: 0;
+}

@@ -592,3 +592,108 @@ async def test_both_stores_group_a_set_the_same_way(opensearch: str, case: dict)
         assert distinct_total == len(tally)
     finally:
         await store.close()
+
+
+# ---- sorting a page (roadmap 1.5, the Object Table upgrade) ------------------
+def test_the_default_sort_is_most_recently_changed(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """Unchanged behaviour, pinned: every existing caller sends no sort and
+    must keep getting the page it got before."""
+    type_id = seeded
+    body = evaluate(client, fx, {"object_type_id": type_id, "filters": []})
+    explicit = evaluate(client, fx, {"object_type_id": type_id, "filters": []}, sort="recent")
+    assert [i["primary_key"] for i in body["instances"]] == [
+        i["primary_key"] for i in explicit["instances"]
+    ]
+
+
+def test_sorting_by_key_is_the_key_order_both_ways(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    type_id = seeded
+    up = evaluate(client, fx, {"object_type_id": type_id, "filters": []}, sort="key")
+    down = evaluate(client, fx, {"object_type_id": type_id, "filters": []}, sort="-key")
+    keys = [i["primary_key"] for i in up["instances"]]
+    assert keys == sorted(keys)
+    assert [i["primary_key"] for i in down["instances"]] == list(reversed(keys))
+
+
+def test_a_sorted_page_does_not_repeat_or_skip_a_row(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """A bulk sync writes every row in one instant, so `updated_at` ties are
+    the normal case rather than the rare one. Without a tiebreak the two pages
+    of one sort can share a row and miss another, and nothing about the symptom
+    points at the sort."""
+    type_id = seeded
+    definition = {"object_type_id": type_id, "filters": []}
+    seen: list[str] = []
+    for offset in (0, 2, 4, 6):
+        page = evaluate(client, fx, definition, limit=2, offset=offset, sort="recent")
+        seen += [i["primary_key"] for i in page["instances"]]
+    assert len(seen) == len(set(seen)), "a row appeared on two pages"
+    assert set(seen) == {key for key, _ in ROWS}, "a row appeared on no page"
+    # And the tiebreak is *observably* the key, not merely whatever order the
+    # rows happen to come back in. Without this the assertions above pass on a
+    # small table even with no tiebreak at all, because a sequential scan is
+    # accidentally stable - which is exactly the kind of test that reports a
+    # guarantee it is not checking. Every fixture row shares one `updated_at`,
+    # so ascending keys is the whole of what the tiebreak promises.
+    assert seen == sorted(seen), "tied timestamps did not fall through to the key"
+
+
+def test_sorting_by_a_property_is_refused_with_what_it_would_take(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The same refusal ordered operators get, for the same reason: untyped
+    properties mean the two stores would order 250 and 40 differently."""
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
+        headers=hdr(fx.owner_sub),
+        json={"definition": {"object_type_id": seeded, "filters": []}, "sort": "capacity"},
+    )
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "unknown sort" in detail
+    assert "declared property type" in detail
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sort", object_sets.SORTS)
+async def test_the_two_stores_sort_a_page_identically(opensearch: str, sort: str) -> None:
+    """The cross-store check, extended to ordering. A table sorted one way on
+    Postgres and another on OpenSearch is the invisible kind of wrong - the
+    same class of bug the operator list already exists to prevent."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-sort-test",
+            object_type_id=type_id,
+            source_id=source_id,
+            rows=ROWS,
+            synced_at=datetime.now(timezone.utc),
+        )
+        rows, _ = await store.evaluate_object_set(
+            search_prefix="ws-sort-test",
+            object_type_id=type_id,
+            filters=(),
+            limit=50,
+            offset=0,
+            sort=sort,
+        )
+        keys = [r["primary_key"] for r in rows]
+        if sort == "key":
+            assert keys == sorted(keys)
+        elif sort == "-key":
+            assert keys == sorted(keys, reverse=True)
+        else:
+            # One sync writes one `updated_at`, so both time sorts fall through
+            # to the tiebreak - which is exactly the case that must not vary.
+            assert keys == sorted(keys), f"{sort} did not fall back to the key tiebreak"
+    finally:
+        await store.close()

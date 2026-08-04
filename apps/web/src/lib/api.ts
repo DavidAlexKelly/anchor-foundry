@@ -572,7 +572,7 @@ export const objects = {
   evaluateObjectSet: (
     wid: string,
     definition: unknown,
-    opts: { limit?: number; offset?: number } = {},
+    opts: { limit?: number; offset?: number; sort?: string } = {},
   ) =>
     request<{
       instances: import("./types").ObjectInstance[];

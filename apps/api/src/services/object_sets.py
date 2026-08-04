@@ -64,6 +64,39 @@ ORDERED_OPERATORS = ("gt", "gte", "lt", "lte")
 # Operators whose value is a list rather than a scalar.
 LIST_OPERATORS = ("in",)
 
+# How a page of a set may be ordered (roadmap 1.5, the Object Table upgrade).
+#
+# Four, and **none of them sorts by a property**, which is the same refusal
+# `ORDERED_OPERATORS` makes and for exactly the same reason: properties are
+# stored untyped, so ordering by one means choosing between "250 comes after
+# 40" and "250 comes before 40" on the caller's behalf, and the two stores
+# would choose differently. A table sorted one way on Postgres and another on
+# OpenSearch is the invisible kind of wrong.
+#
+# What is here is what both stores can order identically without knowing any
+# property's type: the primary key, which is text on both, and `updated_at`,
+# which is a real timestamp column on one and an indexed date on the other.
+SORTS = ("key", "-key", "recent", "oldest")
+DEFAULT_SORT = "recent"
+
+# Named so the refusal can say what it would take, rather than only "no".
+PROPERTY_SORT_HINT = (
+    "sorting by a property needs the declared property type behind it - instance "
+    "properties are stored untyped, so the two stores would order 250 and 40 "
+    "differently. Sort by key or by when a row last changed."
+)
+
+
+def parse_sort(sort: Any) -> str:
+    """Validate a sort, refusing in a sentence somebody can act on."""
+    if sort is None or sort == "":
+        return DEFAULT_SORT
+    if not isinstance(sort, str):
+        raise ValueError("sort must be a string")
+    if sort in SORTS:
+        return sort
+    raise ValueError(f"unknown sort {sort!r} (supported: {', '.join(SORTS)}). {PROPERTY_SORT_HINT}")
+
 # What a Metric Card can ask of a set (roadmap 1.5).
 #
 # Both of these are *text-identity* operations - how many documents, and how
