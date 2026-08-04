@@ -302,12 +302,12 @@ No migration was needed: every version's bytes have always been written to their
 
 ---
 
-## Section 4 — Ontology applications
+## Section 4 — Ontology applications — **done**
 
 Closest to parity already. Two applications, both mostly re-presentation:
 
-### 4.1 Object Explorer — **M**
-Workspace-wide search, type filtering, saved searches, link traversal. The explorer (`STATUS.md` §32) and traversal (§33) exist; this is the full-page app around them.
+### ~~4.1 Object Explorer~~ — **done** (`STATUS.md` §98, migration 0040)
+Workspace-wide search, type filtering, saved searches and link traversal at `/{workspace}/explore` — a destination rather than a panel inside a project's Objects page, since the ontology it searches is workspace-wide. A saved search stores the question and never the answer, and is validated at save time by the same function the explorer route uses, so one that cannot run cannot be saved.
 
 ### ~~4.2 Ontology Manager~~ — **done** (`STATUS.md` §97)
 Type and link management, property types, change history (§34, §35) as a proper application rather than a settings page.

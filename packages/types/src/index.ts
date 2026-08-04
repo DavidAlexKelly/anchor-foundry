@@ -860,6 +860,33 @@ export interface ExplorerPage {
   offset: number;
 }
 
+/** The explorer's own parameters, and nothing else (db 0040). A saved search
+ *  holds a question, never its answer - "vessels flagged NO" reads differently
+ *  tomorrow, and storing the rows would turn it into a stale report. */
+export interface SavedSearchDefinition {
+  q: string | null;
+  type_ids: string[];
+  property: string | null;
+  value: string | null;
+}
+
+export interface SavedSearch {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string;
+  definition: SavedSearchDefinition;
+  /** Resolved for display, so the list does not read as a wall of uuids. */
+  type_names: string[];
+  /** Type ids the workspace no longer has. The search still opens - that
+   *  filter simply matches nothing - and naming them beats both refusing to
+   *  open it and pretending it still asks what it used to. */
+  missing_types: string[];
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // ---- objects (ontology) -----------------------------------------------------
 export type PropertyDataType =
   | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint"
@@ -903,6 +930,8 @@ export interface ObjectTypeSummary {
   colour: string;
   title_property_id: string | null;
   source_count: number;
+  /** Where this type opens as an application (`/r/{id}`, item 4.2). */
+  resource_id: string;
   created_at: string;
   updated_at: string;
 }

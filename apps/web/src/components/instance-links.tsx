@@ -49,7 +49,7 @@ function LinkGroup({
   onOpen,
 }: {
   group: LinkedInstances;
-  browseHref: string;
+  browseHref: string | null;
   onOpen: (stop: LinkStop) => void;
 }) {
   const arrow = group.direction === "outbound" ? "→" : "←";
@@ -109,7 +109,9 @@ function LinkGroup({
       {group.total > group.items.length && (
         <p className="login-note" style={{ margin: "4px 0 0" }}>
           Showing {group.items.length} of {group.total}.{" "}
-          <Link href={browseHref}>Browse all {group.far_type_display_name}</Link>
+          {browseHref && (
+            <Link href={browseHref}>Browse all {group.far_type_display_name}</Link>
+          )}
         </p>
       )}
     </section>
@@ -118,14 +120,17 @@ function LinkGroup({
 
 export function LinkExplorerDialog({
   workspaceId,
-  workspaceSlug,
-  projectSlug,
+  browseHref,
   start,
   onClose,
 }: {
   workspaceId: string;
-  workspaceSlug: string;
-  projectSlug: string;
+  /** Where "Browse all X" goes for a type reached by traversal. A function
+   *  rather than a slug pair because traversal is no longer only reachable
+   *  from inside a project: the Object Explorer (item 4.1) is workspace-wide
+   *  and sends people to the type's own application instead. `null` means
+   *  there is nowhere to send them, and the link is simply not offered. */
+  browseHref: (farTypeId: string) => string | null;
   start: LinkStop;
   onClose: () => void;
 }) {
@@ -180,7 +185,7 @@ export function LinkExplorerDialog({
         <LinkGroup
           key={`${group.link_type_id}:${group.direction}`}
           group={group}
-          browseHref={`/${workspaceSlug}/${projectSlug}/objects/${group.far_type_id}`}
+          browseHref={browseHref(group.far_type_id)}
           onOpen={(stop) => setTrail([...trail, stop])}
         />
       ))}

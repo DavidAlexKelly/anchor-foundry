@@ -1890,6 +1890,28 @@ Seeding it needed three corrections that are worth knowing: `SourceCreate` takes
 
 ---
 
+### 98. The Object Explorer, and a saved search that cannot lie (this session)
+
+Roadmap 4.1, which closes section 4. Workspace-wide instance search, type filtering, saved searches and link traversal now live at `/{workspace}/explore` — a destination, not a panel two thirds of the way down a project's Objects settings page, which is where the explorer had been since §32.
+
+**Why it moved is the same argument as §97's.** Object types are workspace-wide (db 0003), so the explorer always searched across every project whatever project page you opened it from; reaching it meant picking a project first, which is asking somebody to guess a filing decision that has no bearing on the answer. The apps gallery is at `/{workspace}/apps` for exactly this reason, so the precedent was already there. The project page now *links* to it rather than keeping a second copy.
+
+**What is new is saving a search** — migration `0040`, `object_searches`. Three things it is careful about:
+
+- **A saved search stores the question, never the answer.** "Vessels flagged NO" reads differently tomorrow; storing rows would turn a live question into a stale report, and the first person to notice would be the one who trusted it. The table holds `{q, type_ids, property, value}` and nothing else.
+- **A search that cannot run cannot be saved.** The explorer's rule — a property filter needs exactly one type, because a property api_name only means something *within* a type — used to live in the route. It now lives in `services/object_searches.parse`, which both the route and the save path call, so the two cannot disagree. The one place they legitimately differ is named rather than left to each to remember: `require_criteria=False` lets the explorer browse everything, while saving an empty search is a named question with no question in it. The form mirrors the rule instead of teaching it by rejection: with two types ticked the property inputs are not offered, and the fieldset says why.
+- **A search naming a deleted type still opens, and keeps naming it.** The rail marks it, the form says how many are gone, and the dead id stays in the query — dropping it would silently *widen* the question, so the search would start returning rows it never asked for and read as though nothing had happened.
+
+**The browser check found a real inconsistency, and it is the reason the check exists.** A saved search whose only type had been deleted returned `404` when it also carried a property filter, and `200` with nothing when it did not — two behaviours for one question, and which one you hit depended on a filter that has nothing to do with the type being gone. The explorer route's `get_type` lookup now answers an empty page instead of refusing. Isolation does not rest on that lookup: the search prefix is already workspace-scoped, so another workspace's instances are unreachable either way.
+
+That bug also exposed a **weak assertion of my own**: "opening it matches nothing" was checking that no rows rendered, which a 404 error page satisfies perfectly. It now asserts the words *Nothing matches that.* and the absence of an error state.
+
+**Two smaller things.** `ObjectTypeSummary` gained `resource_id`, so a row's type chip opens that type's application (§97) without a second lookup — tested by *resolving* the id, since a plausible-looking uuid that 404s is worse than no link. And `LinkExplorerDialog` took a workspace/project slug pair purely to build one "Browse all X" href; it now takes a function returning a href or `null`, because traversal is no longer only reachable from inside a project.
+
+**720 API tests green** (+18), 74 worker, production build clean. **Twelve mutations, twelve caught** — including one from the previous run that had reported `2 errors in 0.98s` and was not a catch at all: the substitution put a literal `{}` into an f-string, so Python failed at collection and the run read like a pass. `jsonb_build_object()` is the same empty object with no braces in it, and the mutation is genuinely caught.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -84,7 +84,8 @@ async def list_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str
         conn,
         """
         SELECT ot.id, ot.api_name, ot.display_name, ot.description, ot.icon,
-               ot.colour, ot.title_property_id, ot.created_at, ot.updated_at,
+               ot.colour, ot.title_property_id, ot.resource_id,
+               ot.created_at, ot.updated_at,
                (SELECT count(*) FROM object_type_sources s
                  WHERE s.object_type_id = ot.id) AS source_count
           FROM object_types ot
