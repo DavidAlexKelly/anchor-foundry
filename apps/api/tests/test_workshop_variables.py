@@ -158,12 +158,17 @@ def test_a_transform_configured_with_the_wrong_number_of_inputs_is_refused() -> 
         )
 
 
-def test_the_ontology_transforms_say_they_are_not_built_rather_than_failing_oddly() -> None:
-    """`object_property` and `object_set_aggregation` need the instance store,
-    so they are a round trip rather than a pure function. Returning None for
-    them would make every caller guess which of its results were real."""
+def test_the_ontology_transform_says_it_is_not_built_rather_than_failing_oddly() -> None:
+    """An aggregate over a set needs the instance store, so it is a round trip
+    rather than a pure function. Returning None for it would make every caller
+    guess which of its results were real.
+
+    `object_property` used to be the other example here and is now built (§84):
+    its premise was that a `single_object` variable holds a key to fetch, and
+    it holds the object the viewer picked, so there is no round trip to wait
+    for. See the tests at the bottom of this file."""
     with pytest.raises(wv.VariableError, match="not built yet"):
-        wv.parse({"v_a": var("v_a", derivation={"transform": "object_property"})})
+        wv.parse({"v_a": var("v_a", derivation={"transform": "object_set_aggregation"})})
 
 
 # ---- what the transforms mean ------------------------------------------------
@@ -929,3 +934,138 @@ def test_narrow_set_needs_two_inputs() -> None:
                 derivation={"transform": "narrow_set", "inputs": ["v_sites"]},
             ),
         })
+
+
+# ---- object_property, and what a single_object variable holds (§84) ----------
+CLICKED = {
+    "object_type_id": TYPE_ID,
+    "primary_key": "S1",
+    "properties": {"name": "Aberdeen Yard", "status": "open"},
+}
+
+
+def picking_module() -> dict[str, wv.Variable]:
+    return wv.parse(
+        {
+            "v_site": var("v_site", kind="single_object", label="Selected site"),
+            "v_name": var("v_name", label="Name",
+                          derivation={"transform": "object_property", "inputs": ["v_site"],
+                                      "config": {"property": "name"}}),
+        }
+    )
+
+
+def test_a_property_of_the_object_a_viewer_picked() -> None:
+    resolved = wv.evaluate(picking_module(), {"v_site": CLICKED})
+    assert resolved["v_name"] == "Aberdeen Yard"
+
+
+def test_the_primary_key_is_readable_by_name() -> None:
+    """It is not in `properties` - a row's key is its own field - so without
+    this it would be the one thing about an object an app could not show."""
+    variables = wv.parse({
+        "v_site": var("v_site", kind="single_object", label="Selected site"),
+        "v_key": var("v_key", label="Key",
+                     derivation={"transform": "object_property", "inputs": ["v_site"],
+                                 "config": {"property": "primary_key"}}),
+    })
+    assert wv.evaluate(variables, {"v_site": CLICKED})["v_key"] == "S1"
+
+
+def test_nothing_picked_reads_as_empty_rather_than_failing() -> None:
+    """A detail panel before the first click is an ordinary state."""
+    for empty in ({}, {"v_site": None}, {"v_site": ""}):
+        assert wv.evaluate(picking_module(), empty)["v_name"] is None, empty
+
+
+def test_a_property_that_the_object_does_not_have_is_empty() -> None:
+    assert wv.evaluate(
+        wv.parse({
+            "v_site": var("v_site", kind="single_object", label="Selected site"),
+            "v_x": var("v_x", label="Capacity",
+                       derivation={"transform": "object_property", "inputs": ["v_site"],
+                                   "config": {"property": "capacity"}}),
+        }),
+        {"v_site": CLICKED},
+    )["v_x"] is None
+
+
+def test_reading_a_property_of_something_that_is_not_an_object_is_refused() -> None:
+    """A wired-wrongly document, not an ordinary state - a variable holding a
+    string cannot have properties, and rendering blank would hide it."""
+    with pytest.raises(wv.VariableError, match="not an object"):
+        wv.evaluate(picking_module(), {"v_site": "S1"})
+
+
+def test_object_property_chains_into_another_transform() -> None:
+    """The point of it being a transform rather than a widget feature: the
+    property feeds the same graph everything else does."""
+    variables = wv.parse({
+        "v_site": var("v_site", kind="single_object", label="Selected"),
+        "v_name": var("v_name", label="Name",
+                      derivation={"transform": "object_property", "inputs": ["v_site"],
+                                  "config": {"property": "name"}}),
+        "v_status": var("v_status", label="Status",
+                        derivation={"transform": "object_property", "inputs": ["v_site"],
+                                    "config": {"property": "status"}}),
+        "v_label": var("v_label", label="Label",
+                       derivation={"transform": "concat", "inputs": ["v_name", "v_status"],
+                                   "config": {"separator": " - "}}),
+    })
+    assert wv.evaluate(variables, {"v_site": CLICKED})["v_label"] == "Aberdeen Yard - open"
+
+
+def test_object_property_needs_one_input_and_a_property() -> None:
+    with pytest.raises(wv.VariableError, match="exactly one input"):
+        wv.parse({"v_a": var("v_a", label="A"), "v_b": var("v_b", label="B"),
+                  "v_x": var("v_x", label="X",
+                             derivation={"transform": "object_property",
+                                         "inputs": ["v_a", "v_b"],
+                                         "config": {"property": "name"}})})
+    with pytest.raises(wv.VariableError, match="needs a property to read"):
+        wv.parse({"v_a": var("v_a", kind="single_object", label="A"),
+                  "v_x": var("v_x", label="X",
+                             derivation={"transform": "object_property", "inputs": ["v_a"],
+                                         "config": {}})})
+
+
+def test_an_aggregation_over_a_set_is_still_refused_and_says_why() -> None:
+    """The other store transform did not move: it needs the instance store,
+    which `/object-sets/aggregate` is what answers."""
+    with pytest.raises(wv.VariableError, match="not built yet"):
+        wv.parse({"v_set": object_set_var(
+                      "v_set", label="Set",
+                      object_set={"object_type_id": TYPE_ID, "filters": []}),
+                  "v_n": var("v_n", kind="number", label="Count",
+                             derivation={"transform": "object_set_aggregation",
+                                         "inputs": ["v_set"], "config": {}})})
+
+
+def test_a_row_click_may_write_the_whole_object() -> None:
+    events = we.parse(
+        {"e_1": event("e_1", node="tbl", on="row_select", effects=[
+            {"type": "set_variable", "config": {"variable": "v_site", "from": "object"}}])},
+        layout={"tbl": node({})},
+        variables=wv.parse({"v_site": var("v_site", kind="single_object", label="Site")}),
+    )
+    assert events["e_1"].effects[0].config["from"] == "object"
+
+
+def test_writing_from_an_unknown_source_is_refused() -> None:
+    with pytest.raises(we.EventError, match="expected one of"):
+        we.parse(
+            {"e_1": event("e_1", effects=[
+                {"type": "set_variable", "config": {"variable": "v_a", "from": "row"}}])},
+            layout={"btn": node({})},
+        )
+
+
+def test_writing_from_a_source_and_a_value_at_once_is_refused() -> None:
+    """Two ways of saying what to write, and no rule for which wins."""
+    with pytest.raises(we.EventError, match="one or the other"):
+        we.parse(
+            {"e_1": event("e_1", effects=[
+                {"type": "set_variable",
+                 "config": {"variable": "v_a", "from": "object", "value": "{{name}}"}}])},
+            layout={"btn": node({})},
+        )

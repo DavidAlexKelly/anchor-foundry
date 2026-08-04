@@ -66,6 +66,14 @@ OVERLAY_WIDGET = "CanvasOverlay"
 # it is always showing, so an effect that "went to" it would mean nothing.
 HEADER_WIDGET = "CanvasHeader"
 
+# What a `set_variable` may write instead of a template value.
+#
+# `object` is the object the trigger was about - the row somebody clicked -
+# written whole into a `single_object` variable. One entry for now, but a named
+# list rather than a boolean because "the set the trigger was about" is the
+# obvious next one and would otherwise arrive as a second flag.
+SET_SOURCES = ("object",)
+
 # Effects that close what a navigate opened. Separate from `navigate` rather
 # than "navigate to nothing", because closing an overlay returns you to the
 # page you were on - which navigate has no way to name.
@@ -240,6 +248,22 @@ def _parse_effect(
                 f"event {eid!r} sets {getattr(variable, 'label', target)!r}, which is "
                 "computed from other variables - set one of those instead"
             )
+        source = config.get("from")
+        if source is not None:
+            # `from: object` writes the object the trigger was about - the row
+            # that was clicked - rather than a template. Two ways of saying
+            # what to write, so exactly one may be given: a document carrying
+            # both has no rule for which wins.
+            if source not in SET_SOURCES:
+                raise EventError(
+                    f"event {eid!r}: set_variable from {source!r}; expected one of "
+                    f"{', '.join(SET_SOURCES)}"
+                )
+            if config.get("value") is not None:
+                raise EventError(
+                    f"event {eid!r} sets {target!r} both from {source!r} and from a "
+                    "value - give one or the other"
+                )
     elif kind == "navigate":
         target = config.get("page")
         if not target or not isinstance(target, str):

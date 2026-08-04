@@ -56,6 +56,13 @@ export interface EventContext {
   /** What the widget knows about the thing that was acted on — the clicked
    * row, the chosen option. `{{...}}` in an effect's value reads from here. */
   payload?: Record<string, unknown>;
+  /** The *object* the trigger was about, whole: type, key and properties.
+   * What a `set_variable` with `from: "object"` writes into a `single_object`
+   * variable, and what `object_property` then reads a property out of.
+   *
+   * Separate from `payload`, which is flattened for `{{...}}` interpolation
+   * and cannot say which of its keys is the primary key. */
+  object?: { object_type_id?: string; primary_key: unknown; properties: Record<string, unknown> };
   openUrl?: (url: string) => void;
 }
 
@@ -98,6 +105,7 @@ export function interpolate(template: string, payload: Record<string, unknown>):
 export function useEventContext(
   payload?: Record<string, unknown>,
   overlayIds?: Set<string>,
+  object?: EventContext["object"],
 ): EventContext {
   const { setMany } = useCanvasParameters();
   const { go, openOverlay, closeOverlay } = useCanvasPage();
@@ -109,6 +117,7 @@ export function useEventContext(
     overlayIds,
     openUrl: (url: string) => window.open(url, "_blank", "noopener,noreferrer"),
     payload,
+    object,
   };
 }
 
@@ -132,6 +141,13 @@ export function run(
       if (effect.type === "set_variable") {
         const target = String(config.variable ?? "");
         if (!target) continue;
+        if (config.from === "object") {
+          // Nothing picked writes nothing, rather than writing undefined: an
+          // effect that cleared the variable it was meant to fill would be
+          // indistinguishable from one that ran and found nothing.
+          if (context.object) written[target] = context.object;
+          continue;
+        }
         const raw = config.value;
         written[target] =
           typeof raw === "string" ? interpolate(raw, { ...payload, ...written }) : raw;

@@ -59,14 +59,23 @@ TRANSFORMS = (
     "is_not_empty",
     "filter_set",   # narrow an object set by a value another variable holds
     "narrow_set",   # narrow an object set by a list of clauses a widget writes
+    "object_property",  # one property of the object a viewer picked
 )
 
-# Declared here and deliberately not evaluated here. Both need the instance
-# store - a property of one object, an aggregate over a set - so they are a
-# server round trip rather than a pure function, and pretending otherwise would
-# mean this module quietly returning None for them and every caller having to
-# know which of its results are real.
-STORE_TRANSFORMS = ("object_property", "object_set_aggregation")
+# Still declared and deliberately not evaluated here: an aggregate over a set
+# needs the instance store, so it is a server round trip rather than a pure
+# function, and pretending otherwise would mean this module quietly returning
+# None for it and every caller having to know which of its results are real.
+# `/object-sets/aggregate` is what answers it, and the Metric Card is what asks
+# (§74) - which is the correction recorded against roadmap 1.2.
+#
+# **`object_property` moved out of this list** (§84), because its premise
+# changed. It was here on the assumption that a `single_object` variable holds
+# a *key* and reading a property means fetching the object. It holds the object
+# the viewer picked - key, type and properties - so reading one is a lookup in
+# a value this module already has, and the round trip it was waiting for does
+# not exist.
+STORE_TRANSFORMS = ("object_set_aggregation",)
 
 CAST_TARGETS = ("string", "number", "boolean")
 
@@ -277,6 +286,15 @@ def _check_arity(vid: str, d: Derivation) -> None:
                 f"variable {vid!r}: filter_set operator {op!r}; expected one of "
                 f"{', '.join(object_sets.OPERATORS)}"
             )
+    elif d.transform == "object_property":
+        if len(d.inputs) != 1:
+            raise VariableError(
+                f"variable {vid!r}: object_property needs exactly one input "
+                "(the variable holding the object)"
+            )
+        prop = d.config.get("property")
+        if not prop or not isinstance(prop, str):
+            raise VariableError(f"variable {vid!r}: object_property needs a property to read")
     elif d.transform == "narrow_set":
         # No property or operator here on purpose: which properties a Filter
         # List narrows on is what the *viewer* chooses, so it is part of the
@@ -404,6 +422,8 @@ def _apply(variable: Variable, inputs: list[Any]) -> Any:
         return _filter_set(variable, inputs[0], inputs[1], d.config)
     if d.transform == "narrow_set":
         return _narrow_set(variable, inputs[0], inputs[1])
+    if d.transform == "object_property":
+        return _object_property(variable, inputs[0], str(d.config["property"]))
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
 
 
@@ -434,6 +454,52 @@ def _filter_set(
         {"property": config["property"], "op": config.get("op", "eq"), "value": value}
     )
     return {**base, "filters": filters}
+
+
+def _object_property(variable: Variable, obj: Any, property_name: str) -> Any:
+    """One property of the object a viewer picked (roadmap 1.2, built in §84).
+
+    **What a `single_object` variable holds, decided here**: the object the
+    trigger was about - `object_type_id`, `primary_key` and `properties` - not
+    a key to fetch later. Three consequences, and the middle one is the cost:
+
+    *Reading a property is a lookup, not a round trip.* That is why this
+    transform left `STORE_TRANSFORMS`: the fetch it was waiting for does not
+    need to happen.
+
+    *The value is a snapshot of the click.* If the object changes afterwards,
+    a widget reading it keeps showing what was clicked until something clicks
+    again. That is the honest reading of "the row you picked", and it is why
+    the reference travels with it - a widget that needs live values has the
+    type and the key to re-read, and an object *set* re-evaluates on every
+    resolve anyway.
+
+    *Nothing here is persisted*, so this does not make a saved app a saved
+    session (decision 0002 §3) - the objection that keeps object-set variables
+    holding a definition rather than rows does not apply to a value that only
+    ever exists for one viewing.
+
+    **A missing object is `None`, a wrong-shaped one is refused.** Nothing
+    picked yet is an ordinary state - a detail panel before the first click -
+    and reads as empty. A value that is not an object at all is a document
+    wired wrongly, and saying so beats rendering blank.
+    """
+    if obj is None or obj == "":
+        return None
+    if not isinstance(obj, dict) or "properties" not in obj:
+        raise VariableError(
+            f"{variable.label!r} reads a property of something that is not an object - "
+            "point it at a variable a row selection writes"
+        )
+    properties = obj.get("properties")
+    if not isinstance(properties, dict):
+        raise VariableError(f"{variable.label!r}: the object's properties are not an object")
+    if property_name == "primary_key":
+        # The key is not in `properties` on every path (a row's key is its own
+        # field), so it is readable by name rather than being the one property
+        # an app cannot show.
+        return obj.get("primary_key")
+    return properties.get(property_name)
 
 
 def _narrow_set(variable: Variable, base: Any, clauses: Any) -> dict[str, Any]:

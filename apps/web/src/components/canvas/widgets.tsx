@@ -931,6 +931,18 @@ export function CanvasObjectTable({
                                 primary_key: instance.primary_key,
                                 ...instance.properties,
                               },
+                              // The same row twice, deliberately: flattened
+                              // above for `{{...}}` in a label, and whole here
+                              // for a `single_object` variable, which needs to
+                              // know which field is the key.
+                              object: {
+                                // The table's own type, not the row's: every
+                                // row in one table is one type, and the row
+                                // payload does not carry it.
+                                object_type_id: effectiveTypeId ?? undefined,
+                                primary_key: instance.primary_key,
+                                properties: instance.properties,
+                              },
                             })
                         : undefined
                     }

@@ -1575,6 +1575,34 @@ Verified in a browser: the three configured columns in the configured order with
 
 ---
 
+### 84. What a single-object variable holds, and `object_property` (this session)
+
+The last part of roadmap 1.5's Object Table item — row selection emitting a single-object variable — which also settles a question left open since 1.2 and turns one of its two refused transforms on.
+
+**The decision: a `single_object` variable holds the object the viewer picked**, whole — `object_type_id`, `primary_key`, `properties` — not a key to fetch later. Three consequences, and the middle one is the price:
+
+*Reading a property is a lookup, not a round trip*, which is why `object_property` left `STORE_TRANSFORMS`. It was there on the assumption that the variable holds a key; the fetch it was waiting for does not need to happen.
+
+*The value is a snapshot of the click.* If the object changes afterwards, a widget reading it keeps showing what was clicked until something clicks again. That is the honest reading of "the row you picked", and it is why the reference travels with the snapshot — a widget that needs live values has the type and the key to re-read with, and an object *set* re-evaluates on every resolve regardless.
+
+*Nothing here is persisted*, so this does not make a saved app a saved session (decision 0002 §3). The objection that keeps object-set variables holding a definition rather than rows does not apply to a value that only ever exists for one viewing — which is exactly why that objection is written down where it is.
+
+**`set_variable` gained a `from`, not a magic template token.** `{"variable": "v_site", "from": "object"}` writes the object the trigger was about. A list rather than a boolean, because "the set the trigger was about" is the obvious next one and would otherwise arrive as a second flag. Giving both a `from` and a `value` is refused: two ways of saying what to write, and no rule for which wins.
+
+**The primary key is readable by name.** It is not inside `properties` — a row's key is its own field — so without this it would be the one thing about an object an app could not show.
+
+**Nothing picked reads as empty; a wrong-shaped value is refused.** A detail panel before the first click is an ordinary state. A variable holding a string cannot have properties, and rendering blank there would hide a document wired wrongly.
+
+**The table hands over the same row twice, deliberately**: flattened as `payload` for `{{...}}` in a label, and whole as `object` for a `single_object` variable — which needs to know which field is the key, and a flattened map cannot say.
+
+Verified in a browser: before any click the derived label is empty rather than broken; clicking Carlisle Works writes the object and three separate `object_property` variables read the key, the name and the status off it (`S3 · Carlisle Works · closed`); picking another row moves every reader at once; clearing the object empties everything derived from it.
+
+**603 API tests green**, 11 new. All mutation-tested: reading a non-object as blank, making the primary key unreadable, making "nothing picked" an error, accepting a `from` and a `value` together, and accepting any `from` name each fail at least one test.
+
+**One stale test updated honestly rather than around**: the case asserting that "the ontology transforms" are unbuilt now names only `object_set_aggregation`, with a comment saying `object_property` moved and why.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
