@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
+from . import code_checks as check_service
 from . import models as model_service
 
 _EXTENSIONS = {"sql": "sql", "python": "py"}
@@ -560,7 +561,8 @@ async def list_proposals(
 
 
 def _blockers(proposal: dict[str, Any], files: list[dict[str, Any]],
-              reviews: list[dict[str, Any]]) -> list[str]:
+              reviews: list[dict[str, Any]],
+              checks: list[dict[str, Any]] | None = None) -> list[str]:
     """Every reason this proposal cannot be applied, in one list.
 
     A single "can't apply" boolean would leave somebody guessing which rule
@@ -586,6 +588,10 @@ def _blockers(proposal: dict[str, Any], files: list[dict[str, Any]],
             "changed since this was proposed, so applying it would overwrite work "
             "nobody reviewed: " + ", ".join(sorted(stale))
         )
+    # Item 2.8. A failing check is a reason in exactly the same list as every
+    # other reason, so `apply` has one gate rather than two - and the surface
+    # keeps showing every rule that was tripped rather than the first.
+    reasons.extend(check_service.blockers(checks or []))
     return reasons
 
 
@@ -649,10 +655,14 @@ async def get_proposal(
     )]
     comments = await _comments(conn, proposal_id, proposal["files_updated_at"])
     marks = await _file_marks(conn, proposal_id, proposal["files_updated_at"])
+    checks = await check_service.list_checks(
+        conn, proposal_id, proposal["files_updated_at"]
+    )
     for f in files:
         key = str(f["model_id"])
         f["comments"] = [c for c in comments if str(c["model_id"]) == key]
         f["read_by"] = marks.get(key, [])
+        f["checks"] = [c for c in checks if str(c["model_id"]) == key]
     return {
         **proposal,
         "files": files,
@@ -661,7 +671,11 @@ async def get_proposal(
         # proposal changes), so this is the whole conversation in one place for
         # a caller that wants a timeline rather than a per-file view.
         "comments": comments,
-        "blockers": _blockers(proposal, files, reviews),
+        # Including the ones with no file, and the stale ones - a check that
+        # went stale is information, and hiding it would read as "no checks
+        # have run" when in fact they have and the code moved.
+        "checks": checks,
+        "blockers": _blockers(proposal, files, reviews, checks),
     }
 
 

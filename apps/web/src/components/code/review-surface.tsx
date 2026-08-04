@@ -29,6 +29,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, code as codeApi } from "@/lib/api";
 import type {
+  CodeCheck,
   CodeDiffRow,
   CodeProposalComment,
   CodeProposalDetail,
@@ -125,6 +126,12 @@ export function ReviewSurface({
     onError: fail,
   });
 
+  const check = useMutation({
+    mutationFn: () => codeApi.runChecks(workspaceId, projectId, proposalId),
+    onSuccess: landed,
+    onError: fail,
+  });
+
   if (detail.isPending) return <p className="state">Loading review…</p>;
   if (detail.isError) return <p className="state error">{(detail.error as Error).message}</p>;
 
@@ -154,6 +161,14 @@ export function ReviewSurface({
       </header>
 
       {p.description && <pre className="review-description">{p.description}</pre>}
+
+      <ChecksPanel
+        checks={p.checks}
+        open={open}
+        canRun={canReview}
+        running={check.isPending}
+        onRun={() => check.mutate()}
+      />
 
       {p.files.map((file) => (
         <FileReview
@@ -226,6 +241,80 @@ export function ReviewSurface({
         </div>
       )}
     </div>
+  );
+}
+
+/** Checks (roadmap 2.8): what ran, what it found, and — loudly — when nothing
+ * has run against the code as it now stands.
+ *
+ * Silence is the thing this panel exists to stop being mistaken for a pass. A
+ * proposal with no checks and a proposal whose checks all went stale both look
+ * like "no problems found" unless somebody says otherwise, so both get a
+ * sentence rather than an empty space.
+ */
+function ChecksPanel({
+  checks,
+  open,
+  canRun,
+  running,
+  onRun,
+}: {
+  checks: CodeCheck[];
+  open: boolean;
+  canRun: boolean;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const current = checks.filter((c) => !c.stale);
+  const stale = checks.filter((c) => c.stale);
+  const failed = current.filter((c) => c.status === "fail").length;
+  const warned = current.filter((c) => c.status === "warn").length;
+  const errored = current.filter((c) => c.status === "error").length;
+
+  return (
+    <section className="review-checks">
+      <header className="review-checks-head">
+        <strong>Checks</strong>
+        {current.length === 0 ? (
+          <span className="review-checks-none">
+            {stale.length > 0
+              ? "None have run against the code as it now stands."
+              : "None have run."}
+          </span>
+        ) : (
+          <span className="review-checks-tally">
+            {failed > 0 && <span className="fail">{failed} failed</span>}
+            {warned > 0 && <span className="warn">{warned} warning</span>}
+            {errored > 0 && <span className="error">{errored} could not run</span>}
+            {failed === 0 && warned === 0 && errored === 0 && (
+              <span className="pass">all passed</span>
+            )}
+          </span>
+        )}
+        {canRun && open && (
+          <button type="button" className="btn quiet review-checks-run" onClick={onRun} disabled={running}>
+            {running ? "Running…" : current.length ? "Run again" : "Run checks"}
+          </button>
+        )}
+      </header>
+
+      {checks.length > 0 && (
+        <ul className="review-check-list">
+          {[...current, ...stale].map((c) => (
+            <li key={c.id} className={`${c.status}${c.stale ? " stale" : ""}`}>
+              <span className="review-check-status">{c.status}</span>
+              <span className="review-check-name">{c.name}</span>
+              <span className="review-check-summary">{c.summary}</span>
+              {c.stale && (
+                <span className="review-tag" title="The proposal changed after this ran">
+                  stale
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -983,6 +983,13 @@ export const code = {
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/read`,
       { method: "PUT", body: JSON.stringify(input) },
     ),
+  /** Run every check against the proposal's current files (roadmap 2.8).
+   * Editor level: it executes the proposed SQL against the project's data. */
+  runChecks: (wid: string, pid: string, id: string) =>
+    request<import("./types").CodeProposalDetail>(
+      `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/checks`,
+      { method: "POST" },
+    ),
   applyProposal: (wid: string, pid: string, id: string) =>
     request<import("./types").CodeProposalDetail>(
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/apply`,

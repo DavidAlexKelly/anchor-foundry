@@ -1781,6 +1781,29 @@ Roadmap 2.7 asked for the part of code review a reviewer touches: side-by-side d
 
 **And a guard fired on my own commit.** Migration 0036 would not apply: `migrate.py` refused because `0034_workshop_module_format.py` had changed since it was applied. §90 corrected a docstring in that file — a docstring, and the correction was right — but the checksum guard cannot tell a comment from a statement and should not try to. What it was telling me is true of every database that had already run 0034, not just this sandbox. **0034 is reverted to exactly what was applied, and the correction now lives in `packages/db/migrations/ERRATA.md`**, which the runner ignores. §90's claim that it was "corrected to match the code" was itself no longer true and has been fixed.
 
+### 93. Checks that run on a proposal, and where the verdict comes from (this session)
+
+Roadmap 2.8 asked for "lint and schema-compatibility checks that run on a proposal and block merge", reusing the existing quality-gate machinery. Both halves of that machinery already existed and neither ran at review time, so the item is a **sequencing problem, not a missing feature**:
+
+* migration 0023 gave a dataset a `schema_policy` enforced by a trigger on `dataset_versions`, so a transform that drops a column from a strict dataset **was already refused** — by the database, at run time, hours after somebody approved it and applied it;
+* §69 gave the API a way to run a transform over a sample of its inputs and report the schema it produces, writing nothing.
+
+Putting the second in front of the first is the whole item.
+
+**Two checks, and the second depends on the first.** `transform_runs` executes the proposed SQL against a sample of its declared inputs; `schema_compatible` compares the schema that produced against the dataset the transform writes. Nothing else is new — the verdict that separates `fail` from `warn` is **the dataset's own `schema_policy`, read rather than reimplemented**. Predicting anything else would be a second opinion the database is about to overrule.
+
+**Four statuses, and the fourth is the one worth arguing about.** `pass`, `warn` and `fail` are ordinary. `error` means *the check could not run* — a Python transform (which by decision 0004 runs in an isolated task, never in the API), or an input with a dataset row and no bytes behind it. It is deliberately not `pass`: nobody has been told anything about the code, and saying "pass" would be a claim we have not earned. It is also deliberately **not blocking**: refusing to apply because *we* could not answer would make every outage a freeze on every project.
+
+**A failing check blocks; an absent one does not.** A gate that engages by default would leave every project that turns review on unable to apply anything until somebody finds the button — the argument 0031 already made for review being off by default, with more force here because a check costs real work. What the surface must never do is let silence read as a pass, so a proposal with no results says "None have run", and one whose results have all gone stale says "None have run against the code as it now stands".
+
+**Staleness is 0036's rule again**: a check result records the `files_updated_at` it ran against, and one older than that describes code nobody will apply. Stale results are shown, marked, and do not gate — blocking on one would mean an edit made to *fix* a failure keeps the failure in place until somebody re-runs.
+
+**Re-running replaces rather than appends** (`ON CONFLICT … DO UPDATE`, with `UNIQUE NULLS NOT DISTINCT` so a proposal-wide check cannot be inserted twice). A list of every time a check ran is a log; what a reviewer needs is the answer. The case that makes this matter is not a repeated click — it is a dataset's policy being tightened from permissive to strict while the files sit still, which must turn a `warn` into a `fail`.
+
+**Thirteen mutations, thirteen caught** — after three survived the first pass. One was a bad mutation of mine (a no-op edit); the other two were real gaps: nothing tested that re-running *updates* a verdict the world had changed, and nothing tested that a schema check whose transform never ran reports `error` rather than `pass`. That second one is the most dangerous result the screen could show, and it was uncovered.
+
+**657 API tests green**, 14 new. The browser check drives the panel against real servers: the "nothing has run" state, running from the button, a `fail` with a real red pill that reaches the blocker list and disables Apply, and a proposal where everything passes. It needed a project with actual bytes behind its dataset — the dev seed's datasets have rows in Postgres and nothing on disk, which is a legitimate `error` and not a useful demonstration of anything else.
+
 ---
 
 ## What's not started

@@ -266,9 +266,11 @@ Anchor already has proposals, reviews, blockers and the review gate. What it lac
 
 Built onto the existing service, as asked. One idea carries it: a remark about a line is a claim about a *version* of the file, so a comment records the `files_updated_at` it was written against and goes outdated — shown and marked, never hidden — when the proposal is edited. The same derivation gives per-file resolution its meaning. The alignment is computed from `SequenceMatcher` opcodes server-side, not by parsing a unified diff in the browser. The description template is built in rather than per project: a configurable one belongs in the repository, and proposals are not connected to repositories.
 
-### 2.8 Checks — **M**
+### ~~2.8 Checks~~ — **done** (`STATUS.md` §93, migration 0037)
 
 Lint and schema-compatibility checks that run on a proposal and block merge. Reuse the existing quality-gate machinery from Models item 3 where it fits.
+
+Reused rather than rebuilt, and the item turned out to be a sequencing problem: migration 0023's schema policy *already* refused a breaking change — at run time, hours after somebody approved it. `transform_runs` executes the proposed SQL over a sample; `schema_compatible` compares what it produced against the dataset the transform writes, with the dataset's own `schema_policy` deciding `fail` from `warn`. `error` (the check could not run) is neither a pass nor a block. A failing check blocks; an absent one does not, and the surface never lets silence read as a pass.
 
 ### 2.9 Code assistance — **L, and optional**
 

@@ -26,11 +26,21 @@ from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import code as code_service
+from ..services import code_checks as check_service
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/code",
     tags=["code"],
 )
+
+
+def _dataset_storage():
+    """The one gateway `main.py` configured, not a second one pointed somewhere
+    else - the same reason `models.py` and `repositories.py` reach for it this
+    way."""
+    from . import datasets as dataset_routes
+
+    return dataset_routes._storage
 
 
 class FileEntry(BaseModel):
@@ -243,6 +253,25 @@ class ProposalCommentOut(BaseModel):
     resolved_by: UUID | None
 
 
+class CheckOut(BaseModel):
+    id: UUID
+    # None is a check about the proposal as a whole rather than about a file.
+    model_id: UUID | None
+    name: str
+    # pass / warn / fail / error. `error` is not a pass: it means nobody has
+    # been told anything about the code.
+    status: str
+    summary: str
+    detail: dict[str, Any]
+    ran_at: datetime
+    ran_by: UUID | None
+    ran_by_email: str | None
+    anchored_at: datetime
+    # The proposal moved after this ran, so it describes code nobody will
+    # apply. Shown, marked, and not counted as a gate.
+    stale: bool
+
+
 class FileMarkOut(BaseModel):
     """"I have read this file", per reviewer. Only marks made against the
     *current* files are returned - a mark from before the last edit says
@@ -265,6 +294,7 @@ class ProposalFileOut(BaseModel):
     rows: list[DiffRowOut] = []
     comments: list[ProposalCommentOut] = []
     read_by: list[FileMarkOut] = []
+    checks: list[CheckOut] = []
 
 
 class ReviewOut(BaseModel):
@@ -298,6 +328,9 @@ class ProposalDetail(ProposalSummary):
     # The whole conversation in one list, for a caller that wants a timeline
     # rather than the per-file view above. Same rows, not a second store.
     comments: list[ProposalCommentOut] = []
+    # Every check result, including the stale ones: a check that went stale is
+    # information, and hiding it reads as "no checks have run".
+    checks: list[CheckOut] = []
     # Every reason this cannot be applied, so the UI can say which rule was
     # tripped rather than showing a disabled button with no explanation.
     blockers: list[str]
@@ -547,6 +580,31 @@ async def mark_proposal_file_read(
             conn, access.project_id, proposal_id,
             model_id=body.model_id, read=body.read, reviewer_id=access.auth.user_id,
         )
+    return _detail(row)
+
+
+# ---- checks (ROADMAP.md phase 2, item 2.8) ----------------------------------
+@router.post("/proposals/{proposal_id}/checks", response_model=ProposalDetail)
+async def run_proposal_checks(
+    proposal_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ProposalDetail:
+    """Run every check against the proposal's current files.
+
+    **Editor**, unlike commenting. A check executes the proposed SQL against
+    datasets in the project - the same act `POST /repositories/{id}/preview`
+    performs, and at the same floor, for the same reason: it runs code the
+    caller supplied rather than reading something already saved.
+
+    200 rather than 201: what comes back is the proposal, with the results on
+    it. Re-running replaces the previous answer rather than appending one.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await check_service.run_checks(
+            conn, access.project_id, proposal_id,
+            storage=_dataset_storage(), actor_id=access.auth.user_id,
+        )
+        row = await code_service.get_proposal(conn, access.project_id, proposal_id)
     return _detail(row)
 
 

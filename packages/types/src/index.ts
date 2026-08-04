@@ -1210,6 +1210,33 @@ export interface CodeFileMark {
   marked_at: string;
 }
 
+/** A check result (db 0037).
+ *
+ *   pass  - it ran and found nothing
+ *   warn  - it found something a reviewer should see, which does not block
+ *   fail  - it found something that would break, which blocks applying
+ *   error - it could not run. Not a pass: nobody has been told anything about
+ *           the code.
+ */
+export type CodeCheckStatus = "pass" | "warn" | "fail" | "error";
+
+export interface CodeCheck {
+  id: string;
+  /** Null is a check about the proposal as a whole rather than about a file. */
+  model_id: string | null;
+  name: string;
+  status: CodeCheckStatus;
+  summary: string;
+  detail: Record<string, unknown>;
+  ran_at: string;
+  ran_by: string | null;
+  ran_by_email: string | null;
+  anchored_at: string;
+  /** The proposal moved after this ran, so it describes code nobody will
+   * apply. Shown, marked, and not counted as a gate. */
+  stale: boolean;
+}
+
 export interface CodeProposalFile {
   model_id: string;
   model_name: string;
@@ -1224,6 +1251,7 @@ export interface CodeProposalFile {
   rows: CodeDiffRow[];
   comments: CodeProposalComment[];
   read_by: CodeFileMark[];
+  checks: CodeCheck[];
 }
 
 export interface CodeReview {
@@ -1257,6 +1285,9 @@ export interface CodeProposalDetail extends CodeProposal {
   /** The whole conversation in one list, for a timeline rather than the
    * per-file view. Same rows as `files[].comments`, not a second store. */
   comments: CodeProposalComment[];
+  /** Every check result, stale ones included: a check that went stale is
+   * information, and hiding it reads as "no checks have run". */
+  checks: CodeCheck[];
   /** Every reason this cannot be applied, in the words the API used. */
   blockers: string[];
 }

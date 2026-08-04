@@ -679,3 +679,241 @@ def test_a_comment_belonging_to_another_proposal_is_not_resolvable_here(
 
     still = client.get(f"{cbase(fx)}/proposals/{two['id']}", headers=hdr(fx.viewer_sub))
     assert still.json()["comments"][0]["resolved_at"] is None
+
+
+# ---- checks (ROADMAP.md phase 2, item 2.8) -----------------------------------
+def checks_of(detail: dict, name: str) -> list[dict]:
+    return [c for c in detail["checks"] if c["name"] == name]
+
+
+def run_checks(client: TestClient, fx: Fixture, proposal_id: str) -> dict:
+    r = client.post(f"{cbase(fx)}/proposals/{proposal_id}/checks", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_proposal_starts_with_no_checks_and_is_not_blocked_by_that(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """A gate that engages by default leaves every project that turns review on
+    unable to apply anything until somebody finds the button - the argument
+    0031 already made for review itself."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    assert p["checks"] == []
+    assert not any("check" in b for b in p["blockers"])
+
+
+def test_a_transform_that_runs_passes_and_reports_its_columns(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    ran = checks_of(detail, "transform_runs")
+    assert len(ran) == 1 and ran[0]["status"] == "pass", ran
+    assert [c["name"] for c in ran[0]["detail"]["columns"]] == ["id", "val"]
+    assert ran[0]["stale"] is False and ran[0]["ran_by_email"]
+    # and both checks arrive on the file they are about, not only in the flat
+    # list the timeline reads.
+    assert sorted(c["name"] for c in detail["files"][0]["checks"]) == [
+        "schema_compatible", "transform_runs",
+    ]
+
+
+def test_a_transform_that_does_not_run_fails_the_check_and_blocks_applying(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """This is the whole item: find out at review time rather than at run
+    time."""
+    p = propose(client, fx, model, "SELECT id, nosuchcolumn FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    ran = checks_of(detail, "transform_runs")[0]
+    assert ran["status"] == "fail", ran
+    assert "nosuchcolumn" in ran["summary"]
+    assert any(b.startswith("a check failed") for b in detail["blockers"]), detail["blockers"]
+
+    # and the gate actually holds, even with an approval.
+    client.post(f"{cbase(fx)}/proposals/{p['id']}/reviews", headers=hdr(fx.owner_sub),
+                json={"verdict": "approve", "comment": ""})
+    applied = client.post(f"{cbase(fx)}/proposals/{p['id']}/apply", headers=hdr(fx.editor_sub))
+    assert applied.status_code == 422, applied.text
+    assert "a check failed" in applied.json()["detail"]
+
+
+def test_the_schema_check_has_nothing_to_compare_before_the_model_has_run(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """A model with no output dataset yet cannot break one."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    schema = checks_of(detail, "schema_compatible")[0]
+    assert schema["status"] == "pass"
+    assert "not written a dataset yet" in schema["summary"]
+
+
+def test_editing_a_proposal_makes_its_checks_stale_and_they_stop_gating(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """A result older than the current files describes code nobody will apply.
+    Blocking on it would mean an edit made to *fix* a failure keeps the failure
+    in place until somebody re-runs."""
+    p = propose(client, fx, model, "SELECT id, nosuchcolumn FROM raw")
+    failed = run_checks(client, fx, p["id"])
+    assert any(b.startswith("a check failed") for b in failed["blockers"])
+
+    fixed = client.patch(
+        f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.editor_sub),
+        json={"changes": [{"model_id": model, "code": "SELECT id, val FROM raw"}]},
+    ).json()
+    assert all(c["stale"] for c in fixed["checks"]), fixed["checks"]
+    assert not any(b.startswith("a check failed") for b in fixed["blockers"])
+    # The results are still there, marked - not deleted.
+    assert len(fixed["checks"]) == 2
+
+
+def test_re_running_replaces_the_answer_rather_than_appending_one(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """A list of every time a check ran is a log. What a reviewer needs is the
+    answer."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    first = run_checks(client, fx, p["id"])
+    second = run_checks(client, fx, p["id"])
+    assert len(second["checks"]) == len(first["checks"]) == 2
+    assert {c["id"] for c in second["checks"]} == {c["id"] for c in first["checks"]}
+
+
+def test_a_viewer_cannot_run_checks(client: TestClient, fx: Fixture, model: str) -> None:
+    """A check executes the proposed SQL against datasets in the project, which
+    is the act the preview endpoint gates at the same floor."""
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    r = client.post(f"{cbase(fx)}/proposals/{p['id']}/checks", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 403, r.text
+
+
+def test_a_closed_proposal_has_nothing_to_check(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    p = propose(client, fx, model, "SELECT id, val FROM raw")
+    client.post(f"{cbase(fx)}/proposals/{p['id']}/withdraw", headers=hdr(fx.editor_sub))
+    r = client.post(f"{cbase(fx)}/proposals/{p['id']}/checks", headers=hdr(fx.editor_sub))
+    assert r.status_code == 422, r.text
+    assert "closed" in r.json()["detail"]
+
+
+def _run(client: TestClient, fx: Fixture, model: str) -> dict:
+    r = client.post(f"{pbase(fx)}/models/{model}/run", headers=hdr(fx.editor_sub))
+    assert r.status_code in (200, 201), r.text
+    return r.json()
+
+
+def test_a_change_that_drops_a_column_from_a_strict_dataset_fails_and_blocks(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """The point of the item. Migration 0023's trigger would refuse this write
+    when the transform ran - hours after somebody approved it. The check moves
+    that refusal to review time, and reads the dataset's own policy rather than
+    reimplementing one."""
+    _run(client, fx, model)  # gives the model an output dataset with a schema
+    out = client.get(f"{pbase(fx)}/models/{model}", headers=hdr(fx.editor_sub)).json()
+    dataset_id = out["output_dataset_id"]
+    assert dataset_id, out
+    client.patch(f"{pbase(fx)}/datasets/{dataset_id}", headers=hdr(fx.editor_sub),
+                 json={"schema_policy": "strict"})
+
+    # The live transform selects `id`; this one does not.
+    p = propose(client, fx, model, "SELECT val FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    schema = checks_of(detail, "schema_compatible")[0]
+    assert schema["status"] == "fail", schema
+    assert "drops id" in schema["summary"] and "strict" in schema["summary"]
+    assert [c["name"] for c in schema["detail"]["removed"]] == ["id"]
+    assert any(b.startswith("a check failed") for b in detail["blockers"])
+
+
+def test_the_same_change_on_a_permissive_dataset_warns_without_blocking(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """Permissive is the default and means the write is allowed. It does not
+    mean nothing breaks - anything reading the dropped column still does - so
+    the reviewer is told, and decides."""
+    _run(client, fx, model)
+    p = propose(client, fx, model, "SELECT val FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    schema = checks_of(detail, "schema_compatible")[0]
+    assert schema["status"] == "warn", schema
+    assert "drops id" in schema["summary"]
+    assert not any(b.startswith("a check failed") for b in detail["blockers"])
+
+
+def test_adding_a_column_passes_even_on_a_strict_dataset(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """0023 allows it deliberately: a policy people keep switching off is a
+    policy nobody leaves on."""
+    _run(client, fx, model)
+    dataset_id = client.get(
+        f"{pbase(fx)}/models/{model}", headers=hdr(fx.editor_sub)
+    ).json()["output_dataset_id"]
+    client.patch(f"{pbase(fx)}/datasets/{dataset_id}", headers=hdr(fx.editor_sub),
+                 json={"schema_policy": "strict"})
+
+    p = propose(client, fx, model, "SELECT id, val, val * 2 AS doubled FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    schema = checks_of(detail, "schema_compatible")[0]
+    assert schema["status"] == "pass", schema
+    assert "doubled" in schema["summary"]
+
+
+def test_a_retype_is_reported_with_both_types(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """Any retype is breaking, including a widening one - 0023 decided that
+    deliberately rather than encoding a type lattice per dialect."""
+    _run(client, fx, model)  # the output dataset now has `id`, typed
+    p = propose(client, fx, model, "SELECT CAST(id AS VARCHAR) AS id FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    schema = checks_of(detail, "schema_compatible")[0]
+    assert schema["status"] == "warn", schema
+    assert "retypes id" in schema["summary"]
+    retyped = schema["detail"]["retyped"][0]
+    assert retyped["name"] == "id" and retyped["to"] == "VARCHAR"
+    assert retyped["from"] != "VARCHAR"
+
+
+def test_when_the_transform_did_not_run_the_schema_check_says_so_rather_than_passing(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """"I could not tell" is not "nothing is wrong". A schema check that
+    reported `pass` because the code it was meant to judge never ran would be
+    the most dangerous result on the screen."""
+    _run(client, fx, model)  # so there *is* an output dataset to compare against
+    p = propose(client, fx, model, "SELECT id, nosuchcolumn FROM raw")
+    detail = run_checks(client, fx, p["id"])
+    schema = checks_of(detail, "schema_compatible")[0]
+    assert schema["status"] == "error", schema
+    assert "did not run" in schema["summary"]
+
+
+def test_re_running_updates_a_verdict_the_world_has_changed(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """The files did not move; the dataset's policy did. A stored result that
+    only ever gets written once would keep saying `warn` after the policy that
+    made it a warning was tightened."""
+    _run(client, fx, model)
+    dataset_id = client.get(
+        f"{pbase(fx)}/models/{model}", headers=hdr(fx.editor_sub)
+    ).json()["output_dataset_id"]
+
+    p = propose(client, fx, model, "SELECT val FROM raw")
+    warned = run_checks(client, fx, p["id"])
+    assert checks_of(warned, "schema_compatible")[0]["status"] == "warn"
+    assert not any(b.startswith("a check failed") for b in warned["blockers"])
+
+    client.patch(f"{pbase(fx)}/datasets/{dataset_id}", headers=hdr(fx.editor_sub),
+                 json={"schema_policy": "strict"})
+    again = run_checks(client, fx, p["id"])
+    assert checks_of(again, "schema_compatible")[0]["status"] == "fail"
+    assert any(b.startswith("a check failed") for b in again["blockers"])
+    # Still one result, not two: re-running replaces the answer.
+    assert len(checks_of(again, "schema_compatible")) == 1
