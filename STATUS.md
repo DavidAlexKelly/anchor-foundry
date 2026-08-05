@@ -1934,6 +1934,27 @@ Roadmap 0.4, which closes section 0. A link now carries what you are looking at 
 
 ---
 
+### 100. The trigger nothing fired, and the effect that writes (this session)
+
+Roadmap 1.3's two remaining pieces: the **change** trigger, and the **`run_action`** effect. `export` stays refused — it needs a download surface the viewer route does not have, which is a thing to build rather than a thing to decide.
+
+**The change trigger was already a promise the runtime did not keep.** The events panel offered "Changed" on the dropdown and the filter list, the server accepted it, and *no widget ever fired it* — so an author could wire "when this dropdown changes, go to a page", save it, and watch it do nothing. That is precisely the failure `workshop_events.py`'s own docstring says the refusals exist to prevent, live in the product. Both widgets fire it now, with `{{value}}` carrying what was chosen. Not in the builder, though: a `navigate` fired by touching a control while arranging a page would move the builder off the page being edited.
+
+**`run_action` was blocked on a design question, and the answer is that the subject is a variable.** An action runs against one object instance, so the effect names a `single_object` variable holding it — usually set by a row click in an earlier effect of the same click, which is the copy-immediately semantics doing exactly what they exist for. The values it writes are one field per the action's *own* editable properties, not a free-form map: the server refuses a property an action does not make editable, and a text box would have taught that rule by rejection after the save.
+
+**The refusals, and the one that is deliberately asymmetric.** A subject that is not declared, or holds a string rather than an object; an action with nothing to write (`validate_submitted_values` refuses an empty write, so saving one saves a click that fails every time); a non-text value. Plus two that need the workspace: the action must exist, and every property must be on its editable list. **Those two run only when a document is written, never when one is read** — an action deleted after an app was saved would otherwise stop the app opening at all, and a record of what somebody built must not become invalid because live state moved. A `run_action` naming an action that has since gone reports when it is clicked.
+
+**A write fired by an event has nowhere to report**, unlike the action form, which has a form to put an error in — the button that fired it looks the same either way. So there is one status strip for the module. A click with no object picked is silent: that is an effect that does not apply, not a failure, and reporting it would train people to ignore the strip.
+
+**Two things the browser check found, one of them years older than this item.**
+
+- **The action form never refreshed the object table.** The invalidation after a write named four query keys by hand, and the object table's (`canvas-object-table`) was not among them — so submitting the form left the table showing the value it had just replaced. `run_action` inherited the bug verbatim. Both now invalidate by prefix (`canvas-*`), which cannot drift when a widget is added; a hand-kept list of "every widget that reads objects" is a second copy of a fact, and the next widget is the one left out of it.
+- **A survivor that was really a gap in the fixture.** "A failed action is reported as a success" survived because nothing in the seeded app ever failed. Reaching the failure meant a property that is *editable but unmapped* — saveable, and refused at click time, which is the exact case the strip exists for. That also showed the two failure handlers (a refused request, and an accepted request whose write-back fails) were two chances to say "Saved." about something that was not, so they became one. **The `ok: false` with HTTP 200 path — a `DatasetEngineError` during write-back — is still not reachable from a fixture**; what is proven is the shared reporting, not that specific server response.
+
+**732 API tests green** (+12), 74 worker, production build clean. **Ten mutations, ten caught** — five against the server's refusals, five against the browser behaviour.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

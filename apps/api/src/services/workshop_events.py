@@ -37,17 +37,29 @@ from typing import Any
 # thing whether it came from an object table or a dataset table.
 TRIGGERS = ("click", "row_select", "change")
 
-# Effects that run entirely in the browser.
-EFFECTS = ("set_variable", "open_url", "navigate", "close_overlay")
+# Effects the browser runs. `run_action` is the only one that *writes* - the
+# rest move the reader around - which is why it is the only one whose outcome
+# the runtime reports.
+EFFECTS = ("set_variable", "open_url", "navigate", "close_overlay", "run_action")
 
-# Named, refused, and each blocked on something real rather than on effort:
-# `run_action` needs the action's parameters bound to variables, which is its
-# own design question; `export` needs a download surface the viewer route does
-# not have. Refusing with the reason beats accepting and silently doing
-# nothing, which is what an unknown effect type would otherwise do.
+# Named, refused, and blocked on something real rather than on effort: `export`
+# needs a download surface the viewer route does not have. Refusing with the
+# reason beats accepting and silently doing nothing, which is what an unknown
+# effect type would otherwise do.
 #
 # `navigate` moved out of this list with item 1.4: pages exist now.
-PLANNED_EFFECTS = ("run_action", "export")
+# `run_action` moved out with the second half of 1.3: its parameters are bound
+# to variables, which was the design question holding it.
+PLANNED_EFFECTS = ("export",)
+
+# What a `run_action` may write. A wider form is a form, not an event.
+MAX_ACTION_VALUES = 20
+
+# The variable kind a `run_action`'s subject must be. An action executes
+# against an object instance, so the subject has to be something that holds
+# one - a text variable holding an id would look equivalent and would break
+# the moment somebody typed a primary key into it instead.
+SUBJECT_KIND = "single_object"
 
 # The layout node type that is a page (roadmap 1.4). A page is a *node in the
 # layout tree* rather than a separate document, so the builder keeps editing
@@ -154,12 +166,21 @@ def parse(
     *,
     layout: Any = None,
     variables: dict[str, Any] | None = None,
+    actions: dict[str, list[str]] | None = None,
 ) -> dict[str, Event]:
     """Validate the `events` map of a module document.
 
     `layout` and `variables` are optional so this can be exercised on its own,
     but the save path passes both - most of the refusals here are about a
     reference resolving, and a reference cannot be checked against nothing.
+
+    `actions` maps action type id -> editable property names, and is the one
+    argument that describes the *workspace* rather than the document. It is
+    passed when a document is being written and left out when one is being
+    read, deliberately: an action deleted after an app was saved would
+    otherwise make that app fail to open, which is a record of what somebody
+    built becoming invalid because live state moved. A `run_action` naming an
+    action that has since gone reports when it is clicked instead.
     """
     if raw is None:
         return {}
@@ -206,7 +227,9 @@ def parse(
             raise EventError(f"event {key!r}: effects must be a list")
         if len(raw_effects) > MAX_EFFECTS:
             raise EventError(f"event {key!r} may have at most {MAX_EFFECTS} effects")
-        effects = tuple(_parse_effect(eid, e, declared, nodes, page_ids) for e in raw_effects)
+        effects = tuple(
+            _parse_effect(eid, e, declared, nodes, page_ids, actions) for e in raw_effects
+        )
         events[eid] = Event(id=eid, node=node, on=on, effects=effects)
     return events
 
@@ -217,6 +240,7 @@ def _parse_effect(
     declared: dict[str, Any],
     nodes: set[str] | None = None,
     page_ids: set[str] | None = None,
+    actions: dict[str, list[str]] | None = None,
 ) -> Effect:
     if not isinstance(raw, dict):
         raise EventError(f"event {eid!r}: each effect must be an object")
@@ -280,6 +304,63 @@ def _parse_effect(
                 f"event {eid!r} navigates to {target!r}, which is a widget rather than a "
                 "page or an overlay"
             )
+    elif kind == "run_action":
+        action = config.get("action")
+        if not action or not isinstance(action, str):
+            raise EventError(f"event {eid!r}: run_action needs an action to run")
+        subject = config.get("subject")
+        if not subject or not isinstance(subject, str):
+            raise EventError(
+                f"event {eid!r}: run_action needs a variable holding the object to act on"
+            )
+        if declared and subject not in declared:
+            raise EventError(
+                f"event {eid!r} acts on {subject!r}, which this module does not declare"
+            )
+        variable = declared.get(subject)
+        if variable is not None and getattr(variable, "kind", None) != SUBJECT_KIND:
+            raise EventError(
+                f"event {eid!r} acts on {getattr(variable, 'label', subject)!r}, which holds "
+                f"a {getattr(variable, 'kind', 'value')} rather than an object - an action "
+                "runs against one object instance"
+            )
+        values = config.get("values") or {}
+        if not isinstance(values, dict):
+            raise EventError(f"event {eid!r}: run_action values must be an object")
+        if len(values) > MAX_ACTION_VALUES:
+            raise EventError(
+                f"event {eid!r}: run_action may write at most {MAX_ACTION_VALUES} properties"
+            )
+        if not values:
+            # `validate_submitted_values` refuses an empty write, so this would
+            # save an event that fails every time it is clicked.
+            raise EventError(
+                f"event {eid!r}: run_action needs at least one property to write - "
+                "an action with nothing to write has nothing to do"
+            )
+        for prop, template in values.items():
+            if not isinstance(prop, str) or not prop:
+                raise EventError(f"event {eid!r}: run_action has a value with no property name")
+            if not isinstance(template, str):
+                raise EventError(
+                    f"event {eid!r}: run_action writes {prop!r} as {type(template).__name__} - "
+                    "values are text, with {{...}} reading from the trigger"
+                )
+        if actions is not None:
+            if action not in actions:
+                raise EventError(
+                    f"event {eid!r} runs an action this workspace does not have"
+                )
+            editable = set(actions[action])
+            unknown = sorted(p for p in values if p not in editable)
+            if unknown:
+                # The write would be refused at click time with the same
+                # sentence. Saying it now is the difference between the person
+                # who made the mistake finding out and somebody else.
+                raise EventError(
+                    f"event {eid!r} writes {', '.join(repr(u) for u in unknown)}, which "
+                    "this action does not make editable"
+                )
     elif kind == "open_url":
         url = config.get("url")
         if not url or not isinstance(url, str):

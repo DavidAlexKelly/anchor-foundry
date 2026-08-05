@@ -20,6 +20,7 @@ import {
   useCanvasVariables,
 } from "./context";
 import { eventsFor, interpolate, run as runEvents, useEventContext } from "./events";
+import { invalidateCanvasReads } from "./refresh";
 import {
   chartQuery,
   distinctValuesQuery,
@@ -269,12 +270,16 @@ export function CanvasFilterList({
   title?: string;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, mode } = useCanvasEnv();
   const { set } = useCanvasParameters();
   const setDefinition = useCanvasVariable(objectSetVariable);
   const chosen = useCanvasParameter(variable);
+  const { events: moduleEvents } = useCanvasVariables();
+  const changed = eventsFor(moduleEvents, nodeId, "change");
+  const eventContext = useEventContext(undefined, useOverlayIds());
 
   const names = String(properties || "")
     .split(",")
@@ -308,6 +313,15 @@ export function CanvasFilterList({
           : { property: prop, op: "in", value: values },
       );
     if (variable) set(variable, clauses);
+    // Ticking and unticking are both `change` - Foundry's select and deselect
+    // on a dropdown. One trigger with the value and whether it is now on, not
+    // two triggers every document and every panel would have to know about.
+    if (mode === "run" && changed.length > 0) {
+      runEvents(changed, {
+        ...eventContext,
+        payload: { value, property, selected: next.includes(value) ? "true" : "" },
+      });
+    }
   };
 
   return (
@@ -491,11 +505,31 @@ export function CanvasParameterControl({
   column?: string | null;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId, projectId } = useCanvasEnv();
+  const { workspaceId, projectId, mode } = useCanvasEnv();
   const { values, set } = useCanvasParameters();
   const current = name ? values[name] : undefined;
+
+  // The `change` trigger (roadmap 1.3). It was offered by the events panel and
+  // accepted by the server from the start, and no widget fired it - so an app
+  // author could wire "when this dropdown changes, go to a page", save it, and
+  // watch it do nothing. Firing here is what makes the offer true.
+  const { events: moduleEvents } = useCanvasVariables();
+  const changed = eventsFor(moduleEvents, nodeId, "change");
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+  function choose(next: string | null) {
+    set(name, next);
+    // `{{value}}` in an effect is what was just chosen. Empty for "All",
+    // because that is what it means - not "no event".
+    // Not while arranging the page: a `navigate` fired by touching a control
+    // in the builder would move the builder off the page being edited.
+    if (mode === "run" && changed.length > 0) {
+      runEvents(changed, { ...eventContext, payload: { value: next ?? "" } });
+    }
+  }
 
   const options = useQuery({
     queryKey: ["canvas-parameter-options", datasetId, column],
@@ -517,7 +551,7 @@ export function CanvasParameterControl({
             <select
               aria-label={label}
               value={current === undefined || current === null ? "" : String(current)}
-              onChange={(e) => set(name, e.target.value || null)}
+              onChange={(e) => choose(e.target.value || null)}
             >
               {/* "All" is the default, and it is the empty value: a filter
                   that starts filtered looks like an app with no data. */}
@@ -533,7 +567,7 @@ export function CanvasParameterControl({
               type="search"
               aria-label={label}
               value={current === undefined || current === null ? "" : String(current)}
-              onChange={(e) => set(name, e.target.value || null)}
+              onChange={(e) => choose(e.target.value || null)}
               placeholder="Type to filter…"
             />
           )}
@@ -2137,11 +2171,10 @@ export function CanvasActionForm({
     onSuccess: async (result) => {
       if (!result.ok) return;
       // Everything reading this object type reads a *set*, and the set is now
-      // one write out of date.
-      await queryClient.invalidateQueries({ queryKey: ["canvas-widget-instances"] });
-      await queryClient.invalidateQueries({ queryKey: ["canvas-object-set"] });
-      await queryClient.invalidateQueries({ queryKey: ["canvas-map-set"] });
-      await queryClient.invalidateQueries({ queryKey: ["canvas-filter-list"] });
+      // one write out of date. By prefix rather than by a list of four names:
+      // the list had already missed the object table, so submitting this form
+      // left it showing the value the submit had replaced.
+      await invalidateCanvasReads(queryClient);
       // And so is the subject variable, which holds the object as it was when
       // it was picked (§84). The widget that changed it is the one place that
       // knows what it now says, so it writes it back rather than leaving a

@@ -9,7 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ApiError, api, canvas as canvasApi } from "@/lib/api";
+import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
@@ -17,6 +17,7 @@ import type { WorkshopEventDef } from "@/components/canvas/events";
 import {
   EventsPanel,
   TRIGGER_WIDGETS,
+  type ActionCandidate,
   type PageCandidate,
   type TriggerCandidate,
 } from "@/components/canvas/EventsPanel";
@@ -298,6 +299,21 @@ export default function CanvasAppEditorPage() {
   const canEdit = project ? project.effective_role !== "viewer" : false;
   const canPublish = workspace?.effective_role === "admin";
 
+  // What a `run_action` effect may run (roadmap 1.3). Fetched here rather than
+  // inside the panel because the panel is given what the layout and the
+  // workspace contain and does not reach out for either - the same reason
+  // `triggerNodes` and `pages` arrive as props.
+  const actionTypes = useQuery({
+    queryKey: ["action-types", workspace?.id],
+    queryFn: () => actionApi.listTypes(workspace!.id),
+    enabled: !!workspace,
+  });
+  const actionCandidates: ActionCandidate[] = (actionTypes.data ?? []).map((a) => ({
+    id: a.id,
+    label: `${a.display_name} · ${a.object_type_name}`,
+    editable: a.editable_properties,
+  }));
+
   // The variables half of the document. Held here rather than in the panel
   // because the Save button is in the top bar and has to write both halves at
   // once - and reseeded only when a *new version* arrives, so a refetch cannot
@@ -361,6 +377,7 @@ export default function CanvasAppEditorPage() {
             onVariablesChange={setVariables}
             events={events}
             onEventsChange={setEvents}
+            actions={actionCandidates}
           />
         </CanvasEnvBridge>
       </Editor>
@@ -379,6 +396,7 @@ function CanvasBody({
   onVariablesChange,
   events,
   onEventsChange,
+  actions,
 }: {
   hasSavedLayout: boolean;
   definition: Record<string, unknown>;
@@ -390,6 +408,7 @@ function CanvasBody({
   onVariablesChange: (next: Record<string, WorkshopVariable>) => void;
   events: Record<string, WorkshopEvent>;
   onEventsChange: (next: Record<string, WorkshopEvent>) => void;
+  actions: ActionCandidate[];
 }) {
   const { enabled, triggerNodes, pageNodes } = useEditor((state) => {
     // Read from the editor's own node map rather than from the saved
@@ -463,6 +482,7 @@ function CanvasBody({
               variables={variables}
               triggerNodes={triggerNodes}
               pages={pageNodes}
+              actions={actions}
               onChange={onEventsChange}
               readOnly={!canEdit}
             />

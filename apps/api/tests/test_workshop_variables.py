@@ -608,11 +608,11 @@ def test_setting_a_derived_variable_is_refused_and_says_what_to_set_instead() ->
 
 
 def test_an_unbuilt_effect_says_so_rather_than_saving_a_dead_click() -> None:
-    # `navigate` used to be the example here and is built as of item 1.4
-    # (`test_navigate_is_built_now_and_accepted`); `run_action` still waits on
-    # binding an action's parameters to variables.
+    # `navigate` was the example here until item 1.4 built it, and `run_action`
+    # until the second half of 1.3. `export` is the one still waiting, on a
+    # download surface the viewer route does not have.
     with pytest.raises(we.EventError, match="not built yet"):
-        we.parse({"e_1": event("e_1", effects=[{"type": "run_action", "config": {}}])},
+        we.parse({"e_1": event("e_1", effects=[{"type": "export", "config": {}}])},
                  layout={"btn": node({})})
 
 
@@ -708,13 +708,100 @@ def test_navigating_to_a_page_that_is_not_there_is_refused() -> None:
         )
 
 
-def test_the_two_effects_still_waiting_on_something_say_so() -> None:
-    """`run_action` and `export` remain refused, each blocked on something
-    real rather than on effort."""
-    for kind in ("run_action", "export"):
-        with pytest.raises(we.EventError, match="not built yet"):
-            we.parse({"e_1": event("e_1", effects=[{"type": kind, "config": {}}])},
-                     layout={"btn": node({})})
+# ---- run_action (roadmap 1.3, second half) -----------------------------------
+def run_action(subject: str = "v_obj", action: str = "a_1", values=None) -> dict:
+    return {"type": "run_action",
+            "config": {"action": action, "subject": subject,
+                       "values": {"status": "done"} if values is None else values}}
+
+
+def subject_vars(kind: str = "single_object") -> dict:
+    return wv.parse({"v_obj": var("v_obj", kind=kind, label="Picked")})
+
+
+def test_run_action_is_built_now_and_accepted() -> None:
+    events = we.parse(
+        {"e_1": event("e_1", effects=[run_action()])},
+        layout={"btn": node({})}, variables=subject_vars(),
+    )
+    assert [e.type for e in events["e_1"].effects] == ["run_action"]
+
+
+def test_the_one_effect_still_waiting_on_something_says_so() -> None:
+    """`export` remains refused, blocked on something real rather than on
+    effort: the viewer route has no download surface."""
+    with pytest.raises(we.EventError, match="not built yet"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "export", "config": {}}])},
+                 layout={"btn": node({})})
+
+
+def test_an_action_needs_an_object_to_act_on() -> None:
+    with pytest.raises(we.EventError, match="variable holding the object"):
+        we.parse({"e_1": event("e_1", effects=[
+            {"type": "run_action", "config": {"action": "a_1", "values": {"s": "x"}}}])},
+            layout={"btn": node({})}, variables=subject_vars())
+
+
+def test_a_subject_that_does_not_hold_an_object_is_refused() -> None:
+    """A text variable holding a primary key looks equivalent and is not: the
+    action executes against an instance id, so the two disagree the first time
+    somebody types a key into the box."""
+    with pytest.raises(we.EventError, match="rather than an object") as raised:
+        we.parse({"e_1": event("e_1", effects=[run_action()])},
+                 layout={"btn": node({})}, variables=subject_vars(kind="string"))
+    assert "Picked" in str(raised.value), "named by label, not by id"
+
+
+def test_a_subject_the_module_does_not_declare_is_refused() -> None:
+    with pytest.raises(we.EventError, match="does not declare"):
+        we.parse({"e_1": event("e_1", effects=[run_action(subject="v_missing")])},
+                 layout={"btn": node({})}, variables=subject_vars())
+
+
+def test_an_action_with_nothing_to_write_is_refused() -> None:
+    """`validate_submitted_values` refuses an empty write, so saving this
+    would save an event that fails every single time it is clicked."""
+    with pytest.raises(we.EventError, match="nothing to do"):
+        we.parse({"e_1": event("e_1", effects=[run_action(values={})])},
+                 layout={"btn": node({})}, variables=subject_vars())
+
+
+def test_a_value_that_is_not_text_is_refused() -> None:
+    """Values are templates - `{{value}}` reads from the trigger. A number
+    would work by accident and stop working the moment somebody added a token
+    to it."""
+    with pytest.raises(we.EventError, match="values are text"):
+        we.parse({"e_1": event("e_1", effects=[run_action(values={"count": 3})])},
+                 layout={"btn": node({})}, variables=subject_vars())
+
+
+def test_an_action_the_workspace_does_not_have_is_refused_when_saving() -> None:
+    with pytest.raises(we.EventError, match="does not have"):
+        we.parse({"e_1": event("e_1", effects=[run_action(action="a_gone")])},
+                 layout={"btn": node({})}, variables=subject_vars(),
+                 actions={"a_1": ["status"]})
+
+
+def test_writing_a_property_the_action_does_not_make_editable_is_refused() -> None:
+    """The write would be refused at click time with the same sentence. Saying
+    it now is the difference between the person who made the mistake finding
+    out and somebody else."""
+    with pytest.raises(we.EventError, match="does not make editable"):
+        we.parse({"e_1": event("e_1", effects=[run_action(values={"owner": "me"})])},
+                 layout={"btn": node({})}, variables=subject_vars(),
+                 actions={"a_1": ["status"]})
+
+
+def test_without_the_workspace_the_document_is_still_checked_against_itself() -> None:
+    """Reading a saved module does not pass `actions`, so an action deleted
+    since it was saved must not stop the module opening - while the refusals
+    that depend only on the document still hold. A record of what somebody
+    built does not become invalid because live state moved."""
+    we.parse({"e_1": event("e_1", effects=[run_action(action="a_long_gone")])},
+             layout={"btn": node({})}, variables=subject_vars())
+    with pytest.raises(we.EventError, match="rather than an object"):
+        we.parse({"e_1": event("e_1", effects=[run_action(action="a_long_gone")])},
+                 layout={"btn": node({})}, variables=subject_vars(kind="string"))
 
 
 # ---- overlays (roadmap phase 2, item 1.4) ------------------------------------

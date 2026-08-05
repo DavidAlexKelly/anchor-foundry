@@ -22,10 +22,16 @@
  * they were current.
  */
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { canvas as canvasApi } from "@/lib/api";
-import { CanvasPageProvider, CanvasVariableProvider, useCanvasParameters } from "./context";
+import { actions as actionApi, ApiError, canvas as canvasApi } from "@/lib/api";
+import {
+  CanvasActionsProvider,
+  CanvasPageProvider,
+  CanvasVariableProvider,
+  useCanvasParameters,
+} from "./context";
+import { invalidateCanvasReads } from "./refresh";
 
 const DEBOUNCE_MS = 250;
 
@@ -95,6 +101,35 @@ export function VariableBridge({
   const [page, setPage] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<string | null>(null);
 
+  // And running an action (roadmap 1.3), by the same argument.
+  const queryClient = useQueryClient();
+  const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  // One place decides how a failure is reported, because a write can fail two
+  // ways and they are the same news to whoever clicked: the request can be
+  // refused (a property with no column mapped; an action deleted since the app
+  // was saved - which lands here rather than at save time, on purpose, so a
+  // saved document does not stop being valid because live state moved), or it
+  // can be accepted and the write-back can fail afterwards. Two handlers
+  // reporting separately is two chances for one of them to say "Saved." about
+  // something that was not.
+  const failed = (message: string) =>
+    setStatus({ ok: false, message: message || "The action did not go through." });
+
+  const runAction = useMutation({
+    mutationFn: (input: {
+      action: string;
+      instanceId: string;
+      values: Record<string, string>;
+    }) => actionApi.execute(workspaceId, projectId, input.action, input.instanceId, input.values),
+    onSuccess: async (result) => {
+      if (!result.ok) return failed(result.error ?? "");
+      setStatus({ ok: true, message: "Saved." });
+      // Everything reading object data is now one write out of date.
+      await invalidateCanvasReads(queryClient);
+    },
+    onError: (e: Error) => failed(e instanceof ApiError ? e.message : ""),
+  });
+
   return (
     <CanvasVariableProvider value={{ declared, events, resolved, pending }}>
       <CanvasPageProvider
@@ -112,8 +147,55 @@ export function VariableBridge({
           closeOverlay: () => setOverlay(null),
         }}
       >
-        {children}
+        <CanvasActionsProvider
+          value={{
+            run: (config, context) => {
+              const instanceId = context.object?.id;
+              // No subject is not a failure to report - it is a click on a
+              // row nobody has selected yet, and the effect simply does not
+              // apply. Reporting it would train people to ignore the strip.
+              if (!instanceId) return;
+              setStatus(null);
+              runAction.mutate({
+                action: config.action,
+                instanceId,
+                values: config.values ?? {},
+              });
+            },
+            status,
+            dismiss: () => setStatus(null),
+          }}
+        >
+          {children}
+          <ActionStatus status={status} onDismiss={() => setStatus(null)} />
+        </CanvasActionsProvider>
       </CanvasPageProvider>
     </CanvasVariableProvider>
+  );
+}
+
+
+/** What the last `run_action` did.
+ *
+ * A write triggered by an event has no form to report back into - the button
+ * that fired it has already done its job and looks the same either way. So it
+ * reports here, once, for the whole module: an app where a click silently
+ * failed to save is the failure mode this whole effect would otherwise add.
+ */
+function ActionStatus({
+  status,
+  onDismiss,
+}: {
+  status: { ok: boolean; message: string } | null;
+  onDismiss: () => void;
+}) {
+  if (!status) return null;
+  return (
+    <div className={`canvas-action-status${status.ok ? "" : " bad"}`} role="status">
+      <span>{status.message}</span>
+      <button type="button" className="btn quiet" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
   );
 }
