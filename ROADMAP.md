@@ -179,7 +179,7 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 | 2 | ~~**Inline Action Form**~~ | **Done** (`STATUS.md` §87): bound to a `single_object` variable, the form edits the object somebody picked, prefilled with its current values, and writes the result back into the variable so nothing on screen shows what you just replaced |
 | 3 | ~~**Object List / Card List**~~ | **Done** (`STATUS.md` §102). Set-only, by this table's own rule: a widget that reaches for a type id cannot be wired to anything. Leads with the title property, caps at six fields, and fires the same `row_select` the table does — so anything wired to a table can be pointed at it instead |
 | 3 | **Pivot Table** | Cross-tab over an object set |
-| 3 | **Search / Prominent Terms Filter** | Foundry's example apps lean on these |
+| 3 | ~~**Search / Prominent Terms Filter**~~ | **Done** (`STATUS.md` §103) — and half of it already was. *Prominent terms* is the Filter List (§82): `group_object_set` returns buckets ordered by count descending, which is what that widget shows. *Search* is new: a prefix match on one property, written as a clause into its own variable so it **chains** with the Filter List and chart drill-down rather than sharing a variable and fighting them. `starts_with` rather than "contains" is the server's decision showing through — a substring match uses no index on either store |
 | 3 | **Time Series / Timeline** | |
 | 4 | **Embedded module** | One module inside another — needs 1.4 first |
 | 4 | **Comments / Notepad** | |

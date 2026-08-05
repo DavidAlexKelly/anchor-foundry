@@ -2000,6 +2000,29 @@ Roadmap 1.5's Object/Card List — the card-shaped alternative to the object tab
 
 ---
 
+### 103. Search, and the difference between composing and competing (this session)
+
+Roadmap 1.5's *Search / Prominent Terms Filter* row — and **half of it was already built**, which is worth saying rather than shipping a near-duplicate. *Prominent terms* is the Filter List (§82): `group_object_set` returns buckets ordered by count descending, so the widget that shows each value with its count already shows the prominent ones first. What was missing is search.
+
+**It writes clauses, like every other narrowing widget, and that is the point.** The Filter List, a chart drill-down (§101) and this all produce `[{property, op, value}]` and all feed `narrow_set`. Each owns *its own* clause variable and they **chain** — `narrow_set(narrow_set(all, filters), search)` — rather than sharing one. Sharing would make two widgets overwrite each other and leave the resulting set depending on which was touched last, which is a bug nobody would report as a bug. The settings panel says so where somebody is about to pick the variable.
+
+**`starts_with`, not "contains", and that is the server's decision showing through.** A substring match is `ILIKE '%x%'` on Postgres and a wildcard query on OpenSearch, neither of which uses an index — fine on a hundred objects, pathological on a million, which is the cost server-side set evaluation exists to avoid. A prefix is indexable on both and the two stores agree about it. The box says "starts with" on its own hint and in its placeholder, because a control that quietly did something narrower than the word on it is how somebody concludes their data is missing. The browser check types a substring and asserts it matches **nothing**.
+
+**One property, named in Settings.** Searching every property at once is the Object Explorer's job (§98) and it is a different query — the store's `search`, not a set filter. Offering it here would be a second path to a set with no rule for which definition wins.
+
+**A write per keystroke, deliberately.** `VariableBridge` already debounces the resolve, so this costs one request per pause rather than one per character; debouncing again in the widget would only delay the box under the cursor.
+
+**733 API tests green and the build clean**, both unchanged — no server code.
+
+**On the mutation evidence, precisely.** The drill-down and Card List mutations (eleven) were all caught in a clean, completed run. **The three mutations aimed at this widget have not completed one**, and the reason is worth recording because both halves were self-inflicted:
+
+* I ran a production build while the mutation suite was driving the dev server — the rough edge this file already documents. Both write `apps/web/.next`, so every check after that point failed against a 500, which a harness looking for failures reads as a *catch*. That entire run was discarded rather than reported.
+* The container then restarted mid-run, so the script's cleanup never ran and **a mutation was left applied on disk**. The next verification failed and read as a product bug until `git diff` showed a single deleted line. The script now does `trap restore EXIT INT TERM`, and a killed run restored correctly on the next attempt — though a `kill -9` still outruns the trap, which is why the tree is checked with `git diff` before committing rather than trusted.
+
+So: the widget is verified by the browser check on a clean stack, and the check is *not yet* known to be able to fail for it. That is a weaker claim than the three items before it, and it is the true one.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

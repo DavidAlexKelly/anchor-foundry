@@ -1241,6 +1241,194 @@ CanvasObjectTable.craft = {
   related: { settings: ObjectTableSettings },
 };
 
+// ---- Search (roadmap 1.5) ---------------------------------------------------
+/**
+ * A search box that narrows an object set.
+ *
+ * **It writes clauses, like every other narrowing widget**, so the Filter
+ * List, a chart drill-down and this compose instead of competing. Each owns
+ * *its own* clause variable and they chain — `narrow_set(narrow_set(all,
+ * filters), search)` — rather than sharing one, which would make two widgets
+ * overwrite each other's answer and produce a set that depends on which was
+ * touched last.
+ *
+ * **`starts_with`, not "contains", and that is the server's decision showing
+ * through.** A substring match is `ILIKE '%x%'` on Postgres and a wildcard
+ * query on OpenSearch, neither of which uses an index — fine on a hundred
+ * objects and pathological on a million, which is the cost server-side
+ * evaluation exists to avoid. A prefix is indexable on both, and the two
+ * stores agree about it. The widget says "starts with" rather than "search"
+ * on its own hint, because a box that quietly did something narrower than the
+ * word on it is how somebody concludes their data is missing.
+ *
+ * **One property, named in Settings.** Searching every property at once is the
+ * Object Explorer's job (item 4.1) and it is a different query — the store's
+ * `search`, not a set filter. A widget that offered it here would be a second
+ * path to a set, with no rule for which definition wins.
+ */
+export function CanvasSearch({
+  objectSetVariable = null,
+  variable = null,
+  property = null,
+  label = "Search",
+}: {
+  /** The set this searches, used only to offer its properties in Settings —
+   *  the narrowing happens through `variable`, not here. */
+  objectSetVariable?: string | null;
+  /** Where the clause goes. A `narrow_set` derivation reads it. */
+  variable?: string | null;
+  property?: string | null;
+  label?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const written = useCanvasParameter(variable);
+  const { set } = useCanvasParameters();
+
+  // What is currently searched for, read back out of the variable this widget
+  // writes rather than kept beside it - so the box reflects the document's
+  // state, and clearing the clause elsewhere clears the box.
+  const current = (() => {
+    for (const clause of Array.isArray(written) ? written : []) {
+      const c = clause as { property?: string; op?: string; value?: unknown };
+      if (c.property === property && c.op === "starts_with") return String(c.value ?? "");
+    }
+    return "";
+  })();
+
+  const ready = !!variable && !!property;
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!ready ? (
+        <p className="canvas-widget-empty">
+          Search - pick a property and the variable it writes in Settings
+        </p>
+      ) : (
+        <label className="field" style={{ maxWidth: 360 }}>
+          <span className="field-label">{label}</span>
+          <input
+            type="search"
+            value={current}
+            placeholder={`${property} starts with…`}
+            aria-label={label}
+            // A write per keystroke is fine: `VariableBridge` debounces the
+            // resolve, so this costs one request per pause rather than one per
+            // character. Debouncing again here would only delay the box.
+            onChange={(e) =>
+              set(
+                variable!,
+                e.target.value
+                  ? [{ property, op: "starts_with", value: e.target.value }]
+                  // Empty is *no filter*, not a filter for nothing: an empty
+                  // search box must show everything, and `narrow_set` reads an
+                  // empty list as "no narrowing" for exactly that reason.
+                  : [],
+              )
+            }
+          />
+          <span className="field-hint">Matches values that start with what you type</span>
+        </label>
+      )}
+    </div>
+  );
+}
+
+function SearchSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
+  const {
+    objectSetVariable, variable, property, label,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    variable: node.data.props.variable,
+    property: node.data.props.property,
+    label: node.data.props.label,
+  }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const clauseVariables = Object.values(declared).filter(
+    (v) => v.kind === "array" && !v.derivation,
+  );
+  const typeId = (resolved[objectSetVariable as string] as
+    { object_type_id?: string } | undefined)?.object_type_id;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.objectSetVariable = e.target.value || null;
+              p.property = null; // property names mean nothing against another type
+            })
+          }
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">Which set&apos;s properties to offer below</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Property</span>
+        <select
+          value={property || ""}
+          disabled={!type.data}
+          onChange={(e) => setProp((p: { property: string | null }) => (p.property = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {(type.data?.properties ?? []).map((prop) => (
+            <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Writes to</span>
+        <select
+          value={variable || ""}
+          onChange={(e) => setProp((p: { variable: string | null }) => (p.variable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {clauseVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        {/* Its own variable, not one shared with a Filter List: two widgets
+            writing one clause list overwrite each other, and the set then
+            depends on which was touched last. Chain the derivations instead. */}
+        <span className="field-hint">
+          {clauseVariables.length === 0
+            ? "Declare an array variable, and derive a narrowed set from it"
+            : "Give this its own variable, and chain the narrow_set derivations"}
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasSearch.craft = {
+  displayName: "Search",
+  props: { objectSetVariable: null, variable: null, property: null, label: "Search" },
+  related: { settings: SearchSettings },
+};
+
 // ---- Object card list (roadmap 1.5) -----------------------------------------
 /**
  * The card-shaped alternative to the object table.
@@ -3441,6 +3629,7 @@ export const CANVAS_RESOLVER = {
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
+  CanvasSearch,
   CanvasChart,
   CanvasMap,
   CanvasMetricCard,
@@ -3461,6 +3650,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
+  { key: "CanvasSearch", label: "Search", hint: "Narrow an object set by a property prefix" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
   { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },
