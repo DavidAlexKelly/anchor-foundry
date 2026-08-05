@@ -315,6 +315,21 @@ def test_deleting_a_variable_a_derivation_reads_is_refused_the_same_way() -> Non
         )
 
 
+def test_every_prop_that_names_a_variable_is_checked() -> None:
+    """The list of reference props is the whole of what protects a binding, and
+    a prop missing from it is a binding nothing checks. Two were missing:
+    `subjectVariable`, since the inline action form arrived in §87, and
+    `drilldownVariable` when the chart gained one.
+
+    Written as a loop over the list rather than a case each, because the thing
+    that goes wrong is somebody adding a ninth prop and not a ninth test."""
+    for prop in wv.REFERENCE_PROPS:
+        layout = {"w1": node({prop: "v_gone"})}
+        with pytest.raises(wv.VariableError, match="v_gone") as raised:
+            wv.validate_module(module({}, layout))
+        assert "does not declare" in str(raised.value), prop
+
+
 def test_a_prop_that_merely_looks_like_a_reference_is_not_one() -> None:
     """Only the declared reference props carry variable ids. A column called
     `v_region` in somebody's data is not a binding, and treating it as one

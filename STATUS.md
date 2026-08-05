@@ -1955,6 +1955,27 @@ Roadmap 1.3's two remaining pieces: the **change** trigger, and the **`run_actio
 
 ---
 
+### 101. Chart drill-down, and the equality that makes it buildable (this session)
+
+Roadmap 1.5's chart upgrade. Object-set input already existed (§74); what was missing was **drill-down**: clicking a bar or a slice narrows the set everything else on the page reads.
+
+**Clauses, not a set.** The chart writes `[{property, op: "eq", value}]` into a variable, and a `narrow_set` derivation the server resolves does the narrowing — the same shape the Filter List writes, so one derivation reads either, or both. A widget that wrote a *set* would be a second place sets come from with no rule for which wins, which is the argument §82 already made.
+
+**Why this is buildable and the map's area selection is not.** Both are "select on a chart, filter by it", and they are not the same problem. `region = "north"` means the same thing on Postgres and on OpenSearch whatever the property's declared type; `lat > 51.5` does not, and that is the untyped-property blocker (§87) that also holds ordered operators, numeric aggregations and property sorts. Drill-down is equality, so it needs nothing that does not exist.
+
+**Three things it is careful about.** Clicking what is already drilled into clears it — without that there is no way back out from inside the chart, and a filter you cannot remove is one you have to remember you applied. The selected category is drawn at full strength and the rest dimmed, rather than outlined, because the point of drilling in is that the others are no longer what you are looking at. And a chart with nothing to drill into is a **picture**: no pointer, no `aria-pressed`, no hover affordance promising something that will not happen. Scatter takes no drill-down at all — its label is an X *coordinate*, so a click would narrow to one exact value of a continuous axis.
+
+**Two gaps found on the way, and one of them was waiting.**
+
+- **`subjectVariable` was not in `REFERENCE_PROPS`.** An inline action form (§87) bound to a variable somebody then deleted was neither refused nor reported — the form pointed at nothing and edited whatever it found. Added, along with `drilldownVariable`. This can make an already-saved app fail to open, and that is the intended answer: such an app is already broken, and saying so beats a form that silently does the wrong thing. The list is now exercised by a loop over itself rather than a case each, because what goes wrong is somebody adding a ninth prop and not a ninth test.
+- **The parity test caught me, exactly as its own docstring predicted.** `REFERENCE_PROPS` exists twice — the server's copy and the builder's — and `test_the_reference_prop_list_agrees_with_the_browser_s_copy` says it "will grow widget by widget through item 1.5, which is exactly when one copy gets updated and the other does not". It grew, one copy got updated, and the test failed. Worth recording as evidence that mechanical parity assertions earn their keep.
+
+**Two surviving mutations, and only one was a real gap.** "Clicking a bar writes nothing" survived because my mutation was equivalent — a guard on a label that is never empty. "A chart with no drill-down is still clickable" survived because every chart in the fixture had one; the fixture now carries a second chart with nothing to drill into, which is the claim the comment above makes and nothing was checking.
+
+**733 API tests green** (+1), production build clean. **Seven mutations, seven caught.**
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -1826,6 +1826,7 @@ export function CanvasChart({
   filterParameter = null,
   filterOperator = "equals",
   objectSetVariable = null,
+  drilldownVariable = null,
 }: {
   datasetId?: string | null;
   kind?: ChartKind;
@@ -1841,6 +1842,17 @@ export function CanvasChart({
    * a plain sum does, so the two stores would disagree about the bar heights.
    * See `services/object_sets.py`. */
   objectSetVariable?: string | null;
+  /** Where a click on a bar or a slice writes its clause (roadmap 1.5,
+   * drill-down). Clauses rather than a set, for the reason the Filter List
+   * writes clauses: object sets resolve on the server, and a widget that wrote
+   * one would be a second place sets come from with no rule for which wins.
+   *
+   * **This is equality, which is why it is buildable and the map's area
+   * selection is not.** `property = "north"` means the same thing on Postgres
+   * and on OpenSearch whatever the property's declared type; `lat > 51.5`
+   * does not, and that is the untyped-property blocker (§87) that also holds
+   * ordered operators, numeric aggregations and property sorts. */
+  drilldownVariable?: string | null;
 }) {
   const {
     connectors: { connect, drag },
@@ -1849,7 +1861,25 @@ export function CanvasChart({
   const filterValue = useCanvasParameter(filterParameter);
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
+  const { set: setParameter } = useCanvasParameters();
+  const drilled = useCanvasParameter(drilldownVariable);
   const usingSet = !!objectSetVariable;
+
+  // Drill-down needs a set to narrow and a property to narrow it on, so it is
+  // offered only where both exist. A dataset-backed chart has no set: there is
+  // nothing for a clause to mean, and inventing a second mechanism for it
+  // would be two answers to one question.
+  const canDrill = usingSet && !!drilldownVariable && !!dimension;
+  // What is currently drilled into, read back out of the variable the chart
+  // writes rather than held here as a second copy - so the chart reflects the
+  // document's state, including a clause something else set.
+  const drilledLabel = (() => {
+    for (const clause of Array.isArray(drilled) ? drilled : []) {
+      const c = clause as { property?: string; op?: string; value?: unknown };
+      if (c.property === dimension && c.op === "eq") return String(c.value);
+    }
+    return null;
+  })();
 
   const sql = chartQuery({
     kind, dimension, measure, aggregate,
@@ -1900,7 +1930,43 @@ export function CanvasChart({
           {result.error instanceof ApiError ? result.error.message : "Couldn't run this chart."}
         </p>
       )}
-      {points && <Chart kind={kind} points={points} />}
+      {points && (
+        <Chart
+          kind={kind}
+          points={points}
+          drill={
+            canDrill
+              ? {
+                  selected: drilledLabel,
+                  // Clicking what is already drilled into clears it. Without
+                  // that there is no way back out from inside the chart, and
+                  // a filter you cannot remove is a filter you have to
+                  // remember you applied.
+                  onSelect: (label) =>
+                    setParameter(
+                      drilldownVariable!,
+                      label === drilledLabel
+                        ? []
+                        : [{ property: dimension, op: "eq", value: label }],
+                    ),
+                }
+              : undefined
+          }
+        />
+      )}
+      {canDrill && drilledLabel !== null && (
+        <p className="canvas-widget-empty">
+          Drilled into {dimension} = {drilledLabel}.{" "}
+          <button
+            type="button"
+            className="btn quiet"
+            style={{ padding: "1px 7px", fontSize: 12 }}
+            onClick={() => setParameter(drilldownVariable!, [])}
+          >
+            Clear
+          </button>
+        </p>
+      )}
       {/* Said, not hidden: a chart drawing the top 20 of 300 without a word is
           the same trap as a preview that sampled and did not mention it. */}
       {usingSet && setResult.data?.truncated && (
@@ -1923,7 +1989,7 @@ function ChartSettings() {
   const { declared, resolved } = useCanvasVariables();
   const {
     datasetId, kind, dimension, measure, aggregate, title,
-    filterColumn, filterParameter, filterOperator, objectSetVariable,
+    filterColumn, filterParameter, filterOperator, objectSetVariable, drilldownVariable,
     actions: { setProp },
   } = useNode((node) => ({
     datasetId: node.data.props.datasetId,
@@ -1936,12 +2002,21 @@ function ChartSettings() {
     filterParameter: node.data.props.filterParameter,
     filterOperator: node.data.props.filterOperator,
     objectSetVariable: node.data.props.objectSetVariable,
+    drilldownVariable: node.data.props.drilldownVariable,
   }));
   const list = useQuery({
     queryKey: ["datasets", projectId],
     queryFn: () => dsApi.list(workspaceId, projectId),
   });
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  // Where a drill-down writes its clause: an `array` variable, the same kind
+  // the Filter List writes its clauses into, so one `narrow_set` derivation
+  // reads either - or both, if a chart and a filter list narrow the same set.
+  // Derived ones are absent because they are computed from their inputs and a
+  // write to one has no meaning.
+  const clauseVariables = Object.values(declared).filter(
+    (v) => v.kind === "array" && !v.derivation,
+  );
   const setTypeId = (resolved[objectSetVariable as string] as
     { object_type_id?: string } | undefined)?.object_type_id;
   const setType = useQuery({
@@ -2000,6 +2075,30 @@ function ChartSettings() {
           <span className="field-hint">Counts objects in each group</span>
         )}
       </label>
+      {/* Only where there is a set to narrow. A dataset-backed chart has no
+          set, so a clause would have nothing to mean. */}
+      {objectSetVariable && (
+        <label className="field">
+          <span className="field-label">Drill-down writes to</span>
+          <select
+            value={drilldownVariable || ""}
+            onChange={(e) =>
+              setProp((p: { drilldownVariable: string | null }) =>
+                (p.drilldownVariable = e.target.value || null))
+            }
+          >
+            <option value="">Not bound — the chart is a picture</option>
+            {clauseVariables.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            {clauseVariables.length === 0
+              ? "Declare an array variable, and derive a narrowed set from it"
+              : "Clicking a bar or slice narrows the set to that category"}
+          </span>
+        </label>
+      )}
       <label className="field">
         <span className="field-label">Dataset</span>
         <select
@@ -2103,7 +2202,7 @@ CanvasChart.craft = {
     datasetId: null, kind: "bar", dimension: null, measure: null,
     aggregate: "count", title: "", filterColumn: null,
     filterParameter: null, filterOperator: "equals",
-    objectSetVariable: null,
+    objectSetVariable: null, drilldownVariable: null,
   },
   related: { settings: ChartSettings },
 };

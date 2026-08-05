@@ -85,6 +85,16 @@ MAX_CONCAT_PARTS = 20
 # Props whose value is a variable id. The vocabulary grows widget by widget in
 # item 1.5; what matters here is that it is a *list*, so usage scanning has one
 # definition rather than each caller guessing.
+# Every node prop that names a variable. A binding missing from this list is a
+# binding nothing checks: deleting the variable is allowed, and the widget then
+# reads as "no filter" and quietly shows everything - the failure decision 0002
+# exists to remove.
+#
+# `subjectVariable` was missing until item 1.5, which is a real gap and not a
+# new one: an inline action form (§87) bound to a deleted variable was neither
+# refused nor reported. Adding it can make an already-saved app fail to open,
+# and that is the intended answer - such an app is already a form pointed at
+# nothing, and saying so beats a form that edits whatever it finds.
 REFERENCE_PROPS = (
     "filterParameter",
     "searchParameter",
@@ -92,6 +102,8 @@ REFERENCE_PROPS = (
     "objectSetVariable",
     "enabledVariable",
     "visibleWhen",
+    "subjectVariable",
+    "drilldownVariable",
 )
 
 
