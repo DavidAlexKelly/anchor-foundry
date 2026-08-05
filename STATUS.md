@@ -2014,12 +2014,14 @@ Roadmap 1.5's *Search / Prominent Terms Filter* row — and **half of it was alr
 
 **733 API tests green and the build clean**, both unchanged — no server code.
 
-**On the mutation evidence, precisely.** The drill-down and Card List mutations (eleven) were all caught in a clean, completed run. **The three mutations aimed at this widget have not completed one**, and the reason is worth recording because both halves were self-inflicted:
+**Fourteen mutations, fourteen caught** — eleven across the drill-down and the Card List, and three aimed at this widget: a prefix silently becoming an equality match, an empty box filtering for nothing rather than dropping the filter, and search writing into the drill-down's variable instead of its own.
+
+**Getting that evidence took three attempts, and both interruptions were self-inflicted.** Worth recording, because the failure mode of the second one is a checking harness that lies:
 
 * I ran a production build while the mutation suite was driving the dev server — the rough edge this file already documents. Both write `apps/web/.next`, so every check after that point failed against a 500, which a harness looking for failures reads as a *catch*. That entire run was discarded rather than reported.
 * The container then restarted mid-run, so the script's cleanup never ran and **a mutation was left applied on disk**. The next verification failed and read as a product bug until `git diff` showed a single deleted line. The script now does `trap restore EXIT INT TERM`, and a killed run restored correctly on the next attempt — though a `kill -9` still outruns the trap, which is why the tree is checked with `git diff` before committing rather than trusted.
 
-So: the widget is verified by the browser check on a clean stack, and the check is *not yet* known to be able to fail for it. That is a weaker claim than the three items before it, and it is the true one.
+The lesson is not "be careful". It is that a harness which infers a catch from *any* failure cannot tell a caught mutation from a broken environment, and will report a clean sweep for a server that is returning 500 to everything. A run whose environment was disturbed has to be discarded rather than read.
 
 ---
 
