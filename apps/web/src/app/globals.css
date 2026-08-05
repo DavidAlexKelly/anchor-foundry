@@ -1612,3 +1612,17 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .ox-summary dt { color: var(--ink-soft); }
 .ox-summary dd { margin: 0; }
+
+/* ---- copy link (roadmap item 0.4) ---------------------------------------- */
+.copy-link { position: relative; display: inline-flex; }
+/* Shown only when the clipboard API is unavailable — a plain-http deployment,
+   where writing to the clipboard silently does nothing. The link is handed
+   over to copy by hand rather than a success message nobody earned. */
+.copy-link-manual {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  display: grid; gap: 5px; width: min(420px, 70vw); padding: 10px;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: var(--radius); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+.copy-link-manual input { width: 100%; font-family: var(--font-mono); font-size: 12px; }
+.copy-link-manual .btn { justify-self: end; }

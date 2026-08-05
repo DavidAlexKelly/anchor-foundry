@@ -38,6 +38,7 @@ import { useState } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
+import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
 import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
 
 /** The explorer's whole state, and the whole of what a saved search stores.
@@ -84,6 +85,41 @@ function isEmpty(criteria: Criteria): boolean {
   );
 }
 
+/** Is this saved search the one currently on screen?
+ *
+ * Derived by comparing definitions rather than remembering an id (item 0.4).
+ * An id kept alongside the criteria goes stale the moment somebody ticks
+ * another type, and then the rail claims you are looking at "Norwegian
+ * vessels" while you are looking at something else — and, once the state is in
+ * the URL, the *link* claims it too. Order of `type_ids` is not part of the
+ * question, so it is not part of the comparison.
+ */
+function matches(search: SavedSearch, criteria: Criteria): boolean {
+  const a = search.definition;
+  const b = toDefinition(criteria);
+  return (
+    (a.q ?? null) === b.q &&
+    (a.property ?? null) === b.property &&
+    (a.value ?? null) === b.value &&
+    [...(a.type_ids ?? [])].sort().join(",") === [...b.type_ids].sort().join(",")
+  );
+}
+
+/** The part of the form that is actually in effect.
+ *
+ * A property filter needs exactly one type, so with two ticked it is not part
+ * of the question — and everything downstream has to agree about that. Sending
+ * it anyway is a 422 where results should be; saving it would store a search
+ * the server refuses; marking a saved search by it would compare against
+ * something not in effect. The typed filter stays in the URL rather than being
+ * deleted, so unticking the second type brings it back instead of asking
+ * somebody to type it again, and the form says it is not in effect.
+ */
+function inEffect(criteria: Criteria): Criteria {
+  if (criteria.typeIds.length === 1) return criteria;
+  return { ...criteria, property: "", value: "" };
+}
+
 function describe(search: SavedSearch): string {
   const parts: string[] = [];
   if (search.definition.q) parts.push(`“${search.definition.q}”`);
@@ -101,11 +137,27 @@ export function ObjectExplorer({
   workspaceId: string;
   canEdit: boolean;
 }) {
-  const [criteria, setCriteria] = useState<Criteria>(EMPTY);
-  const [draft, setDraft] = useState("");
+  // The question is the URL (item 0.4). Not a copy of it kept in state and
+  // written back: "send me the link to that" is the reason saved searches
+  // exist, so the surface they were built for has to be linkable too, and one
+  // source of truth is how it stays that way through a paste or a reload.
+  const url = useUrlState();
+  const criteria: Criteria = {
+    q: url.get("q") ?? "",
+    typeIds: url.all("type"),
+    property: url.get("property") ?? "",
+    value: url.get("value") ?? "",
+  };
+  const pageNo = Math.max(1, Math.trunc(Number(url.get("page"))) || 1);
+  const offset = (pageNo - 1) * PAGE;
+
+  const applied = inEffect(criteria);
+
+  // Local, and deliberately not in the link: half-typed text is not a
+  // question anybody meant to ask, and the type-list filter is a way of
+  // reading the form rather than part of what it asks.
+  const [draft, setDraft] = useState(() => criteria.q);
   const [typeFilter, setTypeFilter] = useState("");
-  const [offset, setOffset] = useState(0);
-  const [openedFrom, setOpenedFrom] = useState<SavedSearch | null>(null);
   const [saving, setSaving] = useState<Criteria | null>(null);
   const [exploring, setExploring] = useState<LinkStop | null>(null);
 
@@ -117,13 +169,13 @@ export function ObjectExplorer({
   const byId = new Map((types.data ?? []).map((t) => [t.id, t]));
 
   const page = useQuery({
-    queryKey: ["object-explorer", workspaceId, criteria, offset],
+    queryKey: ["object-explorer", workspaceId, applied, offset],
     queryFn: () =>
       objApi.explore(workspaceId, {
-        q: criteria.q.trim() || undefined,
-        typeIds: criteria.typeIds,
-        ...(criteria.property.trim() && criteria.value !== ""
-          ? { property: criteria.property.trim(), value: criteria.value }
+        q: applied.q.trim() || undefined,
+        typeIds: applied.typeIds,
+        ...(applied.property.trim() && applied.value !== ""
+          ? { property: applied.property.trim(), value: applied.value }
           : {}),
         limit: PAGE,
         offset,
@@ -131,35 +183,75 @@ export function ObjectExplorer({
     enabled: !!workspaceId,
   });
 
+  /** Replace the whole question — opening a saved search, clearing, paging. */
+  function write(criteria: Criteria, page?: number) {
+    url.set({
+      q: criteria.q.trim() || undefined,
+      type: criteria.typeIds,
+      property: criteria.property.trim() || undefined,
+      // Written even without a property beside it. The two are only paired
+      // when the query runs and when the search is saved; dropping a value
+      // typed before its property name would clear the box under the cursor.
+      value: criteria.value || undefined,
+      // Any change to the question starts at its first page. A page number
+      // carried over from the previous question is a link to nothing.
+      page: page && page > 1 ? String(page) : undefined,
+    });
+  }
+
   /** The text box is the one control that does not apply as you touch it —
    * a request per keystroke is a different design. Everything that reads the
    * criteria goes through here so an unsubmitted word is never silently
    * dropped, least of all by Save. */
   function applyDraft(next: Partial<Criteria> = {}): Criteria {
     const applied = { ...criteria, q: draft, ...next };
-    setCriteria(applied);
-    setOffset(0);
+    write(applied);
     return applied;
   }
 
+  /** Change one part of it, and *only* that part.
+   *
+   * Rewriting the whole question from `criteria` would re-send keys taken from
+   * the last render, and a write still in flight has not reached that render
+   * yet. Typing a property name and then its value did exactly that: the
+   * second write re-sent `property: undefined` from the stale snapshot and
+   * deleted it, leaving `?value=NO` — a filter the form displayed and the
+   * server was never asked for.
+   */
   function update(next: Partial<Criteria>) {
-    setCriteria({ ...criteria, ...next });
-    setOffset(0);
+    url.set({
+      ...(next.q !== undefined ? { q: next.q.trim() || undefined } : {}),
+      ...(next.typeIds !== undefined ? { type: next.typeIds } : {}),
+      ...(next.property !== undefined
+        ? { property: next.property.trim() || undefined }
+        : {}),
+      ...(next.value !== undefined ? { value: next.value || undefined } : {}),
+      page: undefined,
+    });
+  }
+
+  /** Ticking a type reads the types from the URL as it stands, not as it was
+   * rendered — two ticks in quick succession would otherwise each build on the
+   * same list and the first would be lost. */
+  function toggleType(typeId: string, on: boolean) {
+    url.set((current) => {
+      const have = current.getAll("type");
+      return {
+        type: on ? [...have, typeId] : have.filter((id) => id !== typeId),
+        page: undefined,
+      };
+    });
   }
 
   function open(search: SavedSearch) {
     const loaded = fromSaved(search);
-    setCriteria(loaded);
     setDraft(loaded.q);
-    setOffset(0);
-    setOpenedFrom(search);
+    write(loaded);
   }
 
   function clear() {
-    setCriteria(EMPTY);
     setDraft("");
-    setOffset(0);
-    setOpenedFrom(null);
+    write(EMPTY);
   }
 
   const selected = criteria.typeIds;
@@ -178,9 +270,8 @@ export function ObjectExplorer({
       <SavedSearches
         workspaceId={workspaceId}
         canEdit={canEdit}
-        openedId={openedFrom?.id ?? null}
+        criteria={applied}
         onOpen={open}
-        onClosed={() => setOpenedFrom(null)}
       />
 
       <div className="ox-main">
@@ -210,11 +301,14 @@ export function ObjectExplorer({
               <button
                 type="button"
                 className="btn quiet"
-                onClick={() => setSaving(applyDraft())}
+                onClick={() => setSaving(inEffect(applyDraft()))}
               >
                 Save this search
               </button>
             )}
+            {/* The lighter half of saving (item 0.4): the question is in the
+                URL, so sharing one needs no name and no row in a table. */}
+            <CopyLinkButton label="Copy link to this search" />
           </div>
 
           <fieldset className="ox-types">
@@ -250,13 +344,7 @@ export function ObjectExplorer({
                     <input
                       type="checkbox"
                       checked={selected.includes(t.id)}
-                      onChange={(e) =>
-                        update({
-                          typeIds: e.target.checked
-                            ? [...selected, t.id]
-                            : selected.filter((id) => id !== t.id),
-                        })
-                      }
+                      onChange={(e) => toggleType(t.id, e.target.checked)}
                     />
                     <span>{t.display_name}</span>
                   </label>
@@ -298,6 +386,17 @@ export function ObjectExplorer({
               </div>
             ) : (
               <p className="ox-note">
+                {criteria.property.trim() !== "" && (
+                  <>
+                    {/* Kept, not deleted — untick and it comes back. Saying it
+                        is not in effect beats a form showing a filter the
+                        results do not reflect. */}
+                    <strong>
+                      {criteria.property.trim()} = {criteria.value} is not being
+                      applied.
+                    </strong>{" "}
+                  </>
+                )}
                 Pick exactly one object type to filter on a property. A property
                 name only means something within a type — <code>status</code> on
                 an Order and <code>status</code> on a Shipment are unrelated
@@ -317,7 +416,7 @@ export function ObjectExplorer({
         )}
         {page.data && page.data.total === 0 && (
           <div className="state">
-            {isEmpty(criteria)
+            {isEmpty(applied)
               ? "No instances yet — sync a dataset mapping to create some."
               : "Nothing matches that."}
           </div>
@@ -385,7 +484,7 @@ export function ObjectExplorer({
               <button
                 className="btn quiet"
                 disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - PAGE))}
+                onClick={() => write(criteria, pageNo - 1)}
               >
                 Previous
               </button>
@@ -395,7 +494,7 @@ export function ObjectExplorer({
               <button
                 className="btn quiet"
                 disabled={offset + PAGE >= page.data.total}
-                onClick={() => setOffset(offset + PAGE)}
+                onClick={() => write(criteria, pageNo + 1)}
               >
                 Next
               </button>
@@ -422,10 +521,9 @@ export function ObjectExplorer({
           criteria={saving}
           types={types.data ?? []}
           onClose={() => setSaving(null)}
-          onSaved={(search) => {
-            setSaving(null);
-            setOpenedFrom(search);
-          }}
+          // Nothing to select afterwards: the new search matches what is on
+          // screen by construction, so the rail marks it without being told.
+          onSaved={() => setSaving(null)}
         />
       )}
     </div>
@@ -436,15 +534,15 @@ export function ObjectExplorer({
 function SavedSearches({
   workspaceId,
   canEdit,
-  openedId,
+  criteria,
   onOpen,
-  onClosed,
 }: {
   workspaceId: string;
   canEdit: boolean;
-  openedId: string | null;
+  /** What is on screen, so the rail can say which saved search that *is* —
+   *  derived, never remembered. See `matches`. */
+  criteria: Criteria;
   onOpen: (search: SavedSearch) => void;
-  onClosed: () => void;
 }) {
   const queryClient = useQueryClient();
   const searches = useQuery({
@@ -455,8 +553,7 @@ function SavedSearches({
 
   const remove = useMutation({
     mutationFn: (id: string) => objApi.deleteSearch(workspaceId, id),
-    onSuccess: async (_r, id) => {
-      if (id === openedId) onClosed();
+    onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["object-searches", workspaceId] });
     },
   });
@@ -475,7 +572,7 @@ function SavedSearches({
       )}
       <ul className="ox-saved-list">
         {searches.data?.map((s) => (
-          <li key={s.id} className={s.id === openedId ? "on" : undefined}>
+          <li key={s.id} className={matches(s, criteria) ? "on" : undefined}>
             <button type="button" className="ox-saved-open" onClick={() => onOpen(s)}>
               <strong>{s.name}</strong>
               {describe(s) && <span className="slug">{describe(s)}</span>}
@@ -524,7 +621,7 @@ function SaveSearchDialog({
   criteria: Criteria;
   types: ObjectTypeSummary[];
   onClose: () => void;
-  onSaved: (search: SavedSearch) => void;
+  onSaved: () => void;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -538,9 +635,9 @@ function SaveSearchDialog({
         description,
         definition: toDefinition(criteria),
       }),
-    onSuccess: async (search) => {
+    onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["object-searches", workspaceId] });
-      onSaved(search);
+      onSaved();
     },
   });
 

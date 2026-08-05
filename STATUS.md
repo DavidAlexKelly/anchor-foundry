@@ -1912,6 +1912,28 @@ That bug also exposed a **weak assertion of my own**: "opening it matches nothin
 
 ---
 
+### 99. Deep links, and the state that was never anybody's to keep (this session)
+
+Roadmap 0.4, which closes section 0. A link now carries what you are looking at — the tab, the version, the branch comparison, the whole of a search — and every application offers **Copy link** in its shell.
+
+**Most of this was already true and had no affordance.** The dataset, repository and object type applications each kept their tab in the query string, and each had grown its own eight-line `setParams` to do it. Those three copies are now one hook, `useUrlState`, and the fourth caller is where a copy quietly starts pushing history entries instead of replacing them.
+
+**The URL is the state, not a copy of it.** The explorer (§98) read its criteria from `useState` and was the one surface built this phase that a link could not reproduce — which is a strange thing for the surface that *saved searches* were built for. It now derives them from `useSearchParams`, so restoring from a link is not a code path: there is nothing to restore, because nothing was kept anywhere else.
+
+**The same argument removed a piece of state rather than moving it.** The rail marked the saved search you had opened by remembering its id — which is a lie the moment you tick another type, and once the state is in the URL the *link* tells the lie too. Which saved search is on screen is now derived by comparing definitions. Nothing to go stale, and a pasted link marks the matching search with no wiring at all.
+
+**The browser check found three things, and two were mine.**
+
+- **A write built on the last render, not the last write.** `router.replace` does not land synchronously, so typing a property name and then its value each built on the same snapshot and the second dropped the first — producing `?property=` gone, `?value=NO` left: a filter the form displayed and the server was never asked for. Fixed in two places, because it needed both: `useUrlState` keeps the last write until the router catches up, and a caller that changes one parameter now writes *only* that parameter instead of re-sending all four from a stale copy. `set` also takes a function of the current params, for the case where the new value is derived from the old one — ticking two checkboxes faster than the router settles.
+- **A hidden property filter was still being applied.** With two types ticked the filter is not offered — and was still sent, so the panel showed a 422 where results should be. Hidden now means not applied: the query, the save, and the rail's "which search is this" all read the same `inEffect(criteria)`. The typed filter stays in the URL so unticking brings it back, and the form says in so many words that it is not being applied.
+- **An assertion of mine that could not fail.** "A fresh page restores the same rows" compared row *counts*, and blanking one of four parameters can leave the same number of rows. It compares the keys now.
+
+**Copy link admits when it cannot.** `navigator.clipboard` only exists in a secure context, so on a plain-http deployment — which this platform supports — the write does nothing. The button shows the link to copy by hand and says why, rather than reporting a success it did not have. Mutation testing also showed the explicit `if (!navigator.clipboard)` guard was equivalent to the `catch` beneath it, so it is gone: the `catch` covers a clipboard that is absent *and* one that refuses, which a presence check would have sailed past.
+
+**720 API tests green and 74 worker, both unchanged — no server code was touched.** Production build clean. **Seven mutations, seven caught**, which for frontend-only work is the whole of the evidence that the browser check can go red: it is the only test this code has.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

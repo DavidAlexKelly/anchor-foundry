@@ -34,7 +34,7 @@ Three shifts follow, and they are the whole of this roadmap:
 
 ---
 
-## Section 0 — The precondition: resources, and applications that open them
+## Section 0 — The precondition: resources, and applications that open them — **done**
 
 **Nothing else in this roadmap can be built first.** Both Workshop and Code Repositories are full-viewport applications; there is currently no way to *be* one. Sequenced first for that reason alone, and it is the smallest section.
 
@@ -80,11 +80,11 @@ Three shifts follow, and they are the whole of this roadmap:
 
 **Depends on** 0.1.
 
-### 0.4 Deep links into application state — **S**
+### ~~0.4 Deep links into application state~~ — **done** (`STATUS.md` §99)
 
 **What Foundry does.** A Workshop URL carries the page and the variable state; a Dataset Preview URL carries the tab. You can send someone a link to what you are looking at.
 
-**Build.** Per-app URL state (query params), a "copy link" affordance in the shell, and restore-from-URL on load. Do this **while** each app is built rather than after — retrofitting URL state means unpicking component state that has already been written to assume it owns everything.
+**Built.** One `useUrlState` hook in place of the three per-application copies that had grown, Copy link in the application shell, and the Object Explorer's whole question moved out of component state into the query string. Restore-from-URL is not a code path: the URL *is* the state, so there is nothing to restore. Workshop's variable state is not in the URL — see section 1.
 
 ---
 
