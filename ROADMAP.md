@@ -177,7 +177,7 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 | 2 | ~~**Charts** (upgrade)~~ | **Done**: object-set input (`STATUS.md` §74) and drill-down (§101). Clicking a bar writes an equality *clause* into a variable a `narrow_set` derivation reads — clauses rather than a set, for the reason the Filter List writes clauses. Equality is also why this is buildable where the map's area selection is not: `region = "north"` means the same on both stores, `lat > 51.5` does not |
 | 2 | **Map** (upgrade) | **Object-set input and pin selection done** (`STATUS.md` §86); the clustering and pan work (§37) carried over unchanged. **What remains**: selection emitting a *set* — drawing an area and filtering by it needs numeric comparison on lat/lon, which is the same untyped-property blocker as ordered operators, numeric aggregations and property sorts |
 | 2 | ~~**Inline Action Form**~~ | **Done** (`STATUS.md` §87): bound to a `single_object` variable, the form edits the object somebody picked, prefilled with its current values, and writes the result back into the variable so nothing on screen shows what you just replaced |
-| 3 | **Object List / Card List** | Card-shaped alternative to the table |
+| 3 | ~~**Object List / Card List**~~ | **Done** (`STATUS.md` §102). Set-only, by this table's own rule: a widget that reaches for a type id cannot be wired to anything. Leads with the title property, caps at six fields, and fires the same `row_select` the table does — so anything wired to a table can be pointed at it instead |
 | 3 | **Pivot Table** | Cross-tab over an object set |
 | 3 | **Search / Prominent Terms Filter** | Foundry's example apps lean on these |
 | 3 | **Time Series / Timeline** | |

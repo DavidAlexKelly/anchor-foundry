@@ -49,8 +49,8 @@ const TRIGGERS: {
   {
     on: "row_select",
     label: "Row selected",
-    widgets: ["CanvasObjectTable", "CanvasMap"],
-    labels: { CanvasMap: "Pin selected" },
+    widgets: ["CanvasObjectTable", "CanvasObjectCards", "CanvasMap"],
+    labels: { CanvasMap: "Pin selected", CanvasObjectCards: "Card selected" },
   },
   {
     on: "change",

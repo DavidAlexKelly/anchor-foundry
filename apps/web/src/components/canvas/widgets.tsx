@@ -21,6 +21,7 @@ import {
 } from "./context";
 import { eventsFor, interpolate, run as runEvents, useEventContext } from "./events";
 import { invalidateCanvasReads } from "./refresh";
+import { describeSet, selectionOf, useSetPage } from "./object-set";
 import {
   chartQuery,
   distinctValuesQuery,
@@ -902,40 +903,19 @@ export function CanvasObjectTable({
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
   const usingSet = !!objectSetVariable;
-  const [offset, setOffset] = useState(0);
 
   // Paging is *runtime* state, like a page or a variable value (decision 0002
-  // §3): a saved app opens on the first page for every viewer. It also has to
-  // reset when the set changes, or narrowing a filter while on page 3 leaves a
-  // viewer looking at an empty table that has rows.
-  const setKey = JSON.stringify(setDefinition ?? null);
-  const [lastKey, setLastKey] = useState(setKey);
-  if (setKey !== lastKey) {
-    setLastKey(setKey);
-    setOffset(0);
-  }
-
-  const setPage = useQuery({
-    queryKey: ["canvas-object-set", objectSetVariable, setKey, pageSize, offset, sort],
-    queryFn: () =>
-      objApi.evaluateObjectSet(workspaceId, setDefinition, {
-        limit: pageSize,
-        offset,
-        sort,
-      }),
-    // Not until the definition has resolved. Querying with `undefined` would
-    // ask the server to evaluate nothing and render "0 objects", which is an
-    // answer this widget does not have yet.
-    enabled: usingSet && !!setDefinition,
-    // The previous page stays on screen while the next one loads, rather than
-    // the table emptying and jumping - the rows are about to be replaced, not
-    // gone.
-    placeholderData: (previous) => previous,
+  // §3): a saved app opens on the first page for every viewer. The hook holds
+  // it, and the reset-when-the-set-changes rule with it - shared with the Card
+  // List rather than written twice (see `object-set.ts`).
+  const setPage = useSetPage(workspaceId, usingSet ? setDefinition : null, {
+    pageSize,
+    sort,
+    variablesPending,
   });
+  const { offset, setOffset } = setPage;
 
-  const effectiveTypeId = usingSet
-    ? ((setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null)
-    : objectTypeId;
+  const effectiveTypeId = usingSet ? setPage.typeId : objectTypeId;
   const type = useQuery({
     queryKey: ["object-type", effectiveTypeId],
     queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
@@ -977,12 +957,12 @@ export function CanvasObjectTable({
 
   // One shape for both paths, so everything below reads the same. The set path
   // returns `instances`; the explore path returns `items`.
-  const rows = usingSet ? setPage.data?.instances : page.data?.items;
-  const total = usingSet ? setPage.data?.total : page.data?.total;
-  const active = usingSet ? setPage : page;
-  const setFilters =
-    ((setDefinition as { filters?: { property: string; value: unknown }[] } | undefined)
-      ?.filters) ?? [];
+  const rows = usingSet ? setPage.rows : page.data?.items;
+  const total = usingSet ? setPage.total : page.data?.total;
+  const active = usingSet
+    ? { isError: setPage.isError, isPending: setPage.isPending }
+    : { isError: page.isError, isPending: page.isPending };
+  const setFilters = setPage.filters;
 
   // Row selection (roadmap 1.3). The widget does not decide what a click
   // *means* - it announces that a row was chosen and hands over the row, and
@@ -995,7 +975,7 @@ export function CanvasObjectTable({
       {!usingSet && !objectTypeId && (
         <p className="canvas-widget-empty">Object table - pick an object type in Settings</p>
       )}
-      {usingSet && (variablesPending || (!setDefinition && !active.isError)) && (
+      {usingSet && setPage.unresolved && (
         <p className="canvas-widget-empty">Resolving the object set…</p>
       )}
       {!usingSet && objectTypeId && page.isPending && (
@@ -1040,28 +1020,7 @@ export function CanvasObjectTable({
                         ? () =>
                             runEvents(rowEvents, {
                               ...eventContext,
-                              payload: {
-                                primary_key: instance.primary_key,
-                                ...instance.properties,
-                              },
-                              // The same row twice, deliberately: flattened
-                              // above for `{{...}}` in a label, and whole here
-                              // for a `single_object` variable, which needs to
-                              // know which field is the key.
-                              object: {
-                                // The row twice, deliberately: flattened above
-                                // for `{{...}}` in a label, and whole here for
-                                // a `single_object` variable, which needs to
-                                // know which field is the key - and the id,
-                                // which is what the write APIs take.
-                                id: instance.id,
-                                // The table's own type, not the row's: every
-                                // row in one table is one type, and the row
-                                // payload does not carry it.
-                                object_type_id: effectiveTypeId ?? undefined,
-                                primary_key: instance.primary_key,
-                                properties: instance.properties,
-                              },
+                              ...selectionOf(instance, effectiveTypeId),
                             })
                         : undefined
                     }
@@ -1280,6 +1239,274 @@ CanvasObjectTable.craft = {
     searchParameter: null, pageSize: 25, columns: "", sort: "recent",
   },
   related: { settings: ObjectTableSettings },
+};
+
+// ---- Object card list (roadmap 1.5) -----------------------------------------
+/**
+ * The card-shaped alternative to the object table.
+ *
+ * **Set-only, deliberately.** The table still carries a pre-variable path
+ * where it names an object type and a filter parameter itself; a new widget
+ * does not, because item 1.5's rule is that a widget consumes input variables
+ * and emits output variables — one that reaches for a type id directly cannot
+ * be wired to anything, which is the flaw in the original eight.
+ *
+ * **What makes it a card list rather than a table with rounded corners.** A
+ * table is for comparing many objects across the same columns; cards are for
+ * reading one object at a time, so a card leads with a *heading* — the type's
+ * title property, or the key when it has none — and shows a few fields under
+ * it. Six is the cap: past that a card is a table row that has been folded,
+ * and the table is the better widget.
+ *
+ * It fires the same `row_select` the table does, with the same payload, so
+ * everything already wired to a table can be pointed at this instead.
+ */
+const CARD_FIELD_CAP = 6;
+
+export function CanvasObjectCards({
+  objectSetVariable = null,
+  fields = "",
+  pageSize = 12,
+  sort = "recent",
+}: {
+  objectSetVariable?: string | null;
+  /** Property api_names to show under the heading, in order, comma-separated.
+   *  Blank means the first few the type declares — a card that showed nothing
+   *  until configured would look broken on the first drop, the same argument
+   *  the table's blank `columns` makes. */
+  fields?: string;
+  pageSize?: number;
+  sort?: string;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const eventContext = useEventContext(undefined, useOverlayIds());
+  const definition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
+  const page = useSetPage(workspaceId, objectSetVariable ? definition : null, {
+    pageSize,
+    sort,
+    variablesPending,
+  });
+
+  const type = useQuery({
+    queryKey: ["object-type", page.typeId],
+    queryFn: () => objApi.getType(workspaceId, page.typeId!),
+    enabled: !!page.typeId,
+  });
+  const all = type.data?.properties ?? [];
+  const titleProperty = all.find((p) => p.id === type.data?.title_property_id);
+  const wanted = String(fields || "")
+    .split(",")
+    .map((f) => f.trim())
+    .filter(Boolean);
+  // A configured name that matches nothing is dropped rather than rendered as
+  // an empty line: a property can be removed from the type long after a card
+  // list was pointed at it.
+  const shown = (wanted.length
+    ? wanted.map((name) => all.find((p) => p.api_name === name)).filter((p) => !!p)
+    : all.filter((p) => p.id !== type.data?.title_property_id)
+  ).slice(0, CARD_FIELD_CAP);
+
+  const rowEvents = eventsFor(moduleEvents, nodeId, "row_select");
+  const clickable = rowEvents.length > 0;
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable && (
+        <p className="canvas-widget-empty">Card list - point it at an object set in Settings</p>
+      )}
+      {objectSetVariable && page.unresolved && (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      )}
+      {page.isError && <p className="canvas-widget-empty">Couldn&apos;t load these objects.</p>}
+      {page.rows && page.total !== undefined && (
+        <>
+          <p className="canvas-widget-empty">
+            {describeSet(page.total, type.data?.display_name, page.filters)}
+          </p>
+          {page.rows.length === 0 && (
+            <p className="canvas-widget-empty">Nothing in this set.</p>
+          )}
+          <div className="canvas-cards">
+            {page.rows.map((instance) => {
+              const heading = titleProperty
+                ? instance.properties[titleProperty.api_name]
+                : undefined;
+              const chosen = selectionOf(instance, page.typeId);
+              return (
+                <article
+                  key={instance.id}
+                  className={`canvas-card${clickable ? " clickable" : ""}`}
+                  // A card is a click target only where a click does
+                  // something. An article that highlights on hover and then
+                  // ignores you is worse than one that does not.
+                  {...(clickable
+                    ? {
+                        role: "button",
+                        tabIndex: 0,
+                        onClick: () =>
+                          runEvents(rowEvents, { ...eventContext, ...chosen }),
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            runEvents(rowEvents, { ...eventContext, ...chosen });
+                          }
+                        },
+                      }
+                    : {})}
+                >
+                  <h4>
+                    {heading === undefined || heading === null || heading === ""
+                      ? instance.primary_key
+                      : String(heading)}
+                  </h4>
+                  {/* The key is always shown, even when it is also the
+                      heading: it is what identifies the object to every other
+                      part of the platform, and a card you cannot match back to
+                      a row is a card you cannot act on. */}
+                  <p className="canvas-card-key">{instance.primary_key}</p>
+                  <dl>
+                    {shown.map((p) => (
+                      <div key={p.api_name}>
+                        <dt>{p.display_name || p.api_name}</dt>
+                        <dd>
+                          <PropertyValue
+                            workspaceId={workspaceId}
+                            dataType={p.data_type}
+                            value={instance.properties[p.api_name]}
+                          />
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </article>
+              );
+            })}
+          </div>
+          {page.total > page.rows.length && (
+            <div className="canvas-table-pager">
+              <button
+                type="button"
+                className="btn quiet"
+                disabled={page.offset === 0}
+                onClick={() => page.setOffset(Math.max(0, page.offset - pageSize))}
+              >
+                Previous
+              </button>
+              <span className="canvas-widget-empty">
+                {page.offset + 1}–{page.offset + page.rows.length} of{" "}
+                {page.total.toLocaleString()}
+              </span>
+              <button
+                type="button"
+                className="btn quiet"
+                disabled={page.offset + page.rows.length >= page.total}
+                onClick={() => page.setOffset(page.offset + pageSize)}
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ObjectCardsSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
+  const {
+    objectSetVariable, fields, pageSize, sort,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    fields: node.data.props.fields,
+    pageSize: node.data.props.pageSize,
+    sort: node.data.props.sort,
+  }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const typeId = (resolved[objectSetVariable as string] as
+    { object_type_id?: string } | undefined)?.object_type_id;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.objectSetVariable = e.target.value || null;
+              p.fields = ""; // property names mean nothing against another type
+            })
+          }
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Fields</span>
+        <input
+          type="text"
+          value={fields || ""}
+          placeholder="blank for the first few"
+          onChange={(e) => setProp((p: { fields: string }) => (p.fields = e.target.value))}
+        />
+        <span className="field-hint">
+          {type.data
+            ? `Comma-separated, at most ${CARD_FIELD_CAP}. Available: ${
+                type.data.properties.map((p) => p.api_name).join(", ")
+              }`
+            : `Comma-separated, at most ${CARD_FIELD_CAP}`}
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Cards per page</span>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          value={pageSize ?? 12}
+          onChange={(e) =>
+            setProp((p: { pageSize: number }) => (p.pageSize = Number(e.target.value) || 12))
+          }
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Order</span>
+        <select
+          value={sort || "recent"}
+          onChange={(e) => setProp((p: { sort: string }) => (p.sort = e.target.value))}
+        >
+          <option value="recent">Most recently changed</option>
+          <option value="key">By key</option>
+        </select>
+        {/* Sorting by a property is refused by the server, because untyped
+            properties order differently on the two stores. Offering what it
+            accepts beats a control that sometimes 422s. */}
+        <span className="field-hint">Sorting by a property is not available yet</span>
+      </label>
+    </>
+  );
+}
+
+CanvasObjectCards.craft = {
+  displayName: "Card list",
+  props: { objectSetVariable: null, fields: "", pageSize: 12, sort: "recent" },
+  related: { settings: ObjectCardsSettings },
 };
 
 // ---- Map (ROADMAP Canvas item 4) --------------------------------------------
@@ -3213,6 +3440,7 @@ export const CANVAS_RESOLVER = {
   CanvasParameterControl,
   CanvasDatasetTable,
   CanvasObjectTable,
+  CanvasObjectCards,
   CanvasChart,
   CanvasMap,
   CanvasMetricCard,
@@ -3232,6 +3460,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
+  { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
   { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },

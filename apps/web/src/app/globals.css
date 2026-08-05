@@ -1640,3 +1640,37 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .canvas-action-status.bad { border-color: var(--danger); color: var(--danger); }
 .canvas-action-status .btn { padding: 2px 8px; font-size: 12px; }
+
+/* ---- Card list (roadmap item 1.5) ---------------------------------------- */
+/* A grid rather than a column: cards exist to be scanned several at a time,
+   and one per row is a table with worse density. */
+.canvas-cards {
+  display: grid; gap: 10px; margin: 6px 0;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.canvas-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; display: grid; gap: 4px; align-content: start;
+}
+.canvas-card h4 {
+  margin: 0; font-size: 13.5px; font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.canvas-card-key {
+  margin: 0; font-family: var(--font-mono); font-size: 11px; color: var(--ink-soft);
+}
+.canvas-card dl {
+  margin: 4px 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px; font-size: 12px;
+}
+/* `display: contents` so each pair's dt and dd become items of the dl's own
+   grid. Without it the wrapping div is a single grid item and two fields sit
+   side by side with their labels on one line and their values on the next -
+   which reads as a four-cell table of unrelated words. */
+.canvas-card dl > div { display: contents; }
+.canvas-card dt { color: var(--ink-soft); }
+.canvas-card dd { margin: 0; overflow-wrap: anywhere; }
+/* Only where a click does something — see the widget. */
+.canvas-card.clickable { cursor: pointer; }
+.canvas-card.clickable:hover { border-color: var(--line-strong); }
+.canvas-card.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

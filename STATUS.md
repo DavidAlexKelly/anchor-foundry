@@ -1976,6 +1976,30 @@ Roadmap 1.5's chart upgrade. Object-set input already existed (§74); what was m
 
 ---
 
+### 102. The Card List, and one implementation where there were nearly two (this session)
+
+Roadmap 1.5's Object/Card List — the card-shaped alternative to the object table.
+
+**Set-only, deliberately.** The table still carries a pre-variable path where it names an object type and a filter parameter itself. A new widget does not, because item 1.5's own rule is that a widget consumes input variables and emits output variables: one that reaches for a type id directly cannot be wired to anything, which is the flaw in the original eight.
+
+**What makes it a card list rather than a table with rounded corners.** A table compares many objects across the same columns; cards are for reading one object at a time, so a card leads with a *heading* — the type's title property, or the key when it has none — and shows a few fields under it, capped at six. Past six a card is a folded table row and the table is the better widget. The key is always shown even when it is also the heading: it is what identifies the object to every other part of the platform, and a card you cannot match back to a row is a card you cannot act on.
+
+**It fires the same `row_select` the table does**, with the same payload, so anything already wired to a table can be pointed at this instead — which is the claim the browser check makes by drilling into a chart and watching the table and the cards move together.
+
+**Two things were extracted rather than copied.** Both are places a second implementation would drift, not merely repeat: *paging resets when the set changes* (narrowing a filter while on page 2 otherwise leaves a viewer looking at an empty widget that reports a total), and *how a selected object is announced* — twice, deliberately, flattened for `{{...}}` and whole for a `single_object` variable, with the `object_type_id` coming from the widget's set rather than the row, because a row does not carry one. The table now uses both, so there is one implementation where there were about to be two.
+
+**Three mutations survived the first run, and only two were real.**
+
+- **Paging never paged.** The fixture had nine objects and a page size of twelve, so the reset rule could not fire. North now has fourteen, and the check goes to page 2 and narrows from there.
+- **Every card list in the fixture had a click wired**, so "a card is clickable with nothing wired to it" changed nothing. There is a second, unwired card list now — the claim its own comment makes.
+- **The third was equivalent, and that is a finding.** Nothing reads a selection's `object_type_id`. It is carried because a snapshot of a click needs a reference to re-read from, and the server is what makes a wrong-type action safe — `execute` fetches the instance *by the action's* type, so an object of another type is simply not found. The mutation was removed rather than left standing, since a mutation on a field with no consumer proves nothing.
+
+**One layout bug the screenshot caught**: each field's `<div>` wrapper was a grid item, so two fields sat side by side with their labels on one line and their values on the next — four unrelated words in a box. `display: contents` puts the `dt` and `dd` into the card's own grid.
+
+**733 API tests green and the build clean**, both unchanged — this widget added no server code. **Eleven mutations, eleven caught.**
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
