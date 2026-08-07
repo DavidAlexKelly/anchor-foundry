@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -285,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         computed = {}
         for name, spec in aggs.items():
+            if "date_histogram" in spec:
+                computed[name] = self._date_histogram(spec["date_histogram"], matched)
+                continue
             kind = "cardinality" if "cardinality" in spec else (
                 "terms" if "terms" in spec else None
             )
@@ -334,6 +338,58 @@ class Handler(BaseHTTPRequestHandler):
                 ]
             }
         return computed
+
+    def _date_histogram(self, spec: dict, matched: list[tuple[str, dict]]) -> dict:
+        """Calendar buckets over a date field, keyed in epoch milliseconds.
+
+        **Only `calendar_interval`, and only UTC** - which is not laziness, it
+        is the fixture refusing to answer a question the caller should not be
+        asking. `fixed_interval` months drift past every 31-day month and
+        Postgres's `date_trunc` does not, so a caller that reached for one has
+        a cross-store bug this fixture would otherwise hide behind plausible
+        numbers. Same for a time zone: the caller pins UTC deliberately.
+
+        `min_doc_count` defaults to 1 here rather than to the real default of
+        0, because the platform always asks for 1 and gap-filling lives in
+        `object_sets.fill_time_buckets` - a fixture that filled would be doing
+        the thing under test.
+        """
+        if "calendar_interval" not in spec:
+            raise ValueError("fixture supports calendar_interval only, not fixed_interval")
+        interval = spec["calendar_interval"]
+        if spec.get("time_zone", "UTC") != "UTC":
+            raise ValueError("fixture buckets in UTC only")
+        if int(spec.get("min_doc_count", 1)) != 1:
+            raise ValueError("fixture returns populated buckets only (min_doc_count 1)")
+
+        counts: dict[datetime, int] = {}
+        for _, source in matched:
+            raw = source.get(spec["field"])
+            if raw is None:
+                continue
+            when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            when = when.astimezone(timezone.utc)
+            if interval == "day":
+                start = when.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif interval == "week":
+                start = (when - timedelta(days=when.weekday())).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+            elif interval == "month":
+                start = when.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            else:
+                raise ValueError(f"fixture has no {interval!r} calendar interval")
+            counts[start] = counts.get(start, 0) + 1
+        return {
+            "buckets": [
+                {"key": int(start.timestamp() * 1000),
+                 "key_as_string": start.isoformat(),
+                 "doc_count": n}
+                for start, n in sorted(counts.items())
+            ]
+        }
 
     def _delete_by_query(self, index: str, body: dict) -> None:
         matched = _filtered(index, body.get("query", {}))

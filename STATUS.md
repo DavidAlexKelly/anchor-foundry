@@ -2104,6 +2104,35 @@ All five caught on re-run; **17 of 17**. The pattern worth carrying: a mutation 
 
 ---
 
+### 106. The Time Series, and saying which question it answers (this session)
+
+Roadmap 1.5's *Time Series / Timeline* row. `POST /object-sets/time-series`, a `time_series_object_set` on both stores, and a `CanvasTimeSeries` widget.
+
+**It plots `updated_at`, and the widget says so on screen, unprompted.** That is the honest half of a half-blocked item rather than a stand-in for the blocked half. A resync stamps every object in a set with the same instant, so this answers *"what has been changing"* and not *"when did things happen"* — and those two produce a line of the same shape, which is exactly why the caption is not optional and not a tooltip. Bucketing a *date property* is the other question, and it is blocked for the reason ordered operators are: properties are stored untyped, so "03/04" is March on one reading and April on another, and the two stores would pick differently (decision 0006, §104). The Settings panel says so where the property picker would otherwise be, because an absent control reads as an oversight.
+
+**UTC is stated three times, because it is silent everywhere it is not.** `updated_at` is a `timestamptz`, so Postgres's `date_trunc` follows the *session's* TimeZone unless pinned; OpenSearch's date histogram defaults to UTC; the browser's `Intl` formats in local time by default. Any one of the three left alone puts the day boundary somewhere else on one deployment, and nothing on the chart would say which. All three are pinned and all three now have a check that fails when they are not.
+
+**`calendar_interval`, not `fixed_interval`.** A month is not 2,592,000 seconds and `date_trunc('month', ...)` lands on the first whatever the month's length, so a fixed interval would drift past every 31-day month — starting correct and diverging slowly, which is the worst way for a cross-store difference to begin. The fixture now *rejects* `fixed_interval` rather than answering it plausibly.
+
+**Gaps are filled once, and the range comes from the data.** Both stores return only populated buckets and `object_sets.fill_time_buckets` fills the rest — one implementation, so the two cannot fill differently, and a server-side one, so a chart and an export of the same series agree. A line drawn straight through a silent week is not a smaller claim than the truth, it is a different one. The range is the first and last populated bucket rather than "the last 30 days", so a saved app does not draw a different picture tomorrow with nothing changed.
+
+**Too long a span refuses and names a coarser interval** rather than truncating: a truncated time series is a *different period*, and nothing on it would say which one. My own test population tripped this — the first version spanned into 2025 and the day-interval test hit the 200-bucket refusal. That was the refusal working; the test was about the wrong thing, so the span was narrowed and year rollover left to the pure filling test. It is a fair signal about the cap: real data over a year genuinely will refuse at day resolution.
+
+**No drill-down, deliberately.** Every narrowing widget in the platform writes property-equality clauses. A time bucket is a *range* over a system field, which is not in that vocabulary and would need the ordered operators decision 0006 holds. A second narrowing mechanism for one widget would be two answers to one question — the same reason the scatter chart takes no drill.
+
+**765 API tests green** (75 in `test_object_sets.py`, 21 new), `tsc --noEmit` clean, 15 browser checks green with no console errors.
+
+**Sixteen mutations. Eleven caught first pass, two survived, and two never applied** — the last were quoting mistakes in the mutation script, which is worth recording because a mutation that fails to apply prints a loud error and could just as easily have printed nothing.
+
+The two survivors were different failures and only one was mine to fix:
+
+* **Postgres bucketing in the session's time zone survived a test written for exactly that.** The test did `ALTER DATABASE ... SET TimeZone`, which only reaches connections opened *afterwards* — and the pool was already full of old ones, so the setting never took effect and the test passed against the mutation. Rewritten to `SET LOCAL TIME ZONE` on the very connection the query runs on, and confirmed failing against the mutation before re-running. **A test that sets up the condition it is testing can fail to set it up, and then it tests nothing while looking green.**
+* **The label mutation was equivalent, and separately my check was too weak.** I had picked Kiritimati (UTC+14) — a bucket starting 00:00 UTC is still the *same date* fourteen hours ahead, so nothing moved. Reporting that as a catch would have been worse than reporting it as a survivor. But the check was also only asserting the *shape* of a label ("starts with w/c", "ends with 2024") and never that a label **is** its bucket; it now compares every day label against a reference the same browser formats from the seed's recorded bucket starts, pinned to UTC. Re-run with Pacific/Midway (UTC-11), which does move the date: caught.
+
+All four caught on re-run — **16 of 16**.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

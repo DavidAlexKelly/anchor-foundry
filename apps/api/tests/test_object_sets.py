@@ -22,7 +22,7 @@ import sys
 import time
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -914,6 +914,334 @@ async def test_an_empty_axis_is_an_empty_grid_rather_than_a_query(opensearch: st
             row_values=(),
             column_values=("open",),
         ) == {}
+    finally:
+        await store.close()
+
+
+# ---- a set over time (roadmap 1.5, what a Time Series plots) -----------------
+def series(client: TestClient, fx: Fixture, definition: dict, **kw):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/time-series",
+        headers=hdr(fx.owner_sub),
+        json={"definition": definition, **kw},
+    )
+
+
+def test_a_series_buckets_every_object_and_nothing_else(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """Every instance has an `updated_at`, so unlike a cross-tab the points
+    account for the whole set. A series whose points did not add up to the
+    total would be dropping rows somewhere between the two queries."""
+    r = series(client, fx, {"object_type_id": seeded, "filters": []}, interval="day")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["interval"] == "day"
+    assert body["total"] == len(ROWS)
+    assert sum(p["count"] for p in body["points"]) == len(ROWS)
+
+
+def test_a_series_honours_the_set_s_filters(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    definition = {
+        "object_type_id": seeded,
+        "filters": [{"property": "region", "op": "eq", "value": "north"}],
+    }
+    r = series(client, fx, definition, interval="day")
+    assert r.status_code == 200, r.text
+    expected = sum(1 for _, p in ROWS if p["region"] == "north")
+    assert r.json()["total"] == expected
+    assert sum(p["count"] for p in r.json()["points"]) == expected
+
+
+def test_an_unknown_interval_names_the_ones_that_exist(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    r = series(client, fx, {"object_type_id": seeded, "filters": []}, interval="fortnight")
+    assert r.status_code == 422, r.text
+    for interval in object_sets.TIME_INTERVALS:
+        assert interval in r.json()["detail"]
+
+
+@pytest.mark.parametrize("interval", object_sets.TIME_INTERVALS)
+def test_every_interval_is_answerable(
+    client: TestClient, fx: Fixture, seeded: str, interval: str
+) -> None:
+    """The fixture population lands in one bucket at every size, so this is
+    about each interval being *accepted and computed* rather than about the
+    shape - which the cross-store test below checks against spread data."""
+    r = series(client, fx, {"object_type_id": seeded, "filters": []}, interval=interval)
+    assert r.status_code == 200, r.text
+    assert sum(p["count"] for p in r.json()["points"]) == len(ROWS)
+
+
+# ---- gap filling, which is pure and therefore checked directly ---------------
+def test_gaps_are_filled_rather_than_drawn_through() -> None:
+    """Both stores return only populated buckets. A line drawn straight from
+    Monday to Friday across a silent week is not a smaller claim than the
+    truth, it is a different one."""
+    monday = datetime(2024, 3, 4, tzinfo=timezone.utc)
+    filled = object_sets.fill_time_buckets(
+        [(monday, 3), (monday + timedelta(days=3), 1)], "day"
+    )
+    assert [c for _, c in filled] == [3, 0, 0, 1]
+    assert [s.day for s, _ in filled] == [4, 5, 6, 7]
+
+
+def test_filling_a_month_lands_on_the_first_not_thirty_days_later() -> None:
+    """Calendar arithmetic, not a fixed span: February is 29 days in 2024, and
+    a filled bucket that landed on the 2nd of March would sit *between* the
+    real buckets rather than among them - so every later point would be an
+    empty one and the real ones would look like duplicates."""
+    filled = object_sets.fill_time_buckets(
+        [(datetime(2024, 1, 1, tzinfo=timezone.utc), 2),
+         (datetime(2024, 4, 1, tzinfo=timezone.utc), 5)],
+        "month",
+    )
+    assert [(s.year, s.month, s.day) for s, _ in filled] == [
+        (2024, 1, 1), (2024, 2, 1), (2024, 3, 1), (2024, 4, 1)
+    ]
+    assert [c for _, c in filled] == [2, 0, 0, 5]
+
+
+def test_filling_across_a_year_boundary_rolls_the_year() -> None:
+    filled = object_sets.fill_time_buckets(
+        [(datetime(2024, 11, 1, tzinfo=timezone.utc), 1),
+         (datetime(2025, 1, 1, tzinfo=timezone.utc), 1)],
+        "month",
+    )
+    assert [(s.year, s.month) for s, _ in filled] == [(2024, 11), (2024, 12), (2025, 1)]
+
+
+def test_an_empty_set_is_an_empty_series_not_a_range() -> None:
+    assert object_sets.fill_time_buckets([], "day") == []
+
+
+def test_too_long_a_range_refuses_and_names_a_coarser_interval() -> None:
+    """Truncating would be worse than refusing: the chart would show a
+    different period and nothing on it would say which."""
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="coarser interval"):
+        object_sets.fill_time_buckets(
+            [(start, 1), (start + timedelta(days=object_sets.MAX_TIME_BUCKETS + 5), 1)],
+            "day",
+        )
+    # The same span at a coarser interval is fine, which is what the refusal
+    # tells the caller to do.
+    assert len(object_sets.fill_time_buckets(
+        [(start, 1), (datetime(2020, 8, 1, tzinfo=timezone.utc), 1)], "month"
+    )) == 8
+
+
+# The instants the two bucketing tests below share, so "Postgres and
+# OpenSearch agree" is a claim about the same boundaries rather than about two
+# convenient populations. Wednesday 2024-03-06, plus a Sunday two days on that
+# is the *same* ISO week - a week starting on Sunday would split them.
+SERIES_STAMPS = [
+    datetime(2024, 3, 6, 1, 0, tzinfo=timezone.utc),
+    datetime(2024, 3, 6, 23, 30, tzinfo=timezone.utc),
+    datetime(2024, 3, 10, 12, 0, tzinfo=timezone.utc),
+    datetime(2024, 4, 1, 0, 0, tzinfo=timezone.utc),
+    # Far enough out to cross several months and close enough that the whole
+    # span is still under `MAX_TIME_BUCKETS` days. The first version reached
+    # into 2025 and the day-interval test hit its own refusal - the refusal
+    # working correctly, but it made the test about the wrong thing. Year
+    # rollover is covered by the pure filling test instead.
+    datetime(2024, 8, 15, 12, 0, tzinfo=timezone.utc),
+]
+
+
+def expected_buckets(stamps: list[datetime], interval: str) -> list[tuple[datetime, int]]:
+    def truncate(when: datetime) -> datetime:
+        if interval == "day":
+            return when.replace(hour=0, minute=0, second=0, microsecond=0)
+        if interval == "week":
+            return (when - timedelta(days=when.weekday())).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        return when.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    tally: dict[datetime, int] = {}
+    for when in stamps:
+        tally[truncate(when)] = tally.get(truncate(when), 0) + 1
+    return sorted(tally.items())
+
+
+@pytest.fixture
+def spread(client: TestClient, fx: Fixture) -> str:
+    """Its own object type whose instances are spread across `SERIES_STAMPS`.
+
+    The rows land the normal way and their `updated_at` is then rewritten
+    directly, because a sync stamps every row with one instant - which would
+    make a bucketing test a test of a single spike. The trigger on the table is
+    `BEFORE UPDATE`, so it is switched off around the rewrite; without that
+    every row would land on `now()` and every interval would agree for the
+    wrong reason.
+    """
+    import psycopg
+
+    from test_api import ADMIN_DSN
+
+    tag = uuid.uuid4().hex[:8]
+    csv = b"key,region\n" + b"".join(
+        f"k{i},north\n".encode() for i in range(len(SERIES_STAMPS))
+    )
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.owner_sub),
+        data={"name": f"Spread {tag}"},
+        files={"file": ("spread.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types",
+        headers=hdr(fx.owner_sub),
+        json={"api_name": f"Spread{tag}", "display_name": f"Spread {tag}",
+              "properties": [{"api_name": "region", "data_type": "string"}]},
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.owner_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset_id,
+              "primary_key_column": "key", "column_mappings": {"region": "region"}},
+    )
+    assert r.status_code == 201, r.text
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{r.json()['id']}/sync",
+        headers=hdr(fx.owner_sub),
+    )
+    assert r.status_code == 200, r.text
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("ALTER TABLE object_instances DISABLE TRIGGER USER")
+        try:
+            for index, when in enumerate(SERIES_STAMPS):
+                conn.execute(
+                    "UPDATE object_instances SET updated_at = %s "
+                    " WHERE object_type_id = %s AND primary_key = %s",
+                    (when, type_id, f"k{index}"),
+                )
+        finally:
+            conn.execute("ALTER TABLE object_instances ENABLE TRIGGER USER")
+    return type_id
+
+
+@pytest.mark.parametrize("interval", object_sets.TIME_INTERVALS)
+def test_postgres_buckets_each_interval_by_the_calendar(
+    client: TestClient, fx: Fixture, spread: str, interval: str
+) -> None:
+    """The Postgres half of the agreement below, and the half a fixture cannot
+    stand in for.
+
+    Without this, a store that truncated to the *same* interval whatever it was
+    asked for would pass every other test here - the fixture population lands
+    in one bucket at every size, so only spread instants can tell day from
+    month.
+    """
+    r = series(client, fx, {"object_type_id": spread, "filters": []}, interval=interval)
+    assert r.status_code == 200, r.text
+    points = r.json()["points"]
+    expected = object_sets.fill_time_buckets(
+        expected_buckets(SERIES_STAMPS, interval), interval
+    )
+    assert [p["count"] for p in points] == [c for _, c in expected], interval
+    assert [p["start"][:10] for p in points] == [
+        s.date().isoformat() for s, _ in expected
+    ], interval
+    # Two instants on the same day share a bucket at every interval, which is
+    # what makes this a test of truncation rather than of row counting.
+    assert max(p["count"] for p in points) >= 2
+
+
+@pytest.mark.anyio
+async def test_a_bucket_boundary_is_utc_whatever_the_session_says(
+    client: TestClient, fx: Fixture, spread: str
+) -> None:
+    """`updated_at` is a `timestamptz`, so `date_trunc` on it follows the
+    *session's* TimeZone unless told otherwise - and OpenSearch's histogram is
+    pinned to UTC. A deployment whose database session ran in another zone
+    would put every day boundary somewhere else, and nothing on the chart
+    would say so.
+
+    23:30 UTC on 2024-03-06 is the instant that proves it: in Asia/Tokyo that
+    is 08:30 on the *next* day, so a session-dependent truncation splits the
+    bucket UTC keeps whole - and the day count goes up by one.
+
+    **`SET LOCAL` on the connection under test, not `ALTER DATABASE`.** The
+    first version of this altered the database and passed against the
+    mutation, because an `ALTER DATABASE` only reaches connections opened
+    afterwards and the pool was already full of old ones. Setting it on the
+    very connection the query runs on is the only version that asks the
+    question.
+    """
+    from sqlalchemy import text as sql_text
+
+    from src.lib.db import user_connection
+    from src.services import instances as instances_service
+
+    async def buckets(zone: str) -> list[tuple[datetime, int]]:
+        async with user_connection(fx.owner) as conn:
+            # LOCAL: transaction-scoped, so the connection goes back to the
+            # pool as it came out.
+            await conn.execute(sql_text(f"SET LOCAL TIME ZONE '{zone}'"))
+            assert (await conn.execute(sql_text("SHOW TimeZone"))).scalar() == zone
+            return await instances_service.time_series_object_set(
+                conn,
+                object_type_id=uuid.UUID(spread),
+                filters=(),
+                interval="day",
+            )
+
+    assert await buckets("Asia/Tokyo") == expected_buckets(SERIES_STAMPS, "day")
+    assert await buckets("UTC") == expected_buckets(SERIES_STAMPS, "day")
+    # The instants that would move: both sit on 2024-03-06 in UTC and land on
+    # different days in Tokyo, so a session-dependent truncation would report
+    # one more bucket than there are days with data.
+    assert len(await buckets("Asia/Tokyo")) == len({s.date() for s in SERIES_STAMPS})
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("interval", object_sets.TIME_INTERVALS)
+async def test_both_stores_bucket_a_set_the_same_way(opensearch: str, interval: str) -> None:
+    """Postgres truncates with `date_trunc` pinned to UTC, OpenSearch with a
+    `calendar_interval` date histogram pinned to UTC. Same boundaries, same
+    counts, at every interval.
+
+    The population deliberately straddles all three boundaries: two instants
+    inside one day, one later in the same week, one in the next month, and one
+    in the following year. A store using a *fixed* month interval, or the
+    machine's local time zone, lands them differently.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        for index, when in enumerate(SERIES_STAMPS):
+            await store.upsert_instances(
+                search_prefix="ws-series-test",
+                object_type_id=type_id,
+                source_id=source_id,
+                rows=[(f"k{index}", {"region": "north"})],
+                synced_at=when,
+            )
+
+        buckets = await store.time_series_object_set(
+            search_prefix="ws-series-test",
+            object_type_id=type_id,
+            filters=(),
+            interval=interval,
+        )
+        assert buckets == expected_buckets(SERIES_STAMPS, interval), interval
+        # Two instants on the same day share a bucket at every interval, which
+        # is what makes this about truncation rather than about row counting.
+        assert max(n for _, n in buckets) >= 2
     finally:
         await store.close()
 
