@@ -2133,6 +2133,33 @@ All four caught on re-run — **16 of 16**.
 
 ---
 
+### 107. The browser checks, moved into the repo (this session)
+
+`e2e/`, `scripts/dev-up.sh`, `scripts/check.sh`, and a CI workflow.
+
+**Every browser check built over the last several sections lived in a scratchpad outside the repo.** They found real defects — a hidden filter still being sent, an action form that never refreshed the table beside it, a pivot margin that agreed with its cells and disagreed with a chart — and none of that was reproducible by anyone else, or survived the container it ran on. `ROADMAP.md`'s cross-cutting section is explicit that "Playwright coverage of the builder is not optional", and this was the gap between that sentence and the repo.
+
+**11 tests, ported faithfully rather than re-imagined**: the Pivot Table (§105) and the Time Series (§106), including the awkward cases each mutation pass forced into existence — the capped grid where the margins provably differ from the cells, and the UTC label reference the browser formats for itself.
+
+**Python, and the cost is stated rather than glossed.** The seeding is API calls, the assertions are about server-computed numbers, and the repo has one test runner; a second one with its own lockfile would be a second place test setup lives. The cost is that a change to `widgets.tsx` is verified by a suite in another language in another directory, which `scripts/check.sh` exists to paper over. What it does **not** buy, and a JavaScript runner still would, is unit tests for the pure functions in the widget layer — `seriesLabel`, `pivotClauses`, the `useUrlState` reducer. Those deserve tests and still do not have them.
+
+**Two things were changed to make the suite deterministic rather than clever:**
+
+* `dev_server.py` gained `--tokens-file`. The scratchpad scripts scraped the token out of the server's stdout, which worked until a log was truncated and a whole run authenticated as nobody — reported as twelve assertion failures rather than as "there is no token".
+* The suite **skips** with the command to run when the stack is down, and `ANCHOR_E2E_REQUIRED=1` turns that into a failure. A suite that reports twelve assertion failures because Next was not running has told you nothing about the code; in CI, a missing stack *is* the bug. Both paths are checked.
+
+**The ported tests still have teeth**, which a port can quietly lose: two mutations were run against them and both were caught — a pivot margin computed from its cells, and the time-series caption removed. Worth recording that in the first of those, `test_the_margins_are_whole_rows_and_columns` **passed**: in an uncapped grid the two formulas give the same numbers, which is precisely why the capped-grid test exists and is exactly the equivalence §105's mutation pass turned up. The test is not weak; it is the wrong instrument for that question, and the right one is next to it.
+
+**`scripts/dev-up.sh` found its own bug on the first run** and it is the pattern this file keeps flagging: the `pg_ctl` start was `>/dev/null 2>&1 || true`, so a start that failed because the log file was not writable by the postgres user looked exactly like a server that was merely slow. The command is no longer silenced and a failure prints the log.
+
+**The CI workflow is the one part of this that has never run.** There is no way to execute GitHub Actions from here. It is deliberately thin — every command it invokes is `scripts/check.sh` or `scripts/dev-up.sh`, both run locally on every change — so the unverified surface is the wiring rather than the checks. Its YAML parses and every path it references exists; treat the first run as the thing that proves it.
+
+**765 API tests, `tsc` clean, 11 browser tests — all three through `scripts/check.sh`.**
+
+**Still not ported**: the chart drill-down, Card List and Search checks (§101–§103) remain scratchpad scripts. The pattern is set and they should move next.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
@@ -2148,7 +2175,7 @@ All four caught on re-run — **16 of 16**.
 - **Links through a join object are not supported** — §37's traversal is a single property-to-property equality, so a many-to-many relationship expressed as A → join table → B cannot be described as one link type. `many_to_many` cardinality still works when both sides hold a shared key; what is missing is the two-hop case, which needs a third object type in the middle and is a different data model, not an extra parameter. Nor are computed join keys (`upper(a) = trim(b)`) — a derived join column belongs in the dataset feeding the type, where the model layer can already produce it
 - **Canvas filters build SQL in the browser** (§40). The value is escaped and the column comes from a schema-populated picker, and the endpoint it posts to already accepts arbitrary SQL at the same viewer floor — so this is a correctness and taste issue, not a privilege one. The better shape is structured filters (`{column, operator, value}`) on the preview/query endpoint so the server builds the SQL; worth doing when item 2's charts need the same predicate, rather than twice
 - **Write-through to external connection sources** — Actions write back to this platform's own dataset copy only (see §12); connectors don't support write operations yet
-- **Control-plane and CI/build pipeline** — no Dockerfile exists for `apps/control-plane` yet, and nothing in the repo actually invokes `docker build`/`cdk deploy` automatically (no CI workflow, no build script) — §17's deploy was run entirely by hand from a local machine, not through any pipeline
+- **Control-plane and build/deploy pipeline** — no Dockerfile exists for `apps/control-plane` yet, and nothing in the repo invokes `docker build`/`cdk deploy` automatically — §17's deploy was run entirely by hand from a local machine. **The test side of this is now closed** (§107): `.github/workflows/ci.yml` runs the API suite, `tsc` and the browser suite through `scripts/check.sh`. The *build and deploy* side is not, and the workflow itself has never executed — there is no way to run GitHub Actions from this environment, so its first run on a real PR is what proves the wiring
 
 ---
 

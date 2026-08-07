@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -166,6 +167,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8300)
     parser.add_argument("--seed-only", action="store_true")
+    parser.add_argument(
+        "--tokens-file",
+        help="Write {email: token} here as JSON. The browser suite (e2e/) reads "
+        "it, because the alternative is scraping this process's stdout - which "
+        "worked until a log was truncated and a suite spent a run authenticating "
+        "as nobody.",
+    )
     args = parser.parse_args()
 
     admin_dsn = os.environ.get("TEST_ADMIN_DSN")
@@ -174,10 +182,16 @@ def main() -> None:
         sys.exit(2)
 
     users = seed(admin_dsn)
+    minted = {email: mint(sub) for email, _, sub in users}
     print("\ndev users (paste a token into the web sign-in box):\n")
-    for email, role, sub in users:
-        print(f"  {email:<28} {role:<7} {mint(sub)}")
+    for email, role, _ in users:
+        print(f"  {email:<28} {role:<7} {minted[email]}")
     print()
+    if args.tokens_file:
+        # Written before the server starts listening, so anything that waits for
+        # /api/health can rely on the file already being there.
+        with open(args.tokens_file, "w") as handle:
+            json.dump(minted, handle)
     if args.seed_only:
         return
 

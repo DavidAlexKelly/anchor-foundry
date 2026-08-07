@@ -1,0 +1,102 @@
+name: checks
+
+# Deliberately thin. Every command lives in scripts/check.sh and
+# scripts/dev-up.sh, which are run locally on every change - a workflow that
+# inlined its own commands would be a second copy that nobody runs until it
+# fails, and the two would drift on the first change to either.
+#
+# Honest status: the scripts below are verified locally on every commit. This
+# *workflow* has never executed - there is no way to run GitHub Actions from
+# the environment it was written in - so treat its first run as the thing that
+# proves the wiring, not the checks.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
+      TEST_ADMIN_DSN: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+      STORAGE_ROOT: /tmp/anchor-storage
+      ANCHOR_PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+      - name: Migrate
+        run: python packages/db/migrate.py
+      - run: scripts/check.sh api
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: scripts/check.sh types
+
+  # The browser suite needs the whole stack, so it is its own job rather than a
+  # step on one of the above: a failure here means something a viewer would
+  # see, and reading that off a job whose name is "api" helps nobody.
+  browser:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
+      TEST_ADMIN_DSN: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+      STORAGE_ROOT: /tmp/anchor-storage
+      ANCHOR_PYTHON: python
+      # A missing stack is the bug here, not a reason to skip.
+      ANCHOR_E2E_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+      - run: npm ci
+      - run: python -m playwright install --with-deps chromium
+      - name: Migrate
+        run: python packages/db/migrate.py
+      - name: Bring the stack up
+        run: scripts/dev-up.sh
+      - run: scripts/check.sh e2e
+      - name: Server logs on failure
+        if: failure()
+        run: tail -100 /tmp/anchor-dev/api.log /tmp/anchor-dev/web.log || true
