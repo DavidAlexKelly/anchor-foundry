@@ -594,6 +594,330 @@ async def test_both_stores_group_a_set_the_same_way(opensearch: str, case: dict)
         await store.close()
 
 
+# ---- cross-tabbing a set (roadmap 1.5, what a Pivot Table shows) -------------
+def cross_tab(client: TestClient, fx: Fixture, definition: dict, **kw):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/cross-tab",
+        headers=hdr(fx.owner_sub),
+        json={"definition": definition, **kw},
+    )
+
+
+def expected_grid(rows_in_set, row_property: str, column_property: str):
+    """What the grid should be, worked out from the population rather than from
+    the implementation: axes ordered count-descending then value-ascending, and
+    a cell counting the rows that have both values."""
+    def tally(prop: str) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for p in rows_in_set:
+            if p.get(prop) is not None:
+                out[str(p[prop])] = out.get(str(p[prop]), 0) + 1
+        return out
+
+    def order(counts: dict[str, int]) -> list[str]:
+        return [k for k, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+    row_values, column_values = order(tally(row_property)), order(tally(column_property))
+    cells = [
+        [
+            sum(
+                1
+                for p in rows_in_set
+                if str(p.get(row_property)) == r and str(p.get(column_property)) == c
+            )
+            for c in column_values
+        ]
+        for r in row_values
+    ]
+    return row_values, column_values, cells
+
+
+def test_a_cross_tab_counts_both_properties_at_once(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    r = cross_tab(client, fx, {"object_type_id": seeded, "filters": []},
+                  row_property="region", column_property="status")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    row_values, column_values, cells = expected_grid([p for _, p in ROWS], "region", "status")
+    assert [a["value"] for a in body["rows"]] == row_values
+    assert [a["value"] for a in body["columns"]] == column_values
+    assert body["cells"] == cells
+    assert body["total"] == len(ROWS)
+
+
+def test_a_cross_tab_s_axes_are_the_numbers_a_chart_would_draw(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The axes come from the same grouped count a chart plots. Not "they
+    happen to match" - the route calls `group_object_set` for each axis, and
+    this is what would catch that being replaced by a second implementation
+    computed from the cells, which would be smaller wherever a value was
+    missing or a column was cut."""
+    definition = {"object_type_id": seeded, "filters": []}
+    grid = cross_tab(client, fx, definition,
+                     row_property="region", column_property="status").json()
+    for axis, prop in (("rows", "region"), ("columns", "status")):
+        chart = group(client, fx, definition, property=prop).json()
+        assert [(a["value"], a["count"]) for a in grid[axis]] == [
+            (g["value"], g["count"]) for g in chart["groups"]
+        ], f"the {axis} axis is the {prop} chart"
+
+
+def test_a_cross_tab_honours_the_set_s_filters(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    definition = {
+        "object_type_id": seeded,
+        "filters": [{"property": "status", "op": "eq", "value": "open"}],
+    }
+    r = cross_tab(client, fx, definition, row_property="region", column_property="capacity")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    in_set = [p for _, p in ROWS if p["status"] == "open"]
+    row_values, column_values, cells = expected_grid(in_set, "region", "capacity")
+    assert [a["value"] for a in body["rows"]] == row_values
+    assert body["cells"] == cells
+    assert body["total"] == len(in_set)
+
+
+def test_a_filtered_out_object_does_not_land_in_a_cell(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The trap `test_a_cross_tab_honours_the_set_s_filters` walks past: there,
+    every excluded object had a column value no drawn column used, so dropping
+    the filter from the cell query changed nothing and a mutation survived.
+
+    Here the excluded object shares a cell with an included one - two south
+    sites are both open - so a cell computed over the unfiltered table counts
+    2 where the set has 1.
+    """
+    definition = {
+        "object_type_id": seeded,
+        "filters": [{"property": "capacity", "op": "neq", "value": "40"}],
+    }
+    r = cross_tab(client, fx, definition, row_property="region", column_property="status")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    in_set = [p for _, p in ROWS if str(p["capacity"]) != "40"]
+    row_values, column_values, cells = expected_grid(in_set, "region", "status")
+    assert [a["value"] for a in body["rows"]] == row_values
+    assert body["cells"] == cells
+    south = row_values.index("south"), column_values.index("open")
+    assert body["cells"][south[0]][south[1]] == 1, "the excluded south site is not counted"
+
+
+def test_the_cells_are_only_the_axes_they_were_asked_for(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The Postgres store's half of the pinning contract.
+
+    A store that returned every column and let the caller pick would produce
+    the same grid today and a different one the moment anything iterated the
+    result - and it is the same query shape whose OpenSearch equivalent is
+    actively wrong, not merely wasteful. So the contract is asserted where it
+    is stated: exactly the pairs asked for, nothing else.
+    """
+    import asyncio
+
+    from src.lib.db import user_connection
+    from src.services import instance_store as store_module
+
+    async def run() -> dict:
+        async with user_connection(fx.owner) as conn:
+            return await store_module.store_for(conn).cross_tab_object_set(
+                search_prefix=await instances_service_prefix(conn, fx.workspace),
+                object_type_id=uuid.UUID(seeded),
+                filters=(),
+                row_property="region",
+                column_property="status",
+                # Deliberately a *cut* axis: "closed" exists and is not asked
+                # for. North has one of each, so a store picking its own
+                # top-one column would return north's "closed" instead.
+                row_values=("north", "south", "east"),
+                column_values=("open",),
+            )
+
+    assert asyncio.run(run()) == {("north", "open"): 1, ("south", "open"): 2,
+                                  ("east", "open"): 1}
+
+
+async def instances_service_prefix(conn, workspace_id):
+    from src.services import instances as instances_service
+
+    return await instances_service.workspace_search_prefix(conn, uuid.UUID(str(workspace_id)))
+
+
+def test_a_row_total_is_the_whole_row_not_the_part_inside_the_grid(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """With the columns cut to one, the cells no longer add up to the totals -
+    and the totals are still the totals. The alternative (a row total that is
+    the sum of the drawn cells) would disagree with the same property's bar
+    chart, which is the disagreement the widget exists inside."""
+    r = cross_tab(client, fx, {"object_type_id": seeded, "filters": []},
+                  row_property="region", column_property="status", column_limit=1)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["columns"]) == 1
+    assert body["columns_truncated"] is True
+    assert body["rows_truncated"] is False
+    assert body["column_distinct_total"] == 2
+    counted = {a["value"]: a["count"] for a in body["rows"]}
+    assert counted == {"north": 2, "south": 2, "east": 1}, "whole rows"
+    assert sum(sum(row) for row in body["cells"]) < sum(counted.values()), (
+        "and the grid accounts for less than the set, which is the point"
+    )
+
+
+def test_a_cross_tab_of_a_property_against_itself_is_refused(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """A diagonal is not wrong, it is useless - and it is a grouped count in a
+    grid's clothes, so the refusal points at the thing that answers it."""
+    r = cross_tab(client, fx, {"object_type_id": seeded, "filters": []},
+                  row_property="region", column_property="region")
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "diagonal" in detail
+    assert "chart" in detail, "says what to use instead"
+
+
+def test_a_cross_tab_over_a_type_from_another_workspace_is_refused(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    r = cross_tab(client, fx, {"object_type_id": str(uuid.uuid4()), "filters": []},
+                  row_property="region", column_property="status")
+    assert r.status_code == 404, r.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"row": "region", "column": "status", "filters": []},
+        {"row": "status", "column": "region", "filters": []},
+        {"row": "region", "column": "capacity", "filters": []},
+        {"row": "region", "column": "status",
+         "filters": [{"property": "status", "op": "eq", "value": "open"}]},
+    ],
+    ids=["region-x-status", "transposed", "many-columns", "filtered"],
+)
+async def test_both_stores_cross_tab_a_set_the_same_way(opensearch: str, case: dict) -> None:
+    """Postgres groups by two columns in SQL, OpenSearch nests a terms
+    aggregation inside a terms aggregation. Same cells - including the empty
+    ones, which is where the two would most easily differ: a store that picked
+    its own columns per row would fill a gap that should be zero.
+
+    The population here has a row missing the column property, so this also
+    covers the rule that a cell counts objects with *both* values while the
+    axis totals count the whole row.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        rows = [*ROWS, ("6", {"region": "north", "capacity": 3})]  # no status at all
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-pivot-test",
+            object_type_id=type_id,
+            source_id=source_id,
+            rows=rows,
+            synced_at=datetime.now(timezone.utc),
+        )
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id), "filters": case["filters"]}
+        )
+        in_set = [p for _, p in rows if object_sets.matches(p, definition.filters)]
+        row_values, column_values, expected = expected_grid(in_set, case["row"], case["column"])
+
+        cells = await store.cross_tab_object_set(
+            search_prefix="ws-pivot-test",
+            object_type_id=type_id,
+            filters=definition.filters,
+            row_property=case["row"],
+            column_property=case["column"],
+            row_values=tuple(row_values),
+            column_values=tuple(column_values),
+        )
+        grid = [
+            [cells.get((r, c), 0) for c in column_values] for r in row_values
+        ]
+        assert grid == expected, case
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_opensearch_answers_only_the_axes_it_was_given(opensearch: str) -> None:
+    """The pinning contract on the store where breaking it is actively wrong.
+
+    OpenSearch's inner terms aggregation picks each outer bucket's *own*
+    largest columns, so without `include` the answer is not "extra cells" but
+    *different* cells per row - here north would come back as "closed", which
+    was not asked for, because north's two statuses tie and `_key` ascending
+    breaks the tie the other way.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id = uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-pivot-pin",
+            object_type_id=type_id,
+            source_id=uuid.uuid4(),
+            rows=ROWS,
+            synced_at=datetime.now(timezone.utc),
+        )
+        assert await store.cross_tab_object_set(
+            search_prefix="ws-pivot-pin",
+            object_type_id=type_id,
+            filters=(),
+            row_property="region",
+            column_property="status",
+            row_values=("north", "south", "east"),
+            column_values=("open",),
+        ) == {("north", "open"): 1, ("south", "open"): 2, ("east", "open"): 1}
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_an_empty_axis_is_an_empty_grid_rather_than_a_query(opensearch: str) -> None:
+    """A property no object has gives no axis values, and a cross-tab with no
+    axis is an empty grid. Asked for rather than assumed: `= ANY('{}')` on
+    Postgres and an empty `include` on OpenSearch are both scans that could
+    only return nothing, and the second is not even valid."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id = uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-pivot-empty",
+            object_type_id=type_id,
+            source_id=uuid.uuid4(),
+            rows=ROWS,
+            synced_at=datetime.now(timezone.utc),
+        )
+        assert await store.cross_tab_object_set(
+            search_prefix="ws-pivot-empty",
+            object_type_id=type_id,
+            filters=(),
+            row_property="region",
+            column_property="status",
+            row_values=(),
+            column_values=("open",),
+        ) == {}
+    finally:
+        await store.close()
+
+
 # ---- sorting a page (roadmap 1.5, the Object Table upgrade) ------------------
 def test_the_default_sort_is_most_recently_changed(
     client: TestClient, fx: Fixture, seeded: str
@@ -647,7 +971,12 @@ def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     client: TestClient, fx: Fixture, seeded: str
 ) -> None:
     """The same refusal ordered operators get, for the same reason: untyped
-    properties mean the two stores would order 250 and 40 differently."""
+    properties mean the two stores would order 250 and 40 differently.
+
+    The refusal also has to say *which* types sorting will cover when it is
+    built, and that text will never be one of them (decision 0006 §2) - the
+    earlier wording implied every property would be sortable one day, which is
+    the kind of promise a refusal should not make."""
     r = client.post(
         f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
         headers=hdr(fx.owner_sub),
@@ -656,6 +985,8 @@ def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     assert r.status_code == 422, r.text
     detail = r.json()["detail"]
     assert "unknown sort" in detail
+    assert "integer, float, date and timestamp" in detail, "says what it will cover"
+    assert "text will stay unsortable" in detail, "and what it never will"
     assert "declared property type" in detail
 
 

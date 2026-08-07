@@ -169,6 +169,32 @@ class InstanceStoreGateway(Protocol):
         """
         ...
 
+    async def cross_tab_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: "tuple[Any, ...]",
+        row_property: str,
+        column_property: str,
+        row_values: "tuple[str, ...]",
+        column_values: "tuple[str, ...]",
+    ) -> "dict[tuple[str, str], int]":
+        """The cells of a cross-tab - what a Pivot Table shows (roadmap 1.5).
+
+        **Cells only, and the axes are given rather than chosen.** Both axes
+        come from `group_object_set`, so a pivot's row totals are the same
+        numbers a bar chart over the same property draws; and OpenSearch's
+        nested terms aggregation truncates its inner buckets per outer bucket,
+        so a store choosing its own columns would produce a grid whose columns
+        changed from row to row.
+
+        A missing cell is zero. Returning only the non-empty ones keeps a
+        sparse grid cheap and makes "no rows have both values" the same answer
+        on both stores.
+        """
+        ...
+
 
 def _text_value(value: Any) -> str:
     """The text form used for filter comparison. Deliberately the same
@@ -590,6 +616,56 @@ class OpenSearchInstanceStore:
         ]
         return buckets, int(resp["aggregations"]["distinct"]["value"])
 
+    async def cross_tab_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        row_property: str,
+        column_property: str,
+        row_values: tuple[str, ...],
+        column_values: tuple[str, ...],
+    ) -> dict[tuple[str, str], int]:
+        """Roadmap 1.5. A terms aggregation inside a terms aggregation, both
+        pinned to the axis values with `include` and sized to them.
+
+        `include` is what makes this a cross-tab rather than a stack of
+        unrelated top-N lists: without it the inner terms would pick each row's
+        own largest columns, and column 3 would mean something different on
+        every line.
+        """
+        if not row_values or not column_values:
+            return {}
+        body: dict[str, Any] = {
+            "query": {"bool": self._set_clauses(object_type_id, filters)},
+            "size": 0,
+            "aggs": {
+                "rows": {
+                    "terms": {
+                        "field": f"properties.{row_property}.keyword",
+                        "include": list(row_values),
+                        "size": len(row_values),
+                    },
+                    "aggs": {
+                        "cols": {
+                            "terms": {
+                                "field": f"properties.{column_property}.keyword",
+                                "include": list(column_values),
+                                "size": len(column_values),
+                            }
+                        }
+                    },
+                }
+            },
+        }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        return {
+            (str(row["key"]), str(col["key"])): int(col["doc_count"])
+            for row in resp["aggregations"]["rows"]["buckets"]
+            for col in row["cols"]["buckets"]
+        }
+
     async def evaluate_object_set(
         self,
         *,
@@ -939,6 +1015,29 @@ class PostgresInstanceStore:
             filters=filters,
             property_name=property_name,
             limit=limit,
+        )
+
+    async def cross_tab_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        row_property: str,
+        column_property: str,
+        row_values: tuple[str, ...],
+        column_values: tuple[str, ...],
+    ) -> dict[tuple[str, str], int]:
+        from . import instances as instances_service
+
+        return await instances_service.cross_tab_object_set(
+            self._conn,
+            object_type_id=object_type_id,
+            filters=filters,
+            row_property=row_property,
+            column_property=column_property,
+            row_values=row_values,
+            column_values=column_values,
         )
 
 

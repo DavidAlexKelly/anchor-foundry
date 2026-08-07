@@ -1397,6 +1397,114 @@ async def group_object_set(
     )
 
 
+class ObjectSetCrossTabIn(BaseModel):
+    definition: dict[str, Any]
+    row_property: str = Field(min_length=1, max_length=200)
+    column_property: str = Field(min_length=1, max_length=200)
+    row_limit: int = Field(default=object_sets.MAX_GROUPS, ge=1, le=object_sets.MAX_GROUPS)
+    column_limit: int = Field(
+        default=object_sets.MAX_PIVOT_COLUMNS, ge=1, le=object_sets.MAX_PIVOT_COLUMNS
+    )
+
+
+class ObjectSetAxis(BaseModel):
+    value: str
+    count: int
+    """How many objects have this value - **the whole row or column, not the
+    part of it inside the grid.** A row's cells can sum to less than its count,
+    for two reasons that are both real: columns past `column_limit` are not
+    drawn, and an object with no value for the column property is in no cell at
+    all. Making the total the sum of the cells instead would give a number that
+    quietly disagrees with the same property's bar chart."""
+
+
+class ObjectSetCrossTabOut(BaseModel):
+    rows: list[ObjectSetAxis]
+    columns: list[ObjectSetAxis]
+    row_distinct_total: int
+    column_distinct_total: int
+    """How many distinct values each axis's property actually has. `truncated`
+    is derived from these rather than from "did we fill the axis", which would
+    be wrong on a set with exactly `limit` values."""
+    rows_truncated: bool
+    columns_truncated: bool
+    cells: list[list[int]]
+    """Counts, `rows` x `columns`, in that order. Dense - an empty cell is 0 -
+    because a grid is read positionally and a client reassembling a sparse map
+    would be re-deriving the axes it was already given."""
+    total: int
+    """The size of the whole set. `total` minus the sum of the cells is what
+    the grid does not account for, which is a thing the widget says rather than
+    leaves a viewer to notice."""
+
+
+@router.post("/object-sets/cross-tab", response_model=ObjectSetCrossTabOut)
+async def cross_tab_object_set(
+    body: ObjectSetCrossTabIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetCrossTabOut:
+    """Counts by two properties at once - what a Pivot Table shows (roadmap 1.5).
+
+    **The axes are grouped counts, not a third thing.** Both come from the same
+    `group_object_set` a chart plots, so a pivot's row totals and a bar chart
+    over the same property are the same numbers by construction rather than by
+    two implementations agreeing. Only the cells are new work.
+
+    Counts only, like every other aggregation over a set: instance properties
+    are stored untyped, so a cross-tab of *sums* would mean one thing on
+    Postgres and nothing at all on OpenSearch. See `object_sets`.
+    """
+    definition = object_sets.parse(body.definition)
+    try:
+        row_property, column_property = object_sets.parse_cross_tab(
+            body.row_property, body.column_property
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        shared = {
+            "search_prefix": prefix,
+            "object_type_id": definition.object_type_id,
+            "filters": definition.filters,
+        }
+        row_buckets, row_distinct = await store.group_object_set(
+            **shared, property_name=row_property, limit=body.row_limit
+        )
+        column_buckets, column_distinct = await store.group_object_set(
+            **shared, property_name=column_property, limit=body.column_limit
+        )
+        cells = await store.cross_tab_object_set(
+            **shared,
+            row_property=row_property,
+            column_property=column_property,
+            row_values=tuple(value for value, _ in row_buckets),
+            column_values=tuple(value for value, _ in column_buckets),
+        )
+        total = await store.aggregate_object_set(
+            **shared, aggregation="count", property_name=None
+        )
+
+    return ObjectSetCrossTabOut(
+        rows=[ObjectSetAxis(value=value, count=count) for value, count in row_buckets],
+        columns=[ObjectSetAxis(value=value, count=count) for value, count in column_buckets],
+        row_distinct_total=row_distinct,
+        column_distinct_total=column_distinct,
+        rows_truncated=row_distinct > len(row_buckets),
+        columns_truncated=column_distinct > len(column_buckets),
+        cells=[
+            [cells.get((row, column), 0) for column, _ in column_buckets]
+            for row, _ in row_buckets
+        ],
+        total=total,
+    )
+
+
 @router.post("/object-sets/evaluate", response_model=ObjectSetOut)
 async def evaluate_object_set(
     body: ObjectSetIn,

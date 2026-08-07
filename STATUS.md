@@ -2025,6 +2025,85 @@ The lesson is not "be careful". It is that a harness which infers a catch from *
 
 ---
 
+### 104. The blocker that holds four features, decided (this session)
+
+`docs/decisions/0006-typed-instance-properties.md`. Not built — decided, which is the part
+that can be done well without a cluster and the part that is expensive to get wrong later.
+
+**Four refusals share one cause**: ordered filters, numeric aggregations, property sorts and
+the map's area selection are all refused because instance properties are stored untyped. Each
+refusal is correct and this changes none of them.
+
+**What the spike found that was not written down anywhere.** The obstacle is not "nobody wired
+the declared type through". It is that **the OpenSearch index is per *workspace***
+(`_index_name` → `{search_prefix}object-instances`), holding every object type together — so an
+Order whose `status` is text and a Reading whose `status` is a number cannot share a mapping
+for `properties.status`. Honouring declared types in the index as it stands is not hard, it is
+not expressible. That is why this needed a decision rather than a commit.
+
+**Decided: one index per object type**, because an object type *is* a schema and two schemas
+are two mappings. The two alternatives are named and rejected in the document — type-qualified
+paths make the stored shape differ from the API's, and type-suffixed field names put a schema
+in the index that nobody wrote down. The costs are stated rather than left to be discovered:
+shard count grows with object types, and the workspace-wide explorer becomes a pattern search.
+
+**Decided: text ordering is refused permanently, not postponed.** Lexicographic order is the
+database collation on Postgres and byte order on OpenSearch, so `'Z' < 'a'` differs between
+them — the same disagreement the whole exercise exists to remove, one layer down and harder to
+see. This is the one decision that *shrinks* what will eventually be built, and it is the one
+worth arguing with.
+
+**Decided, and worth carrying elsewhere**: the map's area selection is a `geo_bounding_box`,
+not four ordered comparisons — four comparisons get the antimeridian wrong, silently, for the
+customers whose data crosses it.
+
+**One thing changed in code today**, because the decision made an existing message false:
+`PROPERTY_SORT_HINT` implied every property would be sortable one day. It now names the types
+sorting will cover and says text will not be among them, and the test asserts both — a refusal
+should not make a promise the decision has already withdrawn.
+
+**Also decided: what the fixture must gain before any of this is checkable.**
+`opensearch_fixture_server.py` has no mapping enforcement by design, which is why a *typed*
+cross-store disagreement would not be catchable the way the first one was. The document lists
+the three things it needs, which narrows the unproven claim from "does any of this work" to
+"does OpenSearch behave like the mapping it was given".
+
+**733 API tests green**, build untouched. No behaviour changed beyond one refusal's wording.
+
+---
+
+### 105. The Pivot Table, and the arithmetic it refuses to fake (this session)
+
+Roadmap 1.5's *Pivot Table* row: counts by two properties at once over an object set. `POST /object-sets/cross-tab`, a `cross_tab_object_set` on both stores, and a `CanvasPivotTable` widget.
+
+**The axes are the chart's numbers, by construction rather than by agreement.** The route builds each axis with the same `group_object_set` a bar chart plots — one call for the rows, one for the columns — and the store method computes *only the cells*. A second implementation that derived the axes from the cells would have been shorter and would have drifted the first time either changed; here a row total and a bar over the same property are the same number because they are the same call. A test asserts exactly that, comparing the grid's axes against `/object-sets/group`.
+
+**That decision has a visible cost, and the widget states it rather than hides it.** A row's cells can sum to *less* than the row's total, for two reasons that are both real: an object with no value for the column property is in no cell, and the column axis is capped. The tidy alternative — make each margin the sum of the cells drawn — produces a grid that adds up and quietly contradicts the chart beside it. So the margins are whole rows and whole columns, and the widget says *"Totals count every object; the cells count objects with both values. 4 of 16 are outside the grid."* when the two differ. Both notes are asserted in the browser check, with their numbers.
+
+**The axes are passed *into* the store, which looks redundant until you look at OpenSearch.** A nested terms aggregation truncates its inner buckets per outer bucket, so a store left to choose its own columns would return a grid whose third column meant something different on every row. Both stores are told the axes and answer only "how many are in this cell" — pinned with `include` on OpenSearch, `= ANY(:colvals)` on Postgres. The cross-store test covers a population where one object is missing the column property entirely, which is where the two implementations would most easily part company.
+
+**Clicking a cell narrows, through the drill-down's existing mechanism with one more clause.** A cell writes two equality clauses into the same kind of `array` variable a chart drill-down writes, read by the same `narrow_set` derivation; a heading writes one. Nothing new was invented for it, so a pivot and a chart can narrow the same set without either of them holding one. An empty cell is not a click target — narrowing to nothing is something a viewer does by accident and never on purpose.
+
+**A cross-tab of a property against itself is refused in a sentence**, and the settings panel does not offer it. It is not ill-defined — it is a diagonal with every other cell empty — but it is a grouped count in a grid's clothes, so the refusal points at the thing that answers it properly. Counts only, like every aggregation over a set, for the untyped-property reason decision 0006 (§104) records.
+
+**The fixture grew, and then was mutated to check it was not the reason a test passed.** `opensearch_fixture_server.py` now supports `include` and nested aggregations, which is what a cross-tab needs. A fixture whose inner aggregation counted every matched document rather than its own bucket's would turn every cell into a column total — so that mutation is in the suite alongside the product ones.
+
+**One correction carried out of §104**: two comments in `object_sets.py` cited `db 0026` for `object_type_properties.data_type`. It is db 0003, widened by 0029. Both now say so.
+
+**747 API tests green** (57 in `test_object_sets.py`, 11 new), `tsc --noEmit` clean, 21 browser checks green with no console errors.
+
+**Seventeen mutations. Twelve caught on the first pass, five survived — and every one of the five was a real hole, not a wash.** They are worth listing, because four of the five survived for the same reason: *the fixture data could not tell the mutation apart from the original.*
+
+* **The cell query dropped the set's filters.** Every excluded object happened to have a column value no drawn column used, so the wrong query returned the right grid. Fixed with a case where an excluded object *shares a cell* with an included one — two south sites, both open — so the cell reads 2 where the set has 1.
+* **The Postgres cells stopped being pinned to the column axis**, and the route never noticed because it only reads the pairs it asked for. Extras are invisible through the route, so the contract is now asserted where it is stated: a direct store test requiring *exactly* the pairs requested.
+* **OpenSearch's `include` was deleted** and nothing changed, because the inner `size` equalled the distinct count — nothing was ever truncated, which is the only condition under which `include` matters. Fixed with a deliberately *cut* axis: north's two statuses tie, `_key` ascending picks "closed", and "closed" was not asked for.
+* **The empty-axis guard was deleted** and the test still passed, because the fixture cheerfully returns empty buckets for `size: 0` where real OpenSearch rejects it. **This one was a fault in the fixture, not in the test**: the fixture now raises the way the real cluster does, which is the same class of fidelity gap decision 0006 (§104) says has to close before typed properties are checkable at all.
+* **The row total became the sum of the drawn cells.** In the first grid those are equal — nothing missing, nothing capped — so the check could not see it. The capped second grid can: totals `[9, 5, 2]`, cells `[9, 3, 0]`.
+
+All five caught on re-run; **17 of 17**. The pattern worth carrying: a mutation that survives usually means the *fixture population* has no case that distinguishes the behaviours, not that the behaviour is untested. Four of these five were fixed by changing the data, not by adding an assertion.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
@@ -2063,7 +2142,7 @@ The lesson is not "be careful". It is that a harness which infers a catch from *
 - **An applied migration is immutable, and that includes its comments.** `migrate.py` checksums the file, so editing one - even to fix prose that is actively wrong - makes every database that already applied it refuse to migrate at all. Hit in §92: §90's docstring correction to `0034` blocked `0036` from applying, and would have blocked it in production too. Corrections to a migration's *prose* go in `packages/db/migrations/ERRATA.md`; the runner ignores `.md`. There is no escape hatch and there should not be one - the guard cannot tell a comment from a statement from a hash, and a runner that tried would be a runner that sometimes let a changed statement through.
 
 - **`verify_schema.py` needs a fresh database; it cannot be run twice against the same one.** It creates a fixture organisation, and `audit_log`'s append-only `DELETE` rule (migration 0004) *silently* discards deletes — `DELETE 0`, row still present, even as superuser with `row_security = off` — so the fixture can never be cleaned up and the second run dies on a duplicate slug before checking anything. Found in §88, and it is the reason the verifier's "no unexplained extra tables" check had been failing unnoticed for sixteen migrations.
-- **Four features are waiting on one missing capability: the instance index does not honour declared property types.** Ordered filters (`gt`/`lt`), numeric aggregations (`sum`/`avg`/`min`/`max`, §74), sorting a table by a property (§83) and selecting an area on a map (§86) are each refused for the same reason — properties are stored untyped, so a comparison means one thing on Postgres and another on OpenSearch. Every refusal says so in a sentence. **It cannot be built in this sandbox**: the OpenSearch side is tested against `tests/opensearch_fixture_server.py`, which has no mapping enforcement by design, and there is no Docker daemon and no reachable OpenSearch artifact host here, so the cross-store agreement — the entire point — cannot be demonstrated. It needs a real cluster, not more code.
+- **Four features are waiting on one missing capability: the instance index does not honour declared property types.** **Decided in `docs/decisions/0006-typed-instance-properties.md` (§104), not built** — one index per object type, text ordering refused permanently, the map's box as a `geo_bounding_box`, and what the OpenSearch fixture needs before the build is checkable at all. Ordered filters (`gt`/`lt`), numeric aggregations (`sum`/`avg`/`min`/`max`, §74), sorting a table by a property (§83) and selecting an area on a map (§86) are each refused for the same reason — properties are stored untyped, so a comparison means one thing on Postgres and another on OpenSearch. Every refusal says so in a sentence. **It cannot be built in this sandbox**: the OpenSearch side is tested against `tests/opensearch_fixture_server.py`, which has no mapping enforcement by design, and there is no Docker daemon and no reachable OpenSearch artifact host here, so the cross-store agreement — the entire point — cannot be demonstrated. It needs a real cluster, not more code.
 - **Two sources feeding one object type produce two instances for the same primary key** (found in §83). Instance identity is `(source_id, primary_key)` — `instance_store._doc_id` — so pointing a second dataset at an object type that already has one duplicates every overlapping key instead of updating it, and a set over that type returns each duplicated object twice. Nothing errors. Multi-source object types are a legitimate Foundry pattern (a union of feeds into one type), so the honest fix is to make identity `(object_type_id, primary_key)` and decide what happens when two sources disagree about the same object's properties — an ontology decision with a backfill behind it. Until then, one source per object type.
 - **Craft.js gives a canvas widget its children as one Fragment, not a list.** `React.Children.toArray(children)` therefore returns a one-element array however many widgets the node contains, and nothing errors — §78's sections all rendered as a single column until this was found. Any canvas widget that needs to treat its children individually (a section, a grid, anything positional) must go through `childList()` in `widgets.tsx` rather than `React.Children` directly.
 - **An undefined CSS custom property is silently nothing, not an error.** `background: var(--surface)` in a repo whose variable is `--panel` renders transparent, and a structural browser check will pass straight through it — this bit twice (§78's overlay panel, and `.repo-preview-table th` before it). A check on something that must be *visible* should assert a computed colour, not just the element's presence.

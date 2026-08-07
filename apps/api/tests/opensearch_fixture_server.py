@@ -261,48 +261,79 @@ class Handler(BaseHTTPRequestHandler):
                 "hits": [{"_index": index, "_id": i, "_source": s} for i, s in window],
             }
         }
-        # Cardinality only - the one aggregation this platform issues
-        # (object_sets.AGGREGATIONS). Implemented exactly, not approximately:
-        # OpenSearch's cardinality is approximate above ~40k distinct values,
-        # and a fixture that copied that would be imitating an error budget it
-        # has no way to reproduce. Small sets agree either way, which is what
-        # a test asserts against.
+        # Cardinality and terms - the aggregations this platform issues
+        # (object_sets.AGGREGATIONS, and the terms behind a grouped count and a
+        # cross-tab). Cardinality is implemented exactly, not approximately:
+        # OpenSearch's is approximate above ~40k distinct values, and a fixture
+        # that copied that would be imitating an error budget it has no way to
+        # reproduce. Small sets agree either way, which is what a test asserts
+        # against.
         aggs = body.get("aggs") or {}
         if aggs:
-            computed = {}
-            for name, spec in aggs.items():
-                kind = "cardinality" if "cardinality" in spec else (
-                    "terms" if "terms" in spec else None
-                )
-                if kind is None:
-                    return self._send(400, {"error": f"fixture has no {list(spec)[0]} aggregation"})
-                field = spec[kind]["field"]
-                # `properties.x.keyword` addresses the same stored value as
-                # `properties.x`; this fixture has no analysers, so the
-                # subfield is the field. Its own docstring already records that
-                # this is the thing a fixture cannot check.
-                path = field[: -len(".keyword")] if field.endswith(".keyword") else field
-                parts = path.split(".")
-                counts: dict[str, int] = {}
-                for _, source in matched:
-                    cursor = source
-                    for part in parts:
-                        cursor = cursor.get(part) if isinstance(cursor, dict) else None
-                    if cursor is not None:
-                        counts[str(cursor)] = counts.get(str(cursor), 0) + 1
-                if kind == "cardinality":
-                    computed[name] = {"value": len(counts)}
-                else:
-                    # count desc, then key asc - the order the real terms
-                    # aggregation is asked for explicitly, so the fixture is
-                    # not the reason a test passes.
-                    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-                    size = int(spec["terms"].get("size", 10))
-                    computed[name] = {
-                        "buckets": [{"key": k, "doc_count": n} for k, n in ordered[:size]]
-                    }
-            response["aggregations"] = computed
+            try:
+                response["aggregations"] = self._aggregate(aggs, matched)
+            except ValueError as exc:
+                return self._send(400, {"error": str(exc)})
         self._send(200, response)
+
+    def _aggregate(self, aggs: dict, matched: list[tuple[str, dict]]) -> dict:
+        """One level of aggregations over the matched documents.
+
+        Recursive, because a cross-tab is a terms aggregation *inside* a terms
+        aggregation: each outer bucket re-aggregates its own documents, which
+        is what makes the inner counts cells rather than column totals.
+        """
+        computed = {}
+        for name, spec in aggs.items():
+            kind = "cardinality" if "cardinality" in spec else (
+                "terms" if "terms" in spec else None
+            )
+            if kind is None:
+                raise ValueError(f"fixture has no {list(spec)[0]} aggregation")
+            field = spec[kind]["field"]
+            # `properties.x.keyword` addresses the same stored value as
+            # `properties.x`; this fixture has no analysers, so the subfield is
+            # the field. Its own docstring already records that this is the
+            # thing a fixture cannot check.
+            path = field[: -len(".keyword")] if field.endswith(".keyword") else field
+            parts = path.split(".")
+            grouped: dict[str, list[tuple[str, dict]]] = {}
+            for pair in matched:
+                cursor = pair[1]
+                for part in parts:
+                    cursor = cursor.get(part) if isinstance(cursor, dict) else None
+                if cursor is not None:
+                    grouped.setdefault(str(cursor), []).append(pair)
+            if kind == "cardinality":
+                computed[name] = {"value": len(grouped)}
+                continue
+            # `include` narrows to named terms before ordering and sizing, the
+            # way the real one does - a cross-tab pins both axes with it so the
+            # columns are the same on every row.
+            include = spec["terms"].get("include")
+            if include is not None:
+                allowed = set(include)
+                grouped = {k: v for k, v in grouped.items() if k in allowed}
+            # count desc, then key asc - the order the real terms aggregation
+            # is asked for explicitly, so the fixture is not the reason a test
+            # passes.
+            ordered = sorted(grouped.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+            size = int(spec["terms"].get("size", 10))
+            # Real OpenSearch rejects this rather than returning nothing, and
+            # the difference matters: a caller that reaches a terms aggregation
+            # with an empty axis has a bug, and a fixture that shrugged would
+            # let the guard against it be deleted without a test noticing. That
+            # is not hypothetical - it survived a mutation until this existed.
+            if size < 1:
+                raise ValueError("[size] must be greater than 0")
+            computed[name] = {
+                "buckets": [
+                    {"key": key, "doc_count": len(docs),
+                     **(self._aggregate(spec["aggs"], docs) if spec.get("aggs") else {})}
+                    for key, docs in ordered[:size]
+                ]
+            }
+        return computed
 
     def _delete_by_query(self, index: str, body: dict) -> None:
         matched = _filtered(index, body.get("query", {}))

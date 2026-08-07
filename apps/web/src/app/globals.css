@@ -1674,3 +1674,31 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-card.clickable { cursor: pointer; }
 .canvas-card.clickable:hover { border-color: var(--line-strong); }
 .canvas-card.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- Pivot table (roadmap item 1.5) -------------------------------------- */
+/* Its own scroller: a grid of counts is the one widget that is *meant* to be
+   wider than its column, and a page that scrolled sideways instead would move
+   everything else with it. */
+.canvas-pivot-scroll { overflow-x: auto; margin: 6px 0; }
+.canvas-pivot {
+  border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.canvas-pivot th, .canvas-pivot td {
+  border: 1px solid var(--line); padding: 4px 9px; text-align: right; white-space: nowrap;
+}
+.canvas-pivot thead th, .canvas-pivot tbody th { text-align: left; font-weight: 600; }
+.canvas-pivot-corner { color: var(--ink-soft); font-weight: 400 !important; }
+/* The count beside a heading is the whole row or column, not the part in the
+   grid - see the widget for why those differ. */
+.canvas-pivot-count { color: var(--ink-soft); font-weight: 400; margin-left: 6px; }
+.canvas-pivot .canvas-pivot-total { background: var(--surface-2, rgba(0, 0, 0, 0.03)); font-weight: 600; }
+.canvas-pivot button {
+  background: none; border: 0; padding: 0; font: inherit; color: inherit;
+  cursor: pointer; border-radius: 3px;
+}
+.canvas-pivot button:hover { text-decoration: underline; }
+.canvas-pivot button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Marked on the cell rather than only on the button, so a selected cell reads
+   as selected from across the grid. */
+.canvas-pivot-cell.selected { background: rgba(20, 100, 110, 0.14); }
+.canvas-pivot button[aria-pressed="true"] { font-weight: 700; }

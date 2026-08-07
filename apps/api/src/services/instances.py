@@ -491,6 +491,58 @@ async def group_object_set(
     )
 
 
+async def cross_tab_object_set(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    filters: tuple[Any, ...],
+    row_property: str,
+    column_property: str,
+    row_values: tuple[str, ...],
+    column_values: tuple[str, ...],
+) -> dict[tuple[str, str], int]:
+    """The cells of a cross-tab, Postgres edition (roadmap 1.5, Pivot Table).
+
+    Cells only. The row and column axes - their order, their totals and how
+    many distinct values each has - come from `group_object_set`, which is what
+    makes a pivot's row totals the same numbers a bar chart over the same
+    property draws. Computing them here as well would be a second copy of a
+    fact, and the two would disagree the first time either changed.
+
+    The axis values are passed in for the same reason: OpenSearch's nested
+    terms aggregation truncates the inner buckets *per outer bucket*, so
+    letting each store pick its own columns would give a grid whose columns
+    differ from row to row. Both stores are told the axes and answer only
+    "how many are in this cell".
+
+    Empty axes mean an empty grid, and that is asked for rather than assumed:
+    `= ANY('{}')` is false for every row, so the query would be a scan that
+    could only return nothing.
+    """
+    if not row_values or not column_values:
+        return {}
+    predicate, params = _set_predicate(object_type_id, filters)
+    params["rowprop"] = row_property
+    params["colprop"] = column_property
+    params["rowvals"] = list(row_values)
+    params["colvals"] = list(column_values)
+    row_extract = "jsonb_extract_path_text(i.properties, :rowprop)"
+    col_extract = "jsonb_extract_path_text(i.properties, :colprop)"
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT {row_extract} AS rv, {col_extract} AS cv, count(*) AS n
+          FROM object_instances i
+         WHERE {predicate}
+           AND {row_extract} = ANY(:rowvals)
+           AND {col_extract} = ANY(:colvals)
+         GROUP BY 1, 2
+        """,
+        params,
+    )
+    return {(str(r["rv"]), str(r["cv"])): int(r["n"]) for r in rows}
+
+
 def _filter_text(value: Any) -> str:
     """One definition of "the text of a value", shared with the OpenSearch
     store and with object_sets."""

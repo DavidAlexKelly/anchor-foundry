@@ -48,7 +48,7 @@ OPERATORS = ("eq", "neq", "in", "starts_with")
 # Refused rather than picked, because either choice is wrong somewhere: a
 # numeric-only reading breaks dates and codes, and a lexicographic one is
 # indefensible to anyone filtering a number. Doing it properly means honouring
-# the *declared* property type (object_type_properties.data_type, db 0026) and
+# the *declared* property type (object_type_properties.data_type, db 0003) and
 # indexing accordingly - a mapping change with a backfill behind it, which is
 # its own item rather than a footnote in this one.
 ORDERED_OPERATORS = ("gt", "gte", "lt", "lte")
@@ -80,10 +80,19 @@ SORTS = ("key", "-key", "recent", "oldest")
 DEFAULT_SORT = "recent"
 
 # Named so the refusal can say what it would take, rather than only "no".
+#
+# Says which types it *would* cover, because decision 0006 settled that and the
+# earlier wording implied every property would be sortable one day. A `string`
+# property will not be: lexicographic order is the database collation on
+# Postgres and byte order on OpenSearch, so 'Z' < 'a' differs between them -
+# which is the same disagreement this refusal exists to prevent, one layer down.
 PROPERTY_SORT_HINT = (
     "sorting by a property needs the declared property type behind it - instance "
     "properties are stored untyped, so the two stores would order 250 and 40 "
-    "differently. Sort by key or by when a row last changed."
+    "differently (docs/decisions/0006-typed-instance-properties.md). It will cover "
+    "integer, float, date and timestamp properties; text will stay unsortable, "
+    "because the two stores disagree about how text orders. Sort by key or by when "
+    "a row last changed."
 )
 
 
@@ -116,7 +125,7 @@ AGGREGATIONS = ("count", "count_distinct")
 # platform cannot answer yet.
 #
 # The fix is the same one too, and doing it once unlocks both: honour the
-# *declared* property type (object_type_properties.data_type, db 0026) in the
+# *declared* property type (object_type_properties.data_type, db 0003) in the
 # index mapping, with a backfill behind it.
 NUMERIC_AGGREGATIONS = ("sum", "avg", "min", "max")
 
@@ -128,7 +137,34 @@ NUMERIC_AGGREGATIONS = ("sum", "avg", "min", "max")
 # that does not say it sampled.
 MAX_GROUPS = 20
 
+# A cross-tab's column axis is bounded harder than its row axis, and for a
+# different reason. Rows scroll; columns do not. Twenty columns of numbers is
+# not a grid anybody reads, and it is the axis a viewer cannot get to the end
+# of - so the top 12 with the truncation said out loud beats 20 that run off
+# the side. The cost is bounded either way: the cell query is at most
+# MAX_GROUPS x MAX_PIVOT_COLUMNS buckets.
+MAX_PIVOT_COLUMNS = 12
+
 MAX_FILTERS = 20
+
+
+def parse_cross_tab(row_property: str, column_property: str) -> tuple[str, str]:
+    """Validate a cross-tab's two axes, refusing in a sentence.
+
+    One property against itself is refused rather than drawn. It is not
+    ill-defined - it is a diagonal, every off-diagonal cell empty - but it is a
+    grouped count wearing a grid's clothes, and `/object-sets/group` already
+    answers that question in a shape somebody can read.
+    """
+    if not row_property or not column_property:
+        raise ValueError("a cross-tab needs a row property and a column property")
+    if row_property == column_property:
+        raise ValueError(
+            f"a cross-tab of {row_property!r} against itself is its own diagonal: every "
+            "cell off it is empty, and the counts on it are what grouping by that one "
+            "property already gives. Pick a second property, or use a chart."
+        )
+    return row_property, column_property
 
 
 def parse_aggregation(name: str, property_name: str | None) -> tuple[str, str | None]:
