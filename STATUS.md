@@ -2072,6 +2072,38 @@ the three things it needs, which narrows the unproven claim from "does any of th
 
 ---
 
+### 105. The Pivot Table, and the arithmetic it refuses to fake (this session)
+
+Roadmap 1.5's *Pivot Table* row: counts by two properties at once over an object set. `POST /object-sets/cross-tab`, a `cross_tab_object_set` on both stores, and a `CanvasPivotTable` widget.
+
+**The axes are the chart's numbers, by construction rather than by agreement.** The route builds each axis with the same `group_object_set` a bar chart plots — one call for the rows, one for the columns — and the store method computes *only the cells*. A second implementation that derived the axes from the cells would have been shorter and would have drifted the first time either changed; here a row total and a bar over the same property are the same number because they are the same call. A test asserts exactly that, comparing the grid's axes against `/object-sets/group`.
+
+**That decision has a visible cost, and the widget states it rather than hides it.** A row's cells can sum to *less* than the row's total, for two reasons that are both real: an object with no value for the column property is in no cell, and the column axis is capped. The tidy alternative — make each margin the sum of the cells drawn — produces a grid that adds up and quietly contradicts the chart beside it. So the margins are whole rows and whole columns, and the widget says *"Totals count every object; the cells count objects with both values. 4 of 16 are outside the grid."* when the two differ. Both notes are asserted in the browser check, with their numbers.
+
+**The axes are passed *into* the store, which looks redundant until you look at OpenSearch.** A nested terms aggregation truncates its inner buckets per outer bucket, so a store left to choose its own columns would return a grid whose third column meant something different on every row. Both stores are told the axes and answer only "how many are in this cell" — pinned with `include` on OpenSearch, `= ANY(:colvals)` on Postgres. The cross-store test covers a population where one object is missing the column property entirely, which is where the two implementations would most easily part company.
+
+**Clicking a cell narrows, through the drill-down's existing mechanism with one more clause.** A cell writes two equality clauses into the same kind of `array` variable a chart drill-down writes, read by the same `narrow_set` derivation; a heading writes one. Nothing new was invented for it, so a pivot and a chart can narrow the same set without either of them holding one. An empty cell is not a click target — narrowing to nothing is something a viewer does by accident and never on purpose.
+
+**A cross-tab of a property against itself is refused in a sentence**, and the settings panel does not offer it. It is not ill-defined — it is a diagonal with every other cell empty — but it is a grouped count in a grid's clothes, so the refusal points at the thing that answers it properly. Counts only, like every aggregation over a set, for the untyped-property reason decision 0006 (§104) records.
+
+**The fixture grew, and then was mutated to check it was not the reason a test passed.** `opensearch_fixture_server.py` now supports `include` and nested aggregations, which is what a cross-tab needs. A fixture whose inner aggregation counted every matched document rather than its own bucket's would turn every cell into a column total — so that mutation is in the suite alongside the product ones.
+
+**One correction carried out of §104**: two comments in `object_sets.py` cited `db 0026` for `object_type_properties.data_type`. It is db 0003, widened by 0029. Both now say so.
+
+**747 API tests green** (57 in `test_object_sets.py`, 11 new), `tsc --noEmit` clean, 21 browser checks green with no console errors.
+
+**Seventeen mutations. Twelve caught on the first pass, five survived — and every one of the five was a real hole, not a wash.** They are worth listing, because four of the five survived for the same reason: *the fixture data could not tell the mutation apart from the original.*
+
+* **The cell query dropped the set's filters.** Every excluded object happened to have a column value no drawn column used, so the wrong query returned the right grid. Fixed with a case where an excluded object *shares a cell* with an included one — two south sites, both open — so the cell reads 2 where the set has 1.
+* **The Postgres cells stopped being pinned to the column axis**, and the route never noticed because it only reads the pairs it asked for. Extras are invisible through the route, so the contract is now asserted where it is stated: a direct store test requiring *exactly* the pairs requested.
+* **OpenSearch's `include` was deleted** and nothing changed, because the inner `size` equalled the distinct count — nothing was ever truncated, which is the only condition under which `include` matters. Fixed with a deliberately *cut* axis: north's two statuses tie, `_key` ascending picks "closed", and "closed" was not asked for.
+* **The empty-axis guard was deleted** and the test still passed, because the fixture cheerfully returns empty buckets for `size: 0` where real OpenSearch rejects it. **This one was a fault in the fixture, not in the test**: the fixture now raises the way the real cluster does, which is the same class of fidelity gap decision 0006 (§104) says has to close before typed properties are checkable at all.
+* **The row total became the sum of the drawn cells.** In the first grid those are equal — nothing missing, nothing capped — so the check could not see it. The capped second grid can: totals `[9, 5, 2]`, cells `[9, 3, 0]`.
+
+All five caught on re-run; **17 of 17**. The pattern worth carrying: a mutation that survives usually means the *fixture population* has no case that distinguishes the behaviours, not that the behaviour is untested. Four of these five were fixed by changing the data, not by adding an assertion.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

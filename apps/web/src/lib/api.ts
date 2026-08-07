@@ -667,6 +667,37 @@ export const objects = {
       method: "POST",
       body: JSON.stringify({ definition, property, ...(limit ? { limit } : {}) }),
     }),
+  /** Counts by two properties at once — what a Pivot Table shows.
+   *
+   * The axes are the same grouped counts `groupObjectSet` returns, so a row
+   * total and a bar in a chart over that property are the same number. A row's
+   * cells can therefore sum to *less* than its total: objects with no value
+   * for the column property are in no cell, and columns past the limit are not
+   * drawn. `total` is the whole set, so the widget can say what the grid does
+   * not account for rather than leaving it to be noticed. */
+  crossTabObjectSet: (
+    wid: string,
+    definition: unknown,
+    rowProperty: string,
+    columnProperty: string,
+  ) =>
+    request<{
+      rows: { value: string; count: number }[];
+      columns: { value: string; count: number }[];
+      row_distinct_total: number;
+      column_distinct_total: number;
+      rows_truncated: boolean;
+      columns_truncated: boolean;
+      cells: number[][];
+      total: number;
+    }>(`/workspaces/${wid}/object-sets/cross-tab`, {
+      method: "POST",
+      body: JSON.stringify({
+        definition,
+        row_property: rowProperty,
+        column_property: columnProperty,
+      }),
+    }),
   /** Workspace-wide instance search across every object type at once. */
   explore: (
     wid: string,

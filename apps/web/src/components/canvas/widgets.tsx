@@ -1697,6 +1697,399 @@ CanvasObjectCards.craft = {
   related: { settings: ObjectCardsSettings },
 };
 
+// ---- Pivot table (roadmap 1.5) ----------------------------------------------
+/**
+ * Counts by two properties at once: regions down the side, statuses across the
+ * top, how many of each in the middle.
+ *
+ * **The axes are the chart's numbers.** The server builds each one with the
+ * same grouped count a bar chart plots, so a row total here and a bar there
+ * cannot disagree. That has a visible consequence this widget is careful to
+ * state rather than hide: a row's cells can sum to *less* than its total,
+ * because an object with no value for the column property is in no cell, and
+ * because the columns are capped. A pivot whose margins were the sum of its
+ * cells would look tidier and would quietly contradict the chart beside it.
+ *
+ * **Counts only**, like every other aggregation over a set — instance
+ * properties are stored untyped, so a cross-tab of sums would mean one thing
+ * on Postgres and nothing at all on OpenSearch (`services/object_sets.py`, and
+ * `docs/decisions/0006-typed-instance-properties.md` for what would change it).
+ *
+ * Clicking a cell narrows, by the same mechanism the chart's drill-down uses:
+ * it writes equality *clauses* into a variable a `narrow_set` derivation
+ * reads. Two clauses rather than one is the only difference — a cell is the
+ * intersection of a row and a column, which is exactly what it looks like.
+ */
+type PivotPick = { row: string | null; column: string | null };
+
+/** The clause list for a selection — the whole list, so clearing one axis is
+ *  the absence of its clause rather than a clause with an empty value. */
+function pivotClauses(
+  pick: PivotPick,
+  rowProperty: string,
+  columnProperty: string,
+): { property: string; op: string; value: string }[] {
+  const out = [];
+  if (pick.row !== null) out.push({ property: rowProperty, op: "eq", value: pick.row });
+  if (pick.column !== null) {
+    out.push({ property: columnProperty, op: "eq", value: pick.column });
+  }
+  return out;
+}
+
+export function CanvasPivotTable({
+  objectSetVariable = null,
+  rowProperty = null,
+  columnProperty = null,
+  drilldownVariable = null,
+  title = "",
+}: {
+  objectSetVariable?: string | null;
+  rowProperty?: string | null;
+  columnProperty?: string | null;
+  /** Where a click on a cell or a header writes its clauses. Same mechanism as
+   *  the chart's drill-down, and clauses for the same reason: object sets
+   *  resolve on the server, so a widget that wrote one would be a second place
+   *  sets come from with no rule for which wins. */
+  drilldownVariable?: string | null;
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const definition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const { set: setParameter } = useCanvasParameters();
+  const drilled = useCanvasParameter(drilldownVariable);
+
+  const ready = !!objectSetVariable && !!rowProperty && !!columnProperty;
+  const grid = useQuery({
+    queryKey: [
+      "canvas-pivot", objectSetVariable, JSON.stringify(definition ?? null),
+      rowProperty, columnProperty,
+    ],
+    queryFn: () =>
+      objApi.crossTabObjectSet(workspaceId, definition, rowProperty!, columnProperty!),
+    enabled: ready && !!definition,
+  });
+
+  const canDrill = ready && !!drilldownVariable;
+  // What is currently narrowed, read back out of the variable this widget
+  // writes rather than held beside it — so the grid reflects the document's
+  // state, including a clause a Filter List set.
+  const pick: PivotPick = (() => {
+    const found: PivotPick = { row: null, column: null };
+    for (const clause of Array.isArray(drilled) ? drilled : []) {
+      const c = clause as { property?: string; op?: string; value?: unknown };
+      if (c.op !== "eq") continue;
+      if (c.property === rowProperty) found.row = String(c.value);
+      if (c.property === columnProperty) found.column = String(c.value);
+    }
+    return found;
+  })();
+
+  const apply = (next: PivotPick) => {
+    // Clicking what is already picked clears it. Without that there is no way
+    // back out from inside the grid, and a filter you cannot remove is one you
+    // have to remember you applied.
+    const same = next.row === pick.row && next.column === pick.column;
+    setParameter(
+      drilldownVariable!,
+      same ? [] : pivotClauses(next, rowProperty!, columnProperty!),
+    );
+  };
+
+  const data = grid.data;
+  const covered = data ? data.cells.reduce((t, row) => t + row.reduce((a, b) => a + b, 0), 0) : 0;
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
+      {!ready && (
+        <p className="canvas-widget-empty">
+          Pivot table - point it at an object set and pick two properties in Settings
+        </p>
+      )}
+      {ready && (variablesPending || grid.isPending) && (
+        <p className="canvas-widget-empty">Loading…</p>
+      )}
+      {grid.isError && (
+        <p className="canvas-widget-empty">
+          {grid.error instanceof ApiError ? grid.error.message : "Couldn't build this pivot."}
+        </p>
+      )}
+      {data && (
+        <>
+          <div className="canvas-pivot-scroll">
+            <table className="canvas-pivot">
+              <thead>
+                <tr>
+                  <th scope="col" className="canvas-pivot-corner">
+                    {rowProperty} \ {columnProperty}
+                  </th>
+                  {data.columns.map((column) => (
+                    <th key={column.value} scope="col">
+                      <PivotHeading
+                        label={column.value}
+                        count={column.count}
+                        selected={pick.column === column.value && pick.row === null}
+                        onPick={
+                          canDrill
+                            ? () => apply({ row: null, column: column.value })
+                            : undefined
+                        }
+                        describe={`${columnProperty} = ${column.value}`}
+                      />
+                    </th>
+                  ))}
+                  <th scope="col" className="canvas-pivot-total">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row, r) => (
+                  <tr key={row.value}>
+                    <th scope="row">
+                      <PivotHeading
+                        label={row.value}
+                        count={row.count}
+                        selected={pick.row === row.value && pick.column === null}
+                        onPick={
+                          canDrill ? () => apply({ row: row.value, column: null }) : undefined
+                        }
+                        describe={`${rowProperty} = ${row.value}`}
+                      />
+                    </th>
+                    {data.columns.map((column, c) => {
+                      const count = data.cells[r]?.[c] ?? 0;
+                      const selected = pick.row === row.value && pick.column === column.value;
+                      return (
+                        <td
+                          key={column.value}
+                          className={`canvas-pivot-cell${selected ? " selected" : ""}`}
+                        >
+                          {/* An empty cell is not a click target: narrowing to
+                              nothing is a thing a viewer can do by accident and
+                              never on purpose. */}
+                          {canDrill && count > 0 ? (
+                            <button
+                              type="button"
+                              aria-pressed={selected}
+                              aria-label={`Filter to ${rowProperty} = ${row.value}, ${columnProperty} = ${column.value}`}
+                              onClick={() => apply({ row: row.value, column: column.value })}
+                            >
+                              {count.toLocaleString()}
+                            </button>
+                          ) : (
+                            count.toLocaleString()
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td className="canvas-pivot-total">{row.count.toLocaleString()}</td>
+                  </tr>
+                ))}
+                <tr className="canvas-pivot-total">
+                  <th scope="row">Total</th>
+                  {data.columns.map((column) => (
+                    <td key={column.value}>{column.count.toLocaleString()}</td>
+                  ))}
+                  <td>{data.total.toLocaleString()}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {data.rows.length === 0 && <p className="canvas-widget-empty">Nothing in this set.</p>}
+          {/* The margins are whole rows and whole columns, so they can exceed
+              the cells. Said once, with the gap named, rather than left for a
+              viewer to find by adding up a row. */}
+          {covered < data.total && (
+            <p className="canvas-widget-empty">
+              Totals count every object; the cells count objects with both values.{" "}
+              {(data.total - covered).toLocaleString()} of {data.total.toLocaleString()} are
+              outside the grid.
+            </p>
+          )}
+          {(data.rows_truncated || data.columns_truncated) && (
+            <p className="canvas-widget-empty">
+              {data.rows_truncated &&
+                `Showing the largest ${data.rows.length} of ${data.row_distinct_total.toLocaleString()} ${rowProperty} values. `}
+              {data.columns_truncated &&
+                `Showing the largest ${data.columns.length} of ${data.column_distinct_total.toLocaleString()} ${columnProperty} values.`}
+            </p>
+          )}
+          {canDrill && (pick.row !== null || pick.column !== null) && (
+            <p className="canvas-widget-empty">
+              Narrowed to{" "}
+              {[
+                pick.row !== null ? `${rowProperty} = ${pick.row}` : null,
+                pick.column !== null ? `${columnProperty} = ${pick.column}` : null,
+              ]
+                .filter(Boolean)
+                .join(" and ")}
+              .{" "}
+              <button
+                type="button"
+                className="btn quiet"
+                style={{ padding: "1px 7px", fontSize: 12 }}
+                onClick={() => setParameter(drilldownVariable!, [])}
+              >
+                Clear
+              </button>
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** An axis heading: the value, its whole count, and a click that narrows to it
+ *  where something is wired to receive that. */
+function PivotHeading({
+  label, count, selected, onPick, describe,
+}: {
+  label: string;
+  count: number;
+  selected: boolean;
+  onPick?: () => void;
+  describe: string;
+}) {
+  const inner = (
+    <>
+      {label} <span className="canvas-pivot-count">{count.toLocaleString()}</span>
+    </>
+  );
+  if (!onPick) return <>{inner}</>;
+  return (
+    <button type="button" aria-pressed={selected} aria-label={`Filter to ${describe}`} onClick={onPick}>
+      {inner}
+    </button>
+  );
+}
+
+function PivotTableSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
+  const {
+    objectSetVariable, rowProperty, columnProperty, drilldownVariable, title,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    rowProperty: node.data.props.rowProperty,
+    columnProperty: node.data.props.columnProperty,
+    drilldownVariable: node.data.props.drilldownVariable,
+    title: node.data.props.title,
+  }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const clauseVariables = Object.values(declared).filter(
+    (v) => v.kind === "array" && !v.derivation,
+  );
+  const typeId = (resolved[objectSetVariable as string] as
+    { object_type_id?: string } | undefined)?.object_type_id;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const properties = type.data?.properties ?? [];
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.objectSetVariable = e.target.value || null;
+              // Property names mean nothing against another type.
+              p.rowProperty = null;
+              p.columnProperty = null;
+            })
+          }
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Rows</span>
+        <select
+          value={rowProperty || ""}
+          disabled={!type.data}
+          onChange={(e) =>
+            setProp((p: { rowProperty: string | null }) => (p.rowProperty = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {properties.map((prop) => (
+            <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Columns</span>
+        <select
+          value={columnProperty || ""}
+          disabled={!type.data}
+          onChange={(e) =>
+            setProp((p: { columnProperty: string | null }) =>
+              (p.columnProperty = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {/* The row property is not offered here: a cross-tab of a property
+              against itself is its own diagonal, and the server refuses it.
+              Not offering it beats a control that 422s. */}
+          {properties.filter((prop) => prop.api_name !== rowProperty).map((prop) => (
+            <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Clicking a cell writes to</span>
+        <select
+          value={drilldownVariable || ""}
+          onChange={(e) =>
+            setProp((p: { drilldownVariable: string | null }) =>
+              (p.drilldownVariable = e.target.value || null))
+          }
+        >
+          <option value="">Nothing - the grid is a report</option>
+          {clauseVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {clauseVariables.length === 0
+            ? "Declare an array variable, and derive a narrowed set from it"
+            : "Give this its own variable, and chain the narrow_set derivations"}
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title || ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasPivotTable.craft = {
+  displayName: "Pivot table",
+  props: {
+    objectSetVariable: null, rowProperty: null, columnProperty: null,
+    drilldownVariable: null, title: "",
+  },
+  related: { settings: PivotTableSettings },
+};
+
 // ---- Map (ROADMAP Canvas item 4) --------------------------------------------
 /**
  * Pins on a map, from either half of the platform: an object type's geopoint
@@ -3630,6 +4023,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectTable,
   CanvasObjectCards,
   CanvasSearch,
+  CanvasPivotTable,
   CanvasChart,
   CanvasMap,
   CanvasMetricCard,
@@ -3651,6 +4045,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
   { key: "CanvasSearch", label: "Search", hint: "Narrow an object set by a property prefix" },
+  { key: "CanvasPivotTable", label: "Pivot table", hint: "Counts by two properties at once, over an object set" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
   { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },
