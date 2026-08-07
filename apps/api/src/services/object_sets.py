@@ -80,10 +80,19 @@ SORTS = ("key", "-key", "recent", "oldest")
 DEFAULT_SORT = "recent"
 
 # Named so the refusal can say what it would take, rather than only "no".
+#
+# Says which types it *would* cover, because decision 0006 settled that and the
+# earlier wording implied every property would be sortable one day. A `string`
+# property will not be: lexicographic order is the database collation on
+# Postgres and byte order on OpenSearch, so 'Z' < 'a' differs between them -
+# which is the same disagreement this refusal exists to prevent, one layer down.
 PROPERTY_SORT_HINT = (
     "sorting by a property needs the declared property type behind it - instance "
     "properties are stored untyped, so the two stores would order 250 and 40 "
-    "differently. Sort by key or by when a row last changed."
+    "differently (docs/decisions/0006-typed-instance-properties.md). It will cover "
+    "integer, float, date and timestamp properties; text will stay unsortable, "
+    "because the two stores disagree about how text orders. Sort by key or by when "
+    "a row last changed."
 )
 
 

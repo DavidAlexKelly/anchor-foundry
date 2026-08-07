@@ -647,7 +647,12 @@ def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     client: TestClient, fx: Fixture, seeded: str
 ) -> None:
     """The same refusal ordered operators get, for the same reason: untyped
-    properties mean the two stores would order 250 and 40 differently."""
+    properties mean the two stores would order 250 and 40 differently.
+
+    The refusal also has to say *which* types sorting will cover when it is
+    built, and that text will never be one of them (decision 0006 §2) - the
+    earlier wording implied every property would be sortable one day, which is
+    the kind of promise a refusal should not make."""
     r = client.post(
         f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
         headers=hdr(fx.owner_sub),
@@ -656,6 +661,8 @@ def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     assert r.status_code == 422, r.text
     detail = r.json()["detail"]
     assert "unknown sort" in detail
+    assert "integer, float, date and timestamp" in detail, "says what it will cover"
+    assert "text will stay unsortable" in detail, "and what it never will"
     assert "declared property type" in detail
 
 
