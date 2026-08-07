@@ -16,8 +16,9 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { datasets as datasetApi, models as modelApi } from "@/lib/api";
+import { useUrlState } from "@/components/use-url-state";
 import { PipelineGraphView } from "@/components/pipeline-graph";
 import type { ResolvedResource, TabularResult } from "@/lib/types";
 
@@ -33,10 +34,8 @@ const TAB_LABELS: Record<Tab, string> = {
 };
 
 export function DatasetApplication({ resource }: { resource: ResolvedResource }) {
-  const router = useRouter();
-  const params = useSearchParams();
-  const raw = params.get("tab");
-  const tab: Tab = (TABS as readonly string[]).includes(raw ?? "") ? (raw as Tab) : "preview";
+  const url = useUrlState();
+  const tab = url.oneOf("tab", TABS, "preview");
 
   const wid = resource.workspace_id;
   const pid = resource.project_id!;
@@ -45,19 +44,10 @@ export function DatasetApplication({ resource }: { resource: ResolvedResource })
   // Which version is being read, if not the current one (roadmap 3.3). In the
   // URL beside the tab, so "look at this dataset as it was at v2" is a link
   // rather than a sequence of clicks to describe.
-  const versionParam = Number(params.get("version"));
+  const versionParam = Number(url.get("version"));
   const version = Number.isInteger(versionParam) && versionParam > 0 ? versionParam : null;
 
-  function setParams(next: Record<string, string | undefined>) {
-    const search = new URLSearchParams(params.toString());
-    for (const [key, value] of Object.entries(next)) {
-      if (value === undefined) search.delete(key);
-      else search.set(key, value);
-    }
-    // replace, not push: flicking between tabs should not bury the page the
-    // reader arrived from under a stack of back-button steps.
-    router.replace(`?${search.toString()}`, { scroll: false });
-  }
+  const setParams = url.set;
   const selectTab = (next: Tab) => setParams({ tab: next });
 
   return (

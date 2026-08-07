@@ -346,6 +346,116 @@ def test_saving_a_module_with_a_variable_cycle_is_refused(
     assert "loop" in r.json()["detail"]
 
 
+# ---- run_action (roadmap phase 2, item 1.3) ----------------------------------
+# The service tests cover the effect's own refusals. These cover the one thing
+# only the HTTP layer can prove: that the save path looks the workspace's
+# actions up at all, so a `run_action` naming one that is not there is refused
+# by the person who wrote it rather than by whoever clicks it a month later.
+
+
+def _action_module(action_id: str, values: dict) -> dict:
+    return {
+        "format": 2,
+        "layout": {"btn": {"type": {"resolvedName": "CanvasButton"}, "props": {}}},
+        "variables": {"v_obj": {"id": "v_obj", "kind": "single_object", "label": "Picked"}},
+        "events": {
+            "e_1": {
+                "id": "e_1",
+                "trigger": {"node": "btn", "on": "click"},
+                "effects": [{
+                    "type": "run_action",
+                    "config": {"action": action_id, "subject": "v_obj", "values": values},
+                }],
+            }
+        },
+    }
+
+
+def test_saving_a_run_action_for_an_action_the_workspace_lacks_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    app_id = _new_app(client, fx)
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": _action_module(str(uuid.uuid4()), {"status": "done"})})
+    assert r.status_code == 422, r.text
+    assert "does not have" in r.json()["detail"]
+
+
+def test_a_run_action_naming_a_real_action_saves(client: TestClient, fx: Fixture) -> None:
+    """And the properties it writes are checked against that action's own
+    editable list - the same sentence the execute route would produce, said
+    while the person who typed it is still looking."""
+    tag = uuid.uuid4().hex[:8]
+    otype = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"ticket_{tag}", "display_name": f"Ticket {tag}",
+              "properties": [
+                  {"api_name": "key", "display_name": "Key", "data_type": "string",
+                   "required": True},
+                  {"api_name": "status", "display_name": "Status", "data_type": "string"},
+              ],
+              "title_property": "key"},
+    )
+    assert otype.status_code == 201, otype.text
+    action = client.post(
+        f"/api/workspaces/{fx.workspace}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": otype.json()["id"], "api_name": f"close_{tag}",
+              "display_name": "Close", "editable_properties": ["status"]},
+    )
+    assert action.status_code == 201, action.text
+    action_id = action.json()["id"]
+
+    app_id = _new_app(client, fx)
+    ok = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                    json={"definition": _action_module(action_id, {"status": "closed"})})
+    assert ok.status_code == 200, ok.text
+
+    bad = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                     json={"definition": _action_module(action_id, {"key": "X-1"})})
+    assert bad.status_code == 422, bad.text
+    assert "does not make editable" in bad.json()["detail"]
+
+
+def test_a_saved_run_action_still_opens_after_its_action_is_deleted(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A document is checked against the workspace when it is *written*. An
+    action deleted afterwards must not stop the app opening: a record of what
+    somebody built does not become invalid because live state moved. The click
+    reports it instead."""
+    tag = uuid.uuid4().hex[:8]
+    otype = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"order_{tag}", "display_name": f"Order {tag}",
+              "properties": [{"api_name": "state", "display_name": "State",
+                              "data_type": "string"}]},
+    ).json()
+    action = client.post(
+        f"/api/workspaces/{fx.workspace}/action-types", headers=hdr(fx.editor_sub),
+        json={"object_type_id": otype["id"], "api_name": f"ship_{tag}",
+              "display_name": "Ship", "editable_properties": ["state"]},
+    ).json()
+
+    app_id = _new_app(client, fx)
+    assert client.put(
+        f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+        json={"definition": _action_module(action["id"], {"state": "shipped"})},
+    ).status_code == 200
+
+    assert client.delete(
+        f"/api/workspaces/{fx.workspace}/action-types/{action['id']}",
+        headers=hdr(fx.editor_sub),
+    ).status_code in (204, 200)
+
+    opened = client.get(f"{base(fx)}/{app_id}", headers=hdr(fx.viewer_sub))
+    assert opened.status_code == 200, opened.text
+    evaluated = client.post(
+        f"{base(fx)}/{app_id}/variables/evaluate", headers=hdr(fx.viewer_sub),
+        json={"values": {}},
+    )
+    assert evaluated.status_code == 200, evaluated.text
+
+
 def test_saving_a_v1_definition_is_refused(client: TestClient, fx: Fixture) -> None:
     """This case used to assert the opposite, and the premise it rested on -
     "every unconverted app must keep working" - stopped being true when

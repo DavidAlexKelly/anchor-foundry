@@ -1890,6 +1890,141 @@ Seeding it needed three corrections that are worth knowing: `SourceCreate` takes
 
 ---
 
+### 98. The Object Explorer, and a saved search that cannot lie (this session)
+
+Roadmap 4.1, which closes section 4. Workspace-wide instance search, type filtering, saved searches and link traversal now live at `/{workspace}/explore` — a destination, not a panel two thirds of the way down a project's Objects settings page, which is where the explorer had been since §32.
+
+**Why it moved is the same argument as §97's.** Object types are workspace-wide (db 0003), so the explorer always searched across every project whatever project page you opened it from; reaching it meant picking a project first, which is asking somebody to guess a filing decision that has no bearing on the answer. The apps gallery is at `/{workspace}/apps` for exactly this reason, so the precedent was already there. The project page now *links* to it rather than keeping a second copy.
+
+**What is new is saving a search** — migration `0040`, `object_searches`. Three things it is careful about:
+
+- **A saved search stores the question, never the answer.** "Vessels flagged NO" reads differently tomorrow; storing rows would turn a live question into a stale report, and the first person to notice would be the one who trusted it. The table holds `{q, type_ids, property, value}` and nothing else.
+- **A search that cannot run cannot be saved.** The explorer's rule — a property filter needs exactly one type, because a property api_name only means something *within* a type — used to live in the route. It now lives in `services/object_searches.parse`, which both the route and the save path call, so the two cannot disagree. The one place they legitimately differ is named rather than left to each to remember: `require_criteria=False` lets the explorer browse everything, while saving an empty search is a named question with no question in it. The form mirrors the rule instead of teaching it by rejection: with two types ticked the property inputs are not offered, and the fieldset says why.
+- **A search naming a deleted type still opens, and keeps naming it.** The rail marks it, the form says how many are gone, and the dead id stays in the query — dropping it would silently *widen* the question, so the search would start returning rows it never asked for and read as though nothing had happened.
+
+**The browser check found a real inconsistency, and it is the reason the check exists.** A saved search whose only type had been deleted returned `404` when it also carried a property filter, and `200` with nothing when it did not — two behaviours for one question, and which one you hit depended on a filter that has nothing to do with the type being gone. The explorer route's `get_type` lookup now answers an empty page instead of refusing. Isolation does not rest on that lookup: the search prefix is already workspace-scoped, so another workspace's instances are unreachable either way.
+
+That bug also exposed a **weak assertion of my own**: "opening it matches nothing" was checking that no rows rendered, which a 404 error page satisfies perfectly. It now asserts the words *Nothing matches that.* and the absence of an error state.
+
+**Two smaller things.** `ObjectTypeSummary` gained `resource_id`, so a row's type chip opens that type's application (§97) without a second lookup — tested by *resolving* the id, since a plausible-looking uuid that 404s is worse than no link. And `LinkExplorerDialog` took a workspace/project slug pair purely to build one "Browse all X" href; it now takes a function returning a href or `null`, because traversal is no longer only reachable from inside a project.
+
+**720 API tests green** (+18), 74 worker, production build clean. **Twelve mutations, twelve caught** — including one from the previous run that had reported `2 errors in 0.98s` and was not a catch at all: the substitution put a literal `{}` into an f-string, so Python failed at collection and the run read like a pass. `jsonb_build_object()` is the same empty object with no braces in it, and the mutation is genuinely caught.
+
+---
+
+### 99. Deep links, and the state that was never anybody's to keep (this session)
+
+Roadmap 0.4, which closes section 0. A link now carries what you are looking at — the tab, the version, the branch comparison, the whole of a search — and every application offers **Copy link** in its shell.
+
+**Most of this was already true and had no affordance.** The dataset, repository and object type applications each kept their tab in the query string, and each had grown its own eight-line `setParams` to do it. Those three copies are now one hook, `useUrlState`, and the fourth caller is where a copy quietly starts pushing history entries instead of replacing them.
+
+**The URL is the state, not a copy of it.** The explorer (§98) read its criteria from `useState` and was the one surface built this phase that a link could not reproduce — which is a strange thing for the surface that *saved searches* were built for. It now derives them from `useSearchParams`, so restoring from a link is not a code path: there is nothing to restore, because nothing was kept anywhere else.
+
+**The same argument removed a piece of state rather than moving it.** The rail marked the saved search you had opened by remembering its id — which is a lie the moment you tick another type, and once the state is in the URL the *link* tells the lie too. Which saved search is on screen is now derived by comparing definitions. Nothing to go stale, and a pasted link marks the matching search with no wiring at all.
+
+**The browser check found three things, and two were mine.**
+
+- **A write built on the last render, not the last write.** `router.replace` does not land synchronously, so typing a property name and then its value each built on the same snapshot and the second dropped the first — producing `?property=` gone, `?value=NO` left: a filter the form displayed and the server was never asked for. Fixed in two places, because it needed both: `useUrlState` keeps the last write until the router catches up, and a caller that changes one parameter now writes *only* that parameter instead of re-sending all four from a stale copy. `set` also takes a function of the current params, for the case where the new value is derived from the old one — ticking two checkboxes faster than the router settles.
+- **A hidden property filter was still being applied.** With two types ticked the filter is not offered — and was still sent, so the panel showed a 422 where results should be. Hidden now means not applied: the query, the save, and the rail's "which search is this" all read the same `inEffect(criteria)`. The typed filter stays in the URL so unticking brings it back, and the form says in so many words that it is not being applied.
+- **An assertion of mine that could not fail.** "A fresh page restores the same rows" compared row *counts*, and blanking one of four parameters can leave the same number of rows. It compares the keys now.
+
+**Copy link admits when it cannot.** `navigator.clipboard` only exists in a secure context, so on a plain-http deployment — which this platform supports — the write does nothing. The button shows the link to copy by hand and says why, rather than reporting a success it did not have. Mutation testing also showed the explicit `if (!navigator.clipboard)` guard was equivalent to the `catch` beneath it, so it is gone: the `catch` covers a clipboard that is absent *and* one that refuses, which a presence check would have sailed past.
+
+**720 API tests green and 74 worker, both unchanged — no server code was touched.** Production build clean. **Seven mutations, seven caught**, which for frontend-only work is the whole of the evidence that the browser check can go red: it is the only test this code has.
+
+---
+
+### 100. The trigger nothing fired, and the effect that writes (this session)
+
+Roadmap 1.3's two remaining pieces: the **change** trigger, and the **`run_action`** effect. `export` stays refused — it needs a download surface the viewer route does not have, which is a thing to build rather than a thing to decide.
+
+**The change trigger was already a promise the runtime did not keep.** The events panel offered "Changed" on the dropdown and the filter list, the server accepted it, and *no widget ever fired it* — so an author could wire "when this dropdown changes, go to a page", save it, and watch it do nothing. That is precisely the failure `workshop_events.py`'s own docstring says the refusals exist to prevent, live in the product. Both widgets fire it now, with `{{value}}` carrying what was chosen. Not in the builder, though: a `navigate` fired by touching a control while arranging a page would move the builder off the page being edited.
+
+**`run_action` was blocked on a design question, and the answer is that the subject is a variable.** An action runs against one object instance, so the effect names a `single_object` variable holding it — usually set by a row click in an earlier effect of the same click, which is the copy-immediately semantics doing exactly what they exist for. The values it writes are one field per the action's *own* editable properties, not a free-form map: the server refuses a property an action does not make editable, and a text box would have taught that rule by rejection after the save.
+
+**The refusals, and the one that is deliberately asymmetric.** A subject that is not declared, or holds a string rather than an object; an action with nothing to write (`validate_submitted_values` refuses an empty write, so saving one saves a click that fails every time); a non-text value. Plus two that need the workspace: the action must exist, and every property must be on its editable list. **Those two run only when a document is written, never when one is read** — an action deleted after an app was saved would otherwise stop the app opening at all, and a record of what somebody built must not become invalid because live state moved. A `run_action` naming an action that has since gone reports when it is clicked.
+
+**A write fired by an event has nowhere to report**, unlike the action form, which has a form to put an error in — the button that fired it looks the same either way. So there is one status strip for the module. A click with no object picked is silent: that is an effect that does not apply, not a failure, and reporting it would train people to ignore the strip.
+
+**Two things the browser check found, one of them years older than this item.**
+
+- **The action form never refreshed the object table.** The invalidation after a write named four query keys by hand, and the object table's (`canvas-object-table`) was not among them — so submitting the form left the table showing the value it had just replaced. `run_action` inherited the bug verbatim. Both now invalidate by prefix (`canvas-*`), which cannot drift when a widget is added; a hand-kept list of "every widget that reads objects" is a second copy of a fact, and the next widget is the one left out of it.
+- **A survivor that was really a gap in the fixture.** "A failed action is reported as a success" survived because nothing in the seeded app ever failed. Reaching the failure meant a property that is *editable but unmapped* — saveable, and refused at click time, which is the exact case the strip exists for. That also showed the two failure handlers (a refused request, and an accepted request whose write-back fails) were two chances to say "Saved." about something that was not, so they became one. **The `ok: false` with HTTP 200 path — a `DatasetEngineError` during write-back — is still not reachable from a fixture**; what is proven is the shared reporting, not that specific server response.
+
+**732 API tests green** (+12), 74 worker, production build clean. **Ten mutations, ten caught** — five against the server's refusals, five against the browser behaviour.
+
+---
+
+### 101. Chart drill-down, and the equality that makes it buildable (this session)
+
+Roadmap 1.5's chart upgrade. Object-set input already existed (§74); what was missing was **drill-down**: clicking a bar or a slice narrows the set everything else on the page reads.
+
+**Clauses, not a set.** The chart writes `[{property, op: "eq", value}]` into a variable, and a `narrow_set` derivation the server resolves does the narrowing — the same shape the Filter List writes, so one derivation reads either, or both. A widget that wrote a *set* would be a second place sets come from with no rule for which wins, which is the argument §82 already made.
+
+**Why this is buildable and the map's area selection is not.** Both are "select on a chart, filter by it", and they are not the same problem. `region = "north"` means the same thing on Postgres and on OpenSearch whatever the property's declared type; `lat > 51.5` does not, and that is the untyped-property blocker (§87) that also holds ordered operators, numeric aggregations and property sorts. Drill-down is equality, so it needs nothing that does not exist.
+
+**Three things it is careful about.** Clicking what is already drilled into clears it — without that there is no way back out from inside the chart, and a filter you cannot remove is one you have to remember you applied. The selected category is drawn at full strength and the rest dimmed, rather than outlined, because the point of drilling in is that the others are no longer what you are looking at. And a chart with nothing to drill into is a **picture**: no pointer, no `aria-pressed`, no hover affordance promising something that will not happen. Scatter takes no drill-down at all — its label is an X *coordinate*, so a click would narrow to one exact value of a continuous axis.
+
+**Two gaps found on the way, and one of them was waiting.**
+
+- **`subjectVariable` was not in `REFERENCE_PROPS`.** An inline action form (§87) bound to a variable somebody then deleted was neither refused nor reported — the form pointed at nothing and edited whatever it found. Added, along with `drilldownVariable`. This can make an already-saved app fail to open, and that is the intended answer: such an app is already broken, and saying so beats a form that silently does the wrong thing. The list is now exercised by a loop over itself rather than a case each, because what goes wrong is somebody adding a ninth prop and not a ninth test.
+- **The parity test caught me, exactly as its own docstring predicted.** `REFERENCE_PROPS` exists twice — the server's copy and the builder's — and `test_the_reference_prop_list_agrees_with_the_browser_s_copy` says it "will grow widget by widget through item 1.5, which is exactly when one copy gets updated and the other does not". It grew, one copy got updated, and the test failed. Worth recording as evidence that mechanical parity assertions earn their keep.
+
+**Two surviving mutations, and only one was a real gap.** "Clicking a bar writes nothing" survived because my mutation was equivalent — a guard on a label that is never empty. "A chart with no drill-down is still clickable" survived because every chart in the fixture had one; the fixture now carries a second chart with nothing to drill into, which is the claim the comment above makes and nothing was checking.
+
+**733 API tests green** (+1), production build clean. **Seven mutations, seven caught.**
+
+---
+
+### 102. The Card List, and one implementation where there were nearly two (this session)
+
+Roadmap 1.5's Object/Card List — the card-shaped alternative to the object table.
+
+**Set-only, deliberately.** The table still carries a pre-variable path where it names an object type and a filter parameter itself. A new widget does not, because item 1.5's own rule is that a widget consumes input variables and emits output variables: one that reaches for a type id directly cannot be wired to anything, which is the flaw in the original eight.
+
+**What makes it a card list rather than a table with rounded corners.** A table compares many objects across the same columns; cards are for reading one object at a time, so a card leads with a *heading* — the type's title property, or the key when it has none — and shows a few fields under it, capped at six. Past six a card is a folded table row and the table is the better widget. The key is always shown even when it is also the heading: it is what identifies the object to every other part of the platform, and a card you cannot match back to a row is a card you cannot act on.
+
+**It fires the same `row_select` the table does**, with the same payload, so anything already wired to a table can be pointed at this instead — which is the claim the browser check makes by drilling into a chart and watching the table and the cards move together.
+
+**Two things were extracted rather than copied.** Both are places a second implementation would drift, not merely repeat: *paging resets when the set changes* (narrowing a filter while on page 2 otherwise leaves a viewer looking at an empty widget that reports a total), and *how a selected object is announced* — twice, deliberately, flattened for `{{...}}` and whole for a `single_object` variable, with the `object_type_id` coming from the widget's set rather than the row, because a row does not carry one. The table now uses both, so there is one implementation where there were about to be two.
+
+**Three mutations survived the first run, and only two were real.**
+
+- **Paging never paged.** The fixture had nine objects and a page size of twelve, so the reset rule could not fire. North now has fourteen, and the check goes to page 2 and narrows from there.
+- **Every card list in the fixture had a click wired**, so "a card is clickable with nothing wired to it" changed nothing. There is a second, unwired card list now — the claim its own comment makes.
+- **The third was equivalent, and that is a finding.** Nothing reads a selection's `object_type_id`. It is carried because a snapshot of a click needs a reference to re-read from, and the server is what makes a wrong-type action safe — `execute` fetches the instance *by the action's* type, so an object of another type is simply not found. The mutation was removed rather than left standing, since a mutation on a field with no consumer proves nothing.
+
+**One layout bug the screenshot caught**: each field's `<div>` wrapper was a grid item, so two fields sat side by side with their labels on one line and their values on the next — four unrelated words in a box. `display: contents` puts the `dt` and `dd` into the card's own grid.
+
+**733 API tests green and the build clean**, both unchanged — this widget added no server code. **Eleven mutations, eleven caught.**
+
+---
+
+### 103. Search, and the difference between composing and competing (this session)
+
+Roadmap 1.5's *Search / Prominent Terms Filter* row — and **half of it was already built**, which is worth saying rather than shipping a near-duplicate. *Prominent terms* is the Filter List (§82): `group_object_set` returns buckets ordered by count descending, so the widget that shows each value with its count already shows the prominent ones first. What was missing is search.
+
+**It writes clauses, like every other narrowing widget, and that is the point.** The Filter List, a chart drill-down (§101) and this all produce `[{property, op, value}]` and all feed `narrow_set`. Each owns *its own* clause variable and they **chain** — `narrow_set(narrow_set(all, filters), search)` — rather than sharing one. Sharing would make two widgets overwrite each other and leave the resulting set depending on which was touched last, which is a bug nobody would report as a bug. The settings panel says so where somebody is about to pick the variable.
+
+**`starts_with`, not "contains", and that is the server's decision showing through.** A substring match is `ILIKE '%x%'` on Postgres and a wildcard query on OpenSearch, neither of which uses an index — fine on a hundred objects, pathological on a million, which is the cost server-side set evaluation exists to avoid. A prefix is indexable on both and the two stores agree about it. The box says "starts with" on its own hint and in its placeholder, because a control that quietly did something narrower than the word on it is how somebody concludes their data is missing. The browser check types a substring and asserts it matches **nothing**.
+
+**One property, named in Settings.** Searching every property at once is the Object Explorer's job (§98) and it is a different query — the store's `search`, not a set filter. Offering it here would be a second path to a set with no rule for which definition wins.
+
+**A write per keystroke, deliberately.** `VariableBridge` already debounces the resolve, so this costs one request per pause rather than one per character; debouncing again in the widget would only delay the box under the cursor.
+
+**733 API tests green and the build clean**, both unchanged — no server code.
+
+**Fourteen mutations, fourteen caught** — eleven across the drill-down and the Card List, and three aimed at this widget: a prefix silently becoming an equality match, an empty box filtering for nothing rather than dropping the filter, and search writing into the drill-down's variable instead of its own.
+
+**Getting that evidence took three attempts, and both interruptions were self-inflicted.** Worth recording, because the failure mode of the second one is a checking harness that lies:
+
+* I ran a production build while the mutation suite was driving the dev server — the rough edge this file already documents. Both write `apps/web/.next`, so every check after that point failed against a 500, which a harness looking for failures reads as a *catch*. That entire run was discarded rather than reported.
+* The container then restarted mid-run, so the script's cleanup never ran and **a mutation was left applied on disk**. The next verification failed and read as a product bug until `git diff` showed a single deleted line. The script now does `trap restore EXIT INT TERM`, and a killed run restored correctly on the next attempt — though a `kill -9` still outruns the trap, which is why the tree is checked with `git diff` before committing rather than trusted.
+
+The lesson is not "be careful". It is that a harness which infers a catch from *any* failure cannot tell a caught mutation from a broken environment, and will report a clean sweep for a server that is returning 500 to everything. A run whose environment was disturbed has to be discarded rather than read.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -48,6 +48,11 @@ export default function WorkspacePage() {
           <Link className="btn quiet" href={`/${params.workspace}/apps`}>
             Apps
           </Link>
+          {/* The ontology is workspace-wide (db 0003), so searching it is too
+              — roadmap item 4.1. */}
+          <Link className="btn quiet" href={`/${params.workspace}/explore`}>
+            Explore
+          </Link>
           <span className={`chip${workspace?.effective_role === "admin" ? " brass" : ""}`}>
             {workspace?.effective_role}
           </span>

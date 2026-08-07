@@ -570,6 +570,16 @@ export interface PropertyInput {
   description?: string;
 }
 
+/** What a saved search is saved *as*. Deliberately the same four parameters
+ * `objects.explore` takes: a saved search is the explorer's own state, so a
+ * shape of its own here would be a second place for the two to disagree. */
+export interface SavedSearchInput {
+  q?: string | null;
+  type_ids?: string[];
+  property?: string | null;
+  value?: string | null;
+}
+
 export interface ObjectTypeCreateInput {
   api_name: string;
   display_name: string;
@@ -686,6 +696,30 @@ export const objects = {
       `/workspaces/${wid}/object-instances${qs ? `?${qs}` : ""}`,
     );
   },
+  /** Saved searches (item 4.1). The definition is validated server-side by the
+   *  same function `explore` goes through, so a search that cannot run is
+   *  refused here rather than the next time somebody opens it. */
+  listSearches: (wid: string) =>
+    request<import("./types").SavedSearch[]>(`/workspaces/${wid}/object-searches`),
+  createSearch: (
+    wid: string,
+    input: { name: string; description?: string; definition: SavedSearchInput },
+  ) =>
+    request<import("./types").SavedSearch>(`/workspaces/${wid}/object-searches`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateSearch: (
+    wid: string,
+    searchId: string,
+    input: { name?: string; description?: string; definition?: SavedSearchInput },
+  ) =>
+    request<import("./types").SavedSearch>(
+      `/workspaces/${wid}/object-searches/${searchId}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+  deleteSearch: (wid: string, searchId: string) =>
+    request<void>(`/workspaces/${wid}/object-searches/${searchId}`, { method: "DELETE" }),
   listTypes: (wid: string) =>
     request<import("./types").ObjectTypeSummary[]>(`/workspaces/${wid}/object-types`),
   getType: (wid: string, typeId: string) =>

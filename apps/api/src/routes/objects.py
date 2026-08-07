@@ -39,6 +39,7 @@ from ..lib.errors import NotFoundError
 from ..services import instance_store
 from ..services import object_sets
 from ..services import instances as instances_service
+from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services.dataset_engine import DatasetEngineError
 
@@ -88,6 +89,9 @@ class ObjectTypeSummary(BaseModel):
     colour: str
     title_property_id: UUID | None
     source_count: int
+    # So a caller that has a type can open the type's application (item 4.2)
+    # without a second lookup. NOT NULL since db 0032.
+    resource_id: UUID
     created_at: datetime
     updated_at: datetime
 
@@ -518,6 +522,107 @@ class ExplorerPage(BaseModel):
     offset: int
 
 
+# ---- saved searches (ROADMAP.md phase 2, item 4.1) --------------------------
+class SearchDefinitionIn(BaseModel):
+    q: str | None = Field(default=None, max_length=200)
+    type_ids: list[UUID] = Field(default_factory=list)
+    property: str | None = Field(default=None, max_length=100)
+    value: str | None = Field(default=None, max_length=500)
+
+
+class SearchOut(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    name: str
+    description: str
+    definition: dict[str, Any]
+    # Resolved for display. `missing_types` are ids the workspace no longer
+    # has: the search still opens and that filter simply matches nothing, which
+    # is more useful than refusing to open something somebody may want to
+    # repair.
+    type_names: list[str]
+    missing_types: list[str]
+    created_by: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SearchCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    definition: SearchDefinitionIn
+
+
+class SearchPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    definition: SearchDefinitionIn | None = None
+
+
+def _parsed(body: SearchDefinitionIn) -> dict[str, Any]:
+    try:
+        return searches_service.parse(
+            q=body.q, type_ids=body.type_ids,
+            property_name=body.property, value=body.value,
+        )
+    except searches_service.SearchError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/object-searches", response_model=list[SearchOut])
+async def list_object_searches(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[SearchOut]:
+    """Saved searches are shared within the workspace, not private to whoever
+    wrote them - a saved search is usually a definition of a cohort a team
+    argues about, and one only its author can see gets reinvented slightly
+    differently by everybody else."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await searches_service.list_searches(conn, access.workspace_id)
+    return [SearchOut(**r) for r in rows]
+
+
+@router.post("/object-searches", response_model=SearchOut, status_code=status.HTTP_201_CREATED)
+async def create_object_search(
+    body: SearchCreate,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> SearchOut:
+    definition = _parsed(body.definition)
+    async with user_connection(access.auth.user_id) as conn:
+        row = await searches_service.create_search(
+            conn, access.workspace_id,
+            name=body.name.strip(), description=body.description,
+            definition=definition, created_by=access.auth.user_id,
+        )
+    return SearchOut(**row)
+
+
+@router.patch("/object-searches/{search_id}", response_model=SearchOut)
+async def update_object_search(
+    search_id: UUID,
+    body: SearchPatch,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> SearchOut:
+    definition = _parsed(body.definition) if body.definition is not None else None
+    async with user_connection(access.auth.user_id) as conn:
+        row = await searches_service.update_search(
+            conn, access.workspace_id, search_id,
+            name=body.name.strip() if body.name else None,
+            description=body.description, definition=definition,
+        )
+    return SearchOut(**row)
+
+
+@router.delete("/object-searches/{search_id}", status_code=status.HTTP_204_NO_CONTENT,
+               response_model=None)
+async def delete_object_search(
+    search_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await searches_service.delete_search(conn, access.workspace_id, search_id)
+
+
 @router.get("/object-instances", response_model=ExplorerPage)
 async def explore_instances(
     q: str | None = Query(default=None, max_length=200),
@@ -547,20 +652,36 @@ async def explore_instances(
     Shipment are unrelated columns that happen to share a name, and matching
     across both would silently union two different questions.
     """
-    if (property is None) != (value is None):
-        raise ValueError("filtering by a property needs both 'property' and 'value'")
-    if property is not None and (not type_id or len(type_id) != 1):
-        raise ValueError(
-            "filtering by a property needs exactly one type_id - a property "
-            "name only means something within a type"
+    # The same function a saved search is validated with (item 4.1). The rule
+    # used to live here; it moved so that saving a search that cannot run is
+    # refused at save time rather than at open time.
+    try:
+        searches_service.parse(
+            q=q, type_ids=type_id, property_name=property, value=value,
+            require_criteria=False,
         )
+    except searches_service.SearchError as exc:
+        raise ValueError(str(exc)) from exc
 
     async with user_connection(access.auth.user_id) as conn:
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
         if property is not None:
             assert type_id is not None
-            await ontology_service.get_type(conn, access.workspace_id, type_id[0])
+            try:
+                await ontology_service.get_type(conn, access.workspace_id, type_id[0])
+            except NotFoundError:
+                # A type id this workspace does not have matches nothing, which
+                # is what the no-property branch below already answers for the
+                # same id. A saved search (item 4.1) can outlive the type it
+                # names, and it must give the same answer whether or not it
+                # also carries a property filter - one branch refusing and the
+                # other quietly returning nothing is two behaviours for one
+                # question. Isolation does not rest on this lookup: the search
+                # prefix above is workspace-scoped, so another workspace's
+                # instances are unreachable either way, and an empty page is
+                # what an unknown id gets whether or not it exists elsewhere.
+                return ExplorerPage(items=[], total=0, limit=limit, offset=offset)
             rows, total = await store.find_by_property(
                 search_prefix=prefix,
                 object_type_id=type_id[0],

@@ -34,7 +34,7 @@ Three shifts follow, and they are the whole of this roadmap:
 
 ---
 
-## Section 0 — The precondition: resources, and applications that open them
+## Section 0 — The precondition: resources, and applications that open them — **done**
 
 **Nothing else in this roadmap can be built first.** Both Workshop and Code Repositories are full-viewport applications; there is currently no way to *be* one. Sequenced first for that reason alone, and it is the smallest section.
 
@@ -80,11 +80,11 @@ Three shifts follow, and they are the whole of this roadmap:
 
 **Depends on** 0.1.
 
-### 0.4 Deep links into application state — **S**
+### ~~0.4 Deep links into application state~~ — **done** (`STATUS.md` §99)
 
 **What Foundry does.** A Workshop URL carries the page and the variable state; a Dataset Preview URL carries the tab. You can send someone a link to what you are looking at.
 
-**Build.** Per-app URL state (query params), a "copy link" affordance in the shell, and restore-from-URL on load. Do this **while** each app is built rather than after — retrofitting URL state means unpicking component state that has already been written to assume it owns everything.
+**Built.** One `useUrlState` hook in place of the three per-application copies that had grown, Copy link in the application shell, and the Object Explorer's whole question moved out of component state into the query string. Restore-from-URL is not a code path: the URL *is* the state, so there is nothing to restore. Workshop's variable state is not in the URL — see section 1.
 
 ---
 
@@ -132,7 +132,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.1.
 
-### 1.3 Events — **M, the model and three trigger sources are done** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals; §77: tabs; §81: a button's click, the primary trigger surface). **What remains**: dropdown select/deselect as a trigger, and the two effects still refused with a reason — `run_action` waits on binding an action's parameters to variables, `export` on a download surface the viewer route lacks. (`navigate` was the third; 1.4 built it, and `close_overlay` alongside it.)
+### 1.3 Events — **M, done but for `export`** (`STATUS.md` §76: trigger → ordered effects, Foundry's sequential copy-immediately semantics, object-table row selection setting a variable, and the save-time refusals; §77: tabs; §81: a button's click; §100: the `change` trigger on dropdowns and filter lists — which the builder had offered and no widget fired — and the `run_action` effect, whose subject is a `single_object` variable and whose values are the action's own editable properties). **What remains**: `export`, refused with its reason — it needs a download surface the viewer route lacks. (`navigate` and `close_overlay` were built by 1.4.)
 
 **What Foundry does.** Events trigger behaviour when a user acts. They fire from many widgets — Button Group, Object Table on row selection, String Dropdown on select/deselect, Tabs. A button's **On click** can trigger an action, trigger a set of events, open a URL, or begin an export; when it triggers an action you can additionally fire events at points in the action lifecycle (on submission start, on successful completion). Events execute **sequentially in configured order**, but do not wait for the downstream computation of previous events. Setting a variable copies the value immediately, so the next event sees it.
 
@@ -174,12 +174,12 @@ Build toward Foundry's set, in the order below (roughly descending value per uni
 | 1 | ~~**Button Group**~~ | **Done** (`STATUS.md` §81) as a **Button**: one button is one node, and a group is a row of them in a Section. A trigger is `(node, on)`, so a multi-button node would need every event to name *which* button — a format change to express what the layout already expresses |
 | 1 | ~~**Metric Card**~~ | **Done** (`STATUS.md` §74) |
 | 2 | ~~**Tabs**~~ | **Done** (`STATUS.md` §77), and it navigates through the event system rather than around it |
-| 2 | **Charts** (upgrade) | Object-set input rather than dataset-only; drill-down emitting a filtered set |
+| 2 | ~~**Charts** (upgrade)~~ | **Done**: object-set input (`STATUS.md` §74) and drill-down (§101). Clicking a bar writes an equality *clause* into a variable a `narrow_set` derivation reads — clauses rather than a set, for the reason the Filter List writes clauses. Equality is also why this is buildable where the map's area selection is not: `region = "north"` means the same on both stores, `lat > 51.5` does not |
 | 2 | **Map** (upgrade) | **Object-set input and pin selection done** (`STATUS.md` §86); the clustering and pan work (§37) carried over unchanged. **What remains**: selection emitting a *set* — drawing an area and filtering by it needs numeric comparison on lat/lon, which is the same untyped-property blocker as ordered operators, numeric aggregations and property sorts |
 | 2 | ~~**Inline Action Form**~~ | **Done** (`STATUS.md` §87): bound to a `single_object` variable, the form edits the object somebody picked, prefilled with its current values, and writes the result back into the variable so nothing on screen shows what you just replaced |
-| 3 | **Object List / Card List** | Card-shaped alternative to the table |
+| 3 | ~~**Object List / Card List**~~ | **Done** (`STATUS.md` §102). Set-only, by this table's own rule: a widget that reaches for a type id cannot be wired to anything. Leads with the title property, caps at six fields, and fires the same `row_select` the table does — so anything wired to a table can be pointed at it instead |
 | 3 | **Pivot Table** | Cross-tab over an object set |
-| 3 | **Search / Prominent Terms Filter** | Foundry's example apps lean on these |
+| 3 | ~~**Search / Prominent Terms Filter**~~ | **Done** (`STATUS.md` §103) — and half of it already was. *Prominent terms* is the Filter List (§82): `group_object_set` returns buckets ordered by count descending, which is what that widget shows. *Search* is new: a prefix match on one property, written as a clause into its own variable so it **chains** with the Filter List and chart drill-down rather than sharing a variable and fighting them. `starts_with` rather than "contains" is the server's decision showing through — a substring match uses no index on either store |
 | 3 | **Time Series / Timeline** | |
 | 4 | **Embedded module** | One module inside another — needs 1.4 first |
 | 4 | **Comments / Notepad** | |
@@ -302,12 +302,12 @@ No migration was needed: every version's bytes have always been written to their
 
 ---
 
-## Section 4 — Ontology applications
+## Section 4 — Ontology applications — **done**
 
 Closest to parity already. Two applications, both mostly re-presentation:
 
-### 4.1 Object Explorer — **M**
-Workspace-wide search, type filtering, saved searches, link traversal. The explorer (`STATUS.md` §32) and traversal (§33) exist; this is the full-page app around them.
+### ~~4.1 Object Explorer~~ — **done** (`STATUS.md` §98, migration 0040)
+Workspace-wide search, type filtering, saved searches and link traversal at `/{workspace}/explore` — a destination rather than a panel inside a project's Objects page, since the ontology it searches is workspace-wide. A saved search stores the question and never the answer, and is validated at save time by the same function the explorer route uses, so one that cannot run cannot be saved.
 
 ### ~~4.2 Ontology Manager~~ — **done** (`STATUS.md` §97)
 Type and link management, property types, change history (§34, §35) as a proper application rather than a settings page.

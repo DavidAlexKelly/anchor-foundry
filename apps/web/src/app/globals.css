@@ -1562,3 +1562,115 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-scrim .canvas-overlay--drawer {
   width: min(460px, 92vw); max-height: none; border-radius: 0;
 }
+
+/* ---- Object Explorer (roadmap item 4.1) ---------------------------------- */
+/* Saved searches sit beside the results rather than behind a menu: the point
+   of sharing one is that somebody who did not write it finds it. */
+.ox { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; }
+@media (max-width: 900px) { .ox { grid-template-columns: minmax(0, 1fr); } }
+.ox-main { min-width: 0; display: grid; gap: 12px; align-content: start; }
+.ox-query { display: grid; gap: 10px; }
+.ox-types, .ox-exact {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px 10px;
+  margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center;
+}
+.ox-types legend, .ox-exact legend {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-soft); padding: 0 4px;
+}
+.ox-type-list {
+  flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  max-height: 132px; overflow-y: auto;
+}
+.ox-type { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; }
+.ox-type input { margin: 0; }
+.ox-note { flex: 1 1 100%; margin: 2px 0 0; font-size: 12px; color: var(--ink-soft); }
+.ox-note code { font-family: var(--font-mono); }
+
+.ox-saved { display: grid; gap: 8px; align-content: start; }
+.ox-saved h2 {
+  margin: 0; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.ox-saved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ox-saved-list li {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 2px;
+}
+.ox-saved-list li.on { border-color: var(--accent); background: var(--accent-wash); }
+.ox-saved-open {
+  flex: 1 1 auto; min-width: 0; background: none; border: none; cursor: pointer;
+  font: inherit; text-align: left; padding: 6px 8px; display: grid; gap: 2px;
+}
+.ox-saved-open strong { font-size: 12.5px; }
+.ox-saved-open .slug { font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.ox-saved-open .chip { justify-self: start; }
+
+.ox-summary {
+  margin: 4px 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 12px; font-size: 12.5px;
+}
+.ox-summary dt { color: var(--ink-soft); }
+.ox-summary dd { margin: 0; }
+
+/* ---- copy link (roadmap item 0.4) ---------------------------------------- */
+.copy-link { position: relative; display: inline-flex; }
+/* Shown only when the clipboard API is unavailable — a plain-http deployment,
+   where writing to the clipboard silently does nothing. The link is handed
+   over to copy by hand rather than a success message nobody earned. */
+.copy-link-manual {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  display: grid; gap: 5px; width: min(420px, 70vw); padding: 10px;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: var(--radius); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+.copy-link-manual input { width: 100%; font-family: var(--font-mono); font-size: 12px; }
+.copy-link-manual .btn { justify-self: end; }
+
+/* ---- the run_action status strip (roadmap item 1.3) ---------------------- */
+/* A write fired by an event has no form to report back into: the button that
+   fired it looks the same either way. One strip for the whole module, so a
+   click that silently failed to save cannot go unnoticed. */
+.canvas-action-status {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 50;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 10px 8px 14px; font-size: 12.5px;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+}
+.canvas-action-status.bad { border-color: var(--danger); color: var(--danger); }
+.canvas-action-status .btn { padding: 2px 8px; font-size: 12px; }
+
+/* ---- Card list (roadmap item 1.5) ---------------------------------------- */
+/* A grid rather than a column: cards exist to be scanned several at a time,
+   and one per row is a table with worse density. */
+.canvas-cards {
+  display: grid; gap: 10px; margin: 6px 0;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.canvas-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; display: grid; gap: 4px; align-content: start;
+}
+.canvas-card h4 {
+  margin: 0; font-size: 13.5px; font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.canvas-card-key {
+  margin: 0; font-family: var(--font-mono); font-size: 11px; color: var(--ink-soft);
+}
+.canvas-card dl {
+  margin: 4px 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px; font-size: 12px;
+}
+/* `display: contents` so each pair's dt and dd become items of the dl's own
+   grid. Without it the wrapping div is a single grid item and two fields sit
+   side by side with their labels on one line and their values on the next -
+   which reads as a four-cell table of unrelated words. */
+.canvas-card dl > div { display: contents; }
+.canvas-card dt { color: var(--ink-soft); }
+.canvas-card dd { margin: 0; overflow-wrap: anywhere; }
+/* Only where a click does something — see the widget. */
+.canvas-card.clickable { cursor: pointer; }
+.canvas-card.clickable:hover { border-color: var(--line-strong); }
+.canvas-card.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

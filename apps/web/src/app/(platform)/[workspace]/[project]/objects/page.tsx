@@ -12,7 +12,6 @@ import {
   type PropertyInput,
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
-import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import {
   EditObjectTypeDialog,
   PropertyRows,
@@ -873,182 +872,6 @@ function SourceRow({
   );
 }
 
-function ObjectExplorer({
-  workspaceId,
-  workspaceSlug,
-  projectSlug,
-  types,
-}: {
-  workspaceId: string;
-  workspaceSlug: string;
-  projectSlug: string;
-  types: { id: string; display_name: string }[];
-}) {
-  const [exploring, setExploring] = useState<LinkStop | null>(null);
-  const [draft, setDraft] = useState("");
-  const [query, setQuery] = useState("");
-  const [typeId, setTypeId] = useState("");
-  const [offset, setOffset] = useState(0);
-  const limit = 25;
-
-  const page = useQuery({
-    queryKey: ["object-explorer", workspaceId, query, typeId, offset],
-    queryFn: () =>
-      objApi.explore(workspaceId, {
-        q: query || undefined,
-        typeIds: typeId ? [typeId] : undefined,
-        limit,
-        offset,
-      }),
-    enabled: !!workspaceId,
-  });
-
-  // Every property name present in the current page, so a cross-type result
-  // set still shows values rather than just ids. Union rather than
-  // intersection: a column that only some rows have is still worth seeing.
-  const columns = Array.from(
-    new Set((page.data?.items ?? []).flatMap((i) => Object.keys(i.properties))),
-  ).slice(0, 6);
-
-  return (
-    <>
-      <div className="page-head" style={{ marginTop: 32 }}>
-        <div>
-          <h2 style={{ fontSize: 15, margin: 0 }}>Explore instances</h2>
-          <p className="sub">Every instance in this workspace, across all object types</p>
-        </div>
-      </div>
-      <form
-        className="row-actions"
-        style={{ marginBottom: 12 }}
-        onSubmit={(e) => {
-          e.preventDefault();
-          setOffset(0);
-          setQuery(draft.trim());
-        }}
-      >
-        <input
-          type="search"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Search any property value…"
-          style={{ minWidth: 260 }}
-          aria-label="Search instances"
-        />
-        <select
-          value={typeId}
-          onChange={(e) => {
-            setOffset(0);
-            setTypeId(e.target.value);
-          }}
-          aria-label="Filter by object type"
-        >
-          <option value="">All types</option>
-          {types.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.display_name}
-            </option>
-          ))}
-        </select>
-        <button className="btn" type="submit">
-          Search
-        </button>
-      </form>
-
-      {page.isPending && <div className="state">Searching…</div>}
-      {page.isError && <div className="state error">Couldn&apos;t search instances.</div>}
-      {page.data && page.data.total === 0 && (
-        <div className="state">
-          {query || typeId
-            ? "Nothing matches that."
-            : "No instances yet — sync a dataset mapping to create some."}
-        </div>
-      )}
-      {page.data && page.data.total > 0 && (
-        <>
-          <div className="data-grid">
-            <table>
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Key</th>
-                  {columns.map((c) => (
-                    <th key={c}>{c}</th>
-                  ))}
-                  <th>Updated</th>
-                  <th aria-label="Actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {page.data.items.map((i) => (
-                  <tr key={i.id}>
-                    <td>
-                      <span className="chip">{i.object_type_display_name}</span>
-                    </td>
-                    <td className="slug">{i.primary_key}</td>
-                    {columns.map((c) => (
-                      <td key={c}>
-                        {i.properties[c] === undefined || i.properties[c] === null
-                          ? "∅"
-                          : String(i.properties[c])}
-                      </td>
-                    ))}
-                    <td className="slug">{new Date(i.updated_at).toLocaleString()}</td>
-                    <td>
-                      <button
-                        className="btn quiet"
-                        style={{ padding: "3px 9px", fontSize: 12 }}
-                        onClick={() =>
-                          setExploring({
-                            typeId: i.object_type_id,
-                            typeName: i.object_type_display_name,
-                            instance: i,
-                          })
-                        }
-                      >
-                        Explore
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="row-actions" style={{ marginTop: 8 }}>
-            <button
-              className="btn quiet"
-              disabled={offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - limit))}
-            >
-              Previous
-            </button>
-            <span className="slug">
-              {offset + 1}–{Math.min(offset + limit, page.data.total)} of {page.data.total}
-            </span>
-            <button
-              className="btn quiet"
-              disabled={offset + limit >= page.data.total}
-              onClick={() => setOffset(offset + limit)}
-            >
-              Next
-            </button>
-          </div>
-        </>
-      )}
-
-      {exploring && (
-        <LinkExplorerDialog
-          workspaceId={workspaceId}
-          workspaceSlug={workspaceSlug}
-          projectSlug={projectSlug}
-          start={exploring}
-          onClose={() => setExploring(null)}
-        />
-      )}
-    </>
-  );
-}
-
 export default function ObjectsPage() {
   const params = useParams<{ workspace: string; project: string }>();
   const { workspace } = useWorkspaceBySlug(params.workspace);
@@ -1203,12 +1026,16 @@ export default function ObjectsPage() {
             </tbody>
           </table>
 
-          <ObjectExplorer
-            workspaceId={workspace!.id}
-            workspaceSlug={params.workspace}
-            projectSlug={params.project}
-            types={types.data}
-          />
+          {/* The explorer used to be a panel here, which had it searching the
+              whole workspace from inside one project. It is its own
+              destination now (roadmap item 4.1); this is the way to it, not a
+              copy of it. */}
+          <p className="login-note" style={{ marginTop: 18 }}>
+            Searching across every object type, with saved searches and link
+            traversal, lives in{" "}
+            <Link href={`/${params.workspace}/explore`}>Explore</Link> — it is
+            workspace-wide, so it is not filed under a project.
+          </p>
 
           <div className="page-head" style={{ marginTop: 32 }}>
             <div><h2 style={{ fontSize: 15, margin: 0 }}>Link types</h2></div>

@@ -171,3 +171,38 @@ export const CanvasPageProvider = PageContext.Provider;
 export function useCanvasPage(): CanvasPageState {
   return useContext(PageContext);
 }
+
+/** Running an action from an event (roadmap 1.3, the `run_action` effect).
+ *
+ * Held here rather than built by each widget for the reason `useEventContext`
+ * exists: the first widget to assemble a capability by hand forgot one, and a
+ * missing capability makes an effect silently skip. It is also the only effect
+ * that *writes* — the rest move the reader around — so it is the only one whose
+ * outcome somebody has to be told about. `status` is that telling.
+ *
+ * The default is a no-op with a null status, so a widget rendered outside a
+ * `VariableBridge` (a Craft.js preview, a test) does not throw; the effect is
+ * skipped, which is the same rule every other capability follows.
+ */
+export interface CanvasActions {
+  run: (
+    config: { action: string; subject: string; values?: Record<string, string> },
+    context: { object?: { id?: string } | null },
+  ) => void;
+  /** What the last run did. Kept as one value rather than a list: an app that
+   * accumulated a log of every click would bury the one that failed. */
+  status: { ok: boolean; message: string } | null;
+  dismiss: () => void;
+}
+
+const ActionsContext = createContext<CanvasActions>({
+  run: () => {},
+  status: null,
+  dismiss: () => {},
+});
+
+export const CanvasActionsProvider = ActionsContext.Provider;
+
+export function useCanvasActions(): CanvasActions {
+  return useContext(ActionsContext);
+}

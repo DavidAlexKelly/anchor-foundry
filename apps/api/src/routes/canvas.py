@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from ..lib.db import user_connection
 from ..lib.errors import ForbiddenError
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
+from ..services import actions as actions_service
 from ..services import audit
 from ..services import canvas as canvas_service
 from ..services import workshop_format
@@ -242,14 +243,23 @@ async def save_definition(
                 "migration 0034; a client sending this one is older than that conversion."
             ),
         )
-    try:
-        variables_service.validate_module(body.definition)
-    except variables_service.VariableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
-
     async with user_connection(access.auth.user_id) as conn:
+        # The workspace's actions, so a `run_action` naming one that is not
+        # here - or writing a property it does not make editable - is refused
+        # by the person who wrote it rather than by whoever clicks it later.
+        # Only on the way in: see `validate_module` for why reading a document
+        # does not re-check it against live state.
+        known = {
+            str(a["id"]): [str(p) for p in (a.get("editable_properties") or [])]
+            for a in await actions_service.list_action_types(conn, access.workspace_id)
+        }
+        try:
+            variables_service.validate_module(body.definition, actions=known)
+        except variables_service.VariableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
         row = await canvas_service.save_definition(
             conn, access.project_id, app_id,
             definition=body.definition, created_by=access.auth.user_id,

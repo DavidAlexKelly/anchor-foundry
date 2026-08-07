@@ -24,8 +24,8 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { useUrlState } from "@/components/use-url-state";
 import { ApiError, objects as objectsApi } from "@/lib/api";
 import type { ObjectTypeVersion, ResolvedResource } from "@/lib/types";
 
@@ -40,19 +40,13 @@ const TAB_LABELS: Record<Tab, string> = {
 };
 
 export function ObjectTypeApplication({ resource }: { resource: ResolvedResource }) {
-  const router = useRouter();
-  const params = useSearchParams();
-  const raw = params.get("tab");
-  const tab: Tab = (TABS as readonly string[]).includes(raw ?? "") ? (raw as Tab) : "objects";
+  const url = useUrlState();
+  const tab = url.oneOf("tab", TABS, "objects");
 
   const wid = resource.workspace_id;
   const typeId = resource.kind_id;
 
-  function selectTab(next: Tab) {
-    const search = new URLSearchParams(params.toString());
-    search.set("tab", next);
-    router.replace(`?${search.toString()}`, { scroll: false });
-  }
+  const selectTab = (next: Tab) => url.set({ tab: next });
 
   return (
     <div className="ds-app">

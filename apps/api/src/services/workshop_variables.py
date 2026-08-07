@@ -85,6 +85,16 @@ MAX_CONCAT_PARTS = 20
 # Props whose value is a variable id. The vocabulary grows widget by widget in
 # item 1.5; what matters here is that it is a *list*, so usage scanning has one
 # definition rather than each caller guessing.
+# Every node prop that names a variable. A binding missing from this list is a
+# binding nothing checks: deleting the variable is allowed, and the widget then
+# reads as "no filter" and quietly shows everything - the failure decision 0002
+# exists to remove.
+#
+# `subjectVariable` was missing until item 1.5, which is a real gap and not a
+# new one: an inline action form (§87) bound to a deleted variable was neither
+# refused nor reported. Adding it can make an already-saved app fail to open,
+# and that is the intended answer - such an app is already a form pointed at
+# nothing, and saying so beats a form that edits whatever it finds.
 REFERENCE_PROPS = (
     "filterParameter",
     "searchParameter",
@@ -92,6 +102,8 @@ REFERENCE_PROPS = (
     "objectSetVariable",
     "enabledVariable",
     "visibleWhen",
+    "subjectVariable",
+    "drilldownVariable",
 )
 
 
@@ -661,12 +673,20 @@ def dangling_references(layout: Any, variables: dict[str, Variable]) -> list[dic
     return broken
 
 
-def validate_module(document: Any) -> dict[str, Variable]:
+def validate_module(
+    document: Any, *, actions: dict[str, list[str]] | None = None
+) -> dict[str, Variable]:
     """Everything the save path checks, in one call.
 
     Only applies to `format: 2` documents. A v1 definition is a bare Craft.js
     map with no variables to validate, and refusing to save one would break
     every app that has not been converted yet.
+
+    `actions` (id -> editable properties) is the workspace's action types, and
+    is passed only when a document is being *written*. Reading one does not
+    re-check it against live state: an action deleted after an app was saved
+    would otherwise stop the app opening at all, and a record of what somebody
+    built must not become invalid because something else moved.
     """
     if not isinstance(document, dict) or document.get("format") != 2:
         return {}
@@ -691,6 +711,7 @@ def validate_module(document: Any) -> dict[str, Variable]:
             document.get("events"),
             layout=document.get("layout"),
             variables=variables,
+            actions=actions,
         )
     except workshop_events.EventError as exc:
         raise VariableError(str(exc)) from exc

@@ -23,6 +23,44 @@ export interface ChartPoint {
   value: number;
 }
 
+/** Drill-down (roadmap 1.5). Clicking a category means "narrow to this one",
+ * so the chart needs to know which category is currently narrowed to and how
+ * to say a new one was picked. Absent means the chart is a picture, which is
+ * what a chart with nothing to drill into should be — no pointer cursor, no
+ * hover affordance promising something that will not happen. */
+export interface Drill {
+  selected: string | null;
+  onSelect: (label: string) => void;
+}
+
+/** A selected category is drawn at full strength and the rest are dimmed,
+ * rather than the selection being outlined: the point of drilling in is that
+ * the others are no longer what you are looking at. */
+function dim(drill: Drill | undefined, label: string): number {
+  if (!drill || drill.selected === null) return 1;
+  return drill.selected === label ? 1 : 0.28;
+}
+
+/** What a clickable mark needs to be operable by something other than a
+ * mouse. An SVG shape is not a button until it says so. */
+function markProps(drill: Drill | undefined, label: string) {
+  if (!drill) return {};
+  return {
+    role: "button",
+    tabIndex: 0,
+    style: { cursor: "pointer" },
+    "aria-label": `Filter to ${label}`,
+    "aria-pressed": drill.selected === label,
+    onClick: () => drill.onSelect(label),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        drill.onSelect(label);
+      }
+    },
+  };
+}
+
 const PALETTE = [
   "#2f6f4f", "#b07d2b", "#3d6b8f", "#8f4b6b", "#5c6b3d",
   "#7a5c8f", "#2f8f8f", "#8f5c2f", "#4f4f8f", "#6b8f3d",
@@ -100,7 +138,7 @@ function gridTicks(values: number[], count = 4): number[] {
   return Array.from({ length: count + 1 }, (_, i) => min + (span * i) / count);
 }
 
-function BarChart({ points }: { points: ChartPoint[] }) {
+function BarChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
   const area = plotArea();
   const values = points.map((p) => p.value);
   const s = scale(values);
@@ -121,6 +159,8 @@ function BarChart({ points }: { points: ChartPoint[] }) {
               width={barWidth}
               height={Math.max(1, Math.abs(zeroY - y))}
               fill={PALETTE[i % PALETTE.length]}
+              opacity={dim(drill, p.label)}
+              {...markProps(drill, p.label)}
             >
               <title>{`${p.label}: ${p.value}`}</title>
             </rect>
@@ -140,7 +180,7 @@ function BarChart({ points }: { points: ChartPoint[] }) {
   );
 }
 
-function LineChart({ points }: { points: ChartPoint[] }) {
+function LineChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
   const area = plotArea();
   const values = points.map((p) => p.value);
   const s = scale(values);
@@ -155,7 +195,17 @@ function LineChart({ points }: { points: ChartPoint[] }) {
       <Axes ticks={gridTicks(values)} area={area} />
       <path d={path} fill="none" stroke={PALETTE[0]} strokeWidth={2} />
       {points.map((p, i) => (
-        <circle key={i} cx={area.x + step * i} cy={s.toY(p.value, area)} r={2.5} fill={PALETTE[0]}>
+        <circle
+          key={i}
+          cx={area.x + step * i}
+          cy={s.toY(p.value, area)}
+          // A 2.5px dot is not a click target. Bigger when there is something
+          // to click, rather than asking for a steady hand.
+          r={drill ? 5 : 2.5}
+          fill={PALETTE[0]}
+          opacity={dim(drill, p.label)}
+          {...markProps(drill, p.label)}
+        >
           <title>{`${p.label}: ${p.value}`}</title>
         </circle>
       ))}
@@ -209,7 +259,7 @@ function ScatterChart({ points }: { points: ChartPoint[] }) {
   );
 }
 
-function PieChart({ points }: { points: ChartPoint[] }) {
+function PieChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
   const total = points.reduce((sum, p) => sum + Math.max(0, p.value), 0);
   const cx = 130;
   const cy = HEIGHT / 2;
@@ -239,7 +289,13 @@ function PieChart({ points }: { points: ChartPoint[] }) {
                   "Z",
                 ].join(" ");
           const slice = (
-            <path key={i} d={path} fill={PALETTE[i % PALETTE.length]}>
+            <path
+              key={i}
+              d={path}
+              fill={PALETTE[i % PALETTE.length]}
+              opacity={dim(drill, p.label)}
+              {...markProps(drill, p.label)}
+            >
               <title>{`${p.label}: ${p.value} (${(share * 100).toFixed(1)}%)`}</title>
             </path>
           );
@@ -259,14 +315,26 @@ function PieChart({ points }: { points: ChartPoint[] }) {
   );
 }
 
-export function Chart({ kind, points }: { kind: string; points: ChartPoint[] }) {
+export function Chart({
+  kind,
+  points,
+  drill,
+}: {
+  kind: string;
+  points: ChartPoint[];
+  drill?: Drill;
+}) {
   if (points.length === 0) {
     return <p className="canvas-widget-empty">No rows match — nothing to chart.</p>;
   }
-  if (kind === "line") return <LineChart points={points} />;
-  if (kind === "pie") return <PieChart points={points} />;
+  if (kind === "line") return <LineChart points={points} drill={drill} />;
+  if (kind === "pie") return <PieChart points={points} drill={drill} />;
+  // Scatter takes no drill-down: its label is an X *coordinate*, so clicking a
+  // point would narrow to one exact value of a continuous axis — almost never
+  // the question somebody is asking. Left out rather than wired to something
+  // that technically works.
   if (kind === "scatter") return <ScatterChart points={points} />;
-  return <BarChart points={points} />;
+  return <BarChart points={points} drill={drill} />;
 }
 
 /** Rows come back from the query endpoint as `[label, value]` pairs of

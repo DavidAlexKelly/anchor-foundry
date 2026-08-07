@@ -12,6 +12,7 @@
 
 import Link from "next/link";
 import { kindLabel } from "@/components/resource-browser";
+import { CopyLinkButton } from "@/components/use-url-state";
 import type { ResolvedResource } from "@/lib/types";
 
 export function ApplicationShell({
@@ -47,7 +48,13 @@ export function ApplicationShell({
           {resource.trashed && <span className="chip warn">in trash</span>}
         </div>
         <div className="spacer" />
-        <div className="app-toolbar">{toolbar}</div>
+        {/* Every application, not each one separately (item 0.4). The state
+            worth sharing is already in the query string, so the affordance
+            that shares it belongs where the chrome is. */}
+        <div className="app-toolbar">
+          {toolbar}
+          <CopyLinkButton />
+        </div>
       </header>
       <div className="app-body">{children}</div>
     </div>

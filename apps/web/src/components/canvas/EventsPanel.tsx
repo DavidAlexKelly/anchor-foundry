@@ -49,8 +49,8 @@ const TRIGGERS: {
   {
     on: "row_select",
     label: "Row selected",
-    widgets: ["CanvasObjectTable", "CanvasMap"],
-    labels: { CanvasMap: "Pin selected" },
+    widgets: ["CanvasObjectTable", "CanvasObjectCards", "CanvasMap"],
+    labels: { CanvasMap: "Pin selected", CanvasObjectCards: "Card selected" },
   },
   {
     on: "change",
@@ -59,13 +59,15 @@ const TRIGGERS: {
   },
 ];
 
-/** Mirrors `EFFECTS`. The two the server refuses with a reason are absent:
- * offering them would be offering a choice that fails on save. */
+/** Mirrors `EFFECTS`. The one the server still refuses with a reason
+ * (`export`) is absent: offering it would be offering a choice that fails on
+ * save. */
 const EFFECTS: { type: string; label: string; hint: string }[] = [
   { type: "set_variable", label: "Set a variable", hint: "" },
   { type: "navigate", label: "Go to a page or overlay", hint: "" },
   { type: "close_overlay", label: "Close the overlay", hint: "returns to the page underneath" },
   { type: "open_url", label: "Open a link", hint: "" },
+  { type: "run_action", label: "Run an action", hint: "writes to the object it acts on" },
 ];
 
 /** Widget names that can fire something, for the caller reading the tree.
@@ -84,6 +86,16 @@ export interface PageCandidate {
   label: string;
 }
 
+/** An action this workspace has, and what it lets an event write. The
+ * properties come from the action type rather than from a text box: the server
+ * refuses a write to a property the action does not make editable, and a form
+ * that let you type one would be teaching that rule by rejection. */
+export interface ActionCandidate {
+  id: string;
+  label: string;
+  editable: string[];
+}
+
 function triggersFor(widget: string): { on: string; label: string }[] {
   return TRIGGERS.filter((t) => t.widgets.includes(widget)).map((t) => ({
     on: t.on,
@@ -96,6 +108,7 @@ export function EventsPanel({
   variables,
   triggerNodes,
   pages,
+  actions = [],
   onChange,
   readOnly,
 }: {
@@ -106,11 +119,17 @@ export function EventsPanel({
   triggerNodes: TriggerCandidate[];
   /** Pages and overlays, which is what `navigate` accepts. */
   pages: PageCandidate[];
+  /** The workspace's action types, which is what `run_action` accepts. */
+  actions?: ActionCandidate[];
   onChange: (next: Record<string, WorkshopEvent>) => void;
   readOnly: boolean;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const writable = Object.values(variables).filter((v) => !v.derivation);
+  // Subjects are *read*, so a derived one is fine here where it is not for a
+  // set_variable: "the object this other variable computed" is a reasonable
+  // thing to act on.
+  const objects = Object.values(variables).filter((v) => v.kind === "single_object");
 
   function update(id: string, next: WorkshopEvent) {
     onChange({ ...events, [id]: next });
@@ -241,7 +260,9 @@ export function EventsPanel({
                     index={index}
                     count={effects.length}
                     variables={writable}
+                    objects={objects}
                     pages={pages}
+                    actions={actions}
                     readOnly={readOnly}
                     onChange={(next) => setEffect(event, index, next)}
                     onMove={(by) => moveEffect(event, index, by)}
@@ -291,7 +312,9 @@ function EffectEditor({
   index,
   count,
   variables,
+  objects,
   pages,
+  actions,
   readOnly,
   onChange,
   onMove,
@@ -301,7 +324,9 @@ function EffectEditor({
   index: number;
   count: number;
   variables: WorkshopVariable[];
+  objects: WorkshopVariable[];
   pages: PageCandidate[];
+  actions: ActionCandidate[];
   readOnly: boolean;
   onChange: (next: WorkshopEffect) => void;
   onMove: (by: number) => void;
@@ -411,6 +436,16 @@ function EffectEditor({
         </>
       )}
 
+      {effect.type === "run_action" && (
+        <RunActionEditor
+          config={config}
+          objects={objects}
+          actions={actions}
+          readOnly={readOnly}
+          onChange={(next) => onChange({ type: effect.type, config: next })}
+        />
+      )}
+
       {effect.type === "navigate" && (
         <label className="field">
           <span className="field-label">Go to</span>
@@ -446,5 +481,109 @@ function EffectEditor({
         <p className="field-hint">Returns to the page underneath. Nothing to configure.</p>
       )}
     </div>
+  );
+}
+
+
+/** Configuring a `run_action`.
+ *
+ * Three things, and the third is the one worth care: **which action**, **which
+ * variable holds the object it acts on**, and **what it writes**. The write
+ * fields are one per editable property of the chosen action rather than a
+ * free-form map, because the server refuses a property the action does not
+ * make editable — and a text box that let you type one would be teaching that
+ * rule by rejection, after the save.
+ *
+ * Changing the action clears the values with it. Property names carried over
+ * from a different action would be refused on save with a message about a
+ * property nobody typed.
+ */
+function RunActionEditor({
+  config,
+  objects,
+  actions,
+  readOnly,
+  onChange,
+}: {
+  config: Record<string, unknown>;
+  objects: WorkshopVariable[];
+  actions: ActionCandidate[];
+  readOnly: boolean;
+  onChange: (next: Record<string, unknown>) => void;
+}) {
+  const chosen = actions.find((a) => a.id === String(config.action ?? ""));
+  const values = (config.values ?? {}) as Record<string, string>;
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Action</span>
+        <select
+          disabled={readOnly}
+          value={String(config.action ?? "")}
+          onChange={(e) =>
+            onChange({ ...config, action: e.target.value || undefined, values: {} })
+          }
+        >
+          <option value="">Pick an action</option>
+          {actions.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+        {actions.length === 0 && (
+          <span className="field-hint">
+            This workspace has no actions yet — define one on an object type first
+          </span>
+        )}
+      </label>
+      <label className="field">
+        <span className="field-label">On the object in</span>
+        <select
+          disabled={readOnly}
+          value={String(config.subject ?? "")}
+          onChange={(e) => onChange({ ...config, subject: e.target.value || undefined })}
+        >
+          <option value="">Pick a variable</option>
+          {objects.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        {/* Only object-holding variables are offered. A text variable holding
+            a primary key looks equivalent and is not: the action runs against
+            an instance id. */}
+        <span className="field-hint">
+          {objects.length === 0
+            ? "Declare a variable that holds an object, and set it from a row click"
+            : "Set by a row click, usually in an earlier effect of this same event"}
+        </span>
+      </label>
+      {chosen && chosen.editable.length === 0 && (
+        <p className="canvas-widget-empty">
+          {chosen.label} makes no properties editable, so there is nothing for this
+          effect to write.
+        </p>
+      )}
+      {chosen?.editable.map((prop) => (
+        <label className="field" key={prop}>
+          <span className="field-label">{prop}</span>
+          <input
+            disabled={readOnly}
+            value={values[prop] ?? ""}
+            placeholder="leave blank not to write it"
+            onChange={(e) => {
+              const next = { ...values };
+              if (e.target.value === "") delete next[prop];
+              else next[prop] = e.target.value;
+              onChange({ ...config, values: next });
+            }}
+          />
+          <span className="field-hint">{"{{value}}"} reads from what was clicked or chosen</span>
+        </label>
+      ))}
+    </>
   );
 }

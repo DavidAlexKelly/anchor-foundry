@@ -18,8 +18,8 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useUrlState } from "@/components/use-url-state";
 import { ApiError, code as codeApi, repositories as repoApi } from "@/lib/api";
 import { DESCRIPTION_TEMPLATE } from "@/components/code/review-surface";
 import type {
@@ -37,7 +37,8 @@ const CodeEditor = dynamic(
   { ssr: false, loading: () => <div className="code-editor-loading">Loading editor…</div> },
 );
 
-type Tab = "files" | "history" | "branches" | "publish";
+const TABS = ["files", "history", "branches", "publish"] as const;
+type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   files: "Files",
@@ -47,30 +48,18 @@ const TAB_LABELS: Record<Tab, string> = {
 };
 
 export function RepositoryApplication({ resource }: { resource: ResolvedResource }) {
-  const router = useRouter();
-  const params = useSearchParams();
+  const url = useUrlState();
 
   const wid = resource.workspace_id;
   const pid = resource.project_id!;
   const rid = resource.kind_id;
 
-  const requested = params.get("tab");
-  const tab: Tab =
-    requested === "history" || requested === "branches" || requested === "publish"
-      ? requested
-      : "files";
-  const branch = params.get("branch") ?? undefined;
-  const commitId = params.get("commit") ?? undefined;
-  const openPath = params.get("file") ?? undefined;
+  const tab = url.oneOf("tab", TABS, "files");
+  const branch = url.get("branch") ?? undefined;
+  const commitId = url.get("commit") ?? undefined;
+  const openPath = url.get("file") ?? undefined;
 
-  function setParams(next: Record<string, string | undefined>) {
-    const search = new URLSearchParams(params.toString());
-    for (const [key, value] of Object.entries(next)) {
-      if (value === undefined) search.delete(key);
-      else search.set(key, value);
-    }
-    router.replace(`?${search.toString()}`, { scroll: false });
-  }
+  const setParams = url.set;
 
   const repo = useQuery({
     queryKey: ["repo", rid],
@@ -638,8 +627,14 @@ function BranchesTab({
   const known = useMemo(() => branches ?? [], [branches]);
   const names = known.map((b) => b.name);
 
-  const [base, setBase] = useState(defaultBranch);
-  const [head, setHead] = useState("");
+  // The comparison is in the URL (item 0.4): "look at what this branch has
+  // that trunk does not" is a thing to send somebody, and it is the one piece
+  // of this tab's state that describes a *question* rather than a form being
+  // filled in. The branch being created is not - a half-typed name is not
+  // something to share, and neither is a note about what just happened.
+  const url = useUrlState();
+  const base = url.get("base") ?? defaultBranch;
+  const head = url.get("head") ?? "";
   const [newName, setNewName] = useState("");
   const [from, setFrom] = useState(current);
   const [failure, setFailure] = useState<string | null>(null);
@@ -789,7 +784,7 @@ function BranchesTab({
         <div className="repo-merge-refs">
           <label>
             Into
-            <select value={baseBranch} onChange={(e) => setBase(e.target.value)}>
+            <select value={baseBranch} onChange={(e) => url.set({ base: e.target.value })}>
               {names.map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -800,7 +795,7 @@ function BranchesTab({
           <span aria-hidden>←</span>
           <label>
             From
-            <select value={headBranch} onChange={(e) => setHead(e.target.value)}>
+            <select value={headBranch} onChange={(e) => url.set({ head: e.target.value })}>
               {names
                 .filter((n) => n !== baseBranch)
                 .map((n) => (

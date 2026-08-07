@@ -25,7 +25,12 @@
  * document and concerns itself with *when* things happen.
  */
 
-import { useCanvasPage, useCanvasParameters } from "./context";
+import {
+  useCanvasActions,
+  useCanvasPage,
+  useCanvasParameters,
+  useCanvasVariables,
+} from "./context";
 
 export interface WorkshopEffect {
   type: string;
@@ -72,6 +77,16 @@ export interface EventContext {
     properties: Record<string, unknown>;
   };
   openUrl?: (url: string) => void;
+  /** Run an action against the object the trigger was about (roadmap 1.3).
+   * The only effect that writes, and so the only one whose outcome anybody
+   * has to be told about — see `CanvasActions`. */
+  runAction?: (
+    config: { action: string; subject: string; values?: Record<string, string> },
+    context: { object?: EventContext["object"] | null },
+  ) => void;
+  /** The module's variables as last resolved. Read by `run_action` to find
+   * the object its subject variable holds, when this click did not set it. */
+  variables?: Record<string, unknown>;
 }
 
 /** Events on one widget for one act, in id order — the same order the server's
@@ -117,8 +132,12 @@ export function useEventContext(
 ): EventContext {
   const { setMany } = useCanvasParameters();
   const { go, openOverlay, closeOverlay } = useCanvasPage();
+  const { run: runAction } = useCanvasActions();
+  const { resolved } = useCanvasVariables();
   return {
     setVariables: setMany,
+    runAction,
+    variables: resolved,
     goToPage: go,
     openOverlay,
     closeOverlay,
@@ -166,6 +185,30 @@ export function run(
         else context.goToPage?.(target);
       } else if (effect.type === "close_overlay") {
         context.closeOverlay?.();
+      } else if (effect.type === "run_action") {
+        const action = String(config.action ?? "");
+        const subject = String(config.subject ?? "");
+        if (!action || !subject || !context.runAction) continue;
+        // The subject is a variable holding an object, and a previous effect
+        // in this same click may have just set it — a row click that picks the
+        // object and then acts on it is the obvious pairing. So read the
+        // written copy first, exactly as `{{...}}` does.
+        // The variable the config names, and nothing else. Falling back to the
+        // trigger's own object when that variable holds something different
+        // would act on an object nobody named — a write to the wrong row,
+        // which is the one mistake this effect must not make quietly.
+        const held = (written[subject] ?? context.variables?.[subject]) as
+          | EventContext["object"]
+          | undefined;
+        const raw = (config.values ?? {}) as Record<string, unknown>;
+        const values: Record<string, string> = {};
+        for (const [prop, template] of Object.entries(raw)) {
+          values[prop] =
+            typeof template === "string"
+              ? interpolate(template, { ...payload, ...written })
+              : String(template ?? "");
+        }
+        context.runAction({ action, subject, values }, { object: held ?? null });
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })
