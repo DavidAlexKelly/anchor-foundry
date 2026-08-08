@@ -35,14 +35,32 @@ export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://platform_app:devpass@l
 export TEST_ADMIN_DSN="${TEST_ADMIN_DSN:-postgresql://platform:devpass@localhost:5432/platform?sslmode=disable}"
 mkdir -p "$STORAGE_ROOT"
 
-wait_for() {  # url, seconds, what
+# **`setsid` is Linux-only.** macOS has no such command, so a line written as
+# `setsid nohup ... &` there does not start a detached server - it fails with
+# "setsid: command not found", into the log file, and the only thing the user
+# sees is "the API did not come up". `nohup` alone is enough on macOS: the
+# server is already in a background subshell whose parent exits, and nohup
+# detaches it from the terminal. Resolved once, here, rather than at each of
+# the two call sites.
+if command -v setsid >/dev/null 2>&1; then DETACH=(setsid nohup); else DETACH=(nohup); fi
+
+wait_for() {  # url, seconds, what, logfile
   for _ in $(seq "$2"); do
     if curl -sf -o /dev/null "$1" || curl -s -o /dev/null -w '%{http_code}' "$1" | grep -qE '^[2-4]'; then
       return 0
     fi
     sleep 1
   done
-  echo "!! $3 did not come up; see $LOG_DIR" >&2
+  # **Print the log, do not point at it.** "did not come up; see $LOG_DIR" is a
+  # sentence that makes the reader do the work, and the answer is almost always
+  # in the last few lines - a missing command, a refused connection, a
+  # traceback. A server that failed to start already knows why.
+  echo "!! $3 did not come up. The last 20 lines of ${4:-$LOG_DIR/*.log}:" >&2
+  if [ -n "${4:-}" ] && [ -s "$4" ]; then
+    sed 's/^/   | /' "$4" | tail -20 >&2
+  else
+    echo "   | (the log is empty, which usually means the process never started)" >&2
+  fi
   return 1
 }
 
@@ -106,12 +124,12 @@ fi
 
 if ! curl -s -o /dev/null "http://localhost:$API_PORT/api/health"; then
   rm -f "$TOKENS_FILE"
-  # setsid so the server survives this script's shell exiting. Launching it
+  # Detached so the server survives this script's shell exiting. Launching it
   # from a plain subshell looked fine and left a dead server behind.
-  ( cd "$ROOT/apps/api" && setsid nohup "$PYTHON" dev_server.py \
+  ( cd "$ROOT/apps/api" && "${DETACH[@]}" "$PYTHON" dev_server.py \
       --port "$API_PORT" --tokens-file "$TOKENS_FILE" "${EXTRA[@]+"${EXTRA[@]}"}" \
       > "$LOG_DIR/api.log" 2>&1 & )
-  wait_for "http://localhost:$API_PORT/api/health" 40 "the API"
+  wait_for "http://localhost:$API_PORT/api/health" 40 "the API" "$LOG_DIR/api.log"
 fi
 echo "api:      http://localhost:$API_PORT/api/health -> $(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$API_PORT/api/health")"
 echo "tokens:   $TOKENS_FILE"
@@ -121,8 +139,8 @@ fi
 
 # ---- web --------------------------------------------------------------------
 if ! curl -s -o /dev/null "http://localhost:$WEB_PORT/login"; then
-  ( cd "$ROOT/apps/web" && setsid nohup npx next dev -p "$WEB_PORT" \
+  ( cd "$ROOT/apps/web" && "${DETACH[@]}" npx next dev -p "$WEB_PORT" \
       > "$LOG_DIR/web.log" 2>&1 & )
-  wait_for "http://localhost:$WEB_PORT/login" 90 "the web app"
+  wait_for "http://localhost:$WEB_PORT/login" 90 "the web app" "$LOG_DIR/web.log"
 fi
 echo "web:      http://localhost:$WEB_PORT/login -> $(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$WEB_PORT/login")"
