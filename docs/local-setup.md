@@ -115,6 +115,24 @@ Postgres, the API on **8300**, Next on **3100**. Each piece is started only if
 it is not already answering, so running it twice does not give you two of
 anything. Logs land in `/tmp/anchor-dev/`.
 
+### And down again
+
+```bash
+scripts/dev-down.sh
+```
+
+Stops the API and the web app, and deletes the tokens file — those tokens were
+only ever valid for the API process that minted them, so leaving the file
+behind leaves something that looks usable and is not.
+
+**Postgres is left running**, deliberately. `dev-up.sh` only ever starts it on
+a machine where it found a local cluster stopped; everywhere else it belongs to
+the machine rather than to this repo. Stop it the way you started it —
+`brew services stop postgresql@16`, `pg_ctl stop`, `docker stop`.
+
+Neither script minds being run twice, so `dev-down.sh` on an already-stopped
+stack just says so.
+
 ### 5. In
 
 Open <http://localhost:3100/login> and paste a token into the sign-in box.
