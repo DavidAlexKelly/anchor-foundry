@@ -8,9 +8,21 @@
 # authenticates. Scraping the token out of the API's stdout was the previous
 # arrangement and it failed the first time a log was truncated, with the suite
 # reporting twelve assertion failures rather than "there is no token".
+#
+#   scripts/dev-up.sh
+#   scripts/dev-up.sh --extra-user 'sam@client.local:Sam Client:member'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+EXTRA=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --extra-user) EXTRA+=(--extra-user "$2"); shift 2 ;;
+    --extra-user=*) EXTRA+=(--extra-user "${1#*=}"); shift ;;
+    *) echo "usage: dev-up.sh [--extra-user EMAIL:NAME:ROLE]..." >&2; exit 2 ;;
+  esac
+done
 PYTHON="${ANCHOR_PYTHON:-$ROOT/.venv-api/bin/python}"
 API_PORT="${ANCHOR_API_PORT:-8300}"
 WEB_PORT="${ANCHOR_WEB_PORT:-3100}"
@@ -68,17 +80,44 @@ fi
 echo "postgres: $(pg_isready -d "$PROBE_DSN")"
 
 # ---- API --------------------------------------------------------------------
+# **Extra users force a restart**, and this is not an optimisation detail worth
+# hiding. `dev_server.py` generates its signing key at startup, so only the
+# running process can mint a token it will accept — seeding a user against the
+# database while that process runs creates a user with no usable token, and the
+# symptom is a login box that rejects a token that was just printed. Restarting
+# is the only arrangement where "I asked for this user" and "I can sign in as
+# them" are the same sentence.
+if [ ${#EXTRA[@]} -gt 0 ] && curl -s -o /dev/null "http://localhost:$API_PORT/api/health"; then
+  echo "restarting the API to seed ${#EXTRA[@]} extra user(s) and mint their tokens"
+  # **Not `pkill -f`.** That pattern matches any command line containing it,
+  # including the shell that typed it — a plain `pkill -f` here killed the
+  # terminal that ran this script, which reads as the machine hanging up on
+  # you. Own pid and parent excluded for the same reason.
+  for pid in $(pgrep -f "dev_server\.py --port $API_PORT" || true); do
+    if [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ]; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  for _ in $(seq 20); do
+    curl -s -o /dev/null "http://localhost:$API_PORT/api/health" || break
+    sleep 0.5
+  done
+fi
+
 if ! curl -s -o /dev/null "http://localhost:$API_PORT/api/health"; then
   rm -f "$TOKENS_FILE"
   # setsid so the server survives this script's shell exiting. Launching it
   # from a plain subshell looked fine and left a dead server behind.
   ( cd "$ROOT/apps/api" && setsid nohup "$PYTHON" dev_server.py \
-      --port "$API_PORT" --tokens-file "$TOKENS_FILE" \
+      --port "$API_PORT" --tokens-file "$TOKENS_FILE" "${EXTRA[@]+"${EXTRA[@]}"}" \
       > "$LOG_DIR/api.log" 2>&1 & )
   wait_for "http://localhost:$API_PORT/api/health" 40 "the API"
 fi
 echo "api:      http://localhost:$API_PORT/api/health -> $(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$API_PORT/api/health")"
 echo "tokens:   $TOKENS_FILE"
+if [ -f "$TOKENS_FILE" ]; then
+  echo "users:    $("$PYTHON" -c 'import json,sys; print(", ".join(sorted(json.load(open(sys.argv[1])))))' "$TOKENS_FILE")"
+fi
 
 # ---- web --------------------------------------------------------------------
 if ! curl -s -o /dev/null "http://localhost:$WEB_PORT/login"; then
