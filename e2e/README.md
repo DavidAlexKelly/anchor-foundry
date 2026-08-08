@@ -88,6 +88,7 @@ Kept because each cost real time and none is obvious:
 | `test_time_series.py` | Time Series (§106) |
 | `test_narrowing_widgets.py` | Chart drill-down (§101), Card List (§102), Search (§103) — one module, because the claim that matters is that they *compose* |
 | `test_section_resize.py` | Drag-to-resize sections (§109) — the only suite that drives the **builder** rather than Preview |
+| `test_embedded_module.py` | Embedded module (§114) — a module rendered inside another, in a nested Craft.js editor |
 
 ## What is *not* tested here, on purpose
 

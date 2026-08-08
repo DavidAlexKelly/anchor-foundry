@@ -91,17 +91,28 @@ class Module:
     the difference between debugging a browser test and re-running it blind.
     """
 
-    def __init__(self, api: Api, name: str) -> None:
+    def __init__(self, api: Api, name: str, *, beside: "Module | None" = None) -> None:
+        """`beside` puts this module in another module's project.
+
+        Needed by anything about *two* modules — an embed, most obviously,
+        which the server refuses across projects. Without it the default of
+        one-project-per-module is right: tests that share a project share its
+        object types and each other's leftovers.
+        """
         self.api = api
         self.tag = uuid.uuid4().hex[:6]
         workspace = api.call("GET", "/workspaces")[0]
         self.workspace_id = workspace["id"]
         self.workspace_slug = workspace["slug"]
-        project = api.call(
-            "POST", f"/workspaces/{self.workspace_id}/projects", {"name": f"{name} {self.tag}"}
-        )
-        self.project_id = project["id"]
-        self.project_slug = project["slug"]
+        if beside is not None:
+            self.project_id, self.project_slug = beside.project_id, beside.project_slug
+        else:
+            project = api.call(
+                "POST", f"/workspaces/{self.workspace_id}/projects",
+                {"name": f"{name} {self.tag}"},
+            )
+            self.project_id = project["id"]
+            self.project_slug = project["slug"]
         self.base = f"/workspaces/{self.workspace_id}/projects/{self.project_id}"
         self.object_type_id: str | None = None
         self.app_id: str | None = None
