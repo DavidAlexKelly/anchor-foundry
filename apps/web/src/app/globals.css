@@ -1530,11 +1530,33 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--ink-soft); margin: 0 0 4px; cursor: pointer;
 }
+/* Drag-to-resize (roadmap 1.4). Builder-only — a viewer dragging a divider
+   would be editing the saved document, which decision 0002 rules out. */
+.canvas-section-handle {
+  flex: 0 0 auto; align-self: stretch; border-radius: 3px;
+  background: transparent; transition: background 120ms;
+  /* The grab area is wider than the line it draws: a 1px target is a target
+     nobody hits, and the gap between parts is already empty space. */
+  touch-action: none;
+}
+.canvas-section-handle--columns { width: 7px; cursor: col-resize; min-height: 24px; }
+.canvas-section-handle--rows { height: 7px; cursor: row-resize; min-width: 24px; }
+.canvas-section-handle:hover,
+.canvas-section-handle:focus-visible { background: var(--brass); outline: none; }
+/* Focus is visible on its own terms as well as by colour, since the colour
+   change alone is the same signal hover gives. */
+.canvas-section-handle:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+
 /* The responsive rule the roadmap asks for, per section type: a column
    section stops being columns rather than becoming three unreadable ones.
    Rows are already a stack, so they need no rule. */
 @media (max-width: 900px) {
   .canvas-section--columns > .canvas-section-parts { flex-direction: column; }
+  /* A vertical handle in a stacked section resizes an axis that is no longer
+     there. Hidden rather than left to drag nothing. */
+  .canvas-section--columns > .canvas-section-parts > .canvas-section-handle {
+    display: none;
+  }
 }
 
 /* ---- overlays (ROADMAP phase 2, 1.4) -------------------------------------- */

@@ -77,6 +77,7 @@ Kept because each cost real time and none is obvious:
 | `test_pivot_table.py` | Pivot Table (`STATUS.md` §105) |
 | `test_time_series.py` | Time Series (§106) |
 | `test_narrowing_widgets.py` | Chart drill-down (§101), Card List (§102), Search (§103) — one module, because the claim that matters is that they *compose* |
+| `test_section_resize.py` | Drag-to-resize sections (§109) — the only suite that drives the **builder** rather than Preview |
 
 Not covered by a browser test: everything else. The Filter List, the Map, the
 Action form, the builder's own panels, publishing, and the Object Explorer all

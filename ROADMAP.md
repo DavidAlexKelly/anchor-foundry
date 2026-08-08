@@ -140,7 +140,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Depends on** 1.2.
 
-### 1.4 Layouts — **L, pages, tabs, sections and overlays done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`; §79: the Layout sidebar; §80: the module header). **What remains**: drag-to-resize, deliberately deferred below. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
+### ~~1.4 Layouts~~ — **done** (`STATUS.md` §77: a Page widget, a Tabs widget, the `navigate` effect, current-page-as-runtime-state; §78: sections with proportional columns and rows, responsive stacking, and overlays as modals and drawers with `close_overlay`; §79: the Layout sidebar; §80: the module header). Drag-to-resize is now built too (`STATUS.md` §109): a splitter that writes the same `weights` prop the Settings field edits, builder-only because a viewer dragging a divider would be editing the saved document, keyboard operable, and clamped so a part cannot be dragged into a state with no handle left to grab. **Building it found that row-section proportions had never worked at all** — `flex-grow` shares out *free* space and a content-height column has none — so a row section gained a height, and one with no height offers no handle. Pages were sequenced first because the rest hangs off them and because `navigate` was refused for want of somewhere to go.
 
 **What Foundry does.** A module has a **header** (persistent toolbar for module-wide title, tabs and buttons), **pages**, **sections**, and **overlays**. A default page starts as two vertically divided sections. Sections subdivide a page and can be configured as columns, rows, tabs or toolbars, each containing widgets or further layout. Overlays are contextual layers over a page — modals and drawers — for content that should not navigate you away. A **Tabs widget** triggers events to navigate between pages and overlays. Layout elements are edited from a Layout sidebar panel or by selecting them in the module view.
 
@@ -148,7 +148,7 @@ The three things that make Workshop *Workshop* — and that Canvas has none of �
 
 **Build.** The layout tree from 1.1 with those node types; the Layout sidebar; drag-to-resize sections; the Tabs widget wired to the event system. Responsive rules per section type.
 
-*Deviation, deliberate: **drag-to-resize is not built and a section's proportions are typed instead.** A drag handle is an affordance over the same numbers, and building it first would have meant a layout nobody could describe in the saved document. The numbers are there now (`weights: "1,2"`), so the handle can arrive without a format change.*
+*Sequencing that paid off: **the proportions were typed first and the drag handle came second.** The handle writes the same `weights` the field does, so it arrived with no format change — and because the numbers were already the description of the layout, the first thing to actually exercise them found that one direction had never applied them.*
 
 *Deviation: **a toolbar is not a section type.** Foundry lists columns, rows, tabs and toolbars; a tabbed section is the Tabs widget over pages, which is the same idea one level up, and a toolbar is a row with different padding rather than a different concept. Naming them separately would have made three of the four the same code with a label.*
 

@@ -2179,6 +2179,32 @@ All four caught on re-run — **16 of 16**.
 
 ---
 
+### 109. Drag-to-resize, and the bug it found on the way (this session)
+
+Roadmap 1.4's last open item, which closes the section. A splitter between a section's parts, in `CanvasSection`.
+
+**Dragging is a way of typing.** The handle writes the same `weights` prop the Settings field edits, so after a drag the field shows the new numbers. A resize that stored pixels alongside the proportions would look identical on screen and be a second answer to "how wide is this" — and the two would disagree the first time a window changed size. The typed-proportions-first sequencing the roadmap chose is what made this arrive without a format change.
+
+**Builder-only.** A viewer dragging a divider is editing the *saved document*, which decision 0002 rules out for the same reason a viewer's filters are not saved: a module is a definition, not a session. What a viewer sees is what the author laid out.
+
+**Committed once, on release.** During the drag the section renders from transient state; the prop is written when the pointer lifts. One undo step per drag rather than one per pixel, and no second copy of the layout at rest.
+
+**Clamped to 8% either side, and keyboard-operable.** A part dragged to nothing leaves no handle to grab and no way back except the Settings field — an unrecoverable state reached by an ordinary gesture, which is worth preventing rather than documenting. And a splitter only a mouse can move is one a keyboard user cannot use at all, so it is a `role="separator"` with arrow keys and `aria-valuenow`.
+
+**The test found a bug that had nothing to do with drag-to-resize, and it is the more useful result.** The row-direction drag moved nothing. The diagnosis was not the handle:
+
+> **Row-section proportions had never worked.** `weights: "3,1"` on a row section laid out exactly like `"1,1"` — two parts of 22.5px. `flex-grow` shares out *free* space, and a column of content-height children has none. Columns were never affected: a row of children in a full-width container has free space by construction.
+
+Both the Settings hint ("2,1 for two-thirds and a third") and the widget's own docstring ("children share the space by weight") said otherwise. Nothing had ever asked a row section to change shape, so nothing had ever contradicted them. **A feature can be documented, shipped, and simply not exist**, and the thing that finds it is the first test that asks it to do something rather than to be there.
+
+Fixed rather than papered over: a row section gained a `minHeight`, blank meaning "as tall as its contents" — which is the sensible default and the reason this was invisible. Proportions apply once there is a height to divide, the Settings panel says so where the number goes, and **a row section with no height offers no handle at all**, by the rule the empty pivot cell follows: an affordance that promises nothing is worse than no affordance.
+
+**Nine mutations, nine caught first pass** — including the two guarding the new behaviour (a row section offering a handle it cannot honour; a row section ignoring its configured height) and the one guarding readability (weights written at full float precision, which would make the saved layout undescribable).
+
+**765 API tests, `tsc` clean, 28 browser tests.**
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
