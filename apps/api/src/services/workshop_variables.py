@@ -79,6 +79,17 @@ STORE_TRANSFORMS = ("object_set_aggregation",)
 
 CAST_TARGETS = ("string", "number", "boolean")
 
+# How deep one module may be embedded inside another (roadmap 1.5, priority 4).
+#
+# A limit rather than "as deep as it goes", and small on purpose. Every level
+# is another definition to fetch, another variable graph to resolve and another
+# set of widgets to draw, all before the outermost module has anything on
+# screen - so the cost of depth is paid by a *viewer* who cannot see why the
+# page is slow. Three is enough for a module composed of parts composed of
+# parts, and past that the honest advice is to link to the module rather than
+# inline it.
+MAX_EMBED_DEPTH = 3
+
 MAX_VARIABLES = 200
 MAX_CONCAT_PARTS = 20
 
@@ -616,6 +627,33 @@ def _cast(value: Any, target: str, label: str) -> Any:
 
 
 # ---- what uses what ----------------------------------------------------------
+def embedded_modules(document: Any) -> set[str]:
+    """The module ids a document embeds, from its layout.
+
+    Pure, and separate from the cycle check that consumes it, because the two
+    have different needs: this one is a parse, and deciding whether an embed is
+    *legal* means reading other modules out of the database. Keeping the parse
+    here means the route does not have to know the document's shape.
+    """
+    layout = document.get("layout") if isinstance(document, dict) else None
+    found: set[str] = set()
+    for node in (layout or {}).values():
+        if not isinstance(node, dict):
+            continue
+        # A node's `type` is `{"resolvedName": ...}` from the builder and a bare
+        # string in hand-written and converted documents. Both are in the
+        # stored corpus, and assuming the first form raised `AttributeError` on
+        # the second - a save path that crashed rather than refusing.
+        node_type = node.get("type")
+        resolved = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type
+        if str(resolved or "") != "CanvasEmbeddedModule":
+            continue
+        module_id = (node.get("props") or {}).get("moduleId")
+        if isinstance(module_id, str) and module_id:
+            found.add(module_id)
+    return found
+
+
 def usages(layout: Any, variables: dict[str, Variable]) -> dict[str, list[dict[str, str]]]:
     """Where each variable is referenced, by node and prop.
 

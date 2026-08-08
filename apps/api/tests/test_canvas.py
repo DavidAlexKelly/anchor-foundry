@@ -666,3 +666,103 @@ def test_variables_resolve_against_the_published_version_not_the_live_one(
     values = r.json()["values"]
     assert values["v_a"] == "published"
     assert "v_b" not in values, "a variable added after publishing reached a viewer"
+
+
+# ---- embedded modules (roadmap 1.5, priority 4) ------------------------------
+def _embed_app(client: TestClient, fx: Fixture, name: str) -> str:
+    """Its own helper rather than reusing `_new_app`, which has a different
+    signature - the first version of this shadowed it and broke ten unrelated
+    tests, which is what a module-level name collision does in Python."""
+    r = client.post(base(fx), headers=hdr(fx.editor_sub), json={"name": name})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _embedding(*module_ids: str) -> dict:
+    return {
+        "format": 2, "variables": {}, "events": {},
+        "layout": {
+            "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                     "props": {}, "nodes": [f"e{i}" for i in range(len(module_ids))],
+                     "linkedNodes": {}},
+            **{f"e{i}": {"type": {"resolvedName": "CanvasEmbeddedModule"},
+                         "props": {"moduleId": mid}, "parent": "ROOT", "nodes": []}
+               for i, mid in enumerate(module_ids)},
+        },
+    }
+
+
+def _put_definition(client: TestClient, fx: Fixture, app_id: str, document: dict):
+    """The raw response, because half of these tests are about a refusal - and
+    named distinctly because `_save` already exists above and returns parsed
+    JSON. Shadowing it broke ten unrelated tests, twice."""
+    return client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                      json={"definition": document})
+
+
+def test_embedding_another_module_is_allowed(client: TestClient, fx: Fixture) -> None:
+    outer, inner = _embed_app(client, fx, f"Outer {fx.tag}"), _embed_app(client, fx, f"Inner {fx.tag}")
+    assert _put_definition(client, fx, outer, _embedding(inner)).status_code == 200
+
+
+def test_a_module_cannot_embed_itself(client: TestClient, fx: Fixture) -> None:
+    """The loop with no end, and the one somebody reaches for first."""
+    app_id = _embed_app(client, fx, f"Self {fx.tag}")
+    r = _put_definition(client, fx, app_id, _embedding(app_id))
+    assert r.status_code == 422, r.text
+    assert "cannot embed itself" in r.json()["detail"]
+
+
+def test_a_cycle_through_another_module_is_refused(client: TestClient, fx: Fixture) -> None:
+    """**Refused when it is saved, not when it is opened.** A cycle found at
+    render time is a browser that hangs, and the person who meets it is a viewer
+    who did not build the thing."""
+    a, b = _embed_app(client, fx, f"A {fx.tag}"), _embed_app(client, fx, f"B {fx.tag}")
+    assert _put_definition(client, fx, b, _embedding(a)).status_code == 200, "B embeds A: fine so far"
+
+    # Now A embeds B, which closes the loop. Whichever side completes it is the
+    # side that is refused - which is why this needs no locking.
+    r = _put_definition(client, fx, a, _embedding(b))
+    assert r.status_code == 422, r.text
+    assert "embed itself through" in r.json()["detail"]
+
+
+def test_a_module_from_another_project_is_refused_with_the_reason(
+    client: TestClient, fx: Fixture
+) -> None:
+    """An id that resolves to nothing would draw nothing, silently, in the space
+    it was placed."""
+    app_id = _embed_app(client, fx, f"Missing {fx.tag}")
+    r = _put_definition(client, fx, app_id, _embedding(str(uuid.uuid4())))
+    assert r.status_code == 422, r.text
+    assert "not in this project" in r.json()["detail"]
+
+
+def test_embedding_deeper_than_the_limit_is_refused(client: TestClient, fx: Fixture) -> None:
+    """Every level is another definition to fetch before anything appears, and
+    the wait is paid by a viewer who cannot see why."""
+    chain = [_embed_app(client, fx, f"Deep{i} {fx.tag}") for i in range(6)]
+    # Deepest first: each save then sees the whole chain below it. Built the
+    # other way round, every save sees a chain of length one and the limit is
+    # never reached however long the chain is - which is what the first version
+    # of this test did, and it passed while checking nothing.
+    refused = None
+    for outer, inner in reversed(list(zip(chain, chain[1:]))):
+        r = _put_definition(client, fx, outer, _embedding(inner))
+        if r.status_code == 422:
+            refused = r
+            break
+        assert r.status_code == 200, r.text
+    assert refused is not None, "a chain of six embeds was accepted; the limit did nothing"
+    assert "past the limit" in refused.json()["detail"], refused.text
+
+
+def test_two_modules_may_embed_the_same_one(client: TestClient, fx: Fixture) -> None:
+    """A diamond is not a cycle. Refusing shared embeds would make the check
+    about the shape of the graph rather than about termination."""
+    shared = _embed_app(client, fx, f"Shared {fx.tag}")
+    for name in ("First", "Second"):
+        holder = _embed_app(client, fx, f"{name} {fx.tag}")
+        assert _put_definition(client, fx, holder, _embedding(shared)).status_code == 200
+    both = _embed_app(client, fx, f"Both {fx.tag}")
+    assert _put_definition(client, fx, both, _embedding(shared, shared)).status_code == 200

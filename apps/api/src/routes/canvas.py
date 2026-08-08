@@ -23,13 +23,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
-from ..lib.errors import ForbiddenError
+from ..lib.errors import ForbiddenError, NotFoundError
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import actions as actions_service
 from ..services import audit
 from ..services import canvas as canvas_service
 from ..services import workshop_format
 from ..services import workshop_variables as variables_service
+from ..services.workshop_variables import MAX_EMBED_DEPTH
 
 router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/canvas-apps", tags=["canvas"]
@@ -214,6 +215,59 @@ async def delete_app(
 
 
 # ---- definition versioning ----------------------------------------------------
+async def _check_embeds(conn, project_id: UUID, app_id: UUID, document: Any) -> None:
+    """Refuse an embed that cannot be drawn: a missing module, a cycle, or a
+    stack deeper than `MAX_EMBED_DEPTH`.
+
+    **Checked when the document is saved, not when it is opened.** A cycle
+    found at render time is a browser that hangs or a request storm, and the
+    person who sees it is a viewer who did not build the thing. The author is
+    the one who can fix it, so the author is the one who is told.
+
+    The walk is over *stored* definitions, which means it is a snapshot: A can
+    be saved embedding B today and B edited to embed A tomorrow, because saving
+    B checks B's own embeds and reaches A the same way. The cycle is refused
+    whichever side completes it - which is the property that matters, and is
+    why this does not need to lock anything.
+    """
+    direct = variables_service.embedded_modules(document)
+    if not direct:
+        return
+    if str(app_id) in direct:
+        raise variables_service.VariableError(
+            "a module cannot embed itself - it would draw itself drawing itself. "
+            "Embed one of its parts, or link to it."
+        )
+
+    seen: set[str] = {str(app_id)}
+    frontier = [(module_id, 1, [str(module_id)]) for module_id in sorted(direct)]
+    while frontier:
+        module_id, depth, path = frontier.pop()
+        try:
+            embedded = await canvas_service.get(conn, project_id, UUID(module_id))
+        except (NotFoundError, ValueError) as exc:
+            raise variables_service.VariableError(
+                f"embedded module {module_id} is not in this project, so nothing would "
+                "be drawn where it is placed"
+            ) from exc
+        if depth > MAX_EMBED_DEPTH:
+            raise variables_service.VariableError(
+                f"embedding is {depth} deep at {' -> '.join(path)}, past the limit of "
+                f"{MAX_EMBED_DEPTH}. Every level is another definition to fetch before "
+                "anything appears, and the wait is paid by a viewer who cannot see why."
+            )
+        for nested in sorted(variables_service.embedded_modules(embedded.get("definition") or {})):
+            if nested == str(app_id):
+                raise variables_service.VariableError(
+                    f"this would embed itself through {' -> '.join(path)}, and the loop "
+                    "has no end. Break the chain at one of those modules."
+                )
+            if nested in seen:
+                continue
+            seen.add(nested)
+            frontier.append((nested, depth + 1, [*path, nested]))
+
+
 @router.put("/{app_id}/definition", response_model=CanvasAppDetail)
 async def save_definition(
     app_id: UUID,
@@ -255,6 +309,13 @@ async def save_definition(
         }
         try:
             variables_service.validate_module(body.definition, actions=known)
+        except variables_service.VariableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
+        try:
+            await _check_embeds(conn, access.project_id, app_id, body.definition)
         except variables_service.VariableError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
