@@ -22,9 +22,17 @@ and guessing wrong is worse than saying which is missing.
 | | why |
 |---|---|
 | **Postgres 14+**, running | every surface in the product is backed by it |
-| **Python 3.11+** | the API and worker |
+| **Python 3.12 or 3.13** | the API and worker — what the pins in `apps/api/requirements.txt` target |
 | **Node 20+** | the web app |
 | `psql` and `pg_isready` on `PATH` | the script creates the role and database through them |
+
+**On a Mac, `python3` is Apple's 3.9 and that is not a problem.** Homebrew
+installs `python3.13` alongside it without taking the `python3` name, so
+`brew install python@3.13` is enough — `setup.sh` looks for `python3.13`,
+`python3.12` and `python3.11` by name before falling back to `python3`, and
+uses the newest it finds. `ANCHOR_PYTHON3=/path/to/python` overrides the
+search. By hand, use the same versioned binary when creating the virtualenv:
+`python3.13 -m venv .venv-api`.
 
 Postgres does not have to be local. Set `PGHOST` and `PGPORT` and the script
 will use those; a container, a Postgres.app, or a managed instance all work.
