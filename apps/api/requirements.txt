@@ -20,7 +20,11 @@ PyJWT[crypto]==2.9.0
 psycopg[binary]==3.2.4
 PyMySQL==1.1.1
 email-validator==2.2.0
-greenlet==3.1.0
+# 3.1.1 rather than 3.1.0: a patch release, and the lowest version the
+# browser suite's playwright accepts. Bumped because `pip install -r
+# requirements-dev.txt` was unresolvable - which nothing noticed until CI was
+# made to actually run the install.
+greenlet==3.1.1
 duckdb==1.1.1
 pytz==2024.1
 python-multipart==0.0.9

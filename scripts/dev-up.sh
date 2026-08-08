@@ -38,7 +38,15 @@ wait_for() {  # url, seconds, what
 # Only started when a local cluster exists and is down. A managed or
 # containerised Postgres elsewhere is left alone - DATABASE_URL decides what is
 # actually used, and this script does not get to override that.
-if ! pg_isready -q 2>/dev/null && [ -d /var/lib/postgresql/16/main ]; then
+# **Probe the DSN the app will actually use, not the default socket.** Bare
+# `pg_isready` asks a local Unix socket; a Postgres in a container - which is
+# how CI runs it - answers on TCP. The bare probe reported "no response" for a
+# database that was up and reachable, and the script then refused to start
+# anything. libpq does not know SQLAlchemy's `+psycopg`, so it comes off first.
+PROBE_DSN="${DATABASE_URL/+psycopg/}"
+ready() { pg_isready -q -d "$PROBE_DSN" 2>/dev/null; }
+
+if ! ready && [ -d /var/lib/postgresql/16/main ]; then
   # The log file has to be writable by the postgres user or pg_ctl fails before
   # it writes anything - which, with the output discarded, looked exactly like
   # "the server started and is slow", and cost twenty minutes the first time.
@@ -48,15 +56,16 @@ if ! pg_isready -q 2>/dev/null && [ -d /var/lib/postgresql/16/main ]; then
   su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D /var/lib/postgresql/16/main \
     -l $LOG_DIR/postgres.log \
     -o '-c config_file=/etc/postgresql/16/main/postgresql.conf' start" || true
-  for _ in $(seq 20); do pg_isready -q 2>/dev/null && break; sleep 1; done
 fi
-if ! pg_isready -q 2>/dev/null; then
-  echo "postgres is not reachable: $(pg_isready 2>&1)" >&2
-  echo "the last few lines of $LOG_DIR/postgres.log:" >&2
+# Waited for either way: a managed or containerised Postgres this script did not
+# start still has to be *up* before anything else is worth trying.
+for _ in $(seq 30); do ready && break; sleep 1; done
+if ! ready; then
+  echo "postgres is not reachable at ${PROBE_DSN%%\?*}: $(pg_isready -d "$PROBE_DSN" 2>&1)" >&2
   tail -5 "$LOG_DIR/postgres.log" >&2 2>/dev/null || true
   exit 1
 fi
-echo "postgres: $(pg_isready)"
+echo "postgres: $(pg_isready -d "$PROBE_DSN")"
 
 # ---- API --------------------------------------------------------------------
 if ! curl -s -o /dev/null "http://localhost:$API_PORT/api/health"; then

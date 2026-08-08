@@ -2205,6 +2205,92 @@ Fixed rather than papered over: a row section gained a `minHeight`, blank meanin
 
 ---
 
+### 110. Making CI runnable, and what running it found (this session)
+
+The workflow added in §107 had never executed. Reading it against the repo, and then *running the parts that could be run*, turned up **five defects — and one of them was not in the workflow at all.**
+
+**In the workflow:**
+
+1. **`playwright` was installed by nothing.** The browser job pip-installs `requirements.txt` and `requirements-dev.txt`, and Playwright was in neither — it existed only in a local venv, installed by hand. A fresh checkout could never have run the browser suite. Now pinned in `requirements-dev.txt`.
+2. **The migrate step connected as a role that does not exist yet.** `migrate.py` reads `DATABASE_URL`, which was set job-wide to the *app* role — and that role is created by migration `0006_rls.sql`. On a fresh database the first connection fails before any migration runs. Overridden to the owner role for that step.
+3. **`migrate.py` rejects SQLAlchemy's URL scheme.** It talks to psycopg directly, so `postgresql+psycopg://` is not a DSN it can parse; the step would have failed on the URL form whatever the role. Found by running it against a scratch database, not by reading it.
+4. **`scripts/dev-up.sh` probed the wrong Postgres.** Bare `pg_isready` asks a local Unix socket; a service-container Postgres answers on TCP. It reported "no response" for a database that was up, and refused to start anything. It now probes the DSN the app will actually use — and a wrong port was checked to still report *down*, so the fix is not vacuous.
+
+**And the one that was not in the workflow:**
+
+5. **`pip install -r requirements-dev.txt` was unresolvable.** `playwright` needs `greenlet>=3.1.1`; `requirements.txt` pinned `greenlet==3.1.0`. Bumped to 3.1.1 — a patch release, and the constraint SQLAlchemy places on greenlet is permissive.
+
+**The finding underneath all of that is the uncomfortable one.** Chasing (5) meant comparing the local venv against the pins, and **four packages had drifted**: pydantic 2.8.2 → 2.13.4, greenlet 3.1.0 → 3.5.4, psycopg 3.2.4 → 3.2.1, duckdb 1.1.1 → 1.0.0. Two newer than the pin, two older. The ad-hoc Playwright install had upgraded greenlet, and the venv had never been a clean install of `requirements.txt`.
+
+**So every test result reported in §98–§109 ran against a dependency set that did not match the pins.** That is stated plainly rather than quietly corrected. It has now been checked: a clean venv built exactly as CI builds one runs **765 passed, 1 skipped** — the same as the drifted environment — and the pinned Playwright drives the browser suite unchanged. The drift was not hiding a failure. But nothing had established that until now, and the reason nothing had is precisely that CI had never run.
+
+**This is the argument for CI in one paragraph.** Not "a pipeline is good practice": a pipeline installs from the pins on a machine with no history, and that is the only thing that can catch a lie between what a repo says it depends on and what its author happens to have installed.
+
+**Still unproven**: the workflow itself. Four of the five fixes were verified by running the affected command locally; the fifth (the install) was verified by building the venv CI would build. What remains unverified is GitHub Actions' own wiring — the service container, the caches, the runner image — and that cannot be exercised from here.
+
+---
+
+### 111. A JavaScript test runner, and two tests that could not see their own bug (this session)
+
+Vitest, scoped to `apps/web/src/components/canvas/pure.ts` — the widgets' arithmetic and formatting, extracted from `widgets.tsx` where nothing but a browser driving the whole application could reach it. **23 tests in under a second**, against twelve minutes for the browser suite.
+
+**The boundary is structural, not a convention.** `pure.ts` imports no React and touches no DOM, so a component test *cannot* be written in it. That is deliberate: a JavaScript runner tends to grow jsdom "integration" tests that pass while the real application is broken, and that is precisely the class of defect the browser suite exists to catch — a widget reading the right data and drawing the wrong thing, a section laying out in one column. `e2e/README.md` says so where somebody would go looking.
+
+**The extraction paid for itself immediately** by making the section-resize arithmetic reachable. `resizeWeights` was trapped in a closure; the browser suite could only ask about it through pixels. It now has a 30-part case, which is not reachable in a browser in any reasonable time and is exactly where an off-by-one in the pair arithmetic would show.
+
+**Ten mutations. Two survived, and both were the same mistake in different clothes — a test that cannot see the bug it was written for.**
+
+* **`timeZone: "UTC"` deleted from the day formatter, and the tests passed.** This container's clock *is* UTC, so removing the option changed nothing. The test asserted a real property and was incapable of failing. `vitest.config.ts` now pins the process to `America/New_York` — a zone *behind* UTC, because one ahead leaves a midnight-UTC bucket on the same date and hides it again, which is the trap a browser-suite mutation fell into in §106. **And the test now asserts its own precondition first**: if the process is ever in UTC, it fails rather than passing vacuously. That is the §106 lesson written into an assertion instead of a commit message.
+* **`timeZone: "UTC"` deleted from the *month* formatter, and the tests still passed.** The fix above was not enough: the month case used the 4th, which is still March in New York. Midnight UTC on the *first* of a month is the only place the two diverge — that instant is the previous month locally. With that case added, caught.
+
+Both survivors were mine, in tests written minutes earlier, and neither was a missing test — both were tests aimed slightly to one side of the thing they named.
+
+**One process note.** The first mutation run reported nine survivors and was wrong: the harness grepped Vitest's "Failed Tests" banner instead of reading its exit code, so every genuine catch was reported as a survivor. A harness that infers a result from output text rather than from a status code is the same failure §103 recorded, inverted. It now reads the exit code. A second run was also invalid — a `cd` persisted between commands and the mutation never applied, while the harness cheerfully printed "caught". Both runs were discarded rather than reported.
+
+**765 API tests, `tsc` clean, 23 unit tests, 28 browser tests**, and `scripts/check.sh` now runs them cheapest-first so a broken pure function does not cost twelve minutes of browser time to discover.
+
+**Pre-existing and untouched**: `npm audit` reports two advisories in the Next 14.2.5 tree (`next` critical, `postcss` high). Vitest introduced neither — the audit simply ran for the first time. Fixing them means `next@14.2.35`, which is its own change with its own verification.
+
+---
+
+### 112. Mapping enforcement in the OpenSearch fixture (this session)
+
+Decision 0006 §7's prerequisite, and the part of the typed-property work that can be done honestly without a cluster. `tests/opensearch_fixture_server.py` now remembers the mapping `indices.create` was given, coerces and compares by it, and refuses what contradicts it.
+
+**Why this was the blocker rather than a nicety.** Until now every field in the fixture was text. A store that mapped `capacity` as an integer and one that left it alone produced *identical* answers here — so the disagreement typed properties exist to remove was invisible to the only test that could have seen it. The fixture could not have failed a wrong mapping, which means a green cross-store test proved nothing about types.
+
+**What it does now**, against the three things §7 asked for:
+
+1. **Remembers the mapping**, resolving explicit `properties` before `dynamic_templates` — a named field beats a pattern, as a cluster resolves it. The `.keyword` subfield now comes from the template that declares it rather than from the fixture treating any dotted path as the same value.
+2. **Compares by declared type.** `capacity >= 40` is true of 250 on an `integer` field and false on a `keyword` one, and both are asserted — the second is not a fixture bug, it is exactly why `ORDERED_OPERATORS` refuses to choose. Dates compare chronologically, so `+00:00` and `Z` are one instant.
+3. **Refuses contradictions.** A value the type cannot hold is a `mapper_parsing_exception` per bulk item, and nothing is stored — which makes §5's reindex failure reachable in a test. A *query* value the type cannot hold is a 400, not an empty result: silently empty is the worst answer available, a wrong query that looks like a true one.
+
+**`geo_bounding_box` is answered properly, antimeridian included** (§3). A box whose west edge is east of its east edge is a union of two ranges, not one interval — which is what four ordered comparisons get wrong, silently, for exactly the customers whose data crosses it. A store reaching for comparisons instead would now be visibly wrong here rather than merely slower.
+
+**The fixture has its own tests now, and that is the point.** It is what every OpenSearch-side claim in this repo rests on, and it has twice been the reason a check passed for the wrong reason: `size: 0` (§105) and a nested aggregation that could have counted the wrong documents (§105). A load-bearing fake needs its own evidence. **Nine mutations against the enforcement, nine caught.**
+
+**782 API tests, 1 skipped** — 765 existing with no regressions, plus 17 new. That the existing ones still pass is itself a result: the mapping `_ensure_index` declares is consistent with everything the suite does, including `updated_at` range queries that now compare as dates rather than as strings.
+
+**What this still does not prove**, unchanged and worth repeating: that a real cluster agrees. It narrows the unproven claim from *"does any of this work"* to *"does OpenSearch behave like the mapping it was given"* — a much smaller thing to check on first deployment, and one 0006 lists as a runbook step. The fixture's docstring no longer claims it has no mapping enforcement, because that would now be a lie; it states the limits it does still have.
+
+---
+
+### 113. The browser suite stops sleeping (this session)
+
+Every test in `e2e/` waited a fixed 6–9 seconds after each interaction, tuned to this machine. **The suite went from 12m23s to 1m26s** — an 8.6× speedup with no test removed and no assertion weakened.
+
+**Speed was the smaller half.** The real problem was that the numbers were tuned to one machine: a slower CI runner would have started failing tests that were merely late, and a suite that flakes gets ignored, which is worse than no suite. The waits are now deadlines rather than durations — Playwright's `expect` where a locator assertion fits (a count, a text, an attribute), and an `eventually()` helper for values derived from several reads, like a grid parsed out of table cells or a series pulled from SVG tooltips. A test ready in 200ms takes 200ms; a slow machine takes longer instead of failing.
+
+**The hazard this introduces, and the guard for it.** A polling assertion on an *absence* passes instantly: `expect(x).to_have_count(0)` is true of a page that has not drawn yet. Converted naively, "an unwired grid offers no buttons" and "a viewer gets no resize handles" would both have gone green *before the widgets existed* — faster, and meaningless. **Every absence check now waits for a presence first**, and the two mutations aimed at exactly those assertions were re-run and still caught. That is the same shape as §111's vacuous UTC test and §106's `ALTER DATABASE`: a check that cannot fail is worse than a slow one, and speed is a good way to acquire one by accident.
+
+**Five mutations re-run against the converted suite, five caught** — the two absence checks above, a bar click that writes nothing, a drag that never commits, and the time-series caption removed. The conversion did not cost the suite its teeth.
+
+**One self-inflicted defect worth recording.** The bulk of the conversion was a regex, and it swallowed a compound assertion whole: `assert table_rows(page) == COUNTS["south"] and regions(page) == ["south"]` became `to_have_count(<boolean>)`. Playwright refused it outright — "expected float, got boolean" — which is the good kind of failure, and the reason it was a two-minute fix rather than a silently weakened test. A more forgiving API would have accepted the boolean and compared a count against `True`.
+
+**28 browser tests, 782 API tests, 23 unit tests, `tsc` clean.**
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

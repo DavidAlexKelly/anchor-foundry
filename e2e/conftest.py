@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
 import pytest
+from playwright.sync_api import expect
 
 from api import Api
 
@@ -39,11 +41,19 @@ ADMIN_DSN = os.environ.get(
 )
 CHROMIUM = os.environ.get("PLAYWRIGHT_CHROMIUM", "/opt/pw-browsers/chromium")
 
-# Waits, in one place because they are the thing most likely to need tuning on
-# a slower machine, and because scattering magic numbers through assertions is
-# how a suite becomes flaky without anybody deciding to make it flaky.
-SETTLE_MS = int(os.environ.get("ANCHOR_E2E_SETTLE_MS", "7000"))
-FIRST_RENDER_MS = int(os.environ.get("ANCHOR_E2E_FIRST_RENDER_MS", "9000"))
+# **How long a check may wait, not how long it does wait.** These are deadlines
+# for the polling helpers below; a test that is ready in 200ms takes 200ms.
+#
+# The suite used to sleep these amounts unconditionally, which had two costs.
+# It was slow — twelve minutes for twenty-eight tests, nearly all of it spent
+# waiting for things that had already happened. And it was tuned to one
+# machine: a slower CI runner would have started failing tests that were merely
+# late, and a suite that flakes gets ignored, which is worse than no suite.
+SETTLE_MS = int(os.environ.get("ANCHOR_E2E_SETTLE_MS", "20000"))
+FIRST_RENDER_MS = int(os.environ.get("ANCHOR_E2E_FIRST_RENDER_MS", "30000"))
+# How often a derived value is re-read while waiting. Small enough to be
+# invisible, large enough not to spin.
+POLL_MS = 100
 
 
 def _reachable(url: str) -> bool:
@@ -128,10 +138,48 @@ def page(browser, token: str):
     opened.goto(f"{WEB_BASE}/login")
     opened.fill("input[placeholder='Paste an access token']", token)
     opened.get_by_role("button", name="Use token").click()
-    opened.wait_for_timeout(2500)
+    # Waits for the redirect off /login rather than for a fixed interval.
+    opened.wait_for_url(lambda url: "/login" not in url, timeout=FIRST_RENDER_MS)
     opened.console_errors = errors  # type: ignore[attr-defined]
     yield opened
     context.close()
+
+
+def eventually(read, matches, *, what: str, timeout_ms: int | None = None):
+    """Poll `read()` until `matches(...)`, then return the value.
+
+    Playwright's own `expect` covers anything that *is* a locator — a count, a
+    text, an attribute — and is used directly wherever it fits. This exists for
+    the derived reads a locator assertion cannot express: a grid of numbers
+    parsed out of table cells, a list of counts pulled from SVG tooltips.
+
+    The failure message carries the last value seen, because "still [3, 2] after
+    20s" says what went wrong and "timed out" does not.
+    """
+    deadline = time.monotonic() + (timeout_ms or SETTLE_MS) / 1000
+    last = None
+    while True:
+        last = read()
+        if matches(last):
+            return last
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{what}: still {last!r} after {timeout_ms or SETTLE_MS}ms")
+        time.sleep(POLL_MS / 1000)
+
+
+def settled(page, locator_or_none=None) -> None:
+    """Wait for the module to have rendered *something* before asserting.
+
+    **This is the guard that makes negative assertions honest.** `expect(x).
+    to_have_count(0)` passes instantly on a page that has not drawn yet, so a
+    check for "this widget offers no handles" would be green before the widget
+    existed. Every test that asserts an absence waits for a presence first.
+    """
+    expect(page.locator(".canvas-block, .canvas-section, .canvas-cards").first).to_be_visible(
+        timeout=FIRST_RENDER_MS
+    )
+    if locator_or_none is not None:
+        expect(locator_or_none).to_be_visible(timeout=FIRST_RENDER_MS)
 
 
 def open_module(page, module, *, settle_ms: int | None = None) -> None:
@@ -142,9 +190,10 @@ def open_module(page, module, *, settle_ms: int | None = None) -> None:
     be asked in Preview.
     """
     page.goto(f"{WEB_BASE}{module.url}")
-    page.wait_for_timeout(FIRST_RENDER_MS)
-    page.get_by_role("button", name="Preview", exact=True).click()
-    page.wait_for_timeout(settle_ms or FIRST_RENDER_MS)
+    preview = page.get_by_role("button", name="Preview", exact=True)
+    expect(preview).to_be_visible(timeout=FIRST_RENDER_MS)
+    preview.click()
+    settled(page)
 
 
 def open_builder(page, module) -> None:
@@ -156,7 +205,7 @@ def open_builder(page, module) -> None:
     viewer is looking at.
     """
     page.goto(f"{WEB_BASE}{module.url}")
-    page.wait_for_timeout(FIRST_RENDER_MS)
+    settled(page)
 
 
 def no_console_errors(page) -> list[str]:

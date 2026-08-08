@@ -8,6 +8,7 @@
 #   scripts/check.sh              # everything, e2e skipped if the stack is down
 #   scripts/check.sh api          # just the API suite
 #   scripts/check.sh types        # just tsc
+#   scripts/check.sh unit         # just the TypeScript unit tests
 #   scripts/check.sh e2e          # just the browser suite
 #
 # Exits non-zero on the first failure. Set ANCHOR_E2E_REQUIRED=1 to make a
@@ -39,6 +40,9 @@ step() {  # name, then the command
 
 run_api()   { ( cd "$ROOT/apps/api" && "$PYTHON" -m pytest -q ); }
 run_types() { ( cd "$ROOT/apps/web" && npx tsc --noEmit -p tsconfig.json ); }
+# Pure functions only, and fast enough to be run on every save - see
+# `apps/web/src/components/canvas/pure.ts` for why the boundary is drawn there.
+run_unit()  { ( cd "$ROOT/apps/web" && npx vitest run ); }
 # `-p no:randomly`-free and deliberately serial: these drive one dev stack, and
 # two of them at once would each be seeding into the other's workspace.
 run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q ); }
@@ -46,13 +50,17 @@ run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q ); }
 case "$WHICH" in
   api)   step "API tests" run_api ;;
   types) step "TypeScript" run_types ;;
+  unit)  step "TypeScript unit tests" run_unit ;;
   e2e)   step "Browser suite" run_e2e ;;
   all)
-    step "API tests" run_api
+    # Cheapest first: a type error or a broken pure function should not cost
+    # twelve minutes of browser time to find out about.
     step "TypeScript" run_types
+    step "TypeScript unit tests" run_unit
+    step "API tests" run_api
     step "Browser suite" run_e2e
     ;;
-  *) echo "unknown target '$WHICH' (api, types, e2e, all)" >&2; exit 2 ;;
+  *) echo "unknown target '$WHICH' (api, types, unit, e2e, all)" >&2; exit 2 ;;
 esac
 
 echo

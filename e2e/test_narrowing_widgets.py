@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import pytest
 
+from playwright.sync_api import expect
+
 from api import Module, layout, object_set
-from conftest import SETTLE_MS, no_console_errors, open_module
+from conftest import eventually, no_console_errors, open_module, settled
 
 # North is deliberately bigger than the card list's page size, so paging is
 # reachable — and so is the rule that narrowing while on page 2 sends you back
@@ -148,8 +150,12 @@ def module(api):
     return built
 
 
+def table_locator(page):
+    return page.locator(".canvas-block table tbody tr")
+
+
 def table_rows(page) -> int:
-    return page.locator(".canvas-block table tbody tr").count()
+    return table_locator(page).count()
 
 
 def regions(page) -> list[str]:
@@ -173,9 +179,9 @@ def cards(page):
 def test_a_bar_is_operable_and_says_what_it_would_do(page, module):
     open_module(page, module)
     bars = page.locator("svg rect[role='button']")
-    assert bars.count() == len(COUNTS)
+    expect(bars).to_have_count(len(COUNTS))
     assert (bars.first.get_attribute("aria-label") or "").startswith("Filter to ")
-    assert table_rows(page) == TOTAL, "the table starts with the whole set"
+    expect(table_locator(page)).to_have_count(TOTAL)  # starts with the whole set
     assert not no_console_errors(page)
 
 
@@ -187,18 +193,21 @@ def test_a_chart_with_nothing_to_drill_into_is_a_picture(page, module):
     earlier version of this read six bars instead of three.
     """
     open_module(page, module)
+    # Presence before absence: `to_have_count(0)` is true of a page that has
+    # not drawn yet, so the assertion below would be green before either chart
+    # existed.
+    expect(page.locator("svg rect[role='button']")).to_have_count(len(COUNTS))
     plain = page.locator(".canvas-block", has_text="Sites by region (no drill)").last
     assert plain.locator("svg rect").count() > 0
-    assert plain.locator("svg rect[role='button']").count() == 0
+    expect(plain.locator("svg rect[role='button']")).to_have_count(0)
 
 
 def test_clicking_a_bar_narrows_the_table_to_that_category(page, module):
     open_module(page, module)
     north = bar(page, "north")
     north.click()
-    page.wait_for_timeout(SETTLE_MS)
 
-    assert table_rows(page) == COUNTS["north"]
+    expect(table_locator(page)).to_have_count(COUNTS["north"])
     assert regions(page) == ["north"], "that category and nothing else"
     assert north.get_attribute("aria-pressed") == "true"
     # Dimmed rather than removed: the others are still the shape of the data.
@@ -210,29 +219,25 @@ def test_clicking_a_bar_narrows_the_table_to_that_category(page, module):
 def test_drilling_switches_rather_than_stacks_and_can_be_undone(page, module):
     open_module(page, module)
     bar(page, "north").click()
-    page.wait_for_timeout(SETTLE_MS)
     bar(page, "south").click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == COUNTS["south"] and regions(page) == ["south"]
+    expect(table_locator(page)).to_have_count(COUNTS["south"])
+    assert regions(page) == ["south"], "switched to south, not added to north"
 
     # Clicking what is already drilled into clears it. Without that there is no
     # way back out from inside the chart, and a filter you cannot remove is one
     # you have to remember you applied.
     bar(page, "south").click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == TOTAL
+    expect(table_locator(page)).to_have_count(TOTAL)
 
     bar(page, "east").click()
-    page.wait_for_timeout(SETTLE_MS)
     page.get_by_role("button", name="Clear").first.click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == TOTAL, "and so does Clear"
+    expect(table_locator(page)).to_have_count(TOTAL)
 
 
 # ---- the card list ---------------------------------------------------------
 def test_a_card_leads_with_the_title_property_and_still_shows_the_key(page, module):
     open_module(page, module)
-    assert cards(page).count() == min(TOTAL, CARDS_PER_PAGE)
+    expect(cards(page)).to_have_count(min(TOTAL, CARDS_PER_PAGE))
     assert cards(page).first.locator("h4").inner_text().startswith("Site ")
     # The key is always shown, even when it is also the heading: it is what
     # identifies the object to every other part of the platform.
@@ -241,6 +246,7 @@ def test_a_card_leads_with_the_title_property_and_still_shows_the_key(page, modu
 
 def test_a_card_list_with_nothing_wired_is_not_clickable(page, module):
     open_module(page, module)
+    expect(cards(page)).to_have_count(min(TOTAL, CARDS_PER_PAGE))
     plain = page.locator(".canvas-cards").last.locator(".canvas-card")
     assert plain.count() > 0
     assert plain.first.get_attribute("role") is None
@@ -250,29 +256,29 @@ def test_narrowing_while_on_page_two_returns_to_the_first_page(page, module):
     """Otherwise the widget shows nothing while claiming a total that has rows,
     which reads as "the filter broke"."""
     open_module(page, module)
+    expect(cards(page)).to_have_count(min(TOTAL, CARDS_PER_PAGE))
     first_heading = cards(page).first.locator("h4").inner_text()
     page.locator(".canvas-cards").first.locator("xpath=..").get_by_role(
         "button", name="Next"
     ).click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert cards(page).first.locator("h4").inner_text() != first_heading
+    eventually(lambda: cards(page).first.locator("h4").inner_text(),
+               lambda got: got != first_heading, what="the second page")
 
     bar(page, "east").click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert cards(page).count() == COUNTS["east"]
+    expect(cards(page)).to_have_count(COUNTS["east"])
     assert cards(page).count() == table_rows(page), "and the table agrees"
 
 
 def test_clicking_a_card_selects_that_object(page, module):
     open_module(page, module)
+    expect(cards(page)).to_have_count(min(TOTAL, CARDS_PER_PAGE))
     picked = page.get_by_text("Picked:", exact=False).last
     before = picked.inner_text()
     heading = cards(page).first.locator("h4").inner_text()
     cards(page).first.click()
-    page.wait_for_timeout(SETTLE_MS)
 
-    after = picked.inner_text()
-    assert after != before
+    after = eventually(lambda: picked.inner_text(), lambda got: got != before,
+                       what="the picked object")
     assert heading in after, "and it is the object on the card"
 
 
@@ -282,15 +288,12 @@ def test_search_narrows_what_is_already_narrowed(page, module):
     shared one, the set would depend on which was touched last."""
     open_module(page, module)
     bar(page, "east").click()
-    page.wait_for_timeout(SETTLE_MS)
 
     box = page.get_by_label("Find a site")
     box.fill("Site east 2")
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == 1
-    assert "Drilled into region = east" in page.locator(".canvas-block").first.inner_text(), (
-        "the drill-down is still in force"
-    )
+    expect(table_locator(page)).to_have_count(1)
+    # The drill-down is still in force.
+    expect(page.locator(".canvas-block").first).to_contain_text("Drilled into region = east")
     assert cards(page).count() == table_rows(page), "the cards agree"
 
 
@@ -308,25 +311,20 @@ def test_search_matches_a_prefix_and_only_a_prefix(page, module):
     box = page.get_by_label("Find a site")
 
     box.fill("east 2")
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == 0, "not a substring match"
+    expect(table_locator(page)).to_have_count(0)
 
     box.fill("Site east")
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == COUNTS["east"], "a partial prefix matches every row under it"
+    expect(table_locator(page)).to_have_count(COUNTS["east"])
 
     box.fill("Site east 2")
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == 1, "and a whole one matches its own row"
+    expect(table_locator(page)).to_have_count(1)
 
 
 def test_an_empty_box_is_no_filter_not_a_filter_for_nothing(page, module):
     open_module(page, module)
     box = page.get_by_label("Find a site")
     box.fill("Site east")
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == COUNTS["east"]
+    expect(table_locator(page)).to_have_count(COUNTS["east"])
 
     box.fill("")
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == TOTAL
+    expect(table_locator(page)).to_have_count(TOTAL)

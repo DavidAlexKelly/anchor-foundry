@@ -4,3 +4,9 @@
 pytest==8.3.3
 httpx==0.27.2
 moto[server]==5.0.13
+
+# The browser suite (e2e/). Test-only, like everything else here - the runtime
+# image installs requirements.txt alone. It was missing entirely until the CI
+# workflow was read against the repo: the suite ran locally because a venv had
+# it installed by hand, and a fresh checkout could not have run it at all.
+playwright==1.61.0

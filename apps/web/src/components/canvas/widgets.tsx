@@ -23,6 +23,10 @@ import { eventsFor, interpolate, run as runEvents, useEventContext } from "./eve
 import { invalidateCanvasReads } from "./refresh";
 import { describeSet, selectionOf, useSetPage } from "./object-set";
 import {
+  MIN_SHARE, formatWeights, parseWeights, pivotClauses, resizeWeights, roundWeight,
+  seriesLabel, type PivotPick,
+} from "./pure";
+import {
   chartQuery,
   distinctValuesQuery,
   filteredQuery,
@@ -1720,23 +1724,6 @@ CanvasObjectCards.craft = {
  * reads. Two clauses rather than one is the only difference — a cell is the
  * intersection of a row and a column, which is exactly what it looks like.
  */
-type PivotPick = { row: string | null; column: string | null };
-
-/** The clause list for a selection — the whole list, so clearing one axis is
- *  the absence of its clause rather than a clause with an empty value. */
-function pivotClauses(
-  pick: PivotPick,
-  rowProperty: string,
-  columnProperty: string,
-): { property: string; op: string; value: string }[] {
-  const out = [];
-  if (pick.row !== null) out.push({ property: rowProperty, op: "eq", value: pick.row });
-  if (pick.column !== null) {
-    out.push({ property: columnProperty, op: "eq", value: pick.column });
-  }
-  return out;
-}
-
 export function CanvasPivotTable({
   objectSetVariable = null,
   rowProperty = null,
@@ -2117,20 +2104,6 @@ CanvasPivotTable.craft = {
  * already filled by the server, so a plain line over the points is correct.
  */
 const SERIES_INTERVALS = ["day", "week", "month"] as const;
-
-/** A bucket's label, formatted **in UTC** — the boundary the server pinned.
- *  Rendering in local time would put a viewer six hours west a day behind the
- *  bucket they are looking at, which is exactly the disagreement UTC was
- *  chosen to remove, reintroduced in the browser. */
-function seriesLabel(iso: string, interval: string): string {
-  const when = new Date(iso);
-  const opts: Intl.DateTimeFormatOptions =
-    interval === "month"
-      ? { year: "numeric", month: "short", timeZone: "UTC" }
-      : { day: "numeric", month: "short", timeZone: "UTC" };
-  const formatted = new Intl.DateTimeFormat(undefined, opts).format(when);
-  return interval === "week" ? `w/c ${formatted}` : formatted;
-}
 
 export function CanvasTimeSeries({
   objectSetVariable = null,
@@ -3606,21 +3579,6 @@ function childList(children: React.ReactNode): React.ReactNode[] {
  * three unreadable columns; the roadmap asks for responsive rules per section
  * type, and for a column section the rule is "stop being columns".
  */
-
-/** The least of a section a part may be dragged to, as a fraction of the pair
- *  being resized. A part dragged to nothing has no handle left to grab and no
- *  way back except the Settings field - an unrecoverable state reached by an
- *  ordinary gesture, which is the kind worth preventing rather than
- *  documenting. */
-const MIN_SHARE = 0.08;
-
-/** Weights are rounded so the document stays something a person can read and
- *  edit. `2.33,0.67` is describable; sixteen decimal places of float noise is
- *  not, and the roadmap's whole reason for typing proportions first was that
- *  the saved layout should be describable. */
-function roundWeight(value: number): number {
-  return Math.round(value * 100) / 100;
-}
 export function CanvasSection({
   direction = "columns",
   weights = "",
@@ -3660,33 +3618,19 @@ export function CanvasSection({
   const { mode } = useCanvasEnv();
   const { hidden, marker } = useVisibility(visibleWhen);
   const parts = childList(children);
-  const parsed = String(weights || "")
-    .split(",")
-    .map((w) => Number(w.trim()))
-    .filter((w) => Number.isFinite(w) && w > 0);
+  const parsed = parseWeights(weights, parts.length);
 
   const partsRef = React.useRef<HTMLDivElement>(null);
   // What the section looks like *during* a drag. Deliberately transient: the
   // prop is written once, on release, so a drag is one undo step rather than
   // one per pixel — and there is no second copy of the layout at rest.
   const [dragging, setDragging] = React.useState<number[] | null>(null);
-  const effective = dragging ?? parts.map((_, index) => parsed[index] ?? 1);
+  const effective = dragging ?? parsed;
 
   const commit = (next: number[]) => {
-    setProp((p: { weights: string }) => (p.weights = next.map(roundWeight).join(",")));
+    setProp((p: { weights: string }) => (p.weights = formatWeights(next)));
   };
-
-  /** Move the boundary between `index` and `index + 1`, keeping their combined
-   *  share fixed. Only the two either side of a handle move: dragging one
-   *  divider must not shuffle a column at the far end of the section. */
-  const resized = (index: number, share: number): number[] => {
-    const next = [...effective];
-    const pair = (next[index] ?? 1) + (next[index + 1] ?? 1);
-    const clamped = Math.min(Math.max(share, MIN_SHARE), 1 - MIN_SHARE);
-    next[index] = pair * clamped;
-    next[index + 1] = pair - (next[index] ?? 0);
-    return next;
-  };
+  const resized = (index: number, share: number) => resizeWeights(effective, index, share);
 
   const onHandleDown = (index: number) => (event: React.PointerEvent<HTMLDivElement>) => {
     const container = partsRef.current;
@@ -3754,7 +3698,7 @@ export function CanvasSection({
       {mode === "edit" && (
         <p className="canvas-section-label">
           {direction === "columns" ? "Columns" : "Rows"}
-          {parsed.length > 1 ? ` · ${parsed.join(":")}` : ""}
+          {parts.length > 1 ? ` · ${parsed.map(roundWeight).join(":")}` : ""}
         </p>
       )}
       <div

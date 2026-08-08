@@ -9,6 +9,11 @@ scripts/dev-up.sh      # Postgres, the API on 8300, Next on 3100
 scripts/check.sh e2e   # or: .venv-api/bin/python -m pytest e2e -q
 ```
 
+**Nothing here sleeps for a fixed interval.** Every wait is a condition with a
+deadline — Playwright's `expect` where a locator assertion fits, `eventually()`
+for values derived from several reads. A test that is ready in 200ms takes
+200ms, and a slower machine takes longer rather than failing.
+
 ## Why this exists
 
 `ROADMAP.md`'s cross-cutting section puts it plainly: *"Playwright coverage of
@@ -66,6 +71,11 @@ Kept because each cost real time and none is obvious:
 - **A checkbox backed by the URL does not tick synchronously.** Playwright's
   `check()` verifies state immediately after clicking and the tick lands a
   router round-trip later. Click, then wait.
+- **A polling assertion on an *absence* passes instantly.** `expect(x).
+  to_have_count(0)` is true of a page that has not drawn yet, so "this widget
+  offers no handles" would be green before the widget existed. Every check for
+  an absence waits for a *presence* first — see `settled()`, and the comments
+  at each such assertion.
 - **Never run `next build` while these are running.** Both write
   `apps/web/.next`, and the dev server starts 500ing mid-suite. Every assertion
   after that point fails for a reason that has nothing to do with the code.
@@ -78,6 +88,20 @@ Kept because each cost real time and none is obvious:
 | `test_time_series.py` | Time Series (§106) |
 | `test_narrowing_widgets.py` | Chart drill-down (§101), Card List (§102), Search (§103) — one module, because the claim that matters is that they *compose* |
 | `test_section_resize.py` | Drag-to-resize sections (§109) — the only suite that drives the **builder** rather than Preview |
+
+## What is *not* tested here, on purpose
+
+`apps/web/src/components/canvas/pure.ts` holds the widgets' arithmetic and
+formatting, and `pure.test.ts` beside it covers those with Vitest — no React,
+no DOM, no rendering. They run in under a second, which is the point: a pixel
+is a lossy and slow way to ask about a number.
+
+**The boundary is worth keeping.** A JavaScript runner tends to grow jsdom
+"integration" tests that pass while the real application is broken — which is
+exactly the class of defect this suite exists to catch. `pure.ts` imports
+nothing from React, so such a test cannot be written in it.
+
+## What nothing tests
 
 Not covered by a browser test: everything else. The Filter List, the Map, the
 Action form, the builder's own panels, publishing, and the Object Explorer all
