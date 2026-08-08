@@ -11,10 +11,21 @@ call the gateway makes - index exists/create, bulk upsert, delete_by_query
 on a term + range filter, search with a term filter, sort, from/size and a
 total, get by id, and partial update.
 
-What this is **not**: OpenSearch. There are no analyzers, no mapping
-enforcement, no refresh semantics, no sharding. It proves the gateway forms
-correct requests and reads responses correctly; it cannot prove the cluster
-agrees. That gap is stated in STATUS rather than papered over.
+Mapping enforcement, as of decision 0006 §7: `indices.create` bodies are
+remembered, values are coerced and compared by their declared type, and a
+document or query that contradicts the mapping is refused the way a cluster
+refuses it. Until that existed every field was text here, so a store that
+mapped `capacity` as an integer and one that left it alone gave identical
+answers - which is exactly the disagreement typed properties exist to remove,
+invisible to the only test that could have seen it.
+
+What this is **still not**: OpenSearch. There are no analyzers, no scoring, no
+refresh semantics, no sharding, and the mapping rules implemented are the ones
+this platform writes rather than the whole language. It proves the gateway
+forms correct requests, reads responses correctly, and does not contradict the
+mapping it declared; it cannot prove a real cluster agrees. That remaining gap
+is stated in STATUS rather than papered over, and decision 0006 lists checking
+it as a deployment step.
 
 Endpoints:
   GET    /                        version banner (client handshake)
@@ -39,8 +50,159 @@ from urllib.parse import urlparse
 # index name -> {doc_id: source}
 INDICES: dict[str, dict[str, dict]] = {}
 
+# index name -> the mapping body `indices.create` was given. Kept so the
+# fixture can *contradict* a wrong one (decision 0006 §7): until it did, every
+# field was text as far as this process was concerned, so a store that mapped
+# `capacity` as an integer and one that left it as text produced identical
+# answers here - which is precisely the disagreement typed properties exist to
+# remove, invisible to the only test that could have seen it.
+MAPPINGS: dict[str, dict] = {}
+
 
 MISSING = object()
+
+
+class MappingError(ValueError):
+    """A document or query that contradicts the index's declared mapping.
+
+    Its own type, because a real cluster answers these with 400 and a
+    `mapper_parsing_exception` rather than by quietly coercing - and decision
+    0006 §5 turns on that failure being reachable in a test.
+    """
+
+
+def _declared_type(index: str, field: str) -> str | None:
+    """The mapping's type for a field path, or None where nothing declares one.
+
+    Honours explicit `properties` first and `dynamic_templates` second, which is
+    the order a real cluster resolves them in: a named field beats a pattern.
+    A trailing `.keyword` names a subfield of the same value and is reported as
+    `keyword`, since that is what it is.
+    """
+    mapping = (MAPPINGS.get(index) or {}).get("mappings") or {}
+    keyword_subfield = field.endswith(".keyword")
+    path = field[: -len(".keyword")] if keyword_subfield else field
+
+    node = mapping.get("properties") or {}
+    declared: dict | None = None
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            declared = None
+            break
+        declared = node[part]
+        node = declared.get("properties") or {}
+    if declared is not None and "type" in declared:
+        if keyword_subfield:
+            return "keyword" if "keyword" in (declared.get("fields") or {}) else None
+        return str(declared["type"])
+
+    for template in mapping.get("dynamic_templates") or []:
+        for spec in template.values():
+            match = spec.get("path_match")
+            if match and _path_matches(match, path):
+                mapped = (spec.get("mapping") or {})
+                if keyword_subfield:
+                    return "keyword" if "keyword" in (mapped.get("fields") or {}) else None
+                return str(mapped.get("type")) if mapped.get("type") else None
+    return None
+
+
+def _path_matches(pattern: str, path: str) -> bool:
+    """`properties.*` against `properties.capacity`. One level, which is all
+    the templates this platform writes use - a fixture that implemented more
+    would be imitating a rule nothing here relies on."""
+    if pattern.endswith(".*"):
+        prefix = pattern[:-2]
+        return path.startswith(prefix + ".") and "." not in path[len(prefix) + 1:]
+    return pattern == path
+
+
+def _coerce(value, declared: str | None, where: str):
+    """A value as the mapping says it is, or a refusal.
+
+    **Refusing is the point.** A real cluster rejects "n/a" for an integer
+    field with a `mapper_parsing_exception`; a fixture that stored it as a
+    string would let a typed reindex look like it had worked and leave the
+    disagreement to be found on a real deployment.
+    """
+    if value is None or declared is None:
+        return value
+    try:
+        if declared in ("integer", "long"):
+            if isinstance(value, bool) or float(value) != int(float(value)):
+                raise ValueError
+            return int(value)
+        if declared in ("float", "double"):
+            if isinstance(value, bool):
+                raise ValueError
+            return float(value)
+        if declared == "boolean":
+            if isinstance(value, bool):
+                return value
+            if str(value).lower() in ("true", "false"):
+                return str(value).lower() == "true"
+            raise ValueError
+        if declared == "date":
+            _parse_date(value)
+            return value
+        if declared == "geo_point":
+            _parse_geo(value)
+            return value
+    except (TypeError, ValueError) as exc:
+        raise MappingError(
+            f"failed to parse field [{where}] of type [{declared}]: {value!r}"
+        ) from exc
+    return value
+
+
+def _parse_date(value) -> datetime:
+    when = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _parse_geo(value) -> tuple[float, float]:
+    """`{"lat": .., "lon": ..}` or `"lat,lon"`, the two forms the platform
+    writes. Anything else is a parse failure rather than a guess."""
+    if isinstance(value, dict):
+        return float(value["lat"]), float(value["lon"])
+    lat, _, lon = str(value).partition(",")
+    if not lon:
+        raise ValueError(f"not a geo_point: {value!r}")
+    return float(lat), float(lon)
+
+
+def _validate(index: str, doc: dict, prefix: str = "") -> dict:
+    """Every field of a document, coerced by the mapping. Raises on the first
+    contradiction, the way a cluster refuses the whole document rather than
+    storing the parts that happened to parse."""
+    out: dict = {}
+    for key, value in doc.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict) and _declared_type(index, path) != "geo_point":
+            out[key] = _validate(index, value, prefix=f"{path}.")
+        else:
+            out[key] = _coerce(value, _declared_type(index, path), path)
+    return out
+
+
+def _comparable(value, declared: str | None):
+    """A value in the form its mapping compares in.
+
+    This is the whole reason the mapping is remembered. `keyword` compares as
+    bytes and `integer` numerically, so `"250" < "40"` on one and `250 > 40` on
+    the other - which is the disagreement `object_sets.ORDERED_OPERATORS`
+    refuses to choose between, and which a fixture with no mappings could not
+    reproduce in either direction.
+    """
+    if value is None:
+        return None
+    if declared in ("integer", "long", "float", "double"):
+        return float(value)
+    if declared == "boolean":
+        return bool(value)
+    if declared == "date":
+        return _parse_date(value)
+    return str(value)
 
 
 def _resolve(source: dict, field: str):
@@ -64,15 +226,50 @@ def _resolve(source: dict, field: str):
     return current
 
 
-def _match(source: dict, clause: dict) -> bool:
+def _match(source: dict, clause: dict, index: str = "") -> bool:
     if "term" in clause:
         field, value = next(iter(clause["term"].items()))
         found = _resolve(source, field)
-        return found is not MISSING and str(found) == str(value)
+        if found is MISSING:
+            return False
+        declared = _declared_type(index, field)
+        try:
+            return _comparable(found, declared) == _comparable(value, declared)
+        except (TypeError, ValueError) as exc:
+            # A query value the field's type cannot hold. A real cluster
+            # answers 400 rather than "no matches", and the difference matters:
+            # silently empty is how a wrong query looks like a true answer.
+            raise MappingError(
+                f"failed to parse query value for [{field}] of type [{declared}]: {value!r}"
+            ) from exc
     if "terms" in clause:
         field, values = next(iter(clause["terms"].items()))
         found = _resolve(source, field)
-        return found is not MISSING and str(found) in {str(v) for v in values}
+        if found is MISSING:
+            return False
+        declared = _declared_type(index, field)
+        return _comparable(found, declared) in {_comparable(v, declared) for v in values}
+    if "geo_bounding_box" in clause:
+        # Decision 0006 §3: the map's area selection is a bounding box, not
+        # four ordered comparisons - four get the antimeridian wrong, silently,
+        # for exactly the customers whose data crosses it. The fixture answers
+        # it properly so that a store which reached for comparisons instead
+        # would not merely be slower, it would be visibly wrong here.
+        field, box = next(iter(clause["geo_bounding_box"].items()))
+        found = _resolve(source, field)
+        if found is MISSING:
+            return False
+        if _declared_type(index, field) != "geo_point":
+            raise MappingError(f"[geo_bounding_box] query on non-geo_point field [{field}]")
+        lat, lon = _parse_geo(found)
+        top_left, bottom_right = _parse_geo(box["top_left"]), _parse_geo(box["bottom_right"])
+        if not (bottom_right[0] <= lat <= top_left[0]):
+            return False
+        west, east = top_left[1], bottom_right[1]
+        # A box whose west edge is east of its east edge crosses the
+        # antimeridian, and then "between" is the union of two ranges rather
+        # than one interval.
+        return west <= lon <= east if west <= east else (lon >= west or lon <= east)
     if "multi_match" in clause:
         # Substring over every property value plus the primary key. Real
         # OpenSearch tokenises and ranks; the fixture only has to decide
@@ -105,10 +302,31 @@ def _match(source: dict, clause: dict) -> bool:
         return True
     if "range" in clause:
         field, bounds = next(iter(clause["range"].items()))
-        current = str(source.get(field, ""))
-        if "lt" in bounds and not current < str(bounds["lt"]):
+        found = _resolve(source, field)
+        if found is MISSING:
             return False
-        if "gte" in bounds and not current >= str(bounds["gte"]):
+        # **Compared by the mapping, not as text.** This is the line the whole
+        # exercise is about: `capacity >= 40` is true of 250 on an integer
+        # field and false on a keyword one, and until the mapping was
+        # remembered this fixture could only ever give the second answer -
+        # so a typed range that worked on Postgres and not on OpenSearch
+        # would have passed here.
+        declared = _declared_type(index, field)
+        try:
+            current = _comparable(found, declared)
+            edges = {op: _comparable(bounds[op], declared) for op in bounds if op in
+                     ("lt", "lte", "gt", "gte")}
+        except (TypeError, ValueError) as exc:
+            raise MappingError(
+                f"failed to parse range bound for [{field}] of type [{declared}]"
+            ) from exc
+        if "lt" in edges and not current < edges["lt"]:
+            return False
+        if "lte" in edges and not current <= edges["lte"]:
+            return False
+        if "gt" in edges and not current > edges["gt"]:
+            return False
+        if "gte" in edges and not current >= edges["gte"]:
             return False
         return True
     raise ValueError(f"fixture does not implement clause {clause!r}")
@@ -133,7 +351,7 @@ def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
         minimum = int(bool_query.get("minimum_should_match", 0))
         if should and minimum:
             def enough(source: dict) -> bool:
-                return sum(1 for c in should if _match(source, c)) >= minimum
+                return sum(1 for c in should if _match(source, c, index)) >= minimum
         elif should:
             def enough(source: dict) -> bool:
                 return True
@@ -147,14 +365,14 @@ def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
         def enough(source: dict) -> bool:
             return True
     def allowed(source: dict) -> bool:
-        return not any(_match(source, c) for c in must_not)
+        return not any(_match(source, c, index) for c in must_not)
 
     if not clauses:
         return [(i, s) for i, s in docs if enough(s) and allowed(s)]
     return [
         (i, s)
         for i, s in docs
-        if all(_match(s, c) for c in clauses) and enough(s) and allowed(s)
+        if all(_match(s, c, index) for c in clauses) and enough(s) and allowed(s)
     ]
 
 
@@ -205,8 +423,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802
         index = urlparse(self.path).path.strip("/")
-        self._body()
+        raw = self._body()
         INDICES.setdefault(index, {})
+        # Remembered rather than discarded: everything below compares by it.
+        MAPPINGS[index] = json.loads(raw or "{}")
         self._send(200, {"acknowledged": True, "index": index})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -214,6 +434,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = self._body()
         if path == "/__reset":
             INDICES.clear()
+            MAPPINGS.clear()
             return self._send(200, {"reset": True})
         if path == "/_bulk":
             return self._bulk(raw)
@@ -242,13 +463,31 @@ class Handler(BaseHTTPRequestHandler):
                 items.append({"update": {"_id": doc_id, "status": 404,
                                          "error": {"type": "document_missing_exception"}}})
                 continue
-            bucket[doc_id] = {**(existing or {}), **payload["doc"]}
+            try:
+                doc = _validate(index, payload["doc"])
+            except MappingError as exc:
+                # Per-item, not per-request: a real bulk reports each document
+                # separately and the gateway reads `errors` plus the items, so a
+                # fixture that failed the whole call would exercise a path the
+                # gateway does not have.
+                items.append({"update": {"_id": doc_id, "status": 400,
+                                         "error": {"type": "mapper_parsing_exception",
+                                                   "reason": str(exc)}}})
+                continue
+            bucket[doc_id] = {**(existing or {}), **doc}
             items.append({"update": {"_id": doc_id, "status": 200,
                                      "result": "updated" if existing else "created"}})
         self._send(200, {"errors": any("error" in i["update"] for i in items), "items": items})
 
     def _search(self, index: str, body: dict) -> None:
-        matched = _filtered(index, body.get("query", {}))
+        try:
+            matched = _filtered(index, body.get("query", {}))
+        except MappingError as exc:
+            # What a real cluster answers a query its mapping cannot honour.
+            # Returning no matches instead would be the worst option available:
+            # a wrong query that looks like a true answer.
+            return self._send(400, {"error": {"type": "search_phase_execution_exception",
+                                              "reason": str(exc)}})
         for sort in reversed(body.get("sort", [])):
             field, direction = next(iter(sort.items()))
             matched.sort(key=lambda pair: str(pair[1].get(field, "")),
@@ -392,7 +631,11 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _delete_by_query(self, index: str, body: dict) -> None:
-        matched = _filtered(index, body.get("query", {}))
+        try:
+            matched = _filtered(index, body.get("query", {}))
+        except MappingError as exc:
+            return self._send(400, {"error": {"type": "mapper_parsing_exception",
+                                              "reason": str(exc)}})
         for doc_id, _ in matched:
             INDICES[index].pop(doc_id, None)
         self._send(200, {"deleted": len(matched)})
@@ -401,7 +644,12 @@ class Handler(BaseHTTPRequestHandler):
         bucket = INDICES.get(index, {})
         if doc_id not in bucket:
             return self._send(404, {"_index": index, "_id": doc_id, "found": False})
-        bucket[doc_id] = {**bucket[doc_id], **body["doc"]}
+        try:
+            doc = _validate(index, body["doc"])
+        except MappingError as exc:
+            return self._send(400, {"error": {"type": "mapper_parsing_exception",
+                                              "reason": str(exc)}})
+        bucket[doc_id] = {**bucket[doc_id], **doc}
         self._send(200, {"_index": index, "_id": doc_id, "result": "updated"})
 
 

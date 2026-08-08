@@ -2253,6 +2253,28 @@ Both survivors were mine, in tests written minutes earlier, and neither was a mi
 
 ---
 
+### 112. Mapping enforcement in the OpenSearch fixture (this session)
+
+Decision 0006 §7's prerequisite, and the part of the typed-property work that can be done honestly without a cluster. `tests/opensearch_fixture_server.py` now remembers the mapping `indices.create` was given, coerces and compares by it, and refuses what contradicts it.
+
+**Why this was the blocker rather than a nicety.** Until now every field in the fixture was text. A store that mapped `capacity` as an integer and one that left it alone produced *identical* answers here — so the disagreement typed properties exist to remove was invisible to the only test that could have seen it. The fixture could not have failed a wrong mapping, which means a green cross-store test proved nothing about types.
+
+**What it does now**, against the three things §7 asked for:
+
+1. **Remembers the mapping**, resolving explicit `properties` before `dynamic_templates` — a named field beats a pattern, as a cluster resolves it. The `.keyword` subfield now comes from the template that declares it rather than from the fixture treating any dotted path as the same value.
+2. **Compares by declared type.** `capacity >= 40` is true of 250 on an `integer` field and false on a `keyword` one, and both are asserted — the second is not a fixture bug, it is exactly why `ORDERED_OPERATORS` refuses to choose. Dates compare chronologically, so `+00:00` and `Z` are one instant.
+3. **Refuses contradictions.** A value the type cannot hold is a `mapper_parsing_exception` per bulk item, and nothing is stored — which makes §5's reindex failure reachable in a test. A *query* value the type cannot hold is a 400, not an empty result: silently empty is the worst answer available, a wrong query that looks like a true one.
+
+**`geo_bounding_box` is answered properly, antimeridian included** (§3). A box whose west edge is east of its east edge is a union of two ranges, not one interval — which is what four ordered comparisons get wrong, silently, for exactly the customers whose data crosses it. A store reaching for comparisons instead would now be visibly wrong here rather than merely slower.
+
+**The fixture has its own tests now, and that is the point.** It is what every OpenSearch-side claim in this repo rests on, and it has twice been the reason a check passed for the wrong reason: `size: 0` (§105) and a nested aggregation that could have counted the wrong documents (§105). A load-bearing fake needs its own evidence. **Nine mutations against the enforcement, nine caught.**
+
+**782 API tests, 1 skipped** — 765 existing with no regressions, plus 17 new. That the existing ones still pass is itself a result: the mapping `_ensure_index` declares is consistent with everything the suite does, including `updated_at` range queries that now compare as dates rather than as strings.
+
+**What this still does not prove**, unchanged and worth repeating: that a real cluster agrees. It narrows the unproven claim from *"does any of this work"* to *"does OpenSearch behave like the mapping it was given"* — a much smaller thing to check on first deployment, and one 0006 lists as a runbook step. The fixture's docstring no longer claims it has no mapping enforcement, because that would now be a lie; it states the limits it does still have.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -158,6 +158,13 @@ mapping enforcement** — by design, and it says so in its own docstring. It tre
 `properties.x` and `properties.x.keyword` as the same value, which is exactly why the first
 cross-store disagreement was catchable and why a *typed* one would not be.
 
+**Built** (`STATUS.md` §112): the fixture now remembers `indices.create` mappings, coerces and
+compares by declared type, answers `geo_bounding_box` including the antimeridian case, and
+refuses a document or a query that contradicts the mapping. `tests/test_opensearch_fixture.py`
+covers it, and nine mutations against the enforcement were all caught. The three requirements
+below are what that work was measured against; the paragraph after them still stands
+unchanged.
+
 Before this is built, the fixture must:
 
 1. **Accept and remember a mapping** from `indices.create`, per index.
