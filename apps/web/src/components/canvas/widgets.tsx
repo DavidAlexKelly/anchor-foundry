@@ -7,10 +7,15 @@
  * actions endpoints already built elsewhere; a widget only remembers which
  * dataset/action it's bound to, never a copy of the data itself. */
 
-import { useEditor, useNode } from "@craftjs/core";
+import { Editor, Frame, useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { actions as actionApi, ApiError, datasets as dsApi, objects as objApi } from "@/lib/api";
+import {
+  actions as actionApi, ApiError, canvas as canvasApi, datasets as dsApi,
+  objects as objApi,
+} from "@/lib/api";
+import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
+import { VariableBridge } from "./VariableBridge";
 import {
   useCanvasEnv,
   useCanvasPage,
@@ -2241,6 +2246,150 @@ CanvasTimeSeries.craft = {
   related: { settings: TimeSeriesSettings },
 };
 
+
+// ---- embedded module (roadmap 1.5, priority 4) -------------------------------
+/**
+ * One Workshop module inside another.
+ *
+ * **The inner module is shown, not edited.** Its `<Editor>` is always
+ * `enabled={false}`, in the builder as well as the viewer: editing a module
+ * means opening it, and a nested editable canvas would put two documents' undo
+ * stacks, selections and drag targets on one screen with no way to say which
+ * one a gesture meant.
+ *
+ * **It resolves its own variables, and shares none with its host.** A shared
+ * namespace would collide the first time two modules both declared `v_filter`,
+ * and the collision would be silent — the inner module would quietly read the
+ * outer one's value and look like it was working. Passing values in needs an
+ * explicit mapping, which is a format change and its own item; until then the
+ * boundary is a wall rather than a leak, and the Settings panel says so.
+ *
+ * **What may be embedded is settled on the server** (`routes/canvas.py`): a
+ * module cannot embed itself, close a cycle, name a module outside its
+ * project, or nest deeper than three. Those are refused when the *author*
+ * saves, because a cycle discovered here would be a browser that hangs and a
+ * viewer who cannot do anything about it.
+ */
+export function CanvasEmbeddedModule({
+  moduleId = null,
+  title = "",
+}: {
+  moduleId?: string | null;
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, projectId } = useCanvasEnv();
+
+  const embedded = useQuery({
+    queryKey: ["canvas-embedded", workspaceId, projectId, moduleId],
+    queryFn: () => canvasApi.get(workspaceId, projectId, moduleId!),
+    enabled: !!moduleId,
+  });
+
+  const definition = embedded.data?.definition;
+  const layout = definition ? layoutOf(definition) : null;
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
+      {!moduleId && (
+        <p className="canvas-widget-empty">
+          Embedded module - choose one in Settings
+        </p>
+      )}
+      {moduleId && embedded.isPending && <p className="canvas-widget-empty">Loading…</p>}
+      {embedded.isError && (
+        // Names the module rather than saying "something went wrong": the most
+        // likely cause is a viewer who cannot open it, and that is worth being
+        // able to tell apart from a module that is broken.
+        <p className="canvas-widget-empty">
+          {embedded.error instanceof ApiError && embedded.error.status === 403
+            ? "You do not have access to the module embedded here."
+            : "Couldn't load the embedded module."}
+        </p>
+      )}
+      {layout && Object.keys(layout).length === 0 && (
+        <p className="canvas-widget-empty">
+          {embedded.data?.name ?? "That module"} has nothing on it yet.
+        </p>
+      )}
+      {layout && Object.keys(layout).length > 0 && (
+        <div className="canvas-embedded" data-module={moduleId ?? ""}>
+          {/* Its own bridge, so the inner module's variables resolve against
+              the inner module. Sharing the outer one would resolve the wrong
+              declarations against the wrong document. */}
+          <VariableBridge
+            workspaceId={workspaceId}
+            projectId={projectId}
+            appId={moduleId!}
+            declared={variablesOf(definition)}
+            events={eventsOf(definition) as never}
+          >
+            <Editor resolver={CANVAS_RESOLVER} enabled={false}>
+              <Frame data={JSON.stringify(layout)} />
+            </Editor>
+          </VariableBridge>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmbeddedModuleSettings() {
+  const { workspaceId, projectId } = useCanvasEnv();
+  const {
+    moduleId, title,
+    actions: { setProp },
+  } = useNode((node) => ({
+    moduleId: node.data.props.moduleId,
+    title: node.data.props.title,
+  }));
+  const apps = useQuery({
+    queryKey: ["canvas-apps", workspaceId, projectId],
+    queryFn: () => canvasApi.list(workspaceId, projectId),
+  });
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Module</span>
+        <select
+          value={moduleId || ""}
+          onChange={(e) =>
+            setProp((p: { moduleId: string | null }) => (p.moduleId = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {(apps.data ?? []).map((app) => (
+            <option key={app.id} value={app.id}>{app.name}</option>
+          ))}
+        </select>
+        {/* Said here because the alternative - discovering it when a variable
+            silently does nothing - is much worse. */}
+        <span className="field-hint">
+          It runs on its own variables; nothing is passed in from this module
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title || ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasEmbeddedModule.craft = {
+  displayName: "Embedded module",
+  props: { moduleId: null, title: "" },
+  related: { settings: EmbeddedModuleSettings },
+};
+
 // ---- Map (ROADMAP Canvas item 4) --------------------------------------------
 /**
  * Pins on a map, from either half of the platform: an object type's geopoint
@@ -4311,6 +4460,7 @@ export const CANVAS_RESOLVER = {
   CanvasSearch,
   CanvasPivotTable,
   CanvasTimeSeries,
+  CanvasEmbeddedModule,
   CanvasChart,
   CanvasMap,
   CanvasMetricCard,
@@ -4334,6 +4484,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasSearch", label: "Search", hint: "Narrow an object set by a property prefix" },
   { key: "CanvasPivotTable", label: "Pivot table", hint: "Counts by two properties at once, over an object set" },
   { key: "CanvasTimeSeries", label: "Time series", hint: "When the objects in a set last changed" },
+  { key: "CanvasEmbeddedModule", label: "Embedded module", hint: "Another Workshop module, shown inside this one" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
   { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },

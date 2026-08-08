@@ -2291,6 +2291,34 @@ Every test in `e2e/` waited a fixed 6–9 seconds after each interaction, tuned 
 
 ---
 
+### 114. One module inside another (this session)
+
+Roadmap 1.5's *Embedded module*, priority 4 — the last widget on the list, and the one 1.4 had to land first for.
+
+**The design unknown was whether Craft.js tolerates a nested `<Editor>` at all.** Every widget calls `useNode()`, which needs an editor above it, so an embedded module cannot be rendered by a plain recursive walk without rewriting every widget. Two editors on one page share a document, a selection and a set of drag handlers, and reading the library's source would not have settled it with any confidence. A browser test did, in twenty minutes: **it works**, and there is now a suite that would notice if it stopped.
+
+**The inner editor is always disabled**, in the builder as well as the viewer. Editing a module means opening it; a nested *editable* canvas would put two documents' undo stacks and drop targets on one screen with no way to say which one a gesture meant.
+
+**The boundary is a wall, not a leak.** The inner module resolves its own variables through its own `VariableBridge` and shares nothing with its host. A shared namespace would collide the first time two modules both declared `v_filter`, and the collision would be *silent* — the inner module would read the outer's value and look like it was working. The test makes that visible rather than arguing it: the inner module's set is filtered to north and the host's is not, so inheritance and independence produce different row counts. Passing values in deliberately needs an explicit mapping, which is a format change and its own item; the Settings panel says so where somebody would otherwise assume.
+
+**What may be embedded is decided when the author saves** (§113's commit, the server half): no self-embedding, no cycles through other modules, nothing outside the project, nothing deeper than three. A cycle found at render time is a browser that hangs, and the person who meets it is a viewer who did not build the thing.
+
+**Six defects on the way, and the ratio is the point: four were mine and dull, two were tests that could not fail.**
+
+* A helper inserted between a route's decorator and its function, so FastAPI registered *the helper* as the route.
+* A parser assuming a node's `type` is always `{"resolvedName": ...}`, when hand-written documents use a bare string — it raised instead of refusing.
+* Two test helpers colliding with existing module-level names, breaking ten unrelated tests. Twice.
+* **The depth test built its chain outermost-first**, so every save saw a chain of length one and the limit was never reached however long the chain was. It passed while checking nothing.
+* **The render test asserted presence rather than visibility.** `to_contain_text` reads `textContent`, which a `display: none` element still has — a mutation hiding the whole embed sailed through. Now it asserts visibility, and the mutation is caught.
+
+Also worth recording: the browser fixture originally put the two modules in *separate projects*, and the widget dutifully reported that it could not load the module — which was the server's cross-project refusal working correctly, discovered by tripping over it. The suite's `Module` helper gained a `beside=` argument so two modules can share a project.
+
+**788 API tests, 23 unit tests, 32 browser tests, `tsc` clean.** Four mutations against the widget: three caught, one invalid (it edited a prop that does not exist) and re-run properly.
+
+**Section 1.5 is now complete except Comments/Notepad**, and section 1 has nothing else open.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
