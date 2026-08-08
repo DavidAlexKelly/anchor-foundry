@@ -70,8 +70,14 @@ Kept because each cost real time and none is obvious:
   `apps/web/.next`, and the dev server starts 500ing mid-suite. Every assertion
   after that point fails for a reason that has nothing to do with the code.
 
-## What is not ported yet
+## Coverage
 
-The chart drill-down, the Card List and the Search widget (`STATUS.md` §101–103)
-still have their checks only as scratchpad scripts. They should move here next;
-the pattern is set.
+| File | Covers |
+|---|---|
+| `test_pivot_table.py` | Pivot Table (`STATUS.md` §105) |
+| `test_time_series.py` | Time Series (§106) |
+| `test_narrowing_widgets.py` | Chart drill-down (§101), Card List (§102), Search (§103) — one module, because the claim that matters is that they *compose* |
+
+Not covered by a browser test: everything else. The Filter List, the Map, the
+Action form, the builder's own panels, publishing, and the Object Explorer all
+have API tests and no browser test. That is a gap, not a decision.

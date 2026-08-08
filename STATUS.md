@@ -2156,7 +2156,26 @@ All four caught on re-run — **16 of 16**.
 
 **765 API tests, `tsc` clean, 11 browser tests — all three through `scripts/check.sh`.**
 
-**Still not ported**: the chart drill-down, Card List and Search checks (§101–§103) remain scratchpad scripts. The pattern is set and they should move next.
+**Now complete** (§108): the chart drill-down, Card List and Search checks moved in too, so nothing under `STATUS.md` §101–§106 is checked only from a scratchpad.
+
+---
+
+### 108. Finishing the port, and a test that could not tell two answers apart (this session)
+
+`e2e/test_narrowing_widgets.py` — chart drill-down (§101), the Card List (§102) and Search (§103), eleven tests in one module.
+
+**One module for three widgets, because the claim that matters spans them.** They all narrow the same object set, none of them *holds* one, and they **compose**: the chart writes clauses into `v_clauses`, search writes into `v_search`, and `narrow_set(narrow_set(all, clauses), search)` chains them. Sharing one variable would make them overwrite each other and leave the set depending on which was touched last — a bug nobody would report as a bug. Splitting them across three files would have meant three modules and no test of the thing they are for.
+
+**Two mutations run against the port, and the second one found a real hole in a test I had just written.**
+
+* Clicking a bar writes nothing → caught by two tests.
+* Search writes `eq` instead of `starts_with` → **`test_search_matches_a_prefix_not_a_substring` passed it.** The mutation was caught, but by an unrelated test, and that is worth reading carefully: the prefix test checked "east 2" (matches nothing under either rule) and "Site east 2" (matches exactly one row under either rule). It discriminated prefix from *substring*, which is what its name claimed, and not prefix from *exact* — and a prefix sits between two wrong answers, so two cases cannot separate three behaviours. Now three, with a partial prefix matching several rows, and the test written for the mutation is the one that catches it.
+
+**A restore failed silently and left a mutation on disk.** The `cp` back ran from `e2e/` rather than the repo root because an earlier `cd` had persisted, so the path did not exist. `git status` caught it immediately — which is the only reason it is a footnote rather than an incident, and the reason the tree is checked rather than trusted after every mutation run.
+
+**Coverage is now stated rather than implied.** `e2e/README.md` carries a table of what is covered and a sentence naming what is not: the Filter List, the Map, the Action form, the builder's own panels, publishing and the Object Explorer have API tests and no browser test. That is a gap, not a decision.
+
+**765 API tests, `tsc` clean, 22 browser tests.**
 
 ---
 
