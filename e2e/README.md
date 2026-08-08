@@ -79,6 +79,20 @@ Kept because each cost real time and none is obvious:
 | `test_narrowing_widgets.py` | Chart drill-down (§101), Card List (§102), Search (§103) — one module, because the claim that matters is that they *compose* |
 | `test_section_resize.py` | Drag-to-resize sections (§109) — the only suite that drives the **builder** rather than Preview |
 
+## What is *not* tested here, on purpose
+
+`apps/web/src/components/canvas/pure.ts` holds the widgets' arithmetic and
+formatting, and `pure.test.ts` beside it covers those with Vitest — no React,
+no DOM, no rendering. They run in under a second, which is the point: a pixel
+is a lossy and slow way to ask about a number.
+
+**The boundary is worth keeping.** A JavaScript runner tends to grow jsdom
+"integration" tests that pass while the real application is broken — which is
+exactly the class of defect this suite exists to catch. `pure.ts` imports
+nothing from React, so such a test cannot be written in it.
+
+## What nothing tests
+
 Not covered by a browser test: everything else. The Filter List, the Map, the
 Action form, the builder's own panels, publishing, and the Object Explorer all
 have API tests and no browser test. That is a gap, not a decision.
