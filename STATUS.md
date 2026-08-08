@@ -2156,7 +2156,52 @@ All four caught on re-run — **16 of 16**.
 
 **765 API tests, `tsc` clean, 11 browser tests — all three through `scripts/check.sh`.**
 
-**Still not ported**: the chart drill-down, Card List and Search checks (§101–§103) remain scratchpad scripts. The pattern is set and they should move next.
+**Now complete** (§108): the chart drill-down, Card List and Search checks moved in too, so nothing under `STATUS.md` §101–§106 is checked only from a scratchpad.
+
+---
+
+### 108. Finishing the port, and a test that could not tell two answers apart (this session)
+
+`e2e/test_narrowing_widgets.py` — chart drill-down (§101), the Card List (§102) and Search (§103), eleven tests in one module.
+
+**One module for three widgets, because the claim that matters spans them.** They all narrow the same object set, none of them *holds* one, and they **compose**: the chart writes clauses into `v_clauses`, search writes into `v_search`, and `narrow_set(narrow_set(all, clauses), search)` chains them. Sharing one variable would make them overwrite each other and leave the set depending on which was touched last — a bug nobody would report as a bug. Splitting them across three files would have meant three modules and no test of the thing they are for.
+
+**Two mutations run against the port, and the second one found a real hole in a test I had just written.**
+
+* Clicking a bar writes nothing → caught by two tests.
+* Search writes `eq` instead of `starts_with` → **`test_search_matches_a_prefix_not_a_substring` passed it.** The mutation was caught, but by an unrelated test, and that is worth reading carefully: the prefix test checked "east 2" (matches nothing under either rule) and "Site east 2" (matches exactly one row under either rule). It discriminated prefix from *substring*, which is what its name claimed, and not prefix from *exact* — and a prefix sits between two wrong answers, so two cases cannot separate three behaviours. Now three, with a partial prefix matching several rows, and the test written for the mutation is the one that catches it.
+
+**A restore failed silently and left a mutation on disk.** The `cp` back ran from `e2e/` rather than the repo root because an earlier `cd` had persisted, so the path did not exist. `git status` caught it immediately — which is the only reason it is a footnote rather than an incident, and the reason the tree is checked rather than trusted after every mutation run.
+
+**Coverage is now stated rather than implied.** `e2e/README.md` carries a table of what is covered and a sentence naming what is not: the Filter List, the Map, the Action form, the builder's own panels, publishing and the Object Explorer have API tests and no browser test. That is a gap, not a decision.
+
+**765 API tests, `tsc` clean, 22 browser tests.**
+
+---
+
+### 109. Drag-to-resize, and the bug it found on the way (this session)
+
+Roadmap 1.4's last open item, which closes the section. A splitter between a section's parts, in `CanvasSection`.
+
+**Dragging is a way of typing.** The handle writes the same `weights` prop the Settings field edits, so after a drag the field shows the new numbers. A resize that stored pixels alongside the proportions would look identical on screen and be a second answer to "how wide is this" — and the two would disagree the first time a window changed size. The typed-proportions-first sequencing the roadmap chose is what made this arrive without a format change.
+
+**Builder-only.** A viewer dragging a divider is editing the *saved document*, which decision 0002 rules out for the same reason a viewer's filters are not saved: a module is a definition, not a session. What a viewer sees is what the author laid out.
+
+**Committed once, on release.** During the drag the section renders from transient state; the prop is written when the pointer lifts. One undo step per drag rather than one per pixel, and no second copy of the layout at rest.
+
+**Clamped to 8% either side, and keyboard-operable.** A part dragged to nothing leaves no handle to grab and no way back except the Settings field — an unrecoverable state reached by an ordinary gesture, which is worth preventing rather than documenting. And a splitter only a mouse can move is one a keyboard user cannot use at all, so it is a `role="separator"` with arrow keys and `aria-valuenow`.
+
+**The test found a bug that had nothing to do with drag-to-resize, and it is the more useful result.** The row-direction drag moved nothing. The diagnosis was not the handle:
+
+> **Row-section proportions had never worked.** `weights: "3,1"` on a row section laid out exactly like `"1,1"` — two parts of 22.5px. `flex-grow` shares out *free* space, and a column of content-height children has none. Columns were never affected: a row of children in a full-width container has free space by construction.
+
+Both the Settings hint ("2,1 for two-thirds and a third") and the widget's own docstring ("children share the space by weight") said otherwise. Nothing had ever asked a row section to change shape, so nothing had ever contradicted them. **A feature can be documented, shipped, and simply not exist**, and the thing that finds it is the first test that asks it to do something rather than to be there.
+
+Fixed rather than papered over: a row section gained a `minHeight`, blank meaning "as tall as its contents" — which is the sensible default and the reason this was invisible. Proportions apply once there is a height to divide, the Settings panel says so where the number goes, and **a row section with no height offers no handle at all**, by the rule the empty pivot cell follows: an affordance that promises nothing is worse than no affordance.
+
+**Nine mutations, nine caught first pass** — including the two guarding the new behaviour (a row section offering a handle it cannot honour; a row section ignoring its configured height) and the one guarding readability (weights written at full float precision, which would make the saved layout undescribable).
+
+**765 API tests, `tsc` clean, 28 browser tests.**
 
 ---
 

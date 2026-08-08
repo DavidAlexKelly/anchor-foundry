@@ -147,6 +147,18 @@ def open_module(page, module, *, settle_ms: int | None = None) -> None:
     page.wait_for_timeout(settle_ms or FIRST_RENDER_MS)
 
 
+def open_builder(page, module) -> None:
+    """Open a module and stay in the builder.
+
+    The opposite of `open_module`, and needed for anything about *authoring*:
+    layout handles, settings panels and the layout tree only exist in edit
+    mode, because what they change is the saved document rather than what a
+    viewer is looking at.
+    """
+    page.goto(f"{WEB_BASE}{module.url}")
+    page.wait_for_timeout(FIRST_RENDER_MS)
+
+
 def no_console_errors(page) -> list[str]:
     """Console errors worth failing on. The favicon 404 is the dev server's,
     not the app's."""

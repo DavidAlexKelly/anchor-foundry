@@ -3587,22 +3587,60 @@ function childList(children: React.ReactNode): React.ReactNode[] {
  *
  * **Widths are proportions, not pixels.** A section's children share the space
  * by weight, so a two-column split stays a two-column split on a narrower
- * screen instead of overflowing. Drag-to-resize is a UI affordance over these
- * same numbers and is not built - the numbers are, so an app can be laid out
- * today and the handle can arrive later without a format change.
+ * screen instead of overflowing.
+ *
+ * **Drag-to-resize is an affordance over those same numbers** (roadmap 1.4,
+ * the last item on it). The handle writes `weights` - the prop the Settings
+ * field edits - so there is one description of the layout and dragging is a
+ * way of typing it. A resize that stored pixels beside the proportions would
+ * be a second answer to "how wide is this", and the two would disagree the
+ * first time a window changed size.
+ *
+ * **Only in the builder.** A viewer dragging a divider is editing the saved
+ * document, and decision 0002 rules that out for the same reason a viewer's
+ * filters are not saved: a module is a definition, not a session. So the
+ * handles are edit-mode only, and what a viewer sees is what the author laid
+ * out.
  *
  * **Below a threshold, columns stack.** A three-column section on a phone is
  * three unreadable columns; the roadmap asks for responsive rules per section
  * type, and for a column section the rule is "stop being columns".
  */
+
+/** The least of a section a part may be dragged to, as a fraction of the pair
+ *  being resized. A part dragged to nothing has no handle left to grab and no
+ *  way back except the Settings field - an unrecoverable state reached by an
+ *  ordinary gesture, which is the kind worth preventing rather than
+ *  documenting. */
+const MIN_SHARE = 0.08;
+
+/** Weights are rounded so the document stays something a person can read and
+ *  edit. `2.33,0.67` is describable; sixteen decimal places of float noise is
+ *  not, and the roadmap's whole reason for typing proportions first was that
+ *  the saved layout should be describable. */
+function roundWeight(value: number): number {
+  return Math.round(value * 100) / 100;
+}
 export function CanvasSection({
   direction = "columns",
   weights = "",
   gap = 12,
+  minHeight = 0,
   visibleWhen = null,
   children,
 }: {
   direction?: "columns" | "rows";
+  /** How tall a **row** section is, in pixels. Blank means "as tall as its
+   *  contents", which is the sensible default and the reason proportions on a
+   *  row section did nothing until this existed: `flex-grow` shares out *free*
+   *  space, and a column of content-height children has none, so `weights` of
+   *  "3,1" laid out exactly like "1,1". The Settings panel said otherwise and
+   *  the widget's own docstring claimed it worked.
+   *
+   *  Found by the drag-to-resize test, which is the first thing that ever
+   *  asked a row section to change shape. Columns were never affected: a row
+   *  of children in a full-width container has free space by construction. */
+  minHeight?: number;
   /** A variable that must be truthy for this section to show (roadmap 1.7) -
    * Foundry's own example of the feature, and the reason it lives on the
    * layout nodes rather than on every widget: hiding a section hides what is
@@ -3617,6 +3655,7 @@ export function CanvasSection({
 }) {
   const {
     connectors: { connect, drag },
+    actions: { setProp },
   } = useNode();
   const { mode } = useCanvasEnv();
   const { hidden, marker } = useVisibility(visibleWhen);
@@ -3625,6 +3664,80 @@ export function CanvasSection({
     .split(",")
     .map((w) => Number(w.trim()))
     .filter((w) => Number.isFinite(w) && w > 0);
+
+  const partsRef = React.useRef<HTMLDivElement>(null);
+  // What the section looks like *during* a drag. Deliberately transient: the
+  // prop is written once, on release, so a drag is one undo step rather than
+  // one per pixel — and there is no second copy of the layout at rest.
+  const [dragging, setDragging] = React.useState<number[] | null>(null);
+  const effective = dragging ?? parts.map((_, index) => parsed[index] ?? 1);
+
+  const commit = (next: number[]) => {
+    setProp((p: { weights: string }) => (p.weights = next.map(roundWeight).join(",")));
+  };
+
+  /** Move the boundary between `index` and `index + 1`, keeping their combined
+   *  share fixed. Only the two either side of a handle move: dragging one
+   *  divider must not shuffle a column at the far end of the section. */
+  const resized = (index: number, share: number): number[] => {
+    const next = [...effective];
+    const pair = (next[index] ?? 1) + (next[index + 1] ?? 1);
+    const clamped = Math.min(Math.max(share, MIN_SHARE), 1 - MIN_SHARE);
+    next[index] = pair * clamped;
+    next[index + 1] = pair - (next[index] ?? 0);
+    return next;
+  };
+
+  const onHandleDown = (index: number) => (event: React.PointerEvent<HTMLDivElement>) => {
+    const container = partsRef.current;
+    if (!container) return;
+    const kids = Array.from(
+      container.querySelectorAll<HTMLElement>(":scope > .canvas-section-part"),
+    );
+    const first = kids[index];
+    const second = kids[index + 1];
+    if (!first || !second) return;
+    const horizontal = direction === "columns";
+    const origin = horizontal ? first.getBoundingClientRect().left
+                              : first.getBoundingClientRect().top;
+    const span = horizontal
+      ? first.offsetWidth + second.offsetWidth
+      : first.offsetHeight + second.offsetHeight;
+    if (span <= 0) return;
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const move = (moveEvent: PointerEvent) => {
+      const position = horizontal ? moveEvent.clientX : moveEvent.clientY;
+      setDragging(resized(index, (position - origin) / span));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      // Read the final layout from state rather than from the last event: a
+      // release with no move in between must not write a value nothing
+      // computed.
+      setDragging((current) => {
+        if (current) commit(current);
+        return null;
+      });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /** Arrow keys move a boundary by a step. A splitter that only responds to a
+   *  drag is one a keyboard user cannot operate at all, and the layout is the
+   *  part of the builder least recoverable by other means. */
+  const onHandleKey = (index: number) => (event: React.KeyboardEvent) => {
+    const back = direction === "columns" ? "ArrowLeft" : "ArrowUp";
+    const forward = direction === "columns" ? "ArrowRight" : "ArrowDown";
+    if (event.key !== back && event.key !== forward) return;
+    event.preventDefault();
+    const pair = (effective[index] ?? 1) + (effective[index + 1] ?? 1);
+    const current = (effective[index] ?? 1) / pair;
+    commit(resized(index, current + (event.key === forward ? 0.05 : -0.05)));
+  };
 
   if (hidden) return null;
   return (
@@ -3644,18 +3757,46 @@ export function CanvasSection({
           {parsed.length > 1 ? ` · ${parsed.join(":")}` : ""}
         </p>
       )}
-      <div className="canvas-section-parts" style={{ gap }}>
+      <div
+        className="canvas-section-parts"
+        style={{ gap, ...(direction === "rows" && minHeight > 0 ? { minHeight } : {}) }}
+        ref={partsRef}
+      >
         {parts.map((child, index) => (
-          <div
-            key={index}
-            className="canvas-section-part"
-            // `flex-grow` rather than a width: the children then share whatever
-            // is left after gaps, so the arithmetic does not have to know how
-            // many gaps there are.
-            style={{ flexGrow: parsed[index] ?? 1, flexBasis: 0, minWidth: 0 }}
-          >
-            {child}
-          </div>
+          <React.Fragment key={index}>
+            <div
+              className="canvas-section-part"
+              // `flex-grow` rather than a width: the children then share
+              // whatever is left after gaps, so the arithmetic does not have to
+              // know how many gaps there are.
+              style={{ flexGrow: effective[index] ?? 1, flexBasis: 0, minWidth: 0 }}
+            >
+              {child}
+            </div>
+            {/* A handle sits *between* parts, so there is one fewer than there
+                are children — and none at all in a viewer, where the layout is
+                the author's rather than the reader's. */}
+            {mode === "edit"
+              && index < parts.length - 1
+              && (direction === "columns" || minHeight > 0) && (
+              <div
+                role="separator"
+                tabIndex={0}
+                aria-orientation={direction === "columns" ? "vertical" : "horizontal"}
+                aria-label={`Resize ${direction === "columns" ? "columns" : "rows"} ${
+                  index + 1} and ${index + 2}`}
+                aria-valuenow={Math.round(
+                  ((effective[index] ?? 1)
+                    / ((effective[index] ?? 1) + (effective[index + 1] ?? 1))) * 100,
+                )}
+                aria-valuemin={Math.round(MIN_SHARE * 100)}
+                aria-valuemax={Math.round((1 - MIN_SHARE) * 100)}
+                className={`canvas-section-handle canvas-section-handle--${direction}`}
+                onPointerDown={onHandleDown(index)}
+                onKeyDown={onHandleKey(index)}
+              />
+            )}
+          </React.Fragment>
         ))}
         {parts.length === 0 && (
           <p className="canvas-widget-empty">Section - drop widgets in to split the page</p>
@@ -3670,12 +3811,14 @@ function SectionSettings() {
     direction,
     weights,
     gap,
+    minHeight,
     visibleWhen,
     actions: { setProp },
   } = useNode((node) => ({
     direction: node.data.props.direction,
     weights: node.data.props.weights,
     gap: node.data.props.gap,
+    minHeight: node.data.props.minHeight,
     visibleWhen: node.data.props.visibleWhen,
   }));
   return (
@@ -3702,9 +3845,30 @@ function SectionSettings() {
           onChange={(e) => setProp((p: { weights: string }) => (p.weights = e.target.value))}
         />
         <span className="field-hint">
-          One number per widget, e.g. 2,1 for two-thirds and a third
+          {direction === "rows" && !(minHeight > 0)
+            ? "Set a height below - a row section with no height has no space to share out"
+            : "One number per widget, e.g. 2,1 for two-thirds and a third. Drag the handles between them"}
         </span>
       </label>
+      {direction === "rows" && (
+        <label className="field">
+          <span className="field-label">Height</span>
+          <input
+            type="number"
+            min={0}
+            value={minHeight ?? 0}
+            placeholder="as tall as its contents"
+            onChange={(e) =>
+              setProp((p: { minHeight: number }) => (p.minHeight = Number(e.target.value) || 0))
+            }
+          />
+          {/* Columns need no equivalent: a row of children in a full-width
+              container has free space by construction. */}
+          <span className="field-hint">
+            In pixels. Proportions only apply once there is a height to divide
+          </span>
+        </label>
+      )}
       <label className="field">
         <span className="field-label">Gap</span>
         <input
@@ -3719,7 +3883,7 @@ function SectionSettings() {
 
 CanvasSection.craft = {
   displayName: "Section",
-  props: { direction: "columns", weights: "", gap: 12, visibleWhen: null },
+  props: { direction: "columns", weights: "", gap: 12, minHeight: 0, visibleWhen: null },
   isCanvas: true,
   related: { settings: SectionSettings },
 };
