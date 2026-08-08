@@ -51,16 +51,35 @@ confirm() {  # prompt, default y|n -> returns 0 for yes
 # ---- 1. the things this script will not install for you ---------------------
 step "Checking prerequisites"
 missing=()
-for cmd in python3 node npm psql pg_isready; do
+for cmd in node npm psql pg_isready; do
   command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 done
 [ ${#missing[@]} -eq 0 ] || die "not on PATH: ${missing[*]}
   psql/pg_isready come from a Postgres client install; node and npm from Node 20+.
   Install them and run this again - everything after this point is automatic."
 
-PY_OK=$(python3 -c 'import sys; print(1 if sys.version_info[:2] >= (3, 11) else 0)')
-[ "$PY_OK" = 1 ] || die "Python 3.11 or newer is required; found $(python3 -V 2>&1)"
-ok "$(python3 -V 2>&1), $(node -v), psql $(psql --version | awk '{print $3}')"
+# **`python3` is not the only candidate, and on a Mac it is usually the wrong
+# one.** macOS ships Python 3.9 at /usr/bin/python3 and Homebrew installs
+# `python3.13` beside it without taking that name, so a machine with a
+# perfectly good interpreter installed reports "Python 3.9.6" and stops. Newest
+# first, so a machine with several gets the one the pins actually target.
+PY=""
+for candidate in ${ANCHOR_PYTHON3:-} python3.13 python3.12 python3.11 python3; do
+  command -v "$candidate" >/dev/null 2>&1 || continue
+  if [ "$("$candidate" -c 'import sys; print(1 if sys.version_info[:2] >= (3, 11) else 0)' 2>/dev/null)" = 1 ]; then
+    PY="$candidate"
+    break
+  fi
+done
+[ -n "$PY" ] || die "no Python 3.11 or newer found.
+  Looked for: python3.13, python3.12, python3.11, python3$(
+    command -v python3 >/dev/null 2>&1 && echo " (which is $(python3 -V 2>&1))"
+  )
+  The pins in apps/api/requirements.txt target 3.12 and 3.13. On a Mac:
+    brew install python@3.13
+  Then run this again - it finds the versioned binary itself, so you do not
+  have to change what \`python3\` means. Or set ANCHOR_PYTHON3 to a path."
+ok "$("$PY" -V 2>&1) (as \`$PY\`), $(node -v), psql $(psql --version | awk '{print $3}')"
 
 # ---- 2. Postgres ------------------------------------------------------------
 step "Postgres"
@@ -171,9 +190,21 @@ APP_DSN="postgresql+psycopg://platform_app:$DB_PASSWORD@$PGHOST_:$PGPORT_/$DB_NA
 # so it is built first.
 step "Python dependencies"
 VENV="$ROOT/.venv-api"
+# **An existing venv is checked, not assumed.** One built by an earlier run on
+# an older interpreter is exactly what the discovery above exists to avoid, and
+# reusing it would put the wrong answer somewhere every later step trusts -
+# with the version check upstream reporting the *right* Python all the while.
+if [ -x "$VENV/bin/python" ] \
+   && [ "$("$VENV/bin/python" -c 'import sys; print(1 if sys.version_info[:2] >= (3, 11) else 0)' 2>/dev/null)" != 1 ]; then
+  note "$VENV was built with $("$VENV/bin/python" -V 2>&1), which is too old; rebuilding it"
+  rm -rf "$VENV"
+fi
 if [ ! -x "$VENV/bin/python" ]; then
   note "creating $VENV"
-  python3 -m venv "$VENV" || die "could not create the virtualenv"
+  # `$PY`, not `python3`: the venv inherits whichever interpreter builds it,
+  # so building it with the wrong one puts the version check's answer in a
+  # directory every later step then trusts.
+  "$PY" -m venv "$VENV" || die "could not create the virtualenv"
 fi
 # Compared against the pins rather than merely "is something installed". A venv
 # that has drifted from requirements-dev.txt is the reason a whole session's
