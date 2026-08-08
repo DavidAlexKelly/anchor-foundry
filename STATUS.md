@@ -2205,6 +2205,31 @@ Fixed rather than papered over: a row section gained a `minHeight`, blank meanin
 
 ---
 
+### 110. Making CI runnable, and what running it found (this session)
+
+The workflow added in §107 had never executed. Reading it against the repo, and then *running the parts that could be run*, turned up **five defects — and one of them was not in the workflow at all.**
+
+**In the workflow:**
+
+1. **`playwright` was installed by nothing.** The browser job pip-installs `requirements.txt` and `requirements-dev.txt`, and Playwright was in neither — it existed only in a local venv, installed by hand. A fresh checkout could never have run the browser suite. Now pinned in `requirements-dev.txt`.
+2. **The migrate step connected as a role that does not exist yet.** `migrate.py` reads `DATABASE_URL`, which was set job-wide to the *app* role — and that role is created by migration `0006_rls.sql`. On a fresh database the first connection fails before any migration runs. Overridden to the owner role for that step.
+3. **`migrate.py` rejects SQLAlchemy's URL scheme.** It talks to psycopg directly, so `postgresql+psycopg://` is not a DSN it can parse; the step would have failed on the URL form whatever the role. Found by running it against a scratch database, not by reading it.
+4. **`scripts/dev-up.sh` probed the wrong Postgres.** Bare `pg_isready` asks a local Unix socket; a service-container Postgres answers on TCP. It reported "no response" for a database that was up, and refused to start anything. It now probes the DSN the app will actually use — and a wrong port was checked to still report *down*, so the fix is not vacuous.
+
+**And the one that was not in the workflow:**
+
+5. **`pip install -r requirements-dev.txt` was unresolvable.** `playwright` needs `greenlet>=3.1.1`; `requirements.txt` pinned `greenlet==3.1.0`. Bumped to 3.1.1 — a patch release, and the constraint SQLAlchemy places on greenlet is permissive.
+
+**The finding underneath all of that is the uncomfortable one.** Chasing (5) meant comparing the local venv against the pins, and **four packages had drifted**: pydantic 2.8.2 → 2.13.4, greenlet 3.1.0 → 3.5.4, psycopg 3.2.4 → 3.2.1, duckdb 1.1.1 → 1.0.0. Two newer than the pin, two older. The ad-hoc Playwright install had upgraded greenlet, and the venv had never been a clean install of `requirements.txt`.
+
+**So every test result reported in §98–§109 ran against a dependency set that did not match the pins.** That is stated plainly rather than quietly corrected. It has now been checked: a clean venv built exactly as CI builds one runs **765 passed, 1 skipped** — the same as the drifted environment — and the pinned Playwright drives the browser suite unchanged. The drift was not hiding a failure. But nothing had established that until now, and the reason nothing had is precisely that CI had never run.
+
+**This is the argument for CI in one paragraph.** Not "a pipeline is good practice": a pipeline installs from the pins on a machine with no history, and that is the only thing that can catch a lie between what a repo says it depends on and what its author happens to have installed.
+
+**Still unproven**: the workflow itself. Four of the five fixes were verified by running the affected command locally; the fifth (the install) was verified by building the venv CI would build. What remains unverified is GitHub Actions' own wiring — the service container, the caches, the runner image — and that cannot be exercised from here.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

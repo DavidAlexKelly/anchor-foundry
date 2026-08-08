@@ -41,8 +41,18 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+      # Two overrides for this step, both found by running it rather than
+      # reading it:
+      #   * **the owner role, not the app role** - `migrate.py` reads
+      #     DATABASE_URL, and the app role the other steps use is *created by*
+      #     migration 0006, so on a fresh database the first connection fails
+      #     before any migration runs;
+      #   * **a plain libpq URL** - `migrate.py` talks to psycopg directly and
+      #     rejects SQLAlchemy's `postgresql+psycopg://` scheme outright.
       - name: Migrate
         run: python packages/db/migrate.py
+        env:
+          DATABASE_URL: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
       - run: scripts/check.sh api
 
   types:
@@ -91,9 +101,14 @@ jobs:
           cache: npm
       - run: pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
       - run: npm ci
+      # The package is pinned in requirements-dev.txt; this fetches the
+      # browser binary, which pip cannot.
       - run: python -m playwright install --with-deps chromium
+      # Same two overrides as the api job; see there for why.
       - name: Migrate
         run: python packages/db/migrate.py
+        env:
+          DATABASE_URL: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
       - name: Bring the stack up
         run: scripts/dev-up.sh
       - run: scripts/check.sh e2e
