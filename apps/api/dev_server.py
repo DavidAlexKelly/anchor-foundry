@@ -87,9 +87,26 @@ def mint(sub: str, ttl_seconds: int = 8 * 3600) -> str:
     )
 
 
-def seed(admin_dsn: str) -> list[tuple[str, str, str]]:
+def seed(
+    admin_dsn: str, extra: list[tuple[str, str, str, str]] | None = None
+) -> list[tuple[str, str, str]]:
     """Idempotently create the dev org, users, a workspace, and projects.
-    Returns (email, org_role, sub) per user."""
+    Returns (email, org_role, sub) per user.
+
+    `extra` is (email, display name, org role, workspace role) and adds users
+    beyond the four fixed ones, so testing as somebody who is not one of
+    owner/admin/editor/viewer does not mean editing this file. They join the
+    same dev org: a *second* organisation would need its own workspace and a
+    way to switch between them, which is a bigger thing than "let me try this
+    as another person".
+
+    **The workspace role is why this is not just an INSERT into users.** Org
+    membership alone grants a plain member access to nothing -
+    `effective_workspace_role` returns NULL without a `workspace_members` row -
+    so a user seeded without one signs in successfully and sees an empty
+    product. That is indistinguishable from a broken deployment at the moment
+    you are trying to judge whether the thing works.
+    """
     out: list[tuple[str, str, str]] = []
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
         row = conn.execute(
@@ -104,22 +121,30 @@ def seed(admin_dsn: str) -> list[tuple[str, str, str]]:
         org_id = row[0]
 
         user_ids: dict[str, Any] = {}
-        for email, name, role in DEV_USERS:
-            sub = f"dev-{email.split('@')[0]}"
+        fixed = [(email, name, role, None) for email, name, role in DEV_USERS]
+        for email, name, role, _ws_role in [*fixed, *(extra or [])]:
+            # Derived from the whole address, not its local part: two extra
+            # users at `sam@a.local` and `sam@b.local` would otherwise share one
+            # identity and each other's permissions.
+            sub = "dev-" + email.replace("@", "-at-").replace(".", "-")
             existing = conn.execute(
-                "SELECT id FROM users WHERE organisation_id=%s AND email=%s",
+                "SELECT id, cognito_sub FROM users WHERE organisation_id=%s AND email=%s",
                 (org_id, email),
             ).fetchone()
             if existing is None:
                 existing = conn.execute(
                     """INSERT INTO users (organisation_id, email, display_name,
                                           org_role, cognito_sub, status)
-                       VALUES (%s,%s,%s,%s,%s,'active') RETURNING id""",
+                       VALUES (%s,%s,%s,%s,%s,'active') RETURNING id, cognito_sub""",
                     (org_id, email, name, role, sub),
                 ).fetchone()
             assert existing is not None
+            # **The stored identity wins.** A token is minted for whatever
+            # `cognito_sub` the row already has; deriving one and minting for
+            # that instead would issue tokens no existing user matches, and the
+            # symptom would be every seeded login failing at once.
             user_ids[email] = existing[0]
-            out.append((email, role, sub))
+            out.append((email, role, existing[1]))
 
         ws = conn.execute(
             "SELECT id FROM workspaces WHERE organisation_id=%s AND slug=%s",
@@ -160,6 +185,29 @@ def seed(admin_dsn: str) -> list[tuple[str, str, str]]:
                        VALUES (%s,%s,%s,%s,%s)""",
                     (ws[0], pname, pslug, pdescr, user_ids["owner@acme.dev.local"]),
                 )
+
+        # **Outside the `if`**, unlike the four fixed grants above. Those run
+        # once, when the workspace is created; an extra user asked for on a
+        # database that already has one would otherwise be given nothing, and
+        # the failure is invisible - the login works and the home screen is
+        # empty. Upserted rather than inserted so re-running with a changed
+        # role changes the role instead of raising on the primary key.
+        for email, _name, org_role, ws_role in extra or []:
+            if org_role in ("owner", "admin"):
+                # An org owner or admin already resolves to workspace 'admin'
+                # everywhere in the org. A membership row would be a second
+                # copy of that fact, free to disagree with it later.
+                continue
+            conn.execute(
+                # The `WHERE` is not decoration: `uq_workspace_members_user` is
+                # a *partial* index (rows may name a group instead of a user),
+                # and Postgres will not infer a partial index without it.
+                """INSERT INTO workspace_members (workspace_id, user_id, role)
+                   VALUES (%s,%s,%s)
+                   ON CONFLICT (workspace_id, user_id) WHERE user_id IS NOT NULL
+                   DO UPDATE SET role=EXCLUDED.role""",
+                (ws[0], user_ids[email], ws_role),
+            )
     return out
 
 
@@ -167,6 +215,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8300)
     parser.add_argument("--seed-only", action="store_true")
+    parser.add_argument(
+        "--extra-user",
+        action="append",
+        default=[],
+        metavar="EMAIL:NAME:ORG_ROLE[:WORKSPACE_ROLE]",
+        help="Seed another dev user and mint a token for them, e.g. "
+        "'sam@client.local:Sam Client:member'. ORG_ROLE is owner, admin or "
+        "member; WORKSPACE_ROLE is admin, editor or viewer and defaults to "
+        "editor, which is what makes a member see anything at all. Repeatable, "
+        "and idempotent - re-running with the same value is a no-op.",
+    )
     parser.add_argument(
         "--tokens-file",
         help="Write {email: token} here as JSON. The browser suite (e2e/) reads "
@@ -181,7 +240,33 @@ def main() -> None:
         print("TEST_ADMIN_DSN is required for seeding", file=sys.stderr)
         sys.exit(2)
 
-    users = seed(admin_dsn)
+    extra: list[tuple[str, str, str, str]] = []
+    for spec in args.extra_user:
+        parts = [p.strip() for p in spec.split(":")]
+        if len(parts) == 3:
+            # Editor rather than viewer, because the reason to seed a user is
+            # almost always to try building something as them, and a viewer
+            # who cannot is a confusing default to have chosen silently.
+            parts.append("editor")
+        if len(parts) != 4 or not all(parts):
+            print(
+                f"--extra-user wants EMAIL:NAME:ORG_ROLE[:WORKSPACE_ROLE], got {spec!r}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        email, name, role, ws_role = parts
+        if role not in ("owner", "admin", "member"):
+            print(f"org role must be owner, admin or member, got {role!r}", file=sys.stderr)
+            sys.exit(2)
+        if ws_role not in ("admin", "editor", "viewer"):
+            print(
+                f"workspace role must be admin, editor or viewer, got {ws_role!r}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        extra.append((email, name, role, ws_role))
+
+    users = seed(admin_dsn, extra)
     minted = {email: mint(sub) for email, _, sub in users}
     print("\ndev users (paste a token into the web sign-in box):\n")
     for email, role, _ in users:

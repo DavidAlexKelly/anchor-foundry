@@ -2319,6 +2319,35 @@ Also worth recording: the browser fixture originally put the two modules in *sep
 
 ---
 
+### 115. One command to stand the thing up, and a guide that says what it did (this session)
+
+Until now "running it locally" was one sentence in this file pointing at `dev_server.py`. Everything else — which of two DSN forms goes where, that migrations need `PLATFORM_APP_PASSWORD`, that the app connects as a *different role* from the migrator — lived in the heads of whoever had done it recently. `scripts/setup.sh` does it, and `docs/local-setup.md` says what it did.
+
+**The script asks rather than assumes, and refuses rather than guesses.** It will not install Postgres, Node or Python: how you install those differs per machine and a wrong guess is worse than a clear "not on PATH". Everything downstream of them it does — role, database, virtualenv, pins, `npm ci`, migrations, browser, seeding, both servers — each step checking before acting, so it is also the right thing to run when you are not sure what state a machine is in.
+
+**A test client is now a flag rather than a source edit.** `--extra-user EMAIL:NAME:ORG_ROLE[:WORKSPACE_ROLE]` on `dev_server.py` and `dev-up.sh`, repeatable and idempotent.
+
+Six things were found by running it — first with `--defaults`, then on a pseudo-terminal against a brand-new role and database — and every one is the kind that only running it finds:
+
+* **Migrations ran before the virtualenv existed**, so `migrate.py` met the system Python and died on `ModuleNotFoundError: psycopg` — a message that says nothing about setup order. Dependencies now come first, in the script and in the guide.
+* **The Playwright check disagreed with the suite it was checking.** It launched a bare `chromium`, while `e2e/conftest.py` launches `/opt/pw-browsers/chromium` when that exists; so it reported "not installed" on a machine with a working browser and then spent two minutes failing to download a second copy. It now reads `CHROMIUM` from the suite's own conftest — one rule, not two that can drift.
+* **`pkill -f "dev_server.py --port 8300"` killed the shell that typed it**, because `-f` matches any command line containing the pattern, including the one doing the matching. Now `pgrep` with own pid and parent excluded.
+* **`ON CONFLICT (workspace_id, user_id)` cannot infer a partial index.** `uq_workspace_members_user` is partial (a row may name a group instead of a user), so the clause needs the index's `WHERE` too.
+* **`psql` prompted for a password in the middle of setup.** The superuser probe exists to answer "does this connection work"; without `-w` it instead sat waiting for input, which on a real terminal is an indefinite hang showing a bare `Password for user root:` and no clue what asked. Only the pty run could show this — piped stdin makes the same probe fail instantly and fall through to the next candidate, which is why the `--defaults` runs all looked fine.
+* **Every migration applied, then the last statement failed:** `permission denied to alter role`. `migrate.py` finishes by setting `platform_app`'s password, and since Postgres 16 that needs `CREATEROLE` *and* ADMIN OPTION on the target role. A cluster where `platform_app` does not exist yet is fine — 0006 creates it, so the migrating role owns it — but one where it already exists under a different owner is not, and the failure reads as though the whole run collapsed. The script grants ADMIN OPTION when the role pre-exists; the guide names the error.
+
+**The one that was a real design mistake, not a bug:** the first version seeded an extra user with an org role only. `effective_workspace_role` returns NULL without a `workspace_members` row, so that user signed in perfectly and saw an empty home screen — indistinguishable from a broken install at exactly the moment you are trying to judge whether the thing works. `--extra-user` now grants a workspace role as well, defaulting to `editor`. Org owners and admins are the exception and get no row: they already resolve to workspace `admin` org-wide, and a row saying so again is a second copy of a fact, free to disagree with the first.
+
+Verified by deleting the seeded user's membership and confirming they then see nothing, which is what makes the grant load-bearing rather than decorative; and by re-seeding with a changed workspace role, which changes it rather than raising.
+
+Also fixed here, before the guide could document it wrongly: `seed()` minted tokens against a *derived* `cognito_sub` rather than the one already stored. Widening the derivation to cover the whole email address (so `sam@a.local` and `sam@b.local` are not one identity) would therefore have orphaned all four existing users at once. The stored identity now wins.
+
+**788 API tests, 1 skipped, 32 browser tests, all green** after the change to `seed()`.
+
+**Still true and worth stating:** there is no UI for workspace membership. The API has it; the web app does not. `--extra-user` is currently the only way to grant it without SQL.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
@@ -2370,4 +2399,12 @@ Also worth recording: the browser fixture originally put the two modules in *sep
 
 ## Running it locally
 
-See `apps/api/dev_server.py` - seeds a dev org with four users at each role level (owner/admin/editor/viewer) and mints tokens for each, printed to stdout, pasteable into the web app's dev sign-in box. Requires local Postgres per the DSNs referenced throughout the codebase's test files.
+```
+scripts/setup.sh
+```
+
+From a fresh checkout to a stack you can sign into. It asks before anything slow, is safe to re-run, and finishes by printing the URL and a token. `--defaults` takes every default and asks nothing.
+
+**`docs/local-setup.md` is the guide** — the same steps by hand, what each one is for, how to seed a test client or user, and the failures worth recognising by sight (the DSN form `migrate.py` refuses, the `PLATFORM_APP_PASSWORD` the schema needs, why a token stops working when the API restarts).
+
+Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own. `scripts/check.sh` runs every check the repo has.
