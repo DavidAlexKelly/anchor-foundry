@@ -15,8 +15,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from playwright.sync_api import expect
+
 from api import Module, layout, object_set
-from conftest import ADMIN_DSN, no_console_errors, open_module
+from conftest import ADMIN_DSN, eventually, no_console_errors, open_module
 
 # Monday, so week boundaries are unambiguous. (day offset, how many, region)
 ANCHOR = datetime(2024, 3, 4, 9, 0, tzinfo=timezone.utc)
@@ -138,10 +140,10 @@ def labels(page, index) -> list[str]:
 
 def test_each_bucket_size_is_a_different_picture_of_one_set(page, module):
     open_module(page, module)
-    assert page.locator("svg[aria-label='Line chart']").count() == 4
-    assert counts(page, DAY) == DAY_POINTS
-    assert counts(page, WEEK) == WEEK_POINTS
-    assert counts(page, MONTH) == MONTH_POINTS
+    expect(page.locator("svg[aria-label='Line chart']")).to_have_count(4)
+    eventually(lambda: counts(page, DAY), lambda got: got == DAY_POINTS, what="the day series")
+    eventually(lambda: counts(page, WEEK), lambda got: got == WEEK_POINTS, what="by week")
+    eventually(lambda: counts(page, MONTH), lambda got: got == MONTH_POINTS, what="by month")
     assert sum(counts(page, DAY)) == sum(counts(page, WEEK)) == sum(counts(page, MONTH)) == TOTAL
     assert not no_console_errors(page)
 
@@ -150,8 +152,8 @@ def test_a_silent_stretch_is_zeros_not_a_line_drawn_through_it(page, module):
     """Both stores return only populated buckets. A line sloping gently across
     a week when nothing happened is a different claim, not a smaller one."""
     open_module(page, module)
+    eventually(lambda: counts(page, DAY), lambda got: got == DAY_POINTS, what="the day series")
     assert counts(page, DAY)[3:7] == [0, 0, 0, 0]
-    assert len(counts(page, DAY)) == len(DAY_POINTS)
 
 
 def test_every_label_is_its_own_bucket_in_utc(page, module):
@@ -163,6 +165,8 @@ def test_every_label_is_its_own_bucket_in_utc(page, module):
     still renders as a plausible date elsewhere, just the wrong one.
     """
     open_module(page, module)
+    eventually(lambda: labels(page, DAY), lambda got: len(got) == len(DAY_STARTS),
+               what="the day labels")
     expected = page.evaluate(
         """(isos) => isos.map((iso) => new Intl.DateTimeFormat(undefined,
              { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(iso)))""",
@@ -176,14 +180,15 @@ def test_every_label_is_its_own_bucket_in_utc(page, module):
 
 def test_the_caption_says_which_question_the_chart_answers(page, module):
     open_module(page, module)
-    caption = block(page, DAY).inner_text()
-    assert "When each object last changed" in caption
-    assert "not a business date" in caption
-    assert "UTC" in caption
-    assert f"{TOTAL} objects" in caption
+    caption = block(page, DAY)
+    expect(caption).to_contain_text("When each object last changed")
+    expect(caption).to_contain_text("not a business date")
+    expect(caption).to_contain_text("UTC")
+    expect(caption).to_contain_text(f"{TOTAL} objects")
 
 
 def test_a_series_over_a_narrowed_set_plots_the_narrowed_set(page, module):
     open_module(page, module)
-    assert counts(page, NORTH_SERIES) == NORTH_POINTS
+    eventually(lambda: counts(page, NORTH_SERIES), lambda got: got == NORTH_POINTS,
+               what="the narrowed series")
     assert sum(counts(page, NORTH_SERIES)) == len(NORTH) < TOTAL

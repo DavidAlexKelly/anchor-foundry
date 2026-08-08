@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import pytest
 
+from playwright.sync_api import expect
+
 from api import Module, layout, object_set
-from conftest import SETTLE_MS, no_console_errors, open_module
+from conftest import eventually, no_console_errors, open_module, settled
 
 # No ties on either axis, so "biggest first" has one right answer and a wrong
 # order is a failed assertion rather than a coin toss.
@@ -110,8 +112,12 @@ def pivot(page, index=0):
     return page.locator("table.canvas-pivot").nth(index)
 
 
+def table_locator(page):
+    return page.locator(".canvas-block table:not(.canvas-pivot) tbody tr")
+
+
 def table_rows(page) -> int:
-    return page.locator(".canvas-block table:not(.canvas-pivot) tbody tr").count()
+    return table_locator(page).count()
 
 
 def cells(page, index=0) -> list[list[int]]:
@@ -129,7 +135,8 @@ def cells(page, index=0) -> list[list[int]]:
 
 def test_the_grid_counts_both_properties_at_once(page, module):
     open_module(page, module)
-    assert cells(page) == [[GRID[r].get(c, 0) for c in COLUMN_ORDER] for r in ROW_ORDER]
+    expected = [[GRID[r].get(c, 0) for c in COLUMN_ORDER] for r in ROW_ORDER]
+    eventually(lambda: cells(page), lambda got: got == expected, what="the grid")
 
     heads = pivot(page).locator("thead th")
     assert [heads.nth(i + 1).inner_text().split()[0] for i in range(len(COLUMN_ORDER))] == (
@@ -148,9 +155,11 @@ def test_the_margins_are_whole_rows_and_columns(page, module):
     disagreement this widget lives inside."""
     open_module(page, module)
     last_column = pivot(page).locator("tbody tr td:last-child")
-    assert [int(last_column.nth(i).inner_text()) for i in range(len(ROW_ORDER))] == [
-        sum(GRID[r].values()) for r in ROW_ORDER
-    ]
+    eventually(
+        lambda: [int(last_column.nth(i).inner_text()) for i in range(len(ROW_ORDER))],
+        lambda got: got == [sum(GRID[r].values()) for r in ROW_ORDER],
+        what="the total column",
+    )
     total_row = pivot(page).locator("tbody tr").last.locator("td")
     assert [int(total_row.nth(i).inner_text()) for i in range(len(COLUMN_ORDER))] == [
         sum(g.get(c, 0) for g in GRID.values()) for c in COLUMN_ORDER
@@ -160,41 +169,37 @@ def test_the_margins_are_whole_rows_and_columns(page, module):
 
 def test_clicking_a_cell_narrows_to_that_pair(page, module):
     open_module(page, module)
-    assert table_rows(page) == TOTAL, "the table starts with the whole set"
+    expect(table_locator(page)).to_have_count(TOTAL)
 
     cell = page.get_by_role(
         "button", name="Filter to region = north, status = closed", exact=True
     )
     cell.click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == GRID["north"]["closed"]
-    assert cell.get_attribute("aria-pressed") == "true"
-    assert "Narrowed to region = north and status = closed" in (
-        pivot(page).locator("xpath=../..").inner_text()
+    expect(table_locator(page)).to_have_count(GRID["north"]["closed"])
+    expect(cell).to_have_attribute("aria-pressed", "true")
+    expect(pivot(page).locator("xpath=../..")).to_contain_text(
+        "Narrowed to region = north and status = closed"
     )
 
     # Clicking what is already picked clears it: a filter you cannot remove
     # from inside the widget is one you have to remember you applied.
     cell.click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == TOTAL
+    expect(table_locator(page)).to_have_count(TOTAL)
 
 
 def test_a_heading_narrows_one_axis(page, module):
     open_module(page, module)
+    expect(table_locator(page)).to_have_count(TOTAL)
+
     page.get_by_role("button", name="Filter to region = south", exact=True).click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == sum(GRID["south"].values())
+    expect(table_locator(page)).to_have_count(sum(GRID["south"].values()))
 
     page.get_by_role("button", name="Filter to status = open", exact=True).click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == sum(g.get("open", 0) for g in GRID.values()), (
-        "the other axis replaces rather than stacks"
-    )
+    # The other axis replaces rather than stacks.
+    expect(table_locator(page)).to_have_count(sum(g.get("open", 0) for g in GRID.values()))
 
     page.get_by_role("button", name="Clear").first.click()
-    page.wait_for_timeout(SETTLE_MS)
-    assert table_rows(page) == TOTAL
+    expect(table_locator(page)).to_have_count(TOTAL)
 
 
 def test_nothing_promises_an_interaction_it_will_not_perform(page, module):
@@ -202,23 +207,32 @@ def test_nothing_promises_an_interaction_it_will_not_perform(page, module):
     accident and never on purpose; and a grid with no variable wired to it has
     nowhere to write."""
     open_module(page, module)
-    assert page.get_by_role(
+    # **Presence before absence.** `to_have_count(0)` passes instantly on a page
+    # that has not drawn yet, so both checks below would be green before the
+    # grids existed. Waiting for a cell that *should* be a button first makes
+    # the absences mean something.
+    expect(page.get_by_role(
+        "button", name="Filter to region = north, status = closed", exact=True
+    )).to_be_visible()
+    expect(page.get_by_role(
         "button", name="Filter to region = east, status = pending", exact=True
-    ).count() == 0, "an empty cell is not a click target"
+    )).to_have_count(0), "an empty cell is not a click target"
 
     report = pivot(page, 1)
+    settled(page, report)
     assert report.locator("tbody tr").count() > 0
-    assert report.locator("button").count() == 0, "an unwired grid is a picture"
+    expect(report.locator("button")).to_have_count(0)  # an unwired grid is a picture
 
 
 def test_a_capped_grid_says_so_and_says_what_it_leaves_out(page, module):
     open_module(page, module)
     report = pivot(page, 1)
-    assert report.locator("thead th").count() == COLUMN_CAP + 2, "corner + columns + Total"
+    # corner + columns + Total
+    expect(report.locator("thead th")).to_have_count(COLUMN_CAP + 2)
 
-    note = report.locator("xpath=../..").inner_text()
-    assert f"largest {COLUMN_CAP} of {TOTAL} code values" in note
-    assert f"{TOTAL - COLUMN_CAP} of {TOTAL} are outside the grid" in note
+    note = report.locator("xpath=../..")
+    expect(note).to_contain_text(f"largest {COLUMN_CAP} of {TOTAL} code values")
+    expect(note).to_contain_text(f"{TOTAL - COLUMN_CAP} of {TOTAL} are outside the grid")
 
     # And the margins are still whole rows here, where the cells provably
     # cannot add up - the uncapped grid cannot tell those two apart.

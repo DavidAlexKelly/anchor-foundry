@@ -2275,6 +2275,22 @@ Decision 0006 §7's prerequisite, and the part of the typed-property work that c
 
 ---
 
+### 113. The browser suite stops sleeping (this session)
+
+Every test in `e2e/` waited a fixed 6–9 seconds after each interaction, tuned to this machine. **The suite went from 12m23s to 1m26s** — an 8.6× speedup with no test removed and no assertion weakened.
+
+**Speed was the smaller half.** The real problem was that the numbers were tuned to one machine: a slower CI runner would have started failing tests that were merely late, and a suite that flakes gets ignored, which is worse than no suite. The waits are now deadlines rather than durations — Playwright's `expect` where a locator assertion fits (a count, a text, an attribute), and an `eventually()` helper for values derived from several reads, like a grid parsed out of table cells or a series pulled from SVG tooltips. A test ready in 200ms takes 200ms; a slow machine takes longer instead of failing.
+
+**The hazard this introduces, and the guard for it.** A polling assertion on an *absence* passes instantly: `expect(x).to_have_count(0)` is true of a page that has not drawn yet. Converted naively, "an unwired grid offers no buttons" and "a viewer gets no resize handles" would both have gone green *before the widgets existed* — faster, and meaningless. **Every absence check now waits for a presence first**, and the two mutations aimed at exactly those assertions were re-run and still caught. That is the same shape as §111's vacuous UTC test and §106's `ALTER DATABASE`: a check that cannot fail is worse than a slow one, and speed is a good way to acquire one by accident.
+
+**Five mutations re-run against the converted suite, five caught** — the two absence checks above, a bar click that writes nothing, a drag that never commits, and the time-series caption removed. The conversion did not cost the suite its teeth.
+
+**One self-inflicted defect worth recording.** The bulk of the conversion was a regex, and it swallowed a compound assertion whole: `assert table_rows(page) == COUNTS["south"] and regions(page) == ["south"]` became `to_have_count(<boolean>)`. Playwright refused it outright — "expected float, got boolean" — which is the good kind of failure, and the reason it was a two-minute fix rather than a silently weakened test. A more forgiving API would have accepted the boolean and compared a count against `True`.
+
+**28 browser tests, 782 API tests, 23 unit tests, `tsc` clean.**
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

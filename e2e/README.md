@@ -9,6 +9,11 @@ scripts/dev-up.sh      # Postgres, the API on 8300, Next on 3100
 scripts/check.sh e2e   # or: .venv-api/bin/python -m pytest e2e -q
 ```
 
+**Nothing here sleeps for a fixed interval.** Every wait is a condition with a
+deadline — Playwright's `expect` where a locator assertion fits, `eventually()`
+for values derived from several reads. A test that is ready in 200ms takes
+200ms, and a slower machine takes longer rather than failing.
+
 ## Why this exists
 
 `ROADMAP.md`'s cross-cutting section puts it plainly: *"Playwright coverage of
@@ -66,6 +71,11 @@ Kept because each cost real time and none is obvious:
 - **A checkbox backed by the URL does not tick synchronously.** Playwright's
   `check()` verifies state immediately after clicking and the tick lands a
   router round-trip later. Click, then wait.
+- **A polling assertion on an *absence* passes instantly.** `expect(x).
+  to_have_count(0)` is true of a page that has not drawn yet, so "this widget
+  offers no handles" would be green before the widget existed. Every check for
+  an absence waits for a *presence* first — see `settled()`, and the comments
+  at each such assertion.
 - **Never run `next build` while these are running.** Both write
   `apps/web/.next`, and the dev server starts 500ing mid-suite. Every assertion
   after that point fails for a reason that has nothing to do with the code.
