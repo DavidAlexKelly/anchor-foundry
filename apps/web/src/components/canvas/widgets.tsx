@@ -2090,6 +2090,184 @@ CanvasPivotTable.craft = {
   related: { settings: PivotTableSettings },
 };
 
+// ---- Time series (roadmap 1.5) ----------------------------------------------
+/**
+ * How many objects in a set last changed in each time bucket.
+ *
+ * **It plots `updated_at`, and it says so on the widget.** That is a real
+ * limitation rather than a stand-in for a business date: a resync moves every
+ * object in a set to today, so this answers *"what has been changing"* and not
+ * *"when did things happen"*. The two look identical as a line, which is why
+ * the caption is not optional — a viewer who reads this as an events-over-time
+ * chart has been misled by the shape.
+ *
+ * A date *property* is the other question and is blocked: properties are
+ * stored untyped, so bucketing one means guessing whether "03/04" is March or
+ * April, and the two stores would guess differently
+ * (`docs/decisions/0006-typed-instance-properties.md`).
+ *
+ * **No drill-down, deliberately.** Every narrowing widget writes property
+ * equality clauses; a time bucket is a *range* over a system field, which is
+ * not in that vocabulary and would need the ordered operators the same
+ * decision holds. Inventing a second narrowing mechanism for one widget would
+ * be two answers to one question — the same reason the scatter chart takes no
+ * drill.
+ *
+ * The line itself is the existing `Chart`, not a second renderer: gaps are
+ * already filled by the server, so a plain line over the points is correct.
+ */
+const SERIES_INTERVALS = ["day", "week", "month"] as const;
+
+/** A bucket's label, formatted **in UTC** — the boundary the server pinned.
+ *  Rendering in local time would put a viewer six hours west a day behind the
+ *  bucket they are looking at, which is exactly the disagreement UTC was
+ *  chosen to remove, reintroduced in the browser. */
+function seriesLabel(iso: string, interval: string): string {
+  const when = new Date(iso);
+  const opts: Intl.DateTimeFormatOptions =
+    interval === "month"
+      ? { year: "numeric", month: "short", timeZone: "UTC" }
+      : { day: "numeric", month: "short", timeZone: "UTC" };
+  const formatted = new Intl.DateTimeFormat(undefined, opts).format(when);
+  return interval === "week" ? `w/c ${formatted}` : formatted;
+}
+
+export function CanvasTimeSeries({
+  objectSetVariable = null,
+  interval = "day",
+  title = "",
+}: {
+  objectSetVariable?: string | null;
+  interval?: string;
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const definition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+
+  const series = useQuery({
+    queryKey: [
+      "canvas-series", objectSetVariable, JSON.stringify(definition ?? null), interval,
+    ],
+    queryFn: () => objApi.timeSeriesObjectSet(workspaceId, definition, interval),
+    enabled: !!objectSetVariable && !!definition,
+  });
+
+  const points = (series.data?.points ?? []).map((p) => ({
+    label: seriesLabel(p.start, series.data!.interval),
+    value: p.count,
+  }));
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
+      {!objectSetVariable && (
+        <p className="canvas-widget-empty">
+          Time series - point it at an object set in Settings
+        </p>
+      )}
+      {objectSetVariable && (variablesPending || series.isPending) && (
+        <p className="canvas-widget-empty">Loading…</p>
+      )}
+      {series.isError && (
+        // The server's own sentence: "that range is more than 200 day buckets"
+        // tells a builder which control to change, where "couldn't load" does
+        // not.
+        <p className="canvas-widget-empty">
+          {series.error instanceof ApiError
+            ? series.error.message
+            : "Couldn't build this series."}
+        </p>
+      )}
+      {series.data && points.length === 0 && (
+        <p className="canvas-widget-empty">Nothing in this set.</p>
+      )}
+      {series.data && points.length > 0 && (
+        <>
+          <Chart kind="line" points={points} />
+          {/* Not a tooltip and not optional. A line of counts over time reads
+              as "when these things happened" unless it says otherwise, and it
+              is not that. */}
+          <p className="canvas-widget-empty">
+            When each object last changed, by {series.data.interval}, in UTC -
+            not a business date.{" "}
+            {series.data.total.toLocaleString()} objects across {points.length}{" "}
+            {series.data.interval}
+            {points.length === 1 ? "" : "s"}.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TimeSeriesSettings() {
+  const { declared } = useCanvasVariables();
+  const {
+    objectSetVariable, interval, title,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    interval: node.data.props.interval,
+    title: node.data.props.title,
+  }));
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable || ""}
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Bucket</span>
+        <select
+          value={interval || "day"}
+          onChange={(e) => setProp((p: { interval: string }) => (p.interval = e.target.value))}
+        >
+          {SERIES_INTERVALS.map((i) => (
+            <option key={i} value={i}>{`By ${i}`}</option>
+          ))}
+        </select>
+        {/* There is no property picker here on purpose, and the absence needs
+            explaining or it reads as an oversight. */}
+        <span className="field-hint">
+          Plots when each object last changed. Bucketing by a date property
+          needs the declared property type behind it (decision 0006).
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title || ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+    </>
+  );
+}
+
+CanvasTimeSeries.craft = {
+  displayName: "Time series",
+  props: { objectSetVariable: null, interval: "day", title: "" },
+  related: { settings: TimeSeriesSettings },
+};
+
 // ---- Map (ROADMAP Canvas item 4) --------------------------------------------
 /**
  * Pins on a map, from either half of the platform: an object type's geopoint
@@ -4024,6 +4202,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectCards,
   CanvasSearch,
   CanvasPivotTable,
+  CanvasTimeSeries,
   CanvasChart,
   CanvasMap,
   CanvasMetricCard,
@@ -4046,6 +4225,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
   { key: "CanvasSearch", label: "Search", hint: "Narrow an object set by a property prefix" },
   { key: "CanvasPivotTable", label: "Pivot table", hint: "Counts by two properties at once, over an object set" },
+  { key: "CanvasTimeSeries", label: "Time series", hint: "When the objects in a set last changed" },
   { key: "CanvasChart", label: "Chart", hint: "Bar, line, pie or scatter over a dataset" },
   { key: "CanvasMap", label: "Map", hint: "Pins from a geopoint property or location columns" },
   { key: "CanvasMetricCard", label: "Metric card", hint: "One number over an object set" },

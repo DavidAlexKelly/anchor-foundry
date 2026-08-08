@@ -20,7 +20,7 @@ current data - the store should not lag behind deletes upstream.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
+from . import object_sets
 from .dataset_engine import DatasetEngineError, json_safe
 
 MAX_INSTANCE_SYNC_ROWS = 20_000  # flag: worker/OpenSearch bulk path beyond this
@@ -489,6 +490,46 @@ async def group_object_set(
         [(str(r["value"]), int(r["n"])) for r in rows],
         int(total_row["n"]) if total_row else 0,
     )
+
+
+async def time_series_object_set(
+    conn: AsyncConnection,
+    *,
+    object_type_id: UUID,
+    filters: tuple[Any, ...],
+    interval: str,
+) -> list[tuple[datetime, int]]:
+    """How many objects last changed in each time bucket, Postgres edition
+    (roadmap 1.5, what a Time Series plots).
+
+    **UTC is stated, not inherited.** `updated_at` is a `timestamptz`, so
+    `date_trunc` on it would otherwise bucket by the session's TimeZone - and
+    OpenSearch's date histogram defaults to UTC. Two deployments with different
+    server time zones would draw the same data with the day boundaries in
+    different places, which is the invisible kind of disagreement this module
+    exists to prevent. `AT TIME ZONE 'UTC'` pins one answer.
+
+    Only the buckets that have rows. The gaps are filled once, in
+    `object_sets.fill_time_buckets`, so the two stores cannot fill differently.
+    """
+    if interval not in object_sets.TIME_INTERVALS:  # pragma: no cover - parsed upstream
+        raise ValueError(f"unknown interval {interval!r}")
+    predicate, params = _set_predicate(object_type_id, filters)
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT date_trunc('{interval}', i.updated_at AT TIME ZONE 'UTC') AS bucket,
+               count(*) AS n
+          FROM object_instances i
+         WHERE {predicate}
+         GROUP BY 1
+         ORDER BY 1
+        """,
+        params,
+    )
+    return [
+        (row["bucket"].replace(tzinfo=timezone.utc), int(row["n"])) for row in rows
+    ]
 
 
 async def cross_tab_object_set(

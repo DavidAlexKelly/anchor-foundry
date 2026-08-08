@@ -1505,6 +1505,85 @@ async def cross_tab_object_set(
     )
 
 
+class ObjectSetTimeSeriesIn(BaseModel):
+    definition: dict[str, Any]
+    interval: str = object_sets.DEFAULT_TIME_INTERVAL
+
+
+class ObjectSetTimePoint(BaseModel):
+    start: datetime
+    """The bucket's first instant, in UTC. The *start*, not a label: a client
+    that wanted "March" can format one, and a client that wanted to line two
+    series up needs the instant."""
+    count: int
+
+
+class ObjectSetTimeSeriesOut(BaseModel):
+    points: list[ObjectSetTimePoint]
+    interval: str
+    total: int
+    """The size of the set. Equal to the sum of the points here - unlike a
+    cross-tab, every object has an `updated_at` and no bucket is dropped - and
+    returned so a widget can say so rather than a viewer having to add up."""
+
+
+@router.post("/object-sets/time-series", response_model=ObjectSetTimeSeriesOut)
+async def time_series_object_set(
+    body: ObjectSetTimeSeriesIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectSetTimeSeriesOut:
+    """How many objects last changed in each time bucket (roadmap 1.5).
+
+    **This plots `updated_at` - when the platform last saw each object change -
+    and not a business date.** That is a real limitation, not a stand-in for
+    one: a resync moves every object in a set to today, so this answers "what
+    has been changing" rather than "when did things happen". Both stores agree
+    about it, which a date *property* would not - properties are stored
+    untyped (`object_sets.DATE_PROPERTY_HINT`, decision 0006). The widget says
+    which of the two questions it is answering, because the difference is
+    invisible from the shape of the chart.
+
+    **Empty buckets are filled, and the range comes from the data.** A line
+    drawn through a gap slopes gently across a week when nothing happened,
+    which is a different claim rather than a smaller one. The range is the
+    first and last populated bucket rather than "the last 30 days", so the same
+    saved app does not draw a different picture tomorrow.
+    """
+    definition = object_sets.parse(body.definition)
+    try:
+        interval = object_sets.parse_interval(body.interval)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        shared = {
+            "search_prefix": prefix,
+            "object_type_id": definition.object_type_id,
+            "filters": definition.filters,
+        }
+        buckets = await store.time_series_object_set(**shared, interval=interval)
+        total = await store.aggregate_object_set(
+            **shared, aggregation="count", property_name=None
+        )
+
+    try:
+        filled = object_sets.fill_time_buckets(buckets, interval)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return ObjectSetTimeSeriesOut(
+        points=[ObjectSetTimePoint(start=start, count=count) for start, count in filled],
+        interval=interval,
+        total=total,
+    )
+
+
 @router.post("/object-sets/evaluate", response_model=ObjectSetOut)
 async def evaluate_object_set(
     body: ObjectSetIn,

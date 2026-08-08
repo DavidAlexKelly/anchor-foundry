@@ -46,7 +46,7 @@ first deployment against a real domain as the remaining verification step.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid5
 
@@ -192,6 +192,29 @@ class InstanceStoreGateway(Protocol):
         A missing cell is zero. Returning only the non-empty ones keeps a
         sparse grid cheap and makes "no rows have both values" the same answer
         on both stores.
+        """
+        ...
+
+    async def time_series_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: "tuple[Any, ...]",
+        interval: str,
+    ) -> "list[tuple[datetime, int]]":
+        """How many objects last changed in each time bucket - what a Time
+        Series plots (roadmap 1.5).
+
+        **Over `updated_at`, in UTC, and only over `updated_at`.** It is a real
+        `timestamptz` on one store and a mapped `date` on the other, so both
+        bucket it identically without knowing any property's type. A date
+        *property* is stored untyped like every other, which is the same
+        blocker ordered operators have (`object_sets.DATE_PROPERTY_HINT`).
+
+        Only the buckets that have rows, ascending. Gaps are filled once in
+        `object_sets.fill_time_buckets`, so the two stores cannot fill
+        differently - and so a chart and an export of the same series agree.
         """
         ...
 
@@ -666,6 +689,54 @@ class OpenSearchInstanceStore:
             for col in row["cols"]["buckets"]
         }
 
+    async def time_series_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        interval: str,
+    ) -> list[tuple[datetime, int]]:
+        """Roadmap 1.5. A date histogram on `updated_at`.
+
+        `calendar_interval` rather than `fixed_interval`: a month is not
+        2,592,000 seconds, and Postgres's `date_trunc('month', ...)` lands on
+        the first of the month whatever its length. A fixed interval would
+        drift past every 31-day month and the two stores would slowly disagree
+        about which bucket a row is in - starting correct, which is the worst
+        way for a difference to begin.
+
+        `time_zone` is stated rather than defaulted, for the same reason
+        Postgres is pinned to UTC: two clusters configured differently would
+        put the day boundary in different places.
+        """
+        body: dict[str, Any] = {
+            "query": {"bool": self._set_clauses(object_type_id, filters)},
+            "size": 0,
+            "aggs": {
+                "series": {
+                    "date_histogram": {
+                        "field": "updated_at",
+                        "calendar_interval": interval,
+                        "time_zone": "UTC",
+                        # Only the populated buckets, matching what Postgres's
+                        # GROUP BY returns. Asking OpenSearch to fill them
+                        # would put the filling in one store and not the other.
+                        "min_doc_count": 1,
+                        "order": {"_key": "asc"},
+                    }
+                }
+            },
+        }
+        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        return [
+            (
+                datetime.fromtimestamp(int(b["key"]) / 1000, tz=timezone.utc),
+                int(b["doc_count"]),
+            )
+            for b in resp["aggregations"]["series"]["buckets"]
+        ]
+
     async def evaluate_object_set(
         self,
         *,
@@ -1038,6 +1109,23 @@ class PostgresInstanceStore:
             column_property=column_property,
             row_values=row_values,
             column_values=column_values,
+        )
+
+    async def time_series_object_set(
+        self,
+        *,
+        search_prefix: str,
+        object_type_id: UUID,
+        filters: tuple[Any, ...],
+        interval: str,
+    ) -> list[tuple[datetime, int]]:
+        from . import instances as instances_service
+
+        return await instances_service.time_series_object_set(
+            self._conn,
+            object_type_id=object_type_id,
+            filters=filters,
+            interval=interval,
         )
 
 

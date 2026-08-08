@@ -27,6 +27,7 @@ properties. The rest are refused with a sentence rather than picked - see
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -146,6 +147,95 @@ MAX_GROUPS = 20
 MAX_PIVOT_COLUMNS = 12
 
 MAX_FILTERS = 20
+
+# ---- a set over time (roadmap 1.5, what a Time Series plots) -----------------
+#
+# **Over `updated_at`, and only over `updated_at`.** That is the same short list
+# `SORTS` is drawn from and for the same reason: it is a real `timestamptz` on
+# Postgres and a mapped `date` on OpenSearch, so both stores bucket it
+# identically without being told what any property's type is. A *date property*
+# is stored untyped like every other, so bucketing one means guessing whether
+# "03/04" is March or April - see `DATE_PROPERTY_HINT`.
+TIME_INTERVALS = ("day", "week", "month")
+DEFAULT_TIME_INTERVAL = "day"
+
+# The most points a series will return. A chart with a thousand points is a
+# smear, and an unbounded date histogram over a long-lived set is a real cost
+# on both stores. Exceeding it **refuses and names a coarser interval** rather
+# than truncating: a truncated time series is not a smaller answer, it is a
+# different period, and nothing on screen would say which one.
+MAX_TIME_BUCKETS = 200
+
+DATE_PROPERTY_HINT = (
+    "a time series over a date *property* needs the declared property type behind it - "
+    "instance properties are stored untyped, so the two stores would bucket the same "
+    "value differently (docs/decisions/0006-typed-instance-properties.md). This plots "
+    "when each object last changed, which both stores agree about."
+)
+
+
+def parse_interval(interval: Any) -> str:
+    """Validate a bucket size, refusing in a sentence."""
+    if interval is None or interval == "":
+        return DEFAULT_TIME_INTERVAL
+    if not isinstance(interval, str):
+        raise ValueError("interval must be a string")
+    if interval not in TIME_INTERVALS:
+        raise ValueError(
+            f"unknown interval {interval!r} (supported: {', '.join(TIME_INTERVALS)})"
+        )
+    return interval
+
+
+def next_bucket(start: datetime, interval: str) -> datetime:
+    """The start of the bucket after this one.
+
+    Calendar arithmetic, not a fixed number of seconds: a month is 28-31 days
+    and this has to land on the same instants `date_trunc` and
+    `calendar_interval` produce, or the filled gaps would sit between the real
+    buckets rather than among them.
+    """
+    if interval == "day":
+        return start + timedelta(days=1)
+    if interval == "week":
+        return start + timedelta(days=7)
+    if interval == "month":
+        return start.replace(year=start.year + start.month // 12,
+                             month=start.month % 12 + 1, day=1)
+    raise ValueError(f"unknown interval {interval!r}")  # pragma: no cover
+
+
+def fill_time_buckets(
+    buckets: list[tuple[datetime, int]], interval: str
+) -> list[tuple[datetime, int]]:
+    """Every bucket from the first to the last, empty ones included.
+
+    **Both stores return only the buckets that have rows**, and a line drawn
+    through the gaps would slope smoothly across a week when nothing happened -
+    which is not a smaller claim than the truth, it is a different one. Filled
+    here rather than in either store so the two cannot fill differently, and
+    rather than in the browser so a chart and a CSV of the same series agree.
+
+    The range is the data's own first and last bucket. Not "the last 30 days":
+    that would make the same saved app draw a different picture tomorrow with
+    no change to anything it points at.
+    """
+    if not buckets:
+        return []
+    ordered = sorted(buckets)
+    counts = dict(ordered)
+    out: list[tuple[datetime, int]] = []
+    cursor, last = ordered[0][0], ordered[-1][0]
+    while cursor <= last:
+        out.append((cursor, counts.get(cursor, 0)))
+        cursor = next_bucket(cursor, interval)
+        if len(out) > MAX_TIME_BUCKETS:
+            raise ValueError(
+                f"that range is more than {MAX_TIME_BUCKETS} {interval} buckets. Use a "
+                "coarser interval - a truncated time series is a different period, not "
+                "a shorter one."
+            )
+    return out
 
 
 def parse_cross_tab(row_property: str, column_property: str) -> tuple[str, str]:
