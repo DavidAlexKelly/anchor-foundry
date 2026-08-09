@@ -83,7 +83,45 @@ Parity is a large target, so the order matters more than usual. Four principles:
 | Stage | Contents | Why here |
 |---|---|---|
 | **0** | ~~Make CI actually run~~ — **done, PR #52** | It had already been running, and had been **red for nineteen consecutive runs** on a single cause: CI never set `PLATFORM_APP_PASSWORD`, so `platform_app` kept its placeholder password while everything connected as it with `devpass`. All three jobs now green. Every "at parity" claim below now means something. |
-| **1** | Navigation (phase-3 §A) — Workshop onto `/r/{id}`, delete the duplicate editor, pillar pages become filtered views | Mostly deletion. Everything after lands in a cleaner shape, and it answers the original complaint about screens. |
+| **1** | Navigation (phase-3 §A) — Workshop onto `/r/{id}`, pillar pages become filtered views, delete the duplicate editor **(blocked, see below)** | Mostly deletion. Everything after lands in a cleaner shape, and it answers the original complaint about screens. |
+
+#### Stage 1 progress
+
+- **Workshop onto `/r/{id}`** — done.
+- **Pillar pages become filtered views** — the mechanism is in: the resource
+  browser's kind filter lives in the URL (`?kind=dataset&kind=model`), so a
+  pillar page can *be* the browser with a filter applied. Rules in
+  `resource-filter.ts` with unit tests; behaviour in
+  `e2e/test_resource_filter.py`. Pointing each pillar page at it is the
+  remaining half, and it is not uniform: `dataset`, `object_type`,
+  `canvas_app` and `code_repo` have applications to open into, while `model`
+  and `connection` do not yet, so their pages cannot become pure lists.
+- **Delete the duplicate editor** — blocked, below.
+
+#### Stage 1 is not as deletable as it looked
+
+Two of the three parts are straightforward. The third is blocked, and the
+blocker is worth stating because it reorders the plan.
+
+**"Delete the duplicate editor" cannot happen until models live in
+repositories** — which is stage 2's B.1, not stage 1. The reason is the review
+gate, and it is enforced server-side on both write paths: a direct model edit
+is refused when `require_code_review` is set (`services/models.py:476`), and so
+is publishing a repository commit (`services/transform_publish.py:202`, which
+refuses it explicitly so that "a gate with a documented way round it" cannot be
+had by putting the code in a repository first).
+
+So in a review-required project, a transform can only be changed by a
+**proposal**, and proposals come in two shapes: typed changes, and *publish
+this commit*. The typed-changes shape is created in exactly one place —
+`code/page.tsx:179` — and a model with no `source_path` has no repository
+commit to publish. Deleting that page therefore strands every non-repository
+model in a review-required project with no way to change it at all. Nothing
+would error; the capability would simply be gone.
+
+The order that follows: **B.1 first, then the deletion.** Until then the Code
+pillar keeps its editor, and the honest description of it is not "a duplicate"
+but "the only authoring surface for transforms that are not yet files".
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, external IDs, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
 | **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |
