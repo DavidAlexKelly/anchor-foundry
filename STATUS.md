@@ -2407,4 +2407,4 @@ From a fresh checkout to a stack you can sign into. It asks before anything slow
 
 **`docs/local-setup.md` is the guide** — the same steps by hand, what each one is for, how to seed a test client or user, and the failures worth recognising by sight (the DSN form `migrate.py` refuses, the `PLATFORM_APP_PASSWORD` the schema needs, why a token stops working when the API restarts).
 
-Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own. `scripts/check.sh` runs every check the repo has.
+Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own; `scripts/dev-down.sh` stops the two servers again and leaves Postgres alone, because it is not this repo's to stop. `scripts/check.sh` runs every check the repo has.
