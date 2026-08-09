@@ -5,10 +5,10 @@ name: checks
 # inlined its own commands would be a second copy that nobody runs until it
 # fails, and the two would drift on the first change to either.
 #
-# Honest status: the scripts below are verified locally on every commit. This
-# *workflow* has never executed - there is no way to run GitHub Actions from
-# the environment it was written in - so treat its first run as the thing that
-# proves the wiring, not the checks.
+# Honest status: this workflow ran for the first time on PR #50 and was red
+# for nineteen runs, on one cause - see the PLATFORM_APP_PASSWORD note on the
+# Migrate steps. Everything it checks had been passing locally the whole time,
+# which is exactly why "verified locally" is not a substitute for a run.
 
 on:
   pull_request:
@@ -53,6 +53,17 @@ jobs:
         run: python packages/db/migrate.py
         env:
           DATABASE_URL: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+          # **The role's password is not the one anything connects with.**
+          # 0006_rls.sql creates platform_app with a fixed placeholder, because
+          # migrations are checksummed and cannot carry a per-deployment
+          # secret. `migrate.py` reconciles it from PLATFORM_APP_PASSWORD, and
+          # locally `scripts/setup.sh` is what arranges for that to happen -
+          # a script CI has no reason to run. So every job here connected as
+          # platform_app with `devpass` against a role whose password was still
+          # `change_me_in_secrets_manager`, and nineteen runs failed on
+          # "password authentication failed for user platform_app" while the
+          # same suites stayed green on every developer machine.
+          PLATFORM_APP_PASSWORD: devpass
       - run: scripts/check.sh api
 
   types:
@@ -111,6 +122,17 @@ jobs:
         run: python packages/db/migrate.py
         env:
           DATABASE_URL: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+          # **The role's password is not the one anything connects with.**
+          # 0006_rls.sql creates platform_app with a fixed placeholder, because
+          # migrations are checksummed and cannot carry a per-deployment
+          # secret. `migrate.py` reconciles it from PLATFORM_APP_PASSWORD, and
+          # locally `scripts/setup.sh` is what arranges for that to happen -
+          # a script CI has no reason to run. So every job here connected as
+          # platform_app with `devpass` against a role whose password was still
+          # `change_me_in_secrets_manager`, and nineteen runs failed on
+          # "password authentication failed for user platform_app" while the
+          # same suites stayed green on every developer machine.
+          PLATFORM_APP_PASSWORD: devpass
       - name: Bring the stack up
         run: scripts/dev-up.sh
       - run: scripts/check.sh e2e
