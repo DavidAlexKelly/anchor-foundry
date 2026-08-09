@@ -82,7 +82,7 @@ Parity is a large target, so the order matters more than usual. Four principles:
 
 | Stage | Contents | Why here |
 |---|---|---|
-| **0** | E.1 from the phase-3 doc: make CI actually run | Every claim of "done" below is worthless without it. It has never once executed. |
+| **0** | ~~Make CI actually run~~ — **done, PR #52** | It had already been running, and had been **red for nineteen consecutive runs** on a single cause: CI never set `PLATFORM_APP_PASSWORD`, so `platform_app` kept its placeholder password while everything connected as it with `devpass`. All three jobs now green. Every "at parity" claim below now means something. |
 | **1** | Navigation (phase-3 §A) — Workshop onto `/r/{id}`, delete the duplicate editor, pillar pages become filtered views | Mostly deletion. Everything after lands in a cleaner shape, and it answers the original complaint about screens. |
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, external IDs, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |

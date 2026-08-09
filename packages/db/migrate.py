@@ -91,10 +91,17 @@ def sync_app_password(conn: psycopg.Connection) -> None:
     """0006_rls.sql creates platform_app with a fixed placeholder password
     (migrations are checksummed/immutable, so the real per-deployment
     password can't live in the migration file itself). PLATFORM_APP_PASSWORD
-    carries the actual value from Secrets Manager in the deployed stack;
-    local dev/CI don't set it, so this is a no-op there. Safe to run on
-    every invocation, not just first-time — keeps the role in sync if the
-    secret is ever rotated."""
+    carries the actual value from Secrets Manager in the deployed stack.
+    Safe to run on every invocation, not just first-time — keeps the role in
+    sync if the secret is ever rotated.
+
+    **Every environment has to set it, including CI.** This docstring used to
+    say local dev and CI don't, "so this is a no-op there", and that sentence
+    was the whole of the CI failure: the placeholder password stayed in place
+    while DATABASE_URL connected as platform_app with `devpass`. Locally
+    `scripts/setup.sh` arranges it; in CI the workflow sets it on the Migrate
+    step. Unset, the role exists and every migration applies, and then
+    everything that connects as the app role is refused."""
     password = os.environ.get("PLATFORM_APP_PASSWORD")
     if not password:
         return
