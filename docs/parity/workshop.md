@@ -148,6 +148,26 @@ So one concept powers **embedding, URL deep-links, and state saving**. We built 
 
 **The precedence rule, which is easy to get backwards:** "When an interface variable is mapped between a parent and an embedded child module, Workshop uses the **parent module's** variable definition and ignores the embedded module's own" (p.164).
 
+### 3.5 Evaluation — when a variable actually computes
+
+Two behaviours that are semantics rather than UI, which is why they are easy to skip and expensive to retrofit: both change what a correct implementation of §3 *is*, not what it looks like.
+
+**Lazy loading.** "In both view and edit mode, Workshop variables will compute and recompute lazily only when displayed by a visible widget or layout. This means that variables used in non-visible pages, tabs, overlays, or non-visible pages of a looped layout will not be computed until they are shown. This behavior is the same for non-visible variables used in embedded modules." (p.75)
+
+We evaluate the whole variable graph on load. For a module with a handful of variables that is invisible; for one with an overlay per row of a table it is the difference between usable and not. Note the second-order effect: the Performance Profiler (§9) only counts widgets and variables that affect the on-screen display precisely *because* of this rule, so profiling is meaningless without it.
+
+**Recompute behaviour**, configurable per variable on Function, Object set aggregation, Object property, Variable transformation and Object set filter definitions (p.76):
+
+| Behaviour | Meaning | Status |
+|---|---|---|
+| **Automatic** | recompute when any dependency changes — the default, and what we do unconditionally | ✅ |
+| **Only when triggered by an event** | recompute solely on a `recompute {variable}` event | ○ |
+| **On module load, and when triggered by an event** | recompute once at load, then only on the event | ○ |
+
+Object set definitions do not offer the choice and always behave as Automatic; the documented escape hatch is to set the behaviour on an upstream variable or use a function-backed one (p.76).
+
+The `recompute {variable}` event is the other half of this and is missing from §5. Two caveats worth carrying into the implementation: automatic variables "may recompute even when no upstream values have changed", for instance after an action submission or an auto-refresh (p.76) — so nothing may assume recompute means dependency-changed; and a Reset event restores the value configured in the variable *definition*, which under §3.4's precedence rule means the parent's definition, not the child's (p.85, p.128).
+
 ---
 
 ## 4. Embedded modules
@@ -175,8 +195,13 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 | **Layout** — Switch to page | ✅ | |
 | **Layout** — Expand / Collapse / Toggle each collapsible section | ○ | needs collapsible sections (§1.3) |
 | Set variable value | ✅ | |
+| **Recompute {variable}** | ○ | the other half of §3.5 — without it, the two non-automatic recompute behaviours have no way to fire (p.85) |
+| **Reset {variable} value** | ○ | static variables only; restores the value in the variable *definition*, which for a mapped interface variable means the parent's (p.85, p.128) |
 | Run action | ✅ | |
 | Open URL | ✅ | |
+| **Switch to {tab}** | ○ | unlike page and section events, this one *does* write back to the variable behind Variable-Based Tab Selection (p.84) — an inconsistency to reproduce deliberately, not to tidy up |
+| **Refresh data in module** | ○ | (p.91) |
+| **Toggle light / dark mode** | ○ | (p.91) |
 | **Export** | ○ | refused with reason at §76; Foundry treats export as a first-class `On click` target alongside actions, events and URLs (p.482) |
 | Open Workshop module | ○ | §4 |
 | Sequential execution, no waiting for downstream propagation | ✅ | matches p.80 exactly |

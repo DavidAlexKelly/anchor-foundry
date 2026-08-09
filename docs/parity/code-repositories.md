@@ -122,7 +122,31 @@ The docs add a note we should honour: "You should not delete any branches that y
 | Create a PR, choosing the base branch | ◑ | |
 | **Line-by-line review with comments** | ◑ | §52 built a review surface; verify it is line-level, not file-level |
 | Require at least one approving review before merge, per repository settings | ✅ | §28 review-gated promotion |
-| **See how changes affect datasets** when reviewing transform code | ○ | "Analyze the impact of changes" (TOC §11) |
+| **See how changes affect datasets** when reviewing transform code | ○ | see §4.1 |
+
+### 4.1 Impact analysis (p.52–55)
+
+The largest single gap in this file, and the one that most changes what a review *is*. Ours reviews text; Foundry reviews the consequences of text.
+
+Impact analysis requires the affected datasets to have been built on **both** the head and the base branch — head "to validate that the code builds properly, the outputs appear as expected, and that all Data Expectations are met", base "to compare the outputs to the latest version of the target" (p.52). The PR page warns when affected datasets are **stale** and offers **Configure and build** to review and build them.
+
+| Feature | Status | Notes |
+|---|---|---|
+| List of directly affected datasets | ○ | Python repos derive this from Transforms Level Logic Versioning; Java treats a dataset as affected if its source file changed (p.53) |
+| **Add datasets to analysis** — pull derived datasets in, plus every intermediate between (p.54) | ○ | |
+| **Code** — changes to the source file only | ◑ | our diff is the source file |
+| **Schema** — column changes on the output dataset | ○ | we detect schema drift on syncs (§5); this is the same question asked of a proposal |
+| **Security** — changes to markings applied to the output | ○ | |
+| **Expectations** — data expectations on the head branch | ◑ | we have quality gating (§11), not surfaced on a proposal |
+| Trashed datasets shown faded | ○ | |
+| Inaccessible datasets marked as such rather than hidden | ○ | a small honesty that is easy to get wrong |
+| Staleness warning + Configure and build | ○ | |
+| **Pipeline review tab** — lineage view of affected datasets; select a node to see the code and schema changes that produced it (p.54–55) | ○ | we have the lineage graph (§14) |
+| **Per-file approve/reject**, shown as an indicator on the corresponding output dataset node in the graph (p.55) | ○ | |
+
+Two limits Palantir states plainly and we should copy rather than discover: the staleness warning "only covers affected datasets within a specific code repository" and says nothing about stale parent datasets outside it or about uncommitted changes (p.52); and reviewing affected datasets requires access to the data, so an inaccessible dataset is labelled, not silently dropped (p.53).
+
+**Sequencing.** This depends on the publish path (§55) knowing which datasets a proposal touches, and on being able to build a dataset on a branch without promoting it. Neither exists yet, so this is late — but it is worth naming early, because "which datasets does this change break" is the question a data platform exists to answer, and a review surface that cannot answer it is a code-review tool that happens to live next to data.
 
 ---
 
