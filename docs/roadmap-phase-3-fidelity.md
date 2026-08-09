@@ -339,8 +339,22 @@ The repo's standard is that a check you cannot make fail is not a check (§106, 
 
 ---
 
-## What this document is not
+## What happened next
 
-Not a commitment to reach parity. Foundry is a decade of work by a large team; several items in section D would each be a quarter on their own, and `docs/pal/` describes perhaps forty applications we will never build.
+This document is the analysis. **The decision that followed it was to go further than it recommends.**
 
-It is a map of the distance, with the cheap parts marked and the sources named. The three complaints that prompted it are answered by passes 1 and 2.
+> "I do want to reach parity with at least the parts we are doing. Workshop, code editor etc. This isn't a full replication of Foundry, but I want full parity/replication in a few applications. Foundry without all the bloat."
+
+So the closing position of this document — a map of the distance, with the cheap parts marked — is no longer the plan. The plan is **full parity inside a named boundary, and nothing outside it**. That boundary and the checklists that implement it live in [`docs/parity/`](parity/README.md):
+
+| Spec | Covers |
+|---|---|
+| [`parity/workshop.md`](parity/workshop.md) | core builder and the full widget library — we have 13 of ~52 widgets |
+| [`parity/code-repositories.md`](parity/code-repositories.md) | five tabs, nine helper panels, sandbox branches |
+| [`parity/ontology.md`](parity/ontology.md) | Ontology Manager, Object Explorer, Object Views, Action Types |
+| [`parity/datasets-lineage.md`](parity/datasets-lineage.md) | Dataset Preview, Data Lineage |
+| [`parity/data-connection.md`](parity/data-connection.md) | sources, syncs, exports, egress |
+
+Out of scope, and named there so that skipping them is a decision: Pipeline Builder, Slate, Contour, Quiver, Code Workbook, Code Workspaces, Carbon, Marketplace, AIP everything, and — within Workshop — Scenarios, Mobile and the AIP widgets.
+
+**What survives from this document unchanged** is sections A and E. The navigation work is stage 1 of the parity plan because it is mostly deletion and everything else lands in a cleaner shape afterwards. Section E is stage 0 and unaffected by any of it: **CI has still never once executed**, and every parity claim below is worthless until it does.
