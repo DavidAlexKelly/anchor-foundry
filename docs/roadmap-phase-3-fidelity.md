@@ -291,7 +291,11 @@ Recorded so it is not re-litigated: Preview exists in the builder, the viewer ro
 
 **None of the above makes this production-ready.** Unchanged from the previous draft, because none of it depends on Foundry's documentation.
 
-**E.1 — The CI workflow has never executed. S. Do this first.** `.github/workflows/ci.yml` was written carefully and fixed once by inspection (§108), and no GitHub Actions run has ever been triggered from this environment. A workflow that has never executed is a workflow that does not work. Everything else here assumes checks are real.
+**E.1 — CI. ~~Never executed.~~ Done, and it found a real bug.** This item said the workflow had never run, which was true when written. It first ran on PR #50 and was **red for nineteen consecutive runs**, on one cause: `0006_rls.sql` creates `platform_app` with a placeholder password, `migrate.py` reconciles it from `PLATFORM_APP_PASSWORD`, and only `scripts/setup.sh` — which CI has no reason to run — was setting that variable. So the role kept `change_me_in_secrets_manager` while everything connected as it with `devpass`. Migrations applied, the Migrate step went green, and then every Postgres-touching job was refused.
+
+The tell was visible in the job list the whole time: `types and unit tests` is the only job that never touches Postgres, and it was the only one passing. Fixed in PR #52; all three jobs green.
+
+Two things worth keeping from this. **The docstring on `sync_app_password` was the bug** — it said local dev and CI don't set the variable, "so this is a no-op there", which reads as fine on paper and is wrong in exactly the way only a run exposes. And nineteen red runs sat there while the same suites passed on every developer machine, which is the entire argument for stage 0 going first.
 
 **E.2 — Decision 0006 is unproven against a real cluster. M.** Typed instance properties are tested against a fixture that now enforces mappings and has 17 tests of its own fidelity (§112). As that work said: this narrows the unproven claim from "does any of this work" to "does OpenSearch behave like the mapping it was given". One deployment closes it.
 
@@ -357,4 +361,4 @@ So the closing position of this document — a map of the distance, with the che
 
 Out of scope, and named there so that skipping them is a decision: Pipeline Builder, Slate, Contour, Quiver, Code Workbook, Code Workspaces, Carbon, Marketplace, AIP everything, and — within Workshop — Scenarios, Mobile and the AIP widgets.
 
-**What survives from this document unchanged** is sections A and E. The navigation work is stage 1 of the parity plan because it is mostly deletion and everything else lands in a cleaner shape afterwards. Section E is stage 0 and unaffected by any of it: **CI has still never once executed**, and every parity claim below is worthless until it does.
+**What survives from this document unchanged** is sections A and E. The navigation work is stage 1 of the parity plan because it is mostly deletion and everything else lands in a cleaner shape afterwards. Section E was stage 0 — **E.1 is now done**, and it found a real bug rather than merely proving wiring, which is the best possible argument for having put it first.
