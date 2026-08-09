@@ -841,6 +841,23 @@ button { font: inherit; cursor: pointer; }
 
 .app-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 18px; }
 .app-summary { max-width: 720px; }
+
+/* Workshop's own controls, under the shell header rather than instead of it.
+   The breadcrumb, the module name and the copy-link button belong to every
+   application and are drawn once by `.app-bar`; what is left here is the
+   version state and the three buttons that act on it. */
+.ws-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.ws-actions .sub { margin: 0; }
+.ws-actions .spacer { flex: 1 1 auto; }
+/* A refused save has to be readable without pushing the buttons off the row,
+   so it takes a line of its own rather than sitting in the flex flow. */
+.ws-actions .state.error { flex: 1 0 100%; margin: 0; order: 1; }
 .app-facts { display: flex; flex-wrap: wrap; gap: 26px; margin: 18px 0; }
 .app-facts dt {
   font-size: 11.5px;

@@ -194,6 +194,10 @@ class Module:
     def define(self, document: dict[str, Any]) -> str:
         app = self.api.call("POST", f"{self.base}/canvas-apps", {"name": f"App {self.tag}"})
         self.app_id = app["id"]
+        # The id the *application* is addressed by. Distinct from `app_id`,
+        # which is the row's id in `canvas_apps` and is still what every
+        # canvas-apps endpoint below is keyed on.
+        self.resource_id = app["resource_id"]
         self.api.call(
             "PUT", f"{self.base}/canvas-apps/{self.app_id}/definition", {"definition": document}
         )
@@ -201,7 +205,14 @@ class Module:
 
     @property
     def url(self) -> str:
-        return f"/{self.workspace_slug}/{self.project_slug}/canvas/{self.app_id}"
+        """Where a module opens, which is the resource id and nothing else.
+
+        The old slug path still resolves and forwards here, so this could have
+        stayed as it was - but then every browser test would exercise the
+        redirect rather than the application, and the one thing none of them
+        would cover is the URL people actually get.
+        """
+        return f"/r/{self.resource_id}"
 
 
 def layout(nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:

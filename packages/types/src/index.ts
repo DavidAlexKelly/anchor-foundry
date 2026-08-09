@@ -1141,6 +1141,8 @@ export interface CanvasApp {
    * published; saving never changes it, so "published v3, editing v7" is a
    * state the builder can and does show. */
   published_version: number | null;
+  /** Where this app opens as an application (`/r/{id}`). */
+  resource_id: string;
   created_at: string;
   updated_at: string;
 }

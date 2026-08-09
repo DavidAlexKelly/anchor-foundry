@@ -31,7 +31,10 @@ function NewAppDialog({
     mutationFn: () => canvasApi.create(workspaceId, projectId, { name, description }),
     onSuccess: async (app) => {
       await queryClient.invalidateQueries({ queryKey: ["canvas-apps", projectId] });
-      router.push(`/${workspaceSlug}/${projectSlug}/canvas/${app.id}`);
+      // Straight to the application. The slug path still works and forwards
+      // here, but sending somebody through a redirect they did not need is a
+      // flash of one page before another for no reason.
+      router.push(`/r/${app.resource_id}`);
     },
   });
 
@@ -101,7 +104,7 @@ function AppCard({
         {app.publish_scope !== "private" && <span className="chip">{app.publish_scope}</span>}
       </div>
       <div className="row-actions" style={{ marginTop: 10 }}>
-        <Link href={`/${workspaceSlug}/${projectSlug}/canvas/${app.id}`} className="btn quiet" style={{ padding: "3px 11px", fontSize: 12 }}>
+        <Link href={`/r/${app.resource_id}`} className="btn quiet" style={{ padding: "3px 11px", fontSize: 12 }}>
           Open
         </Link>
         {canEdit && (

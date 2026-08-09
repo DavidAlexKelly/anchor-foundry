@@ -46,6 +46,12 @@ MAX_DEFINITION_BYTES = 2 * 1024 * 1024  # flag: conservative day-one cap on a sa
 _COLUMN_NAMES = (
     "id", "project_id", "name", "slug", "description", "current_version",
     "publish_scope", "published_at", "published_version", "created_at", "updated_at",
+    # Where this app opens as an application (`/r/{id}`). The column has been
+    # here since the registry landed; not returning it meant every caller that
+    # wanted to link to a module had to build a slug path instead, which is the
+    # kind of link that breaks on a rename - the exact thing resource ids exist
+    # to prevent. Object types surface theirs the same way.
+    "resource_id",
 )
 
 

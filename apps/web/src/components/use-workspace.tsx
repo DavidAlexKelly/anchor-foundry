@@ -35,3 +35,35 @@ export function useProjectBySlug(
     notFound: q.isSuccess && !project,
   };
 }
+
+/** The same two lookups keyed by id, for `/r/{id}` applications.
+ *
+ * A resolved resource already carries `workspace_id` and `project_id`, so an
+ * application opened by resource id has no slug to look up and no reason to
+ * invent one. What it still needs is `effective_role` - whether this person may
+ * edit or publish - and that lives on the summary rows these queries already
+ * hold. Same query keys as the by-slug pair, so the two share one cache entry
+ * rather than fetching the list twice under different names.
+ */
+export function useWorkspaceById(id: string | undefined): {
+  workspace: WorkspaceSummary | undefined;
+  isPending: boolean;
+} {
+  const q = useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces });
+  return { workspace: q.data?.find((w) => w.id === id), isPending: q.isPending };
+}
+
+export function useProjectById(
+  workspaceId: string | undefined,
+  projectId: string | null,
+): { project: ProjectSummary | undefined; isPending: boolean } {
+  const q = useQuery({
+    queryKey: ["projects", workspaceId],
+    queryFn: () => api.projects(workspaceId!),
+    enabled: !!workspaceId,
+  });
+  return {
+    project: projectId ? q.data?.find((p) => p.id === projectId) : undefined,
+    isPending: !workspaceId || q.isPending,
+  };
+}
