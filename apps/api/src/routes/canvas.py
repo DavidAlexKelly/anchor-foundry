@@ -56,6 +56,12 @@ class CanvasAppOut(BaseModel):
     # editing v7" is the sentence an author needs, and it cannot be said with
     # one number.
     published_version: int | None
+    # Where this app opens as an application (`/r/{id}`). The registry has held
+    # the mapping since it landed; not reporting it here meant every caller
+    # that wanted to link to a module built a slug path instead, and a slug
+    # path is a link that breaks on a rename - the one thing resource ids exist
+    # to prevent.
+    resource_id: UUID
     created_at: datetime
     updated_at: datetime
 

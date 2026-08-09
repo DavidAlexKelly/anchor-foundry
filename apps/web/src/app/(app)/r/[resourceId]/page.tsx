@@ -21,6 +21,7 @@ import { ApplicationShell, ResourceSummary } from "@/components/application-shel
 import { DatasetApplication } from "@/components/applications/dataset-app";
 import { ObjectTypeApplication } from "@/components/applications/object-type-app";
 import { RepositoryApplication } from "@/components/applications/repository-app";
+import { WorkshopApplication } from "@/components/applications/workshop-app";
 import { resources as resourcesApi } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { ResolvedResource, ResourceKind } from "@/lib/types";
@@ -29,18 +30,13 @@ import type { ResolvedResource, ResourceKind } from "@/lib/types";
  * a real application. `href` is null for kinds whose current home cannot be
  * linked to for one resource. */
 const APPLICATIONS: Record<
-  Exclude<ResourceKind, "dataset" | "code_repo" | "object_type">,
+  Exclude<ResourceKind, "dataset" | "code_repo" | "object_type" | "canvas_app">,
   { buildingIn: string; label: string; href: (r: ResolvedResource) => string | null }
 > = {
   model: {
     buildingIn: "roadmap section 2 (Code Repositories)",
     label: "Open in Models",
     href: (r) => (r.project_slug ? `/${r.workspace_slug}/${r.project_slug}/models` : null),
-  },
-  canvas_app: {
-    buildingIn: "roadmap section 1 (Workshop)",
-    label: "Open in Canvas",
-    href: (r) => (r.project_slug ? `/${r.workspace_slug}/${r.project_slug}/canvas` : null),
   },
   connection: {
     buildingIn: "not yet scheduled",
@@ -95,6 +91,13 @@ export default function ResourcePage() {
     return (
       <ApplicationShell resource={resource.data}>
         <ObjectTypeApplication resource={resource.data} />
+      </ApplicationShell>
+    );
+  }
+  if (resource.data.kind === "canvas_app") {
+    return (
+      <ApplicationShell resource={resource.data}>
+        <WorkshopApplication resource={resource.data} />
       </ApplicationShell>
     );
   }
