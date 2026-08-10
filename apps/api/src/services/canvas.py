@@ -46,6 +46,7 @@ MAX_DEFINITION_BYTES = 2 * 1024 * 1024  # flag: conservative day-one cap on a sa
 _COLUMN_NAMES = (
     "id", "project_id", "name", "slug", "description", "current_version",
     "publish_scope", "published_at", "published_version", "created_at", "updated_at",
+    "auto_publish_on_save", "prompt_for_description",
     # Where this app opens as an application (`/r/{id}`). The column has been
     # here since the registry landed; not returning it meant every caller that
     # wanted to link to a module had to build a slug path instead, which is the
@@ -169,6 +170,7 @@ async def save_definition(
     *,
     definition: dict[str, Any],
     created_by: UUID,
+    version_description: str = "",
 ) -> dict[str, Any]:
     existing = await get(conn, project_id, app_id)
     payload = json.dumps(definition)
@@ -179,7 +181,20 @@ async def save_definition(
         conn,
         f"""
         UPDATE canvas_apps
-           SET definition = CAST(:def AS jsonb), current_version = :version
+           SET definition = CAST(:def AS jsonb),
+               current_version = :version,
+               -- "Automatically publish when saving" (Foundry p.192). Done in
+               -- the same statement as the save, because a save that published
+               -- in a second round trip could leave viewers on the previous
+               -- version if the second one failed - and the failure mode of
+               -- "published, but not really" is the one thing §88 exists to
+               -- rule out.
+               published_version = CASE
+                   WHEN auto_publish_on_save THEN :version ELSE published_version
+               END,
+               published_at = CASE
+                   WHEN auto_publish_on_save THEN now() ELSE published_at
+               END
          WHERE id = :aid
         RETURNING {_COLUMNS}, definition
         """,
@@ -189,11 +204,13 @@ async def save_definition(
     await fetch_one(
         conn,
         """
-        INSERT INTO canvas_app_versions (canvas_app_id, version_number, definition, created_by)
-        VALUES (:aid, :version, CAST(:def AS jsonb), :by)
+        INSERT INTO canvas_app_versions
+                    (canvas_app_id, version_number, definition, created_by, description)
+        VALUES (:aid, :version, CAST(:def AS jsonb), :by, :descr)
         RETURNING id
         """,
-        {"aid": str(app_id), "version": version, "def": payload, "by": str(created_by)},
+        {"aid": str(app_id), "version": version, "def": payload, "by": str(created_by),
+         "descr": version_description[:500]},
     )
     return dict(row)
 
@@ -203,13 +220,151 @@ async def list_versions(conn: AsyncConnection, project_id: UUID, app_id: UUID) -
     return await fetch_all(
         conn,
         """
-        SELECT id, version_number, created_by, created_at
-          FROM canvas_app_versions
-         WHERE canvas_app_id = :aid
-         ORDER BY version_number DESC
+        -- The editor's *name*, not their id. p.191 lists "a timestamp,
+        -- editor, and description"; a dialog showing a uuid where a person
+        -- belongs is a dialog nobody reads twice. LEFT JOIN because
+        -- `created_by` is ON DELETE SET NULL - a version outlives the account
+        -- that made it, and losing the whole row with the account would be
+        -- worse than losing the name.
+        SELECT v.id, v.version_number, v.created_by, v.created_at, v.description,
+               u.display_name AS created_by_name
+          FROM canvas_app_versions v
+          LEFT JOIN users u ON u.id = v.created_by
+         WHERE v.canvas_app_id = :aid
+         ORDER BY v.version_number DESC
         """,
         {"aid": str(app_id)},
     )
+
+
+async def get_version(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, version_number: int
+) -> dict[str, Any]:
+    """One saved version, definition included - "View this version" (p.191)."""
+    await get(conn, project_id, app_id)
+    row = await fetch_one(
+        conn,
+        """
+        SELECT v.id, v.version_number, v.created_by, v.created_at, v.description,
+               v.definition, u.display_name AS created_by_name
+          FROM canvas_app_versions v
+          LEFT JOIN users u ON u.id = v.created_by
+         WHERE v.canvas_app_id = :aid AND v.version_number = :n
+        """,
+        {"aid": str(app_id), "n": version_number},
+    )
+    if row is None:
+        raise NotFoundError("canvas app version")
+    return dict(row)
+
+
+async def describe_version(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, version_number: int, description: str
+) -> dict[str, Any]:
+    """p.192: descriptions "can be viewed, added, and edited"."""
+    await get(conn, project_id, app_id)
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE canvas_app_versions SET description = :descr
+         WHERE canvas_app_id = :aid AND version_number = :n
+        RETURNING id, version_number, created_by, created_at, description
+        """,
+        {"aid": str(app_id), "n": version_number, "descr": description[:500]},
+    )
+    if row is None:
+        raise NotFoundError("canvas app version")
+    return dict(row)
+
+
+async def publish_version(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, version_number: int
+) -> dict[str, Any]:
+    """"Publish this version" (p.191) - pin viewers to a *named* version.
+
+    Distinct from `set_publish_scope`, which pins whatever is current. This is
+    the other half of what §88 made possible: if saving does not move viewers,
+    then something has to be able to move them deliberately, and to a version
+    somebody chose rather than to the newest one.
+
+    **It does not change the scope.** A private module stays private and simply
+    records which version its viewers would see; publishing to an audience is a
+    separate decision with a separate permission (workspace admin), and folding
+    the two together would let a project editor widen an audience by choosing a
+    version number.
+    """
+    await get(conn, project_id, app_id)
+    exists = await fetch_one(
+        conn,
+        "SELECT 1 AS ok FROM canvas_app_versions WHERE canvas_app_id = :aid AND version_number = :n",
+        {"aid": str(app_id), "n": version_number},
+    )
+    if exists is None:
+        raise NotFoundError("canvas app version")
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE canvas_apps
+           SET published_version = :n,
+               published_at = COALESCE(published_at, now())
+         WHERE id = :aid
+        RETURNING {_COLUMNS}, definition
+        """,
+        {"aid": str(app_id), "n": version_number},
+    )
+    assert row is not None
+    return dict(row)
+
+
+async def revert_to_version(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID, version_number: int, created_by: UUID
+) -> dict[str, Any]:
+    """p.192: "Save the historic version as the newest version of the module."
+
+    A *new* version rather than a rewind, which is the important part: the
+    history between then and now is still there, and reverting a revert is
+    another save rather than an archaeology problem.
+
+    "A description detailing the revert action will be automatically generated"
+    - so the generated text is the description, and it names the version this
+    came from, because "Reverted" on its own tells you nothing a timestamp did
+    not already.
+    """
+    source = await get_version(conn, project_id, app_id, version_number)
+    definition = source["definition"]
+    if isinstance(definition, str):
+        definition = json.loads(definition)
+    return await save_definition(
+        conn, project_id, app_id,
+        definition=definition,
+        created_by=created_by,
+        version_description=f"Reverted to version {version_number}",
+    )
+
+
+async def set_version_settings(
+    conn: AsyncConnection,
+    project_id: UUID,
+    app_id: UUID,
+    *,
+    auto_publish_on_save: bool | None,
+    prompt_for_description: bool | None,
+) -> dict[str, Any]:
+    """The two toggles in the Versions dialog (p.192)."""
+    await get(conn, project_id, app_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE canvas_apps
+           SET auto_publish_on_save = COALESCE(:auto, auto_publish_on_save),
+               prompt_for_description = COALESCE(:prompt, prompt_for_description)
+         WHERE id = :aid
+        RETURNING {_COLUMNS}, definition
+        """,
+        {"aid": str(app_id), "auto": auto_publish_on_save, "prompt": prompt_for_description},
+    )
+    assert row is not None
+    return dict(row)
 
 
 # ---- publishing ---------------------------------------------------------------
