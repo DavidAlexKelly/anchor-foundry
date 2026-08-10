@@ -233,6 +233,14 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 |---|---|---|
 | Enable routing toggle, in Pages settings | ○ | (p.195) |
 | Module state written to the URL for sharing | ◑ | §99, by a different mechanism |
+| Current **page ID** written to the URL; no ID means the default page on load | ○ | (p.197) |
+| Per-variable URL behaviour: **In URL when used by visible widget or layout** | ○ | (p.198) — only when non-default *and* on screen |
+| Per-variable URL behaviour: **Always in URL** (when non-default) | ○ | (p.198) |
+| Per-variable URL behaviour: **Never in URL** | ○ | (p.198) |
+| A query parameter matching an external ID seeds the variable **regardless** of the behaviour above | ○ | (p.198) — inbound and outbound are separate rules |
+| Refuse routing on object set **filter** variables | ○ | (p.199) — documented limitation, so refuse rather than half-work |
+| Object set variables in the URL limited to a single object by RID | ○ | (p.199) |
+| Embedding does **not** inherit the child's routing config; pass through the interface instead | ○ | (p.199) — same precedence family as §3.4 |
 | **State saving** — save, open, and share a named state | ○ | (p.200) |
 | State saving preserves enabled variables **and optionally the current page** | ○ | (p.200) |
 | Per-variable state-saving enablement via external ID | ○ | §3.4 |
