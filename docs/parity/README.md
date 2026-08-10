@@ -152,9 +152,14 @@ but "the only authoring surface for transforms that are not yet files".
   render, as glyphs with their labels dropped (p.49). There is no icon library,
   so an icon is one or two characters and falls back to an initial — the
   behaviour is faithful, the picker is not built.
-- Remaining in this stage: the **versions dialog**. The Widget setup tab also
-  still holds a flat list rather than being organised variables-first
-  (`workshop.md` §2).
+- **The versions dialog** — done (`STATUS.md` §120). Timestamp, editor name and
+  description per version; publish a *named* version; view one read-only with
+  the conditional warning banner; revert as a new version with a generated
+  description; and p.192's two settings.
+- **Stage 2 is done.** One item inside it is still ◑ rather than ✅: the Widget
+  setup tab holds a flat list rather than being organised variables-first
+  (`workshop.md` §2). The largest thing §6 still lacks is the **Changelog
+  panel** (p.193), which is also the prerequisite for module branching.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
 | **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |

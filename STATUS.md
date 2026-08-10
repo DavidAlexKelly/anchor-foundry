@@ -2478,6 +2478,35 @@ That is Next's router prefetching a route while the **dev server is recompiling*
 
 ---
 
+### 120. The Versions dialog (this session)
+
+`docs/parity/workshop.md` §6, and the last item in parity stage 2.
+
+§88 made publishing mean something — saving does not move viewers, publishing does — but that is only an improvement if a builder can see it and act on it. p.191 is the surface around it: "The Versions dialog is where builders can view a history of the saved versions for a module. Each saved version displays a timestamp, editor, and description if available."
+
+Built: the history with the editor's **name** rather than their id, descriptions that can be added and edited after the fact (p.192), **publish a named version** rather than whatever is newest, **view** one read-only with the conditional warning banner, **revert** as a new version with a generated description, and p.192's two settings.
+
+**Revert saves the old document as the newest version rather than rewinding**, which p.192 specifies and which matters: the history in between survives, so reverting a revert is another save rather than an archaeology problem.
+
+**"Publish this version" is an editor's right, not an admin's**, and the split is deliberate. It changes *which* version an existing audience sees; widening the audience is `set_publish_scope` and still needs a workspace admin. Folding the two together would let a project editor widen an audience by choosing a version number, and there is a test that the scope does not move.
+
+**"View this version" is read-only, which is ours rather than Foundry's wording.** A historic document in an editable canvas is one Save away from silently becoming the current one, and whoever did it would have thought they were only looking. Foundry's own recipe for editing an old version — revert, duplicate the file, revert back (p.192) — reads as the same caution.
+
+**"Always prompt for a description" is a prompt, never a validation rule.** The server accepts an empty description whatever the setting says, and there is a test for it: a save refused for want of a sentence is a save somebody loses.
+
+**Two real bugs, and one of them was in the product rather than the tests.**
+
+* **Craft's `<Frame data>` is read once, at mount.** Changing it afterwards does nothing — fine for a save, where the tree already *is* what was saved, and wrong for a revert, where the document changed underneath the editor. The symptom was a Revert button that appeared to do nothing until the page was reloaded. Fixed by remounting the editor on a token that only revert bumps, so an ordinary save does not throw away the selection of somebody still working.
+* **`e2e/api.py`'s `Module.define()` created a new app on every call**, so a fixture wanting a version *history* got a 409 on its second save rather than a second version. It creates once and saves thereafter now, which is what its name always said. Found by the first test that ever needed to save the same module twice.
+
+**And the same test-isolation lesson as §117**, which is now twice in three sessions: publishing and reverting change what the *next* test reads, so each mutating test has its own module. A claim about "the published version" cannot be checked against a module an earlier test already published something else on.
+
+**828 API tests, 1 skipped, 43 vitest, 72 browser, all green.** Migration 0041 adds the description column and the two settings; all three default to today's behaviour, so no existing module changes.
+
+**Not built, and it is the biggest thing §6 still lacks:** the **Changelog panel** (p.193) — range or single-version diffs highlighting "additions, deletions, changes, moves, and newly unused elements". It is also the prerequisite for module branching and rebasing, which is out of scope, so building it is a decision about branching rather than about versioning.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

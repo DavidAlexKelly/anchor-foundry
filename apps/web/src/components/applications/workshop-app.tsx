@@ -57,6 +57,257 @@ import type {
   WorkshopVariable,
 } from "@/lib/types";
 
+/** The Versions dialog (Foundry p.191-192).
+ *
+ * > "The Versions dialog is where builders can view a history of the saved
+ * > versions for a module. Each saved version displays a timestamp, editor, and
+ * > description if available."
+ *
+ * §88 made publishing mean something — saving does not move viewers, publishing
+ * does. This is the surface around that: which version viewers are on, moving
+ * them to a *chosen* one rather than the newest, and getting back to a version
+ * that worked.
+ *
+ * **Revert saves the old document as a new version rather than rewinding**
+ * (p.192), so the history in between survives and reverting a revert is another
+ * save rather than an archaeology problem.
+ */
+function VersionsDialog({
+  workspaceId,
+  projectId,
+  app,
+  canEdit,
+  onView,
+  onReverted,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  app: CanvasAppDetail;
+  canEdit: boolean;
+  onView: (version: number) => void;
+  /** Called after a revert, so the canvas can be remounted against the new
+   * document — see the comment on `reloadToken`. */
+  onReverted: () => void;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const versions = useQuery({
+    queryKey: ["canvas-versions", app.id],
+    queryFn: () => canvasApi.listVersions(workspaceId, projectId, app.id),
+  });
+
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["canvas-versions", app.id] });
+    await queryClient.invalidateQueries({ queryKey: ["canvas-app", app.id] });
+  };
+  const fail = (e: Error) => setFailure(e.message);
+
+  const publishVersion = useMutation({
+    mutationFn: (n: number) => canvasApi.publishVersion(workspaceId, projectId, app.id, n),
+    onSuccess: refresh, onError: fail,
+  });
+  const revert = useMutation({
+    mutationFn: (n: number) => canvasApi.revertToVersion(workspaceId, projectId, app.id, n),
+    // The refetch has to land *before* the remount, or the canvas reloads
+    // against the definition it already had and the revert looks like it did
+    // nothing - which is the bug this callback exists to fix.
+    onSuccess: async () => { await refresh(); onReverted(); onClose(); }, onError: fail,
+  });
+  const describe = useMutation({
+    mutationFn: (input: { n: number; description: string }) =>
+      canvasApi.describeVersion(workspaceId, projectId, app.id, input.n, input.description),
+    onSuccess: async () => { setEditing(null); await refresh(); }, onError: fail,
+  });
+  const settings = useMutation({
+    mutationFn: (next: { auto_publish_on_save?: boolean; prompt_for_description?: boolean }) =>
+      canvasApi.setVersionSettings(workspaceId, projectId, app.id, next),
+    onSuccess: refresh, onError: fail,
+  });
+
+  return (
+    <Dialog open title={`Versions of ${app.name}`} onClose={onClose}>
+      {failure && <p className="state error">{failure}</p>}
+      <table className="rb-table" data-testid="versions-table">
+        <thead>
+          <tr><th>Version</th><th>Saved</th><th>By</th><th>Description</th><th /></tr>
+        </thead>
+        <tbody>
+          {(versions.data ?? []).map((v) => (
+            <tr key={v.id} data-version={v.version_number}>
+              <td>
+                v{v.version_number}
+                {v.version_number === app.published_version && (
+                  <span className="pill" data-testid="published-pill"> published</span>
+                )}
+              </td>
+              <td>{new Date(v.created_at).toLocaleString()}</td>
+              {/* Null when the account that saved it has since been deleted -
+                  the version outlives the account, so it says so rather than
+                  showing an empty cell. */}
+              <td>{v.created_by_name ?? "(deleted user)"}</td>
+              <td>
+                {editing === v.version_number ? (
+                  <input
+                    value={draft}
+                    autoFocus
+                    data-testid="description-input"
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={() => describe.mutate({ n: v.version_number, description: draft })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") describe.mutate({ n: v.version_number, description: draft });
+                      if (e.key === "Escape") setEditing(null);
+                    }}
+                  />
+                ) : (
+                  <span
+                    className={v.description ? "" : "soft"}
+                    onClick={() => {
+                      if (!canEdit) return;
+                      setEditing(v.version_number);
+                      setDraft(v.description);
+                    }}
+                  >
+                    {v.description || (canEdit ? "Add a description" : "—")}
+                  </span>
+                )}
+              </td>
+              <td>
+                <div className="row-actions">
+                  <button
+                    type="button" className="btn quiet"
+                    onClick={() => { onView(v.version_number); onClose(); }}
+                  >
+                    View
+                  </button>
+                  {canEdit && v.version_number !== app.published_version && (
+                    <button
+                      type="button" className="btn quiet"
+                      data-testid={`publish-v${v.version_number}`}
+                      onClick={() => publishVersion.mutate(v.version_number)}
+                    >
+                      Publish
+                    </button>
+                  )}
+                  {canEdit && v.version_number !== app.current_version && (
+                    <button
+                      type="button" className="btn quiet"
+                      data-testid={`revert-v${v.version_number}`}
+                      onClick={() => revert.mutate(v.version_number)}
+                    >
+                      Revert
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {canEdit && (
+        <>
+          <label className="vars-toggle field">
+            <input
+              type="checkbox"
+              checked={app.auto_publish_on_save}
+              data-testid="auto-publish"
+              onChange={(e) => settings.mutate({ auto_publish_on_save: e.target.checked })}
+            />
+            Automatically publish when saving
+          </label>
+          {/* Said plainly, because this undoes the default that makes saving
+              safe: with it on, every save is immediately what viewers see. */}
+          <p className="login-note" style={{ marginTop: 0 }}>
+            With this on, every save is what viewers see straight away.
+          </p>
+          <label className="vars-toggle field">
+            <input
+              type="checkbox"
+              checked={app.prompt_for_description}
+              data-testid="prompt-description"
+              onChange={(e) => settings.mutate({ prompt_for_description: e.target.checked })}
+            />
+            Always prompt for a description when saving
+          </label>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
+/** One historic version, read-only, with the banner p.191 requires.
+ *
+ * > "View this version: View the module at that specific version. When viewing
+ * > a non-published version, a warning banner will appear at the top of the
+ * > module."
+ *
+ * The banner is conditional exactly as documented — viewing the *published*
+ * version is viewing what everybody else sees, which needs no warning, and a
+ * banner that appeared every time would be one people learn to ignore.
+ */
+function ViewingVersion({
+  workspaceId,
+  projectId,
+  app,
+  version,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  app: CanvasAppDetail;
+  version: number;
+  onClose: () => void;
+}) {
+  const detail = useQuery({
+    queryKey: ["canvas-version", app.id, version],
+    queryFn: () => canvasApi.getVersion(workspaceId, projectId, app.id, version),
+  });
+
+  const definition = detail.data?.definition;
+  const isPublished = version === app.published_version;
+
+  return (
+    <div data-testid="version-view" data-version={version}>
+      <div className="ws-actions">
+        <p className="sub">Viewing v{version} of {app.name}</p>
+        <div className="spacer" />
+        <button type="button" className="btn quiet" onClick={onClose}>
+          Back to editing
+        </button>
+      </div>
+      {!isPublished && (
+        <p className="state error" role="status" data-testid="unpublished-banner">
+          This is v{version}, which is not the version your viewers see
+          {app.published_version ? ` (they are on v${app.published_version})` : " (nothing is published)"}.
+          Nothing here can be edited.
+        </p>
+      )}
+      {detail.isPending && <div className="state">Loading that version…</div>}
+      {detail.isError && (
+        <div className="state error">Couldn&apos;t load v{version}.</div>
+      )}
+      {definition && (
+        <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
+          <CanvasEnvBridge
+            workspaceId={workspaceId}
+            projectId={projectId}
+            appId={app.id}
+            variables={variablesOf(definition)}
+            events={eventsOf(definition)}
+          >
+            <Frame data={JSON.stringify(layoutOf(definition))} />
+          </CanvasEnvBridge>
+        </Editor>
+      )}
+    </div>
+  );
+}
+
 function PublishDialog({
   workspaceId,
   projectId,
@@ -167,6 +418,8 @@ function ActionBar({
   canPublish,
   variables,
   events,
+  onView,
+  onReverted,
 }: {
   app: CanvasAppDetail;
   workspaceId: string;
@@ -175,9 +428,12 @@ function ActionBar({
   canPublish: boolean;
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEvent>;
+  onView: (version: number) => void;
+  onReverted: () => void;
 }) {
   const { enabled, actions, query } = useEditor((state) => ({ enabled: state.options.enabled }));
   const [showPublish, setShowPublish] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -185,7 +441,7 @@ function ActionBar({
     // All three parts in one save. The layout comes from Craft.js, the
     // variables and events from their panels, and a save carrying only some of
     // them would silently discard the rest.
-    mutationFn: () =>
+    mutationFn: (description: string) =>
       canvasApi.saveDefinition(
         workspaceId,
         projectId,
@@ -195,6 +451,7 @@ function ActionBar({
           variables,
           events,
         }),
+        description,
       ),
     onSuccess: async () => {
       setFailure(null);
@@ -231,16 +488,47 @@ function ActionBar({
           {enabled ? "Preview" : "Back to editing"}
         </button>
         {canEdit && enabled && (
-          <button type="button" className="btn" disabled={save.isPending} onClick={() => save.mutate()}>
+          <button
+            type="button"
+            className="btn"
+            disabled={save.isPending}
+            onClick={() => {
+              // p.192's "Always prompt to add a version description when
+              // saving". A prompt, never a requirement - the server accepts an
+              // empty description whatever this setting says, because a save
+              // refused for want of a sentence is a save somebody loses.
+              if (app.prompt_for_description) {
+                const said = window.prompt("What changed in this version?", "");
+                if (said === null) return;  // cancelled the prompt, not the save
+                save.mutate(said);
+                return;
+              }
+              save.mutate("");
+            }}
+          >
             {save.isPending ? "Saving…" : "Save"}
           </button>
         )}
+        <button type="button" className="btn quiet" onClick={() => setShowVersions(true)}>
+          Versions
+        </button>
         {canPublish && (
           <button type="button" className="btn quiet" onClick={() => setShowPublish(true)}>
             Publish
           </button>
         )}
       </div>
+      {showVersions && (
+        <VersionsDialog
+          workspaceId={workspaceId}
+          projectId={projectId}
+          app={app}
+          canEdit={canEdit}
+          onView={onView}
+          onReverted={onReverted}
+          onClose={() => setShowVersions(false)}
+        />
+      )}
       {showPublish && (
         <PublishDialog workspaceId={workspaceId} projectId={projectId} app={app} onClose={() => setShowPublish(false)} />
       )}
@@ -316,6 +604,17 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // Interface variables initialised from the URL (Foundry p.165). The same
   // external IDs an embedding module maps - one mechanism, three consumers.
   const search = useSearchParams();
+  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
+  // **Craft's `<Frame data>` is read once, at mount.** Changing it afterwards
+  // does nothing, which is fine for a save (the tree already *is* what was
+  // saved) and wrong for a revert: the document changed underneath the editor,
+  // and without a remount the canvas keeps drawing the old one. The symptom is
+  // a Revert button that appears to do nothing until the page is reloaded.
+  //
+  // Bumped only by revert rather than keyed on `current_version`, so an
+  // ordinary save does not throw away the selection and scroll position of
+  // somebody who is still working.
+  const [reloadToken, setReloadToken] = useState(0);
   const workspaceId = resource.workspace_id;
   const projectId = resource.project_id;
   const appId = resource.kind_id;
@@ -375,8 +674,29 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
 
   const app = appQuery.data;
 
+  // "View this version" (p.191). Rendered instead of the builder rather than
+  // inside it: a historic document in an *editable* canvas is one Save away
+  // from silently becoming the current one, and the person who did it would
+  // have thought they were only looking.
+  if (viewingVersion !== null) {
+    return (
+      <ViewingVersion
+        workspaceId={workspaceId}
+        projectId={projectId}
+        app={app}
+        version={viewingVersion}
+        onClose={() => setViewingVersion(null)}
+      />
+    );
+  }
+
   return (
-    <Editor resolver={CANVAS_RESOLVER} enabled={canEdit} onRender={CanvasNode}>
+    <Editor
+      key={reloadToken}
+      resolver={CANVAS_RESOLVER}
+      enabled={canEdit}
+      onRender={CanvasNode}
+    >
       <CanvasEnvBridge
         workspaceId={workspaceId}
         projectId={projectId}
@@ -393,6 +713,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           canPublish={canPublish}
           variables={variables}
           events={events}
+          onView={setViewingVersion}
+          onReverted={() => setReloadToken((n) => n + 1)}
         />
         <CanvasBody
           hasSavedLayout={hasLayout(app.definition)}

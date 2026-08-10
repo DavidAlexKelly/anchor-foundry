@@ -971,3 +971,166 @@ def test_a_required_item_variable_is_satisfied_by_the_loop_itself(client: TestCl
     document["variables"]["v_obj"]["interface"] = {"required": True}
     assert _put_definition(client, fx, child, document).status_code == 200
     assert _put_definition(client, fx, host, _looping(child)).status_code == 200
+
+
+# ---- the Versions dialog (parity workshop.md §6; Foundry p.191-192) ----------
+# §88 made publishing mean something: saving does not move viewers, publishing
+# does. These are the operations Foundry puts around that, and each one is a
+# thing a builder can only do if the server offers it.
+def _versions(client: TestClient, fx: Fixture, app_id: str):
+    return client.get(f"{base(fx)}/{app_id}/versions", headers=hdr(fx.editor_sub)).json()
+
+
+def _empty_doc(text: str = "one") -> dict:
+    return {
+        "format": 2, "events": {}, "variables": {},
+        "layout": layout_with_text(text),
+    }
+
+
+def layout_with_text(text: str) -> dict:
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                 "props": {}, "nodes": ["t"], "linkedNodes": {}},
+        "t": {"type": {"resolvedName": "CanvasText"}, "props": {"text": text},
+              "parent": "ROOT", "nodes": []},
+    }
+
+
+def test_a_save_can_carry_a_description(client: TestClient, fx: Fixture) -> None:
+    """p.191: each version shows "a timestamp, editor, and description if
+    available"."""
+    app_id = _embed_app(client, fx, f"Versions {fx.tag}")
+    r = client.put(f"{base(fx)}/{app_id}/definition", headers=hdr(fx.editor_sub),
+                   json={"definition": _empty_doc(), "version_description": "First cut"})
+    assert r.status_code == 200, r.text
+    [latest] = [v for v in _versions(client, fx, app_id) if v["version_number"] == 1]
+    assert latest["description"] == "First cut"
+
+
+def test_a_version_names_its_editor_not_their_id(client: TestClient, fx: Fixture) -> None:
+    """A dialog showing a uuid where a person belongs is one nobody reads."""
+    app_id = _embed_app(client, fx, f"Versions2 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc())
+    [latest] = [v for v in _versions(client, fx, app_id) if v["version_number"] == 1]
+    assert latest["created_by_name"], latest
+
+
+def test_a_description_can_be_edited_after_the_fact(client: TestClient, fx: Fixture) -> None:
+    """p.192: descriptions "can be viewed, added, and edited"."""
+    app_id = _embed_app(client, fx, f"Versions3 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc())
+    r = client.patch(f"{base(fx)}/{app_id}/versions/1", headers=hdr(fx.editor_sub),
+                     json={"description": "Said better"})
+    assert r.status_code == 200, r.text
+    assert r.json()["description"] == "Said better"
+
+
+def test_a_save_is_never_refused_for_want_of_a_description(client: TestClient, fx: Fixture) -> None:
+    """"Always prompt" is a prompt, not a validation rule. A save refused for
+    want of a sentence is a save somebody loses."""
+    app_id = _embed_app(client, fx, f"Versions4 {fx.tag}")
+    client.put(f"{base(fx)}/{app_id}/version-settings", headers=hdr(fx.editor_sub),
+               json={"prompt_for_description": True})
+    assert _put_definition(client, fx, app_id, _empty_doc()).status_code == 200
+
+
+def test_viewing_an_old_version_returns_what_it_was(client: TestClient, fx: Fixture) -> None:
+    """"View this version" (p.191). The point of a version history is that the
+    old document is still there, not just its number."""
+    app_id = _embed_app(client, fx, f"Versions5 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc("first"))
+    _put_definition(client, fx, app_id, _empty_doc("second"))
+
+    r = client.get(f"{base(fx)}/{app_id}/versions/1", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["definition"]["layout"]["t"]["props"]["text"] == "first"
+
+
+def test_publishing_a_named_version_pins_viewers_to_it(client: TestClient, fx: Fixture) -> None:
+    """"Publish this version" (p.191). Not "publish whatever is newest", which
+    is what the existing publish button does - this is the other half §88 made
+    possible."""
+    app_id = _embed_app(client, fx, f"Versions6 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc("first"))
+    _put_definition(client, fx, app_id, _empty_doc("second"))
+
+    r = client.post(f"{base(fx)}/{app_id}/versions/1/publish", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["published_version"] == 1
+    assert r.json()["current_version"] == 2, "editing continues past what viewers see"
+
+
+def test_publishing_a_version_does_not_widen_the_audience(client: TestClient, fx: Fixture) -> None:
+    """The check that stops this being a way round the admin-only scope change:
+    a private module stays private and merely records which version it is on."""
+    app_id = _embed_app(client, fx, f"Versions7 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc())
+    r = client.post(f"{base(fx)}/{app_id}/versions/1/publish", headers=hdr(fx.editor_sub))
+    assert r.json()["publish_scope"] == "private"
+
+
+def test_publishing_a_version_that_does_not_exist_is_refused(client: TestClient, fx: Fixture) -> None:
+    app_id = _embed_app(client, fx, f"Versions8 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc())
+    assert client.post(f"{base(fx)}/{app_id}/versions/99/publish",
+                       headers=hdr(fx.editor_sub)).status_code == 404
+
+
+def test_reverting_saves_the_old_document_as_a_new_version(client: TestClient, fx: Fixture) -> None:
+    """p.192: "Save the historic version as the newest version of the module."
+
+    A new version rather than a rewind, so the history in between survives and
+    reverting a revert is another save rather than an archaeology problem.
+    """
+    app_id = _embed_app(client, fx, f"Versions9 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc("first"))
+    _put_definition(client, fx, app_id, _empty_doc("second"))
+
+    r = client.post(f"{base(fx)}/{app_id}/versions/1/revert", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["current_version"] == 3, "a new version, not a rewind"
+    assert r.json()["definition"]["layout"]["t"]["props"]["text"] == "first"
+
+    # And version 2 is still there to go back to.
+    numbers = [v["version_number"] for v in _versions(client, fx, app_id)]
+    assert numbers == [3, 2, 1], numbers
+
+
+def test_a_revert_describes_itself(client: TestClient, fx: Fixture) -> None:
+    """p.192: "A description detailing the revert action will be automatically
+    generated." It names the source version, because "Reverted" alone says
+    nothing a timestamp did not."""
+    app_id = _embed_app(client, fx, f"Versions10 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc("first"))
+    _put_definition(client, fx, app_id, _empty_doc("second"))
+    client.post(f"{base(fx)}/{app_id}/versions/1/revert", headers=hdr(fx.editor_sub))
+
+    [newest] = [v for v in _versions(client, fx, app_id) if v["version_number"] == 3]
+    assert newest["description"] == "Reverted to version 1"
+
+
+def test_auto_publish_on_save_moves_viewers_with_every_save(client: TestClient, fx: Fixture) -> None:
+    """p.192's toggle, and the one that undoes §88's default on purpose."""
+    app_id = _embed_app(client, fx, f"Versions11 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc("first"))
+    assert _versions(client, fx, app_id)  # a version exists
+
+    r = client.put(f"{base(fx)}/{app_id}/version-settings", headers=hdr(fx.editor_sub),
+                   json={"auto_publish_on_save": True})
+    assert r.status_code == 200, r.text
+
+    saved = _put_definition(client, fx, app_id, _empty_doc("second")).json()
+    assert saved["published_version"] == saved["current_version"] == 2
+
+
+def test_without_auto_publish_a_save_leaves_viewers_where_they_were(client: TestClient, fx: Fixture) -> None:
+    """The default, and §88's whole point. Asserted beside the toggle so the
+    toggle is a *change* rather than the only behaviour ever observed."""
+    app_id = _embed_app(client, fx, f"Versions12 {fx.tag}")
+    _put_definition(client, fx, app_id, _empty_doc("first"))
+    client.post(f"{base(fx)}/{app_id}/versions/1/publish", headers=hdr(fx.editor_sub))
+
+    saved = _put_definition(client, fx, app_id, _empty_doc("second")).json()
+    assert saved["current_version"] == 2
+    assert saved["published_version"] == 1, "saving did not move viewers"

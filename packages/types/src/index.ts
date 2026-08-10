@@ -1168,6 +1168,11 @@ export interface CanvasApp {
    * published; saving never changes it, so "published v3, editing v7" is a
    * state the builder can and does show. */
   published_version: number | null;
+  /** Versions-dialog settings (Foundry p.192). Both default to false, which is
+   * the behaviour that existed before they did: saving does not publish, and
+   * nothing prompts. */
+  auto_publish_on_save: boolean;
+  prompt_for_description: boolean;
   /** Where this app opens as an application (`/r/{id}`). */
   resource_id: string;
   created_at: string;
@@ -1185,7 +1190,13 @@ export interface CanvasAppVersion {
   id: string;
   version_number: number;
   created_by: string | null;
+  /** The editor's name, which is what the Versions dialog shows (Foundry
+   * p.191). Null when the account that made it has since been deleted — the
+   * version outlives the account. */
+  created_by_name: string | null;
   created_at: string;
+  /** Optional note on what changed. Editable after the fact (p.192). */
+  description: string;
 }
 
 export interface CanvasAppShare {

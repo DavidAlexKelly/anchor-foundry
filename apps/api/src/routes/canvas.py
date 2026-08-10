@@ -56,6 +56,9 @@ class CanvasAppOut(BaseModel):
     # editing v7" is the sentence an author needs, and it cannot be said with
     # one number.
     published_version: int | None
+    # The two Versions-dialog settings (p.192).
+    auto_publish_on_save: bool
+    prompt_for_description: bool
     # Where this app opens as an application (`/r/{id}`). The registry has held
     # the mapping since it landed; not reporting it here meant every caller
     # that wanted to link to a module built a slug path instead, and a slug
@@ -82,13 +85,36 @@ class CanvasAppUpdate(BaseModel):
 
 class DefinitionIn(BaseModel):
     definition: dict[str, Any] = Field(default_factory=dict)
+    # Optional note on what changed (p.191). Never required by the server, even
+    # when the module asks for one: "always prompt" is a prompt, not a
+    # validation rule, and a save refused for want of a sentence is a save
+    # somebody loses.
+    version_description: str = Field(default="", max_length=500)
 
 
 class VersionOut(BaseModel):
     id: UUID
     version_number: int
     created_by: UUID | None
+    # The editor's name, which is what p.191 puts in the dialog. Optional
+    # because `created_by` is ON DELETE SET NULL - a version outlives the
+    # account that made it.
+    created_by_name: str | None = None
     created_at: datetime
+    description: str = ""
+
+
+class VersionDetail(VersionOut):
+    definition: dict[str, Any]
+
+
+class DescribeVersionIn(BaseModel):
+    description: str = Field(default="", max_length=500)
+
+
+class VersionSettingsIn(BaseModel):
+    auto_publish_on_save: bool | None = None
+    prompt_for_description: bool | None = None
 
 
 class PublishIn(BaseModel):
@@ -431,6 +457,7 @@ async def save_definition(
         row = await canvas_service.save_definition(
             conn, access.project_id, app_id,
             definition=body.definition, created_by=access.auth.user_id,
+            version_description=body.version_description,
         )
         await audit.record(
             conn,
@@ -456,6 +483,115 @@ async def list_versions(
     async with user_connection(access.auth.user_id) as conn:
         rows = await canvas_service.list_versions(conn, access.project_id, app_id)
     return [VersionOut(**r) for r in rows]
+
+
+@router.get("/{app_id}/versions/{version_number}", response_model=VersionDetail)
+async def get_version(
+    app_id: UUID,
+    version_number: int,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> VersionDetail:
+    """"View this version" (p.191). Viewer, not editor: looking at what an app
+    used to be is reading, and a reviewer who cannot open a version cannot
+    review a revert."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get_version(conn, access.project_id, app_id, version_number)
+    return VersionDetail(**{**row, "definition": _parse_json(row["definition"])})
+
+
+@router.patch("/{app_id}/versions/{version_number}", response_model=VersionOut)
+async def describe_version(
+    app_id: UUID,
+    version_number: int,
+    body: DescribeVersionIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> VersionOut:
+    """p.192: descriptions "can be viewed, added, and edited"."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.describe_version(
+            conn, access.project_id, app_id, version_number, body.description
+        )
+    return VersionOut(**row)
+
+
+@router.post("/{app_id}/versions/{version_number}/publish", response_model=CanvasAppDetail)
+async def publish_version(
+    app_id: UUID,
+    version_number: int,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CanvasAppDetail:
+    """"Publish this version" (p.191) - move viewers to a version somebody
+    chose, rather than to whatever is newest.
+
+    **Editor, not workspace admin**, and the distinction is deliberate: this
+    changes *which* version an existing audience sees, not *who* the audience
+    is. Widening the audience is `set_publish_scope` and still needs an admin,
+    so choosing a version cannot be a way round that check.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.publish_version(
+            conn, access.project_id, app_id, version_number
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="canvas_app.publish_version",
+            resource_type="canvas_app",
+            resource_id=app_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"version": version_number},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _out(row)
+
+
+@router.post("/{app_id}/versions/{version_number}/revert", response_model=CanvasAppDetail)
+async def revert_to_version(
+    app_id: UUID,
+    version_number: int,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CanvasAppDetail:
+    """p.192: save the historic version as the newest one, with a generated
+    description. A new version, not a rewind - the history in between stays."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.revert_to_version(
+            conn, access.project_id, app_id, version_number, access.auth.user_id
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="canvas_app.revert",
+            resource_type="canvas_app",
+            resource_id=app_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"reverted_to": version_number},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _out(row)
+
+
+@router.put("/{app_id}/version-settings", response_model=CanvasAppDetail)
+async def set_version_settings(
+    app_id: UUID,
+    body: VersionSettingsIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CanvasAppDetail:
+    """The two toggles in the Versions dialog (p.192)."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.set_version_settings(
+            conn, access.project_id, app_id,
+            auto_publish_on_save=body.auto_publish_on_save,
+            prompt_for_description=body.prompt_for_description,
+        )
+    return _out(row)
 
 
 # ---- variables (roadmap phase 2, item 1.2) -----------------------------------

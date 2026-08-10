@@ -191,15 +191,25 @@ class Module:
             finally:
                 conn.execute("ALTER TABLE object_instances ENABLE TRIGGER USER")
 
-    def define(self, document: dict[str, Any]) -> str:
-        app = self.api.call("POST", f"{self.base}/canvas-apps", {"name": f"App {self.tag}"})
-        self.app_id = app["id"]
-        # The id the *application* is addressed by. Distinct from `app_id`,
-        # which is the row's id in `canvas_apps` and is still what every
-        # canvas-apps endpoint below is keyed on.
-        self.resource_id = app["resource_id"]
+    def define(self, document: dict[str, Any], *, description: str = "") -> str:
+        """Set this module's document, creating the app on the first call.
+
+        **Creates once, saves thereafter**, which is what the name says and did
+        not used to do: every call used to POST a new app, so a fixture wanting
+        a version *history* got a 409 on its second save rather than a second
+        version. Found writing `test_versions_dialog.py`, which is the first
+        test that ever needed to save the same module twice.
+        """
+        if self.app_id is None:
+            app = self.api.call("POST", f"{self.base}/canvas-apps", {"name": f"App {self.tag}"})
+            self.app_id = app["id"]
+            # The id the *application* is addressed by. Distinct from `app_id`,
+            # which is the row's id in `canvas_apps` and is still what every
+            # canvas-apps endpoint below is keyed on.
+            self.resource_id = app["resource_id"]
         self.api.call(
-            "PUT", f"{self.base}/canvas-apps/{self.app_id}/definition", {"definition": document}
+            "PUT", f"{self.base}/canvas-apps/{self.app_id}/definition",
+            {"definition": document, "version_description": description},
         )
         return self.app_id
 

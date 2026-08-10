@@ -256,15 +256,18 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 | Feature | Status | Notes |
 |---|---|---|
 | Saving does not move viewers; publishing does | ✅ | §88 |
-| **Versions dialog** listing timestamp, editor, description | ○ | (p.191) |
-| Publish this version | ◑ | possible, no dialog |
-| View this version, **with a warning banner when non-published** | ○ | (p.191) |
-| Revert to this version, with auto-generated description | ○ | (p.192) |
-| Setting: **Automatically publish when saving** | ○ | (p.192) |
-| Setting: **Always prompt for a version description** | ○ | (p.192) |
-| **Changelog panel** — range or single-version diff | ○ | highlights "additions, deletions, changes, moves, and newly unused elements", with JSON diffs and a visual hierarchy (p.193) |
+| **Versions dialog** listing timestamp, editor, description | ✅ | (p.191); the editor's *name*, not their id |
+| Publish this version | ✅ | a named version, not "whatever is newest" |
+| View this version, **with a warning banner when non-published** | ✅ | (p.191); read-only, and the banner is conditional exactly as documented |
+| Revert to this version, with auto-generated description | ✅ | (p.192); a new version, not a rewind |
+| Descriptions viewable, addable and **editable after the fact** | ✅ | (p.192) |
+| Setting: **Automatically publish when saving** | ✅ | (p.192) |
+| Setting: **Always prompt for a version description** | ✅ | (p.192); a prompt, never a validation rule — the server accepts an empty description whatever the setting says |
+| **Changelog panel** — range or single-version diff | ○ | highlights "additions, deletions, changes, moves, and newly unused elements", with JSON diffs and a visual hierarchy (p.193). The biggest remaining piece of §6 and the prerequisite for module branching |
 | `/dev/` vs `/latest/` in the URL — last saved vs last published | ○ | (p.166); one route, and save-versus-publish becomes checkable by a human |
 | Module branching and rebasing, with conflict resolution in the Changelog panel | ○ | (p.193) — out of scope for now, but the Changelog panel is its prerequisite |
+
+**"View this version" is read-only, which is ours rather than Foundry's wording** and is the part worth stating: a historic document rendered in an *editable* canvas is one Save away from silently becoming the current one, and the person who did it would have thought they were only looking. Foundry's own answer to editing an old version is a documented dance — revert, duplicate the file, revert back (p.192) — which reads as the same caution.
 
 ---
 

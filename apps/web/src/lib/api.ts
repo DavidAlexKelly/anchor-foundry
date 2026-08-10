@@ -938,10 +938,15 @@ export const canvas = {
     // refuses a v2 document whose bindings do not resolve, so a save that
     // dropped the variables would come back 422 rather than corrupt the app.
     definition: import("./types").WorkshopModule | Record<string, unknown>,
+    /** Optional note on what changed (Foundry p.191). Never required. */
+    versionDescription = "",
   ) =>
     request<import("./types").CanvasAppDetail>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/definition`,
-      { method: "PUT", body: JSON.stringify({ definition }) },
+      {
+        method: "PUT",
+        body: JSON.stringify({ definition, version_description: versionDescription }),
+      },
     ),
   /** Resolve every variable, computing derived ones server-side so the
    * transformation semantics have one implementation. */
@@ -972,6 +977,34 @@ export const canvas = {
   listVersions: (wid: string, pid: string, appId: string) =>
     request<import("./types").CanvasAppVersion[]>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions`,
+    ),
+  /** One saved version, definition included — "View this version" (p.191). */
+  getVersion: (wid: string, pid: string, appId: string, version: number) =>
+    request<import("./types").CanvasAppVersion & { definition: Record<string, unknown> }>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions/${version}`,
+    ),
+  describeVersion: (wid: string, pid: string, appId: string, version: number, description: string) =>
+    request<import("./types").CanvasAppVersion>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions/${version}`,
+      { method: "PATCH", body: JSON.stringify({ description }) },
+    ),
+  publishVersion: (wid: string, pid: string, appId: string, version: number) =>
+    request<import("./types").CanvasApp>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions/${version}/publish`,
+      { method: "POST" },
+    ),
+  revertToVersion: (wid: string, pid: string, appId: string, version: number) =>
+    request<import("./types").CanvasApp>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions/${version}/revert`,
+      { method: "POST" },
+    ),
+  setVersionSettings: (
+    wid: string, pid: string, appId: string,
+    settings: { auto_publish_on_save?: boolean; prompt_for_description?: boolean },
+  ) =>
+    request<import("./types").CanvasApp>(
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/version-settings`,
+      { method: "PUT", body: JSON.stringify(settings) },
     ),
   publish: (
     wid: string,
