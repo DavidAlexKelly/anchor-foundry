@@ -104,18 +104,18 @@ Per-side display names and self-links are both small and both currently impossib
 
 ### 4.1 Standard Object Views — generated, not configured
 
-"When you create and configure an object type in your Ontology, Foundry automatically creates a standard Object View" (p.10). All ○ today.
+"When you create and configure an object type in your Ontology, Foundry automatically creates a standard Object View" (p.10). **Built — `STATUS.md` §122**, less the two renderings that need property types we do not have.
 
-| Feature | Notes |
-|---|---|
-| Auto-generated for every object type | no configuration required |
-| **Prominent properties surfaced at the top**, with type-aware rendering | the payoff for property visibility (§1.2) |
-| — media reference → dedicated media viewer | |
-| — time series → interactive chart | |
-| — geohash / geoshape / geotemporal → rendered on a Map | |
-| — everything else prominent → large card format above a table of the rest | |
-| Normal properties in a regular table; hidden properties not shown | |
-| **Linked objects component** — grouped by link type; preview linked properties inline; open a subset in a new tab; preview a selected linked object in the side panel | (p.11) |
+| Feature | Status | Notes |
+|---|---|---|
+| Auto-generated for every object type | ✅ | no configuration, no saved document, nothing to publish |
+| **Prominent properties surfaced at the top** | ✅ | the payoff for property visibility (§1.2) |
+| — geohash / geoshape / geotemporal → rendered on a Map | ✅ | ours is geopoint; one point is still a map |
+| — everything else prominent → large card above a table of the rest | ✅ | |
+| — media reference → dedicated media viewer | ○ | **blocked on the property type**, §1.1 — not on this view |
+| — time series → interactive chart | ○ | same |
+| Normal properties in a regular table; hidden properties not shown | ✅ | |
+| **Linked objects component** — grouped by link type | ◑ | the groups are there (§18) and now sit *inside* the view rather than beside it (p.11). Inline property preview, open-a-subset-in-a-tab and the side-panel preview are ○ |
 
 ### 4.2 Configured Object Views
 
