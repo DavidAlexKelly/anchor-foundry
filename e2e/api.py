@@ -13,6 +13,8 @@ to set it to anything interesting.
 """
 from __future__ import annotations
 
+import csv as csv_module
+import io
 import json
 import urllib.error
 import urllib.request
@@ -124,12 +126,22 @@ class Module:
         rows: list[dict[str, Any]],
         key: str,
         title: str | None = None,
+        visibility: dict[str, str] | None = None,
+        types: dict[str, str] | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
         instances."""
-        csv = (",".join(columns) + "\n").encode() + b"".join(
-            (",".join(str(row[c]) for c in columns) + "\n").encode() for row in rows
-        )
+        # **Written with the csv module, not by joining on commas.** A
+        # geopoint's value *is* "lat,lon", so the naive join produced a row with
+        # more fields than the header and the upload came back "primary key
+        # column 'id' is not in the dataset" - a message about the key, from a
+        # fault in a different column entirely.
+        buffer = io.StringIO()
+        writer = csv_module.writer(buffer, lineterminator="\n")
+        writer.writerow(columns)
+        for row in rows:
+            writer.writerow([str(row[c]) for c in columns])
+        csv = buffer.getvalue().encode()
         dataset = self.api.upload_csv(
             f"{self.base}/datasets/upload", f"seed_{self.tag}", csv
         )
@@ -143,8 +155,13 @@ class Module:
                     {
                         "api_name": c,
                         "display_name": c.title(),
-                        "data_type": "string",
+                        # String unless told otherwise. `types` exists for the
+                        # one case that needs a real base type - a geopoint
+                        # renders as a Map in a standard Object View, and a
+                        # string of the same characters does not.
+                        "data_type": (types or {}).get(c, "string"),
                         **({"required": True} if c == key else {}),
+                        **({"visibility": (visibility or {})[c]} if c in (visibility or {}) else {}),
                     }
                     for c in columns
                 ],

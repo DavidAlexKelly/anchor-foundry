@@ -22,6 +22,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Dialog } from "@/components/dialog";
 import { objects as objApi } from "@/lib/api";
+import { StandardObjectView } from "@/components/standard-object-view";
 import { PRIMARY_KEY_REF, type LinkedInstances, type ObjectInstance } from "@/lib/types";
 
 export type LinkStop = {
@@ -169,6 +170,18 @@ export function LinkExplorerDialog({
         </nav>
       )}
 
+      {/* The standard Object View (Foundry `object-views` p.10) above the
+          links, because the object is what you came to see and the Linked
+          objects component is a *part* of that view rather than a separate
+          screen (p.11). The dialog was links-only before there was a view to
+          put them under. */}
+      <StandardObjectView
+        workspaceId={workspaceId}
+        typeId={here.typeId}
+        instance={here.instance}
+      />
+
+      <h3 className="sov-section">Linked objects</h3>
       {links.isPending && <div className="state">Following links…</div>}
       {links.isError && <div className="state error">Couldn&apos;t load this object&apos;s links.</div>}
       {links.data && links.data.length === 0 && (
