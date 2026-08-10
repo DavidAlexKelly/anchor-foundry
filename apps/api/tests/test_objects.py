@@ -718,3 +718,100 @@ def test_a_type_with_nothing_hidden_reports_an_empty_list(client: TestClient, fx
     listed = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub)).json()
     [mine] = [t for t in listed if t["api_name"] == f"vis_none_{fx.tag}"]
     assert mine["hidden_properties"] == []
+
+
+# ---- per-side link names and self-links (ontology.md §2; p.192) -------------
+# "A link type is bidirectional: it always has two sides… Each side of a link
+# type can be traversed independently and has its own display name."
+def _two_types(client: TestClient, fx: Fixture, a: str, b: str) -> tuple[str, str]:
+    out = []
+    for name in (a, b):
+        r = client.post(
+            f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+            json={
+                "api_name": f"{name}_{fx.tag}", "display_name": name.title(),
+                "properties": [
+                    {"api_name": "id", "data_type": "string"},
+                    {"api_name": "partner", "data_type": "string"},
+                ],
+                "title_property": "id",
+            },
+        )
+        assert r.status_code == 201, r.text
+        out.append(r.json()["id"])
+    return out[0], out[1]
+
+
+def test_a_link_type_can_name_each_side(client: TestClient, fx: Fixture) -> None:
+    """p.192's own example: Employee → Employer, Company → Employees. One name
+    per link reads backwards from one of its two ends."""
+    emp, comp = _two_types(client, fx, "employee", "company")
+    r = client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"employment_{fx.tag}", "display_name": "Employment",
+            "from_type_id": emp, "to_type_id": comp, "cardinality": "one_to_many",
+            "from_property": "partner", "to_property": "id",
+            "from_side_name": "Employees", "to_side_name": "Employer",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["from_side_name"] == "Employees"
+    assert r.json()["to_side_name"] == "Employer"
+
+
+def test_an_unnamed_side_falls_back_to_the_links_own_name(client: TestClient, fx: Fixture) -> None:
+    """Every link type that existed before sides could be named keeps exactly
+    the label it had, which is what makes this migration invisible."""
+    a, b = _two_types(client, fx, "alpha", "beta")
+    client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"plain_{fx.tag}", "display_name": "Related to",
+            "from_type_id": a, "to_type_id": b, "cardinality": "one_to_many",
+            "from_property": "partner", "to_property": "id",
+        },
+    )
+    [link] = [
+        l for l in client.get(f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub)).json()
+        if l["api_name"] == f"plain_{fx.tag}"
+    ]
+    assert link["from_side_name"] is None and link["to_side_name"] is None, (
+        "unset rather than defaulted, so `unset` and `deliberately blank` stay distinct"
+    )
+    assert link["display_name"] == "Related to", "which is what a reader falls back to"
+
+
+def test_a_self_link_renders_both_directions_with_distinct_names(client: TestClient, fx: Fixture) -> None:
+    """`ontology.md` §8's acceptance test, and p.192's own example: "A link type
+    Direct Report ↔ Manager can be defined between the Employee object type and
+    itself."
+
+    The traversal already returned a self-link twice, once per direction. What
+    it could not do until now is *say which is which* — both rows carried the
+    link's single name, so "my manager" and "my reports" were the same word.
+    """
+    staff, _ = _two_types(client, fx, "staff", "unused")
+    r = client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"reports_to_{fx.tag}", "display_name": "Reporting line",
+            "from_type_id": staff, "to_type_id": staff, "cardinality": "one_to_many",
+            "from_property": "partner", "to_property": "id",
+            "from_side_name": "Direct reports", "to_side_name": "Manager",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    stored = r.json()
+    assert stored["from_object_type_id"] == stored["to_object_type_id"], "both ends one type"
+    assert stored["from_side_name"] == "Direct reports"
+    assert stored["to_side_name"] == "Manager"
+
+    # **What this test does not reach.** `side_name` - the resolved label for
+    # the side being traversed *to* - is produced by
+    # `ontology.link_types_for_type`, and the only HTTP surface that calls it is
+    # the per-instance links endpoint, which needs seeded instances and links
+    # this fixture does not build. So the *storage* of two distinct side names
+    # is covered here and the *resolution* is not covered anywhere yet; it is
+    # recorded as the open half in `ontology.md` §2 rather than implied.

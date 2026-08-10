@@ -2529,6 +2529,22 @@ To do that, the type *list* now reports `hidden_properties` — only the hidden 
 
 ---
 
+### 123. Naming both sides of a link, and a gap that was not one (this session)
+
+`docs/parity/ontology.md` §2. Foundry, `object-link-types` p.192:
+
+> "A link type is **bidirectional**: it always has two sides, one for each of the two object types it relates. Each side of a link type can be traversed independently and **has its own display name**."
+
+We named a link once, so one of its two directions always read backwards: from an Employee, "Employment" is a poor label for the company, and from the Company it is a poor label for the people. Migration 0043 adds `from_side_name` and `to_side_name`, both nullable and both falling back to the link's own name — so every link type that existed keeps exactly the label it had.
+
+**The spec was wrong about self-links.** §2 listed them as absent. They already worked: `link_types_for_type` has returned a self-link *twice*, once per direction, since §18, with a docstring explaining why. What was actually missing was the two names — both rows carried the link's single label, so "my manager" and "my reports" were the same word. Corrected in the spec rather than left to mislead the next person.
+
+**A gap I wrote down and then found I could close.** I first concluded that `side_name` resolution was untestable here — the only HTTP surface calling it is the per-instance links endpoint, which needs seeded instances the object-type fixture does not build — and marked §2 ◑ with a comment saying so. That was wrong: `tests/test_link_traversal.py` already has exactly that fixture, and it already contains a person→person self-link. Naming its two sides and asserting they read differently *is* §8's acceptance test, and it took four lines. The lesson is the cheap one: check whether the fixture exists before declaring the test impossible.
+
+**842 API tests, 1 skipped, 43 vitest.** The resolution is mutation-tested — collapsing `side_name` back to the link's own name turns both new tests red.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -142,6 +142,11 @@ class LinkTypeOut(BaseModel):
     # is a valid ontology statement that cannot yet be traversed (db 0027).
     from_property: str | None = None
     to_property: str | None = None
+    # Per-side labels (Foundry `object-link-types` p.192). NULL falls back to
+    # `display_name`, which is what every link type had before sides could be
+    # named separately.
+    from_side_name: str | None = None
+    to_side_name: str | None = None
 
 
 # Either a property api_name or the reserved '$primary_key' (db 0027). Empty
@@ -158,14 +163,20 @@ class LinkTypeCreate(BaseModel):
     cardinality: str = Field(pattern="^(one_to_one|one_to_many|many_to_many)$")
     from_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
     to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+    # Foundry p.192: each side "has its own display name". Optional, because a
+    # link whose two directions read the same way needs only one name.
+    from_side_name: str | None = Field(default=None, min_length=1, max_length=200)
+    to_side_name: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class LinkJoinUpdate(BaseModel):
-    """Only the join is patchable - see ontology.set_link_join for why an
+    """The join and the side names - see ontology.set_link_join for why an
     endpoint or cardinality change is a different link type, not an edit."""
 
     from_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
     to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
+    from_side_name: str | None = Field(default=None, min_length=1, max_length=200)
+    to_side_name: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class SourceOut(BaseModel):
@@ -880,6 +891,8 @@ async def create_link_type(
             created_by=access.auth.user_id,
             from_property=body.from_property,
             to_property=body.to_property,
+            from_side_name=body.from_side_name,
+            to_side_name=body.to_side_name,
         )
         from_type = await ontology_service.get_type(conn, access.workspace_id, body.from_type_id)
         to_type = await ontology_service.get_type(conn, access.workspace_id, body.to_type_id)
@@ -918,6 +931,8 @@ async def update_link_join(
             link_id,
             from_property=body.from_property,
             to_property=body.to_property,
+            from_side_name=body.from_side_name,
+            to_side_name=body.to_side_name,
         )
         await audit.record(
             conn,
@@ -945,6 +960,10 @@ class LinkedInstances(BaseModel):
     display_name: str
     cardinality: str
     direction: str  # "outbound" (this type is the from end) | "inbound"
+    # What the side you are traversing *to* is called (p.192). Already resolved
+    # against `display_name`, so a caller never has to know which side it is on
+    # to render a label - which is the same reason `near_property` exists.
+    side_name: str
     far_type_id: UUID
     far_type_display_name: str
     near_property: str
@@ -1018,6 +1037,7 @@ async def instance_links(
                 display_name=str(link["display_name"]),
                 cardinality=str(link["cardinality"]),
                 direction=str(link["direction"]),
+                side_name=str(link["side_name"]),
                 far_type_id=UUID(str(link["far_type_id"])),
                 far_type_display_name=str(link["far_type_display_name"]),
                 near_property=near,
