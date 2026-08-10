@@ -2563,6 +2563,20 @@ Nothing is built, and the document says so at the top.
 
 ---
 
+### 125. Every geopoint in the Object Explorer read "[object Object]" (this session)
+
+Small, real, and found sideways: the failure dump of a browser test written for the standard Object View (§122) showed a table cell containing `[object Object]`, which had nothing to do with what that test was about.
+
+The Explorer lists instances across *several* object types at once, so its columns are the union of whatever keys the current page carries and there is no single type to look up — which is why it could not use `PropertyValue`, and why it called `String(value)` instead. Correct for scalars. For a geopoint, which is `{lat, lon}`, `String` produces `[object Object]` — the same six words for every geopoint in the table.
+
+`components/object-value.ts` is the fallback for that one case: no linking, no fetching, no guessing at a type, just making sure a structured value shows something a person can read. Geopoints in both stored shapes, arrays joined, anything else as compact JSON.
+
+**The test that stops the fix being worse than the bug** is the one for `"Smith, Ada"`. A geopoint round-trips through a dataset column as `"lat,lon"`, so the string form has to be recognised — and a name with a comma in it must not then be reformatted as a coordinate pair. Mutation-tested along with the absence check, where `!value` instead of an explicit null/undefined test would have rendered `0` and `false` as "∅".
+
+**50 vitest tests.** Nothing else changed.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
