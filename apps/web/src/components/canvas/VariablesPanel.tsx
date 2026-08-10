@@ -215,6 +215,12 @@ export function VariablesPanel({
                       id <code>{id}</code> — never changes, so renaming is free
                     </p>
 
+                    <InterfaceEditor
+                      variable={variable}
+                      readOnly={readOnly}
+                      onChange={(patch) => update(id, patch)}
+                    />
+
                     <label>
                       Type
                       <select
@@ -313,6 +319,119 @@ export function VariablesPanel({
             );
           })}
         </ul>
+      )}
+    </div>
+  );
+}
+
+/** The external ID and the module-interface toggle (Foundry p.163).
+ *
+ * Two controls rather than one, and the order on screen is the order Foundry
+ * describes: "add an external ID, and make sure the toggle for module
+ * interface is enabled". They are not independent — the interface is
+ * *addressed* by external ID, so the toggle is disabled until there is one,
+ * and the hint says why rather than leaving a dead control to puzzle over.
+ *
+ * The API refuses both halves of this independently (an interface without an
+ * external ID, an external ID that would need URL-encoding), so nothing here is
+ * the only thing standing between a bad document and the database. This is the
+ * copy that makes the refusal unnecessary, not the check that replaces it. */
+function InterfaceEditor({
+  variable,
+  readOnly,
+  onChange,
+}: {
+  variable: WorkshopVariable;
+  readOnly: boolean;
+  onChange: (patch: Partial<WorkshopVariable>) => void;
+}) {
+  const externalId = variable.external_id ?? "";
+  const published = variable.interface != null;
+
+  return (
+    <div className="vars-interface">
+      <label>
+        External ID
+        <input
+          value={externalId}
+          readOnly={readOnly}
+          placeholder="status"
+          data-testid="variable-external-id"
+          onChange={(e) => {
+            const next = e.target.value.trim();
+            // Clearing the external ID takes the interface with it rather than
+            // leaving a published variable with no name to call it by — which
+            // is a document the API refuses, so the alternative is a save that
+            // fails for a reason two fields away from the one just edited.
+            onChange(
+              next
+                ? { external_id: next }
+                : ({ external_id: undefined, interface: undefined } as Partial<WorkshopVariable>),
+            );
+          }}
+        />
+      </label>
+      <p className="vars-id soft">
+        The name a URL and an embedding module use. Letters, digits and
+        underscores — it becomes a query parameter.
+      </p>
+
+      <label className="vars-toggle">
+        <input
+          type="checkbox"
+          checked={published}
+          disabled={readOnly || !externalId}
+          data-testid="variable-interface-toggle"
+          onChange={(e) =>
+            onChange({ interface: e.target.checked ? {} : undefined } as Partial<WorkshopVariable>)
+          }
+        />
+        On the module interface
+      </label>
+      {!externalId && (
+        <p className="vars-id soft">Give it an external ID first — the interface is addressed by one.</p>
+      )}
+
+      {published && (
+        <>
+          <label>
+            Display name
+            <input
+              value={variable.interface?.display_name ?? ""}
+              readOnly={readOnly}
+              placeholder={variable.label}
+              onChange={(e) =>
+                onChange({
+                  interface: { ...variable.interface, display_name: e.target.value || undefined },
+                })
+              }
+            />
+          </label>
+          <label>
+            Description
+            <input
+              value={variable.interface?.description ?? ""}
+              readOnly={readOnly}
+              placeholder="What an embedding module should pass in"
+              onChange={(e) =>
+                onChange({
+                  interface: { ...variable.interface, description: e.target.value || undefined },
+                })
+              }
+            />
+          </label>
+          <label className="vars-toggle">
+            <input
+              type="checkbox"
+              checked={variable.interface?.required ?? false}
+              disabled={readOnly}
+              onChange={(e) =>
+                onChange({ interface: { ...variable.interface, required: e.target.checked } })
+              }
+            />
+            Required — refuse to save a host that leaves it unmapped
+          </label>
+        </>
       )}
     </div>
   );

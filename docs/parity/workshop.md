@@ -41,16 +41,27 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 | Switch page via Layout event | ✅ | |
 | Variable-Based Page Selection | ○ | a string variable backs the current page; **note the documented gotcha** — a Switch-to-Page event does *not* update it (p.81) |
 
-### 1.3 Sections — we have three of six layouts
+### 1.3 Sections — all six layouts
 
 | Layout | Status | Notes |
 |---|---|---|
 | Columns | ✅ | |
-| Rows | ✅ | Foundry's has an **Enable scrolling** option (p.54) — ○ |
+| Rows | ✅ | **Enable scrolling** (p.54) ✅ |
 | Tabs | ✅ | |
-| **Flow** | ○ | vertically scrolling container for widgets that exceed the viewport (p.54) |
-| **Toolbar** | ○ | horizontal, "optimized for smaller widgets like Button Groups or Metric Cards" (p.54) |
-| **Loop** | ○ | loop over an object set or array, rendering an embedded module per entry (p.54); depends on §4 |
+| **Flow** | ✅ | vertically scrolling container for widgets that exceed the viewport (p.54) |
+| **Toolbar** | ✅ | horizontal, "optimized for smaller widgets like Button Groups or Metric Cards" (p.54); its widgets keep their own width rather than sharing the row, which is what separates it from Columns |
+| **Loop** | ◑ | over an **object set** ✅ (p.129–136); over an **array** ○ — see below |
+
+**Loop layouts** were unblocked by §3.4 rather than built alongside it: p.135 says loop variable mapping "works the same way as the embedded module interface configuration". Done: the set to loop, the module to repeat, the child interface variable that receives each object, the other interface variables (shared across copies, per p.135), Limit and Paged paging (p.134), List and Grid display with max columns and min card width (p.134). Each copy gets its own variable scope and layout state, per p.129 — the assertion the feature rests on, since one shared scope renders the right number of cards all showing the same object.
+
+| Loop feature | Status | Notes |
+|---|---|---|
+| Loop an object set | ✅ | |
+| Loop an **array** | ○ | p.132–133. Our `array` kind has no element type, so "a variable typed to the array type" (p.134) cannot be expressed or checked. Needs a typed-array kind first; refused rather than half-built |
+| Sort by property | ○ | decision 0006 — properties are stored untyped, so an ordered comparison means one thing on Postgres and another on OpenSearch. The set's own order is stable, which p.132 says Foundry also guarantees via a primary-key sort behind user sorts |
+| Interface variable warning | ✅ | p.135's "unexpected behavior may occur" is carried into the settings panel rather than left to be discovered |
+
+**One divergence worth naming.** p.134 says the child "must have a module interface object set variable" for an object-set loop, while p.135 describes mapping "objects from the object set". We use our `single_object` kind, which is the one that actually describes a single object, and the server refuses anything else. If Foundry genuinely hands over a one-object *set*, this is a difference in the type, not in the behaviour.
 
 | Section feature | Status | Notes |
 |---|---|---|
@@ -90,13 +101,17 @@ Foundry's widget panel has **three** tabs (p.65–68). An earlier roadmap draft 
 
 | Tab | Contents | Status |
 |---|---|---|
-| **Widget setup** | input and output variables, plus widget-specific configuration | ◑ — we have the fields, flat, not organised as a tab with variables first |
-| **Metadata** | rename widget; **view and edit raw widget JSON** | ○ |
-| **Display** | sizing only: **Auto (max)**, **Absolute** (fixed px), **Flex** (ratio) | ○ |
+| **Widget setup** | input and output variables, plus widget-specific configuration | ✅ the tab exists and holds the per-widget panel; ◑ the panel itself is still a flat list rather than variables-first |
+| **Metadata** | rename widget; **view and edit raw widget JSON** | ✅ |
+| **Display** | sizing only: **Auto (max)**, **Absolute** (fixed px), **Flex** (ratio) | ✅ for height; **width is not per-widget here** — see below |
 
-Renaming matters more than it looks: the widget name "will affect how the current widget is referenced through Workshop, most notably as a component in the Layout panel, and also in default variable names" (p.68).
+Renaming matters more than it looks: the widget name "will affect how the current widget is referenced through Workshop, most notably as a component in the Layout panel, and also in default variable names" (p.68). The Layout panel half is done. The second half does not apply to us — we do not generate variable names from widget names — and that is a divergence rather than a gap.
 
-**The raw JSON editor is the cheapest high-value item in this file.** We already persist `format: 2` documents, so exposing and re-validating one is hours of work, and it makes every configuration we have not built a UI for survivable rather than blocking.
+**The raw JSON editor was the cheapest high-value item in this file**, and it is done. It **replaces** rather than merges, so removing a prop in the editor removes it from the widget; every other assertion about it passes just as happily against a merging implementation, which is why there is a test that only deletion can satisfy.
+
+**Sizing is height, deliberately.** Foundry's own description is height-first and says why: Auto (max) "is not available for setting the width of widgets in a column layout" (p.68). Per-widget *width* here is already solved by a different mechanism — a section distributes width to its children by weight, draggable between them (`§section-resize`). A second per-widget width control would put two numbers in charge of one dimension with no rule for which wins, so it is not built.
+
+Applied through one `<Editor onRender>` wrapper rather than in each of the twenty-odd widgets, and the wrapper **returns the node untouched when no sizing is set** — so a module that configures none renders exactly as it did before, with no extra element in any flex chain.
 
 | Other | Status | Notes |
 |---|---|---|
@@ -154,13 +169,17 @@ So one concept powers **embedding, URL deep-links, and state saving**. We built 
 
 | Feature | Status |
 |---|---|
-| External ID on a variable | ○ |
-| Module interface toggle, with display name and description | ○ |
-| Interface variables mapped when embedding | ○ (deferred at §114) |
-| Interface variables initialised from URL query parameters | ◑ — §99 does this with its own mechanism |
-| State saving keyed on external ID | ○ |
+| External ID on a variable | ✅ |
+| Module interface toggle, with display name and description | ✅ |
+| Interface variables mapped when embedding | ✅ — the §114 deferral is closed |
+| Interface variables initialised from URL query parameters | ✅ — same external ID, same field |
+| State saving keyed on external ID | ○ — the third consumer, not built (§7) |
 
-**Refusals to build in:** mapping a variable not in the interface; a type mismatch between host and interface variable; a required interface variable left unmapped; renaming an external ID that saved states point at.
+**Refusals:** mapping a variable not in the interface ✅; a type mismatch between host and interface variable ✅; a required interface variable left unmapped ✅; renaming an external ID that saved states point at ○ (needs state saving to exist first).
+
+**Built as one mechanism, on purpose.** An external ID plus an interface toggle on the variable; a mapping keyed by external ID on the embed node; the same external ID read from the query string. `e2e/test_module_interface.py` asks one module about two of the three consumers deliberately — when state saving lands, its assertion belongs in that file against that fixture rather than in a new one.
+
+**`required` is ours, not Foundry's.** No documented counterpart was found; it exists because the alternative to refusing an unmapped variable is an embedded module rendering against a default nobody chose. Opt-in, so no existing module becomes unsaveable.
 
 **The precedence rule, which is easy to get backwards:** "When an interface variable is mapped between a parent and an embedded child module, Workshop uses the **parent module's** variable definition and ignores the embedded module's own" (p.164).
 
@@ -192,10 +211,10 @@ The `recompute {variable}` event is the other half of this and is missing from �
 |---|---|---|
 | Embed a module in a module | ✅ | §114 |
 | Editor disabled inside an embed | ✅ | §114 |
-| **Interface variable mapping** | ○ | explicitly deferred at §114; unblocked by §3.4 |
-| Sibling-to-sibling communication through shared interface variables | ○ | (p.164) |
-| Embedded module may modify interface variables through events | ○ | (p.164) |
-| **Loop layouts** — one embedded module per object in a set | ○ | (p.54) |
+| **Interface variable mapping** | ✅ | the §114 deferral is closed; §3.4 |
+| Sibling-to-sibling communication through shared interface variables | ◑ | works by construction — two embeds mapped to one host variable share it through the host — but **untested**, so it is a claim about the design rather than a demonstrated behaviour (p.164) |
+| Embedded module may modify interface variables through events | ◑ | the write path exists and is two-way per p.127; a `set_variable` in the child on a mapped id routes to the host. Also untested (p.164) |
+| **Loop layouts** — one embedded module per object in a set | ✅ | (p.54, p.129–136); §1.3 |
 | Open Workshop module event, passing values into the target's interface | ○ | (p.165) |
 | In edit mode, opening a child from a reference carries the current interface values through, for debugging | ○ | (p.165) — small, and a genuinely thoughtful touch |
 

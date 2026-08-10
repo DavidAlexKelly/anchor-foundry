@@ -106,6 +106,17 @@ class EvaluateVariablesIn(BaseModel):
     derived variable is a function of its inputs (see the service)."""
 
     values: dict[str, Any] = Field(default_factory=dict)
+    # Variable ids the *host* module is backing, when this module is embedded.
+    # Foundry's rule is that the parent's definition wins and the child's is
+    # ignored (p.122, p.127), and that cannot be read off the child's document -
+    # only the host knows which of the child's interface variables it mapped.
+    #
+    # Trusting the client with this is a smaller thing than it looks: a caller
+    # could already send any value it liked for any non-derived variable, and
+    # object sets are still definitions here, resolved against RLS by
+    # `/object-sets/evaluate` afterwards. What `bound` buys a hostile caller is
+    # the ability to change what its own browser draws, which it has anyway.
+    bound: list[str] = Field(default_factory=list)
 
 
 class EvaluateVariablesOut(BaseModel):
@@ -245,6 +256,18 @@ async def _check_embeds(conn, project_id: UUID, app_id: UUID, document: Any) -> 
             "Embed one of its parts, or link to it."
         )
 
+    # The interface mapping's child half, checked here because it is the only
+    # place that has the child's document. Each embed is checked against the
+    # module it actually names, so two nodes embedding two different modules
+    # get two different answers.
+    host_variables = variables_service.parse((document or {}).get("variables"))
+    for embed in variables_service.embeds(document):
+        try:
+            child = await canvas_service.get(conn, project_id, UUID(embed.module_id))
+        except (NotFoundError, ValueError):
+            continue  # reported by the walk below, which says it better
+        await _check_interface(embed, child, host_variables)
+
     seen: set[str] = {str(app_id)}
     frontier = [(module_id, 1, [str(module_id)]) for module_id in sorted(direct)]
     while frontier:
@@ -272,6 +295,84 @@ async def _check_embeds(conn, project_id: UUID, app_id: UUID, document: Any) -> 
                 continue
             seen.add(nested)
             frontier.append((nested, depth + 1, [*path, nested]))
+
+
+async def _check_interface(
+    embed: variables_service.Embed,
+    child: dict[str, Any],
+    host_variables: dict[str, variables_service.Variable],
+) -> None:
+    """The four refusals an interface mapping earns (`docs/parity/workshop.md` §3.4).
+
+    All four are the same failure wearing different clothes: a mapping that
+    looks configured and passes nothing. Foundry's precedence rule makes that
+    worse rather than better - the child's own definition is *ignored* for a
+    mapped variable (p.122, p.127), so a mapping that silently does not apply
+    leaves the child reading a default the parent thought it had replaced.
+    """
+    child_name = child.get("name") or embed.module_id
+    try:
+        child_variables = variables_service.parse((child.get("definition") or {}).get("variables"))
+    except variables_service.VariableError:
+        # The child does not parse. That is the child's problem to fix and its
+        # own save already refused it; saying so here would blame this document
+        # for a fault in another one.
+        return
+    interface = variables_service.interface_variables(child_variables)
+
+    for external_id, host_vid in sorted(embed.mapping.items()):
+        target = interface.get(external_id)
+        if target is None:
+            offered = ", ".join(sorted(interface)) or "nothing"
+            raise variables_service.VariableError(
+                f"{child_name!r} has no interface variable called {external_id!r}. "
+                f"Its interface offers: {offered}. A variable joins the interface by "
+                "being given an external ID with the interface toggle on"
+            )
+        host = host_variables[host_vid]  # validate_module proved it exists
+        if host.kind != target.kind:
+            raise variables_service.VariableError(
+                f"{external_id!r} on {child_name!r} is a {target.kind} and "
+                f"{host.label!r} is a {host.kind}. The mapped variable is backed by "
+                "this module's definition, so the two have to be the same kind"
+            )
+
+    # A Loop layout's item variable (p.135). Same failure as an unknown mapping
+    # - a loop that looks configured and passes no object - but it needs its own
+    # check because it is not in `mapping`: nothing on the host backs it, the
+    # set being looped does.
+    if embed.item_external_id is not None:
+        target = interface.get(embed.item_external_id)
+        if target is None:
+            offered = ", ".join(sorted(interface)) or "nothing"
+            raise variables_service.VariableError(
+                f"{child_name!r} has no interface variable called "
+                f"{embed.item_external_id!r} to receive each object. Its interface "
+                f"offers: {offered}"
+            )
+        if target.kind != "single_object":
+            raise variables_service.VariableError(
+                f"a loop gives {child_name!r} one object at a time, so "
+                f"{embed.item_external_id!r} has to be a single_object and it is a "
+                f"{target.kind}"
+            )
+
+    missing = sorted(
+        external_id
+        for external_id, variable in interface.items()
+        if variable.interface is not None
+        and variable.interface.required
+        and external_id not in embed.mapping
+        # The loop's item variable *is* supplied - by the set being looped -
+        # so a required one is satisfied rather than missing.
+        and external_id != embed.item_external_id
+    )
+    if missing:
+        raise variables_service.VariableError(
+            f"{child_name!r} requires {', '.join(missing)} to be mapped, and "
+            f"{'they are' if len(missing) > 1 else 'it is'} not. A required interface "
+            "variable is one the module cannot render without"
+        )
 
 
 @router.put("/{app_id}/definition", response_model=CanvasAppDetail)
@@ -396,7 +497,9 @@ async def evaluate_variables(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
     try:
-        resolved = variables_service.evaluate(variables, body.values)
+        resolved = variables_service.evaluate(
+            variables, body.values, bound=frozenset(body.bound)
+        )
     except variables_service.VariableError as exc:
         # Not the same failure, and not the same fault. The document is fine;
         # what arrived with the request is not - a Filter List can send filter
@@ -501,7 +604,9 @@ async def evaluate_published_variables(
     except variables_service.VariableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     try:
-        resolved = variables_service.evaluate(variables, body.values)
+        resolved = variables_service.evaluate(
+            variables, body.values, bound=frozenset(body.bound)
+        )
     except variables_service.VariableError as exc:
         # The values, not the document - see the note on the project-scoped one.
         raise HTTPException(

@@ -1190,3 +1190,169 @@ def test_a_visibility_binding_to_a_variable_nothing_declares_is_refused() -> Non
                       "props": {"visibleWhen": "v_gone"}, "nodes": []}}
     with pytest.raises(wv.VariableError, match="does not declare"):
         wv.validate_module(module({}, layout))
+
+
+# ---- external IDs and the module interface (parity workshop.md §3.4) ---------
+# One mechanism behind three features Foundry documents separately: embedding,
+# URL initialisation, and state saving (p.163, p.165, p.202). These test the
+# mechanism; the three consumers are tested where they live.
+def test_a_variable_can_carry_an_external_id() -> None:
+    variables = wv.parse({"v_a": var("v_a", external_id="status")})
+    assert variables["v_a"].external_id == "status"
+    # An external ID alone does not publish it: the interface is a separate
+    # toggle, so a stable name for a URL is not also an embedding contract.
+    assert variables["v_a"].interface is None
+    assert wv.interface_variables(variables) == {}
+
+
+def test_the_interface_toggle_publishes_a_variable_under_its_external_id() -> None:
+    variables = wv.parse(
+        {"v_a": var("v_a", external_id="status", interface={"display_name": "Status"})}
+    )
+    published = wv.interface_variables(variables)
+    assert list(published) == ["status"]
+    assert published["status"].id == "v_a"
+    assert published["status"].interface.display_name == "Status"
+
+
+def test_the_toggle_is_accepted_as_a_bare_true() -> None:
+    """A hand-written document is far likelier to write `true` than an object."""
+    variables = wv.parse({"v_a": var("v_a", external_id="status", interface=True)})
+    assert variables["v_a"].interface == wv.Interface()
+
+
+def test_an_interface_variable_without_an_external_id_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="no external ID"):
+        wv.parse({"v_a": var("v_a", interface=True)})
+
+
+def test_an_external_id_that_would_need_url_encoding_is_refused() -> None:
+    # It is a query parameter name (p.165), so the documented copy-paste recipe
+    # is what breaks if this is let through.
+    with pytest.raises(wv.VariableError, match="URL query parameter"):
+        wv.parse({"v_a": var("v_a", external_id="my status")})
+
+
+def test_an_empty_external_id_is_refused_rather_than_read_as_absent() -> None:
+    with pytest.raises(wv.VariableError, match="empty external ID"):
+        wv.parse({"v_a": var("v_a", external_id="   ")})
+
+
+def test_two_variables_cannot_share_an_external_id() -> None:
+    with pytest.raises(wv.VariableError, match="used by both"):
+        wv.parse(
+            {
+                "v_a": var("v_a", external_id="status", label="First"),
+                "v_b": var("v_b", external_id="status", label="Second"),
+            }
+        )
+
+
+# ---- precedence: the parent's definition wins (p.122, p.127) -----------------
+def test_a_bound_variable_takes_the_hosts_value_and_ignores_its_own_derivation() -> None:
+    """Foundry: "Workshop always uses the parent module's variable definition
+    and ignores the embedded module's interface variable definition" (p.122)."""
+    variables = wv.parse(
+        {
+            "v_src": var("v_src", default="child"),
+            "v_out": var(
+                "v_out",
+                external_id="out",
+                interface=True,
+                derivation={"transform": "concat", "inputs": ["v_src"]},
+            ),
+        }
+    )
+    # Unbound, the child's own derivation answers.
+    assert wv.evaluate(variables, {"v_out": "from host"})["v_out"] == "child"
+    # Bound, the host's value does - derivation skipped entirely.
+    resolved = wv.evaluate(variables, {"v_out": "from host"}, bound=frozenset({"v_out"}))
+    assert resolved["v_out"] == "from host"
+
+
+def test_a_bound_variable_ignores_the_childs_default() -> None:
+    """p.127's first stated consequence of the precedence rule."""
+    variables = wv.parse({"v_a": var("v_a", external_id="a", interface=True, default="child")})
+    assert wv.evaluate(variables, {}, bound=frozenset({"v_a"}))["v_a"] is None
+
+
+def test_the_childs_downstream_variables_recompute_from_the_bound_value() -> None:
+    """The point of passing a value in: it has to reach what reads it."""
+    variables = wv.parse(
+        {
+            "v_in": var("v_in", external_id="in", interface=True, default="child"),
+            "v_label": var(
+                "v_label",
+                derivation={"transform": "concat", "inputs": ["v_in"], "config": {"separator": ""}},
+            ),
+        }
+    )
+    resolved = wv.evaluate(variables, {"v_in": "host"}, bound=frozenset({"v_in"}))
+    assert resolved["v_label"] == "host"
+
+
+# ---- the embed mapping -------------------------------------------------------
+def embed_node(module_id: str, mapping: dict | None = None) -> dict:
+    props: dict = {"moduleId": module_id}
+    if mapping is not None:
+        props["interface"] = mapping
+    return {"type": {"resolvedName": "CanvasEmbeddedModule"}, "props": props}
+
+
+def test_the_mapping_is_read_off_the_node() -> None:
+    document = {
+        "format": 2,
+        "layout": {"n1": embed_node("mod-1", {"status": "v_a"})},
+        "variables": {"v_a": var("v_a")},
+    }
+    [embed] = wv.embeds(document)
+    assert embed.node == "n1"
+    assert embed.module_id == "mod-1"
+    assert embed.mapping == {"status": "v_a"}
+
+
+def test_two_nodes_embedding_one_module_keep_their_own_mappings() -> None:
+    """`embedded_modules` returns a set and would lose one of these."""
+    document = {
+        "format": 2,
+        "layout": {
+            "n1": embed_node("mod-1", {"status": "v_a"}),
+            "n2": embed_node("mod-1", {"status": "v_b"}),
+        },
+        "variables": {"v_a": var("v_a"), "v_b": var("v_b")},
+    }
+    assert {e.node: e.mapping["status"] for e in wv.embeds(document)} == {
+        "n1": "v_a",
+        "n2": "v_b",
+    }
+    assert wv.embedded_modules(document) == {"mod-1"}
+
+
+def test_an_unmapped_row_is_dropped_rather_than_refused() -> None:
+    """Leaving an interface variable unmapped is legitimate - only `required`
+    makes it an error, and that is checked against the child."""
+    document = {
+        "format": 2,
+        "layout": {"n1": embed_node("mod-1", {"status": "", "other": None})},
+        "variables": {},
+    }
+    assert wv.embeds(document)[0].mapping == {}
+
+
+def test_mapping_to_a_variable_this_module_does_not_declare_is_refused() -> None:
+    document = {
+        "format": 2,
+        "layout": {"n1": embed_node("mod-1", {"status": "v_missing"})},
+        "variables": {"v_a": var("v_a")},
+    }
+    with pytest.raises(wv.VariableError, match="does not declare"):
+        wv.validate_module(document)
+
+
+def test_a_valid_mapping_passes_the_save_path() -> None:
+    document = {
+        "format": 2,
+        "layout": {"n1": embed_node("mod-1", {"status": "v_a"})},
+        "variables": {"v_a": var("v_a", label="Status")},
+    }
+    assert "v_a" in wv.validate_module(document)

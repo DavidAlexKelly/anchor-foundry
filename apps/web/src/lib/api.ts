@@ -950,17 +950,24 @@ export const canvas = {
     pid: string,
     appId: string,
     values: Record<string, unknown>,
+    /** Variable ids a host module is backing — see VariableBridge. */
+    bound?: string[],
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/variables/evaluate`,
-      { method: "POST", body: JSON.stringify({ values }) },
+      { method: "POST", body: JSON.stringify({ values, bound: bound ?? [] }) },
     ),
   /** The same resolve for a published app, which a workspace member may open
    * without being in its project. */
-  evaluatePublishedVariables: (wid: string, appId: string, values: Record<string, unknown>) =>
+  evaluatePublishedVariables: (
+    wid: string,
+    appId: string,
+    values: Record<string, unknown>,
+    bound?: string[],
+  ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/published-canvas-apps/${appId}/variables/evaluate`,
-      { method: "POST", body: JSON.stringify({ values }) },
+      { method: "POST", body: JSON.stringify({ values, bound: bound ?? [] }) },
     ),
   listVersions: (wid: string, pid: string, appId: string) =>
     request<import("./types").CanvasAppVersion[]>(

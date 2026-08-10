@@ -115,3 +115,66 @@ export function resizeWeights(current: number[], index: number, share: number): 
 export function formatWeights(weights: number[]): string {
   return weights.map(roundWeight).join(",");
 }
+
+// ---- the module interface, initialised from a URL (Foundry p.165) -----------
+/**
+ * Query parameters, read as starting values for interface variables.
+ *
+ * > "Append `?` to the URL … followed by the external ID, `=`, and the value
+ * > you would like to set. For instance, `?interfaceVariable=123`." (p.165)
+ *
+ * The same external ID that an embedding module maps, which is the whole point
+ * of §3.4: one name, three consumers. Deliberately narrow:
+ *
+ * **Only interface variables.** An external ID with the interface toggle off is
+ * a stable name for state saving and nothing else; honouring it here would make
+ * every such variable settable by anyone who can write a link.
+ *
+ * **Values are seeds, not bindings.** Foundry initialises from the URL; it does
+ * not hold the variable there. A binding would mean the first click on a filter
+ * fought the address bar and lost.
+ *
+ * **Unparseable is skipped, not defaulted.** `?count=banana` on a number
+ * variable leaves the variable alone rather than setting 0 — a wrong number is
+ * indistinguishable from a chosen one once it is on screen, and blank is not.
+ */
+export function seedFromQuery(
+  variables: Record<string, { id: string; kind: string; external_id?: string; interface?: unknown }>,
+  query: URLSearchParams | Record<string, string>,
+): Record<string, unknown> {
+  const get = (name: string) =>
+    query instanceof URLSearchParams ? query.get(name) : (query[name] ?? null);
+  const seed: Record<string, unknown> = {};
+  for (const variable of Object.values(variables)) {
+    if (!variable.interface || !variable.external_id) continue;
+    const raw = get(variable.external_id);
+    if (raw === null) continue;
+    const value = coerce(raw, variable.kind);
+    if (value !== undefined) seed[variable.id] = value;
+  }
+  return seed;
+}
+
+function coerce(raw: string, kind: string): unknown {
+  switch (kind) {
+    case "string":
+    case "date":
+    case "timestamp":
+      return raw;
+    case "number": {
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    case "boolean":
+      if (raw === "true") return true;
+      if (raw === "false") return false;
+      return undefined;
+    // An object set is a *definition*, not a value, and a single object is the
+    // object a viewer picked. Neither survives a round trip through a query
+    // string, and Foundry says so for the set case: object set variables in the
+    // URL are "limited to a single object by RID" (p.199). Until there is a
+    // by-RID lookup to do that properly, this refuses rather than half-works.
+    default:
+      return undefined;
+  }
+}

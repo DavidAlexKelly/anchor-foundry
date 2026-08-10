@@ -24,11 +24,13 @@
 import { Editor, Frame, useEditor } from "@craftjs/core";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { canvas as canvasApi } from "@/lib/api";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
+import { CanvasNode } from "@/components/canvas/SettingsPanel";
+import { seedFromQuery } from "@/components/canvas/pure";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
 
@@ -48,6 +50,7 @@ function ReadOnlyFrame({ definition }: { definition: Record<string, unknown> }) 
 
 export default function PublishedAppPage() {
   const params = useParams<{ workspace: string; appId: string }>();
+  const search = useSearchParams();
   const { workspace, isPending: wsPending, notFound } = useWorkspaceBySlug(params.workspace);
 
   const app = useQuery({
@@ -109,11 +112,15 @@ export default function PublishedAppPage() {
           <p>It has been published, but nothing has been placed on it yet.</p>
         </div>
       ) : (
-        <Editor resolver={CANVAS_RESOLVER} enabled={false}>
+        <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
           <CanvasEnvProvider
             value={{ workspaceId: workspace!.id, projectId: app.data.project_id, mode: "run" }}
           >
-            <CanvasParameterProvider>
+            {/* Interface variables seeded from the URL (Foundry p.165) - the
+                same external IDs an embedding module maps. */}
+            <CanvasParameterProvider
+              seed={seedFromQuery(variablesOf(app.data.definition), search)}
+            >
               <VariableBridge
                 workspaceId={workspace!.id}
                 projectId={app.data.project_id}

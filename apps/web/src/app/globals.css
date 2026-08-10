@@ -586,7 +586,31 @@ button { font: inherit; cursor: pointer; }
 }
 .canvas-frame-area .canvas-block:hover { border-color: var(--line-strong); }
 .canvas-widget-empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; margin: 0; }
+/* Loop layout (Foundry p.129-136): one embedded module per object. */
+.canvas-loop { display: flex; flex-direction: column; gap: 10px; }
+.canvas-loop--grid { display: grid; gap: 10px; }
+.canvas-loop-item { min-width: 0; }
+.canvas-loop-pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 11.5px; }
 .canvas-settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+/* Foundry's three widget-configuration tabs (p.65-68). */
+.canvas-settings-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.canvas-settings-tab {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 6px 9px; font-size: 11.5px; color: var(--ink-soft);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.canvas-settings-tab:hover { color: var(--ink); }
+.canvas-settings-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.canvas-settings-body { display: grid; gap: 10px; }
+.canvas-raw-json {
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  padding: 7px; border: 1px solid var(--line-strong); border-radius: var(--radius);
+  resize: vertical; white-space: pre;
+}
+.canvas-raw-json-error {
+  margin: 0; padding: 6px 8px; font-size: 11.5px;
+  color: var(--danger); background: var(--danger-wash); border-radius: var(--radius);
+}
 
 /* ---- link explorer (Objects item 3) -------------------------------------- */
 .link-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
@@ -1420,6 +1444,20 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .vars-id { margin: -4px 0 0; font-size: 10.5px; }
 .vars-id code { font-family: var(--font-mono); }
+/* The module interface (Foundry p.163): set apart from the fields above it
+   because it is a different kind of statement — the ones above describe the
+   variable, these publish it. */
+.vars-interface {
+  display: grid; gap: 8px; padding: 8px; border-radius: var(--radius);
+  background: var(--paper); border: 1px solid var(--line);
+}
+/* A checkbox reads as a row, not a stacked field: `.vars-editor label` sets
+   `display: grid`, which would otherwise put the box on its own line above its
+   own label and leave the two looking unrelated. */
+.vars-editor .vars-toggle {
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px;
+}
+.vars-editor .vars-toggle input { width: auto; padding: 0; }
 .vars-value { margin: 0; font-size: 11.5px; }
 .vars-value code { font-family: var(--font-mono); }
 .vars-derivation {
@@ -1542,6 +1580,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-section-parts { display: flex; min-width: 0; }
 .canvas-section--columns > .canvas-section-parts { flex-direction: row; }
 .canvas-section--rows > .canvas-section-parts { flex-direction: column; }
+/* Flow scrolls; a toolbar is a strip whose widgets keep their own width. */
+.canvas-section--flow > .canvas-section-parts { flex-direction: column; overflow-y: auto; }
+.canvas-section--toolbar > .canvas-section-parts { flex-direction: row; align-items: center; flex-wrap: wrap; }
 .canvas-section-part { min-width: 0; }
 .canvas-section-label {
   font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;

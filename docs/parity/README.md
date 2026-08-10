@@ -122,7 +122,34 @@ would error; the capability would simply be gone.
 The order that follows: **B.1 first, then the deletion.** Until then the Code
 pillar keeps its editor, and the honest description of it is not "a duplicate"
 but "the only authoring surface for transforms that are not yet files".
-| **2** | Workshop structural: the three config tabs, six section layouts, vertical header, external IDs, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
+
+#### Stage 2 progress
+
+- **External IDs and the module interface** — done (`STATUS.md` §116). A
+  variable carries an external ID and an interface block; an embed maps host
+  variables onto a child's interface; the same external ID seeds a variable
+  from the URL. Foundry's precedence rule is implemented rather than noted, so
+  a mapped variable ignores the child's own default and derivation.
+  `e2e/test_module_interface.py` asks one module about two of the three
+  consumers on purpose.
+- **State saving is the third consumer and is not built.** It keys on the same
+  external ID (p.202–203). It belongs in the existing mechanism and the
+  existing test file; needing anything new would mean this was built wrong.
+- **The three widget-configuration tabs** — done (`STATUS.md` §117). Widget
+  setup / Metadata / Display, named as p.65–68 names them. The raw JSON editor
+  is the piece worth having early: every widget option Foundry documents and we
+  have not built a form for is now survivable rather than blocking, which
+  matters most for stage 5's long tail.
+- **The six section layouts** — done (`STATUS.md` §118). Flow and Toolbar leave
+  their children's natural size alone, which is what separates a Toolbar from a
+  Columns section. Loop renders one embedded module per object, using §116's
+  interface mapping per row rather than a second mechanism; looping an *array*
+  is refused until there is a typed-array kind, and sorting is refused for
+  decision 0006's reason.
+- Remaining in this stage: the vertical header, the versions dialog. The
+  Widget setup tab also still holds a flat list rather than being organised
+  variables-first (`workshop.md` §2).
+| **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
 | **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |
 | **5** | Widget library, in the priority order given in `workshop.md` | Long, cheap, parallel, and it should never block. |

@@ -42,6 +42,7 @@ export function VariableBridge({
   declared,
   events,
   published = false,
+  bound,
   children,
 }: {
   workspaceId: string;
@@ -55,6 +56,11 @@ export function VariableBridge({
    * how this knows to cost no requests. */
   declared: Record<string, import("@/lib/types").WorkshopVariable>;
   events?: Record<string, import("./events").WorkshopEventDef>;
+  /** Variable ids a host module is backing, when this module is embedded. Sent
+   * to the server so the child's own definition stands aside for the host's
+   * value — Foundry's precedence rule (p.122, p.127). Not derivable from this
+   * document: only the host knows what it mapped. */
+  bound?: string[];
   children: React.ReactNode;
 }) {
   const enabled = Object.keys(declared).length > 0;
@@ -71,8 +77,8 @@ export function VariableBridge({
     mutationFn: (raw: Record<string, unknown>) => {
       const ticket = ++latest.current;
       return (published
-        ? canvasApi.evaluatePublishedVariables(workspaceId, appId, raw)
-        : canvasApi.evaluateVariables(workspaceId, projectId, appId, raw))
+        ? canvasApi.evaluatePublishedVariables(workspaceId, appId, raw, bound)
+        : canvasApi.evaluateVariables(workspaceId, projectId, appId, raw, bound))
         .then((data) => ({ data, ticket }));
     },
     onSuccess: ({ data, ticket }) => {
@@ -93,7 +99,7 @@ export function VariableBridge({
     const timer = setTimeout(() => resolve.mutate(values), DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialised, enabled, appId]);
+  }, [serialised, enabled, appId, (bound ?? []).join(",")]);
 
   // The current page lives here too: it is runtime state with exactly the
   // lifetime of the variable values beside it, and a separate provider would
