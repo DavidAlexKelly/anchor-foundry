@@ -766,3 +766,108 @@ def test_two_modules_may_embed_the_same_one(client: TestClient, fx: Fixture) -> 
         assert _put_definition(client, fx, holder, _embedding(shared)).status_code == 200
     both = _embed_app(client, fx, f"Both {fx.tag}")
     assert _put_definition(client, fx, both, _embedding(shared, shared)).status_code == 200
+
+
+# ---- the module interface (parity workshop.md §3.4; Foundry p.163, p.122) -----
+# The child half of an interface mapping: these need the *child's* document, so
+# unlike the host-side check in `validate_module` they can only be made here.
+def _interface_child(external_id: str = "status", kind: str = "string", required: bool = False) -> dict:
+    """A module publishing one interface variable."""
+    return {
+        "format": 2, "events": {},
+        "variables": {
+            "v_in": {
+                "id": "v_in", "kind": kind, "label": "Incoming",
+                "external_id": external_id,
+                "interface": {"display_name": "Status", "required": required},
+            }
+        },
+        "layout": {"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                            "props": {}, "nodes": [], "linkedNodes": {}}},
+    }
+
+
+def _host(module_id: str, mapping: dict, kind: str = "string") -> dict:
+    """A module embedding `module_id` and mapping one of its own variables in."""
+    document = _embedding(module_id)
+    document["variables"] = {"v_host": {"id": "v_host", "kind": kind, "label": "Host status"}}
+    document["layout"]["e0"]["props"]["interface"] = mapping
+    return document
+
+
+def test_mapping_a_host_variable_onto_a_child_interface_variable(client: TestClient, fx: Fixture) -> None:
+    host, child = _embed_app(client, fx, f"Host {fx.tag}"), _embed_app(client, fx, f"Child {fx.tag}")
+    assert _put_definition(client, fx, child, _interface_child()).status_code == 200
+    r = _put_definition(client, fx, host, _host(child, {"status": "v_host"}))
+    assert r.status_code == 200, r.text
+
+
+def test_mapping_a_variable_the_child_does_not_publish_is_refused(client: TestClient, fx: Fixture) -> None:
+    """A variable with no interface toggle is not reachable, and the refusal
+    lists what the child does offer - the next question anyone would ask."""
+    host, child = _embed_app(client, fx, f"Host2 {fx.tag}"), _embed_app(client, fx, f"Child2 {fx.tag}")
+    assert _put_definition(client, fx, child, _interface_child()).status_code == 200
+    r = _put_definition(client, fx, host, _host(child, {"nosuch": "v_host"}))
+    assert r.status_code == 422
+    assert "no interface variable called 'nosuch'" in r.json()["detail"]
+    assert "status" in r.json()["detail"], "the refusal should say what is on offer"
+
+
+def test_a_kind_mismatch_across_the_boundary_is_refused(client: TestClient, fx: Fixture) -> None:
+    """The mapped variable is backed by the host's definition (p.127), so a
+    number arriving where a string is declared is not a coercion - it is the
+    child's declaration being wrong about its own input."""
+    host, child = _embed_app(client, fx, f"Host3 {fx.tag}"), _embed_app(client, fx, f"Child3 {fx.tag}")
+    assert _put_definition(client, fx, child, _interface_child(kind="number")).status_code == 200
+    r = _put_definition(client, fx, host, _host(child, {"status": "v_host"}, kind="string"))
+    assert r.status_code == 422
+    assert "is a number" in r.json()["detail"] and "is a string" in r.json()["detail"]
+
+
+def test_a_required_interface_variable_left_unmapped_is_refused(client: TestClient, fx: Fixture) -> None:
+    host, child = _embed_app(client, fx, f"Host4 {fx.tag}"), _embed_app(client, fx, f"Child4 {fx.tag}")
+    assert _put_definition(client, fx, child, _interface_child(required=True)).status_code == 200
+    r = _put_definition(client, fx, host, _host(child, {}))
+    assert r.status_code == 422
+    assert "requires status" in r.json()["detail"]
+    # And mapping it is what makes the same save succeed.
+    assert _put_definition(client, fx, host, _host(child, {"status": "v_host"})).status_code == 200
+
+
+def test_an_optional_interface_variable_may_be_left_unmapped(client: TestClient, fx: Fixture) -> None:
+    """The child falls back to its own definition, which is the documented
+    behaviour for anything the parent did not map."""
+    host, child = _embed_app(client, fx, f"Host5 {fx.tag}"), _embed_app(client, fx, f"Child5 {fx.tag}")
+    assert _put_definition(client, fx, child, _interface_child()).status_code == 200
+    assert _put_definition(client, fx, host, _host(child, {})).status_code == 200
+
+
+def test_a_child_that_does_not_parse_does_not_break_the_hosts_save(client: TestClient, fx: Fixture) -> None:
+    """Blaming this document for a fault in another one would leave the author
+    of the host with a refusal they cannot act on."""
+    host, child = _embed_app(client, fx, f"Host6 {fx.tag}"), _embed_app(client, fx, f"Child6 {fx.tag}")
+    assert _put_definition(client, fx, child, _interface_child()).status_code == 200
+    assert _put_definition(client, fx, host, _host(child, {"status": "v_host"})).status_code == 200
+
+
+def test_the_host_resolves_a_bound_variable_for_the_child(client: TestClient, fx: Fixture) -> None:
+    """The evaluate endpoint's half of the precedence rule: `bound` makes the
+    child's own derivation stand aside for the value the host sends."""
+    child = _embed_app(client, fx, f"Bound {fx.tag}")
+    document = _interface_child()
+    document["variables"]["v_derived"] = {
+        "id": "v_derived", "kind": "string", "label": "Derived",
+        "external_id": "derived", "interface": True,
+        "derivation": {"transform": "concat", "inputs": ["v_in"], "config": {"separator": ""}},
+    }
+    assert _put_definition(client, fx, child, document).status_code == 200
+
+    url = f"{base(fx)}/{child}/variables/evaluate"
+    unbound = client.post(url, headers=hdr(fx.editor_sub),
+                          json={"values": {"v_in": "child", "v_derived": "from host"}})
+    assert unbound.json()["values"]["v_derived"] == "child", "its own derivation answers"
+
+    bound = client.post(url, headers=hdr(fx.editor_sub),
+                        json={"values": {"v_in": "child", "v_derived": "from host"},
+                              "bound": ["v_derived"]})
+    assert bound.json()["values"]["v_derived"] == "from host", "the host's value wins"
