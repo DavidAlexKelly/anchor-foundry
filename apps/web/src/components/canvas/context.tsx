@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 /** Environment a canvas widget renders in - never part of the saved
  * definition (Craft.js node props), since it's the same app rendered from
@@ -131,6 +131,25 @@ export function CanvasParameterProvider({
   };
 }) {
   const [values, setValues] = useState<Record<string, unknown>>(seed ?? {});
+
+  // **The seed usually arrives after the first render**, which is why this is
+  // an effect and not just the initial state above. Seeding needs the module's
+  // declared variables to know which external ID belongs to which variable, and
+  // those come from a fetch — so at mount `seed` is `{}` and the real one lands
+  // a beat later. Initial state alone silently did nothing, and the symptom was
+  // a URL parameter that worked in no case at all.
+  //
+  // Applied *under* whatever is already set, so it stays a seed rather than a
+  // binding: if a viewer has already touched a filter, their value wins and the
+  // address bar does not take it back off them.
+  const seeded = useRef<string | null>(null);
+  const seedKey = JSON.stringify(seed ?? {});
+  useEffect(() => {
+    if (!seed || Object.keys(seed).length === 0) return;
+    if (seeded.current === seedKey) return;
+    seeded.current = seedKey;
+    setValues((current) => ({ ...seed, ...current }));
+  }, [seedKey, seed]);
   const set = useCallback(
     (name: string, value: unknown) => {
       const hostName = link?.bindings[name];

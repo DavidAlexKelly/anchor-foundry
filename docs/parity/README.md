@@ -122,7 +122,22 @@ would error; the capability would simply be gone.
 The order that follows: **B.1 first, then the deletion.** Until then the Code
 pillar keeps its editor, and the honest description of it is not "a duplicate"
 but "the only authoring surface for transforms that are not yet files".
-| **2** | Workshop structural: the three config tabs, six section layouts, vertical header, external IDs, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
+
+#### Stage 2 progress
+
+- **External IDs and the module interface** — done (`STATUS.md` §116). A
+  variable carries an external ID and an interface block; an embed maps host
+  variables onto a child's interface; the same external ID seeds a variable
+  from the URL. Foundry's precedence rule is implemented rather than noted, so
+  a mapped variable ignores the child's own default and derivation.
+  `e2e/test_module_interface.py` asks one module about two of the three
+  consumers on purpose.
+- **State saving is the third consumer and is not built.** It keys on the same
+  external ID (p.202–203). It belongs in the existing mechanism and the
+  existing test file; needing anything new would mean this was built wrong.
+- Remaining in this stage: the three config tabs, the six section layouts, the
+  vertical header, the versions dialog.
+| **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
 | **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |
 | **5** | Widget library, in the priority order given in `workshop.md` | Long, cheap, parallel, and it should never block. |

@@ -154,13 +154,17 @@ So one concept powers **embedding, URL deep-links, and state saving**. We built 
 
 | Feature | Status |
 |---|---|
-| External ID on a variable | ○ |
-| Module interface toggle, with display name and description | ○ |
-| Interface variables mapped when embedding | ○ (deferred at §114) |
-| Interface variables initialised from URL query parameters | ◑ — §99 does this with its own mechanism |
-| State saving keyed on external ID | ○ |
+| External ID on a variable | ✅ |
+| Module interface toggle, with display name and description | ✅ |
+| Interface variables mapped when embedding | ✅ — the §114 deferral is closed |
+| Interface variables initialised from URL query parameters | ✅ — same external ID, same field |
+| State saving keyed on external ID | ○ — the third consumer, not built (§7) |
 
-**Refusals to build in:** mapping a variable not in the interface; a type mismatch between host and interface variable; a required interface variable left unmapped; renaming an external ID that saved states point at.
+**Refusals:** mapping a variable not in the interface ✅; a type mismatch between host and interface variable ✅; a required interface variable left unmapped ✅; renaming an external ID that saved states point at ○ (needs state saving to exist first).
+
+**Built as one mechanism, on purpose.** An external ID plus an interface toggle on the variable; a mapping keyed by external ID on the embed node; the same external ID read from the query string. `e2e/test_module_interface.py` asks one module about two of the three consumers deliberately — when state saving lands, its assertion belongs in that file against that fixture rather than in a new one.
+
+**`required` is ours, not Foundry's.** No documented counterpart was found; it exists because the alternative to refusing an unmapped variable is an embedded module rendering against a default nobody chose. Opt-in, so no existing module becomes unsaveable.
 
 **The precedence rule, which is easy to get backwards:** "When an interface variable is mapped between a parent and an embedded child module, Workshop uses the **parent module's** variable definition and ignores the embedded module's own" (p.164).
 
@@ -192,9 +196,9 @@ The `recompute {variable}` event is the other half of this and is missing from �
 |---|---|---|
 | Embed a module in a module | ✅ | §114 |
 | Editor disabled inside an embed | ✅ | §114 |
-| **Interface variable mapping** | ○ | explicitly deferred at §114; unblocked by §3.4 |
-| Sibling-to-sibling communication through shared interface variables | ○ | (p.164) |
-| Embedded module may modify interface variables through events | ○ | (p.164) |
+| **Interface variable mapping** | ✅ | the §114 deferral is closed; §3.4 |
+| Sibling-to-sibling communication through shared interface variables | ◑ | works by construction — two embeds mapped to one host variable share it through the host — but **untested**, so it is a claim about the design rather than a demonstrated behaviour (p.164) |
+| Embedded module may modify interface variables through events | ◑ | the write path exists and is two-way per p.127; a `set_variable` in the child on a mapped id routes to the host. Also untested (p.164) |
 | **Loop layouts** — one embedded module per object in a set | ○ | (p.54) |
 | Open Workshop module event, passing values into the target's interface | ○ | (p.165) |
 | In edit mode, opening a child from a reference carries the current interface values through, for debugging | ○ | (p.165) — small, and a genuinely thoughtful touch |
