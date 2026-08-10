@@ -39,7 +39,7 @@ Ours has `json`, which Foundry does not — Foundry's equivalent is Struct, whic
 | Feature | Status | Source |
 |---|---|---|
 | Display name, description, API name | ✅ | |
-| **Visibility** — normal, prominent, hidden | ○ | drives standard Object View layout (`object-views` p.10) |
+| **Visibility** — normal, prominent, hidden | ✅ | (`object-link-types` p.111); drives standard Object View layout (`object-views` p.10) — **the view itself is still ○, see §4.1** |
 | **Value formatting** | ○ | `object-link-types` TOC §11 |
 | **Conditional formatting** | ✅ | §83 |
 | **Required properties** | ○ | TOC §15 |
@@ -203,8 +203,8 @@ The parameter-and-rules model is the big one. Ours conflates "what the user type
 
 ## 7. Build order
 
-1. **Property visibility** (normal / prominent / hidden). Small, and it is the input to standard Object Views.
-2. **Standard Object Views.** Generated from the object type; no builder UI needed. Biggest visible gain in this file.
+1. ~~**Property visibility**~~ — **done (`STATUS.md` §121)**. Stored, editable, and honoured by the Object Explorer, which no longer draws a hidden property's column. Deliberately **a display hint and not a permission**: the value is still stored, still synced and still returned by the API, exactly as Foundry's "an indication to user applications" (p.111) describes. Making it look like access control would be worse than not having it, because somebody would use it as one.
+2. **Standard Object Views.** Generated from the object type; no builder UI needed. Biggest visible gain in this file, and now unblocked — visibility is the input it was waiting for.
 3. **Link type per-side display names and self-links.** Small, currently inexpressible.
 4. **Action parameters and rules.** The structural change everything in §5 depends on.
 5. **Time series and media reference property types.** Both unlock Workshop widgets; both need a storage decision first.
@@ -218,7 +218,7 @@ The parameter-and-rules model is the big one. Ours conflates "what the user type
 
 ## 8. Acceptance tests
 
-- **Property visibility** — a hidden property is absent from the standard Object View and from the Object Table column picker. Mutation: mark it normal, and both change.
+- **Property visibility** — a hidden property is absent from the standard Object View and from the Object Explorer's columns. Mutation: mark it normal, and both change. **Note on the original wording**: this said "the Object Table column picker", and there is no picker — the Workshop Object Table takes a typed `columns` string. The Explorer's derived columns are the equivalent surface and are what the test drives.
 - **Standard Object Views** — an object type with a prominent time series property renders a chart, not a table cell; with a prominent geopoint, a map. Remove the prominent flag and it falls back to the table.
 - **Linked objects** — an instance with two link types shows two groups; expanding one previews properties without navigation.
 - **Configured views** — creating one makes it the default; the standard view is still reachable.

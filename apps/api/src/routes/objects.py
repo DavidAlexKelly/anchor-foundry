@@ -68,6 +68,10 @@ class PropertyIn(BaseModel):
     )
     required: bool = False
     description: str = Field(default="", max_length=1000)
+    # How prominently applications should show this (Foundry
+    # `object-link-types` p.111). Defaults to `normal`, so a client written
+    # before this existed keeps saying exactly what it used to.
+    visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
 
 
 class PropertyOut(BaseModel):
@@ -78,6 +82,7 @@ class PropertyOut(BaseModel):
     required: bool
     description: str
     sort_order: int
+    visibility: str = "normal"
 
 
 class ObjectTypeSummary(BaseModel):
@@ -89,6 +94,10 @@ class ObjectTypeSummary(BaseModel):
     colour: str
     title_property_id: UUID | None
     source_count: int
+    # The api_names an application should not draw (`object-link-types` p.111).
+    # Only the hidden ones: a list endpoint should not carry every property of
+    # every type to answer "which columns do I skip".
+    hidden_properties: list[str] = Field(default_factory=list)
     # So a caller that has a type can open the type's application (item 4.2)
     # without a second lookup. NOT NULL since db 0032.
     resource_id: UUID

@@ -261,9 +261,23 @@ export function ObjectExplorer({
   // Every property name present in the current page, so a cross-type result
   // set still shows values rather than just ids. Union rather than
   // intersection: a column only some rows have is still worth seeing.
+  //
+  // **Less the hidden ones** (Foundry `object-link-types` p.111: "a hidden
+  // property will not appear in user applications"). Filtered here rather than
+  // at the API, because hidden is a display hint and not a permission - the
+  // value is still returned, and anything that needs it can still ask.
+  //
+  // Hidden across *any* selected type hides the column: a cross-type result
+  // shares one set of columns, so a property one type hides and another does
+  // not has no honest single answer, and hiding is the safer of the two.
+  const hiddenProperties = new Set(
+    (types.data ?? [])
+      .filter((t) => selected.length === 0 || selected.includes(t.id))
+      .flatMap((t) => t.hidden_properties ?? []),
+  );
   const columns = Array.from(
     new Set((page.data?.items ?? []).flatMap((i) => Object.keys(i.properties))),
-  ).slice(0, 6);
+  ).filter((c) => !hiddenProperties.has(c)).slice(0, 6);
 
   return (
     <div className="ox">

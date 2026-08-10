@@ -573,3 +573,148 @@ def test_sync_audited(client: TestClient, fx: Fixture) -> None:
     r = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
     actions = {e["action"] for e in r.json()}
     assert "object_type_source.sync" in actions
+
+
+# ---- property visibility (parity ontology.md §1.2; object-link-types p.111) --
+# "An indication to user applications for how prominently to display the
+# property." The input to standard Object Views, which is why it exists at all.
+def test_a_property_defaults_to_normal_visibility(client: TestClient, fx: Fixture) -> None:
+    """p.111: "By default, the start date property will have visibility
+    `normal`." So a client written before this existed keeps saying what it
+    used to, and no object type changes shape on upgrade."""
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vis_default_{fx.tag}", "display_name": "Default vis",
+            "properties": [{"api_name": "id", "data_type": "string"}],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["properties"][0]["visibility"] == "normal"
+
+
+def test_a_property_can_be_prominent_or_hidden(client: TestClient, fx: Fixture) -> None:
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vis_set_{fx.tag}", "display_name": "Set vis",
+            "properties": [
+                {"api_name": "id", "data_type": "string", "visibility": "prominent"},
+                {"api_name": "secret", "data_type": "string", "visibility": "hidden"},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 201, r.text
+    by_name = {p["api_name"]: p["visibility"] for p in r.json()["properties"]}
+    assert by_name == {"id": "prominent", "secret": "hidden"}
+
+
+def test_an_unknown_visibility_is_refused(client: TestClient, fx: Fixture) -> None:
+    """**The 422 here comes from the request schema, not from the service.**
+    `PropertyIn.visibility` has a pattern, so a bad value never reaches
+    `ontology._validate_properties`, and removing that service check leaves this
+    test green. The service check is kept anyway as defence for a non-HTTP
+    caller, and this note exists so nobody reads this test as covering it.
+    """
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vis_bad_{fx.tag}", "display_name": "Bad vis",
+            "properties": [{"api_name": "id", "data_type": "string", "visibility": "loud"}],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_hidden_property_is_still_returned_by_the_api(client: TestClient, fx: Fixture) -> None:
+    """**Hidden is a display hint, not a permission**, and this is the test that
+    keeps it honest. Foundry's wording is "an indication to user applications";
+    making the API withhold the value would let somebody use visibility as
+    access control, which it is not - RLS is, and it is somewhere else."""
+    created = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vis_read_{fx.tag}", "display_name": "Readable",
+            "properties": [
+                {"api_name": "id", "data_type": "string"},
+                {"api_name": "secret", "data_type": "string", "visibility": "hidden"},
+            ],
+            "title_property": "id",
+        },
+    ).json()
+    detail = client.get(
+        f"{wbase(fx)}/object-types/{created['id']}",
+        headers=hdr(fx.editor_sub),
+    ).json()
+    names = [p["api_name"] for p in detail["properties"]]
+    assert "secret" in names, "the definition still declares it"
+
+
+def test_visibility_survives_an_edit(client: TestClient, fx: Fixture) -> None:
+    """The update path rewrites every property row, so it is its own chance to
+    drop a column the create path handles."""
+    created = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vis_edit_{fx.tag}", "display_name": "Editable",
+            "properties": [{"api_name": "id", "data_type": "string"}],
+            "title_property": "id",
+        },
+    ).json()
+    r = client.patch(
+        f"{wbase(fx)}/object-types/{created['id']}",
+        headers=hdr(fx.editor_sub),
+        json={
+            "display_name": "Editable",
+            "properties": [{"api_name": "id", "data_type": "string", "visibility": "prominent"}],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["properties"][0]["visibility"] == "prominent"
+
+
+def test_the_type_list_reports_which_properties_are_hidden(client: TestClient, fx: Fixture) -> None:
+    """What a browser needs to know to not draw a column, and nothing more —
+    a list endpoint carrying every property of every type would be paying for a
+    detail endpoint it did not ask for."""
+    client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vis_list_{fx.tag}", "display_name": "Listed",
+            "properties": [
+                {"api_name": "id", "data_type": "string"},
+                {"api_name": "internal_note", "data_type": "string", "visibility": "hidden"},
+            ],
+            "title_property": "id",
+        },
+    )
+    listed = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub)).json()
+    [mine] = [t for t in listed if t["api_name"] == f"vis_list_{fx.tag}"]
+    assert mine["hidden_properties"] == ["internal_note"], mine["hidden_properties"]
+
+
+def test_a_type_with_nothing_hidden_reports_an_empty_list(client: TestClient, fx: Fixture) -> None:
+    """Empty rather than absent, so a caller never has to tell "none hidden"
+    from "this server does not know about visibility"."""
+    client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"vis_none_{fx.tag}", "display_name": "Nothing hidden",
+            "properties": [{"api_name": "id", "data_type": "string"}],
+            "title_property": "id",
+        },
+    )
+    listed = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub)).json()
+    [mine] = [t for t in listed if t["api_name"] == f"vis_none_{fx.tag}"]
+    assert mine["hidden_properties"] == []

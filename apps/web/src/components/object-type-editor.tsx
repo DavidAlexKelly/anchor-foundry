@@ -26,11 +26,14 @@ import type {
   ObjectTypeDetail,
   ObjectTypeImpact,
   PropertyDataType,
+  PropertyVisibility,
 } from "@/lib/types";
 
 const PROPERTY_TYPES: PropertyDataType[] = [
   "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
 ];
+
+const PROPERTY_VISIBILITIES: PropertyVisibility[] = ["normal", "prominent", "hidden"];
 
 export function toPropertyApiName(display: string): string {
   const words = display.match(/[A-Za-z0-9]+/g) ?? [];
@@ -75,6 +78,23 @@ export function PropertyRows({
           >
             {PROPERTY_TYPES.map((t) => (
               <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          {/* Visibility (Foundry `object-link-types` p.111): "an indication to
+              user applications for how prominently to display the property".
+              A display hint, never a permission — a hidden property is still
+              stored and still returned by the API. */}
+          <select
+            value={prop.visibility ?? "normal"}
+            aria-label={`Property ${index + 1} visibility`}
+            onChange={(e) => {
+              const next = [...properties];
+              next[index] = { ...prop, visibility: e.target.value as PropertyVisibility };
+              onChange(next);
+            }}
+          >
+            {PROPERTY_VISIBILITIES.map((v) => (
+              <option key={v} value={v}>{v}</option>
             ))}
           </select>
           <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>
@@ -294,6 +314,10 @@ export function EditObjectTypeDialog({
       display_name: p.display_name,
       data_type: p.data_type,
       required: p.required,
+      // Carried through, or opening this dialog and saving would silently
+      // reset every property to `normal` - a setting lost by editing something
+      // else, which is the worst way to lose one.
+      visibility: p.visibility,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(

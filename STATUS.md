@@ -2507,6 +2507,28 @@ Built: the history with the editor's **name** rather than their id, descriptions
 
 ---
 
+### 121. Property visibility, and what it is deliberately not (this session)
+
+Parity stage 3 opens, and `docs/parity/ontology.md` §7 puts this first for a reason: it is small, and it is the *input* to standard Object Views. Foundry, `object-link-types` p.111:
+
+> "Visibility: An indication to user applications for how prominently to display the property. A **prominent** property will lead applications to show this property first to users. A **hidden** property will not appear in user applications. By default, the start date property will have visibility `normal`."
+
+Stored (migration 0042), editable in the object type editor, carried through the edit dialog — that last one mattering more than it sounds: without it, opening the dialog to change a display name and saving would have silently reset every property to `normal`, which is the worst way to lose a setting.
+
+**It is a display hint and not a permission, and that is the load-bearing decision here.** A hidden property is still stored, still synced, and still returned by the API to anyone who may read the object type at all. Foundry's own wording is "an indication to user applications". Making it *look* like access control would be worse than not having it, because somebody would eventually rely on it as one — and access control is RLS, which is somewhere else entirely. There is a test asserting the definition still declares a hidden property, so a later well-meaning change that starts withholding it goes red.
+
+**The first consumer is the Object Explorer**, which no longer draws a hidden property's column. Cross-type results share one set of columns, so a property one selected type hides and another does not has no honest single answer; it is hidden, which is the safer of the two.
+
+To do that, the type *list* now reports `hidden_properties` — only the hidden names, not every property of every type. A list endpoint that carried full property metadata to answer "which columns do I skip" would be paying for a detail endpoint nobody asked for.
+
+**One test does less than its name suggests, and says so.** `test_an_unknown_visibility_is_refused` gets its 422 from `PropertyIn`'s pattern, not from the service — a bad value never reaches `_validate_properties`, so removing that service check leaves the test green. The check is kept as defence for a non-HTTP caller and the test now carries a note saying it does not cover it. Found by mutation-testing, which is exactly what mutation-testing is for.
+
+**835 API tests, 1 skipped, 43 vitest, 72 browser, all green.**
+
+**Next, and now unblocked:** standard Object Views (`ontology.md` §4.1) — generated per object type, no builder UI, prominent properties surfaced above a table of the normal ones and hidden ones absent. `object-views` p.10–11 is the spec. It is the biggest visible gain in that file, and visibility was the input it was waiting for. Two of Foundry's type-aware renderings will not be reachable yet: time series and media reference are property types we do not have. Geopoint → Map is.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
