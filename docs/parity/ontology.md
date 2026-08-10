@@ -72,8 +72,8 @@ Ours has `json`, which Foundry does not — Foundry's equivalent is Struct, whic
 |---|---|---|
 | Cardinality one-to-one, one-to-many, many-to-many | ✅ | |
 | Link traversal from an instance | ✅ | §18 |
-| **Per-side display names** | ○ | e.g. Employee → *Employer*, Company → *Employees*. We name the link once. |
-| **Self-links** — a link type between an object type and itself | ○ | "Direct Report ↔ Manager can be defined between the Employee object type and itself" |
+| **Per-side display names** | ✅ | stored, resolved and rendered (`STATUS.md` §123); `side_name` comes back already resolved against the link's own name, so a caller never has to know which end it is on |
+| **Self-links** — a link type between an object type and itself | ✅ | **§2 was wrong to call this absent.** `link_types_for_type` already returned a self-link twice, once per direction, deliberately. What was missing was two *names*, so the directions could be told apart — which is the row above |
 | Independent traversal of each side | ◑ | |
 | Link traversal inside an object set definition | ○ | needed by Workshop §3.1 |
 
@@ -205,7 +205,7 @@ The parameter-and-rules model is the big one. Ours conflates "what the user type
 
 1. ~~**Property visibility**~~ — **done (`STATUS.md` §121)**. Stored, editable, and honoured by the Object Explorer, which no longer draws a hidden property's column. Deliberately **a display hint and not a permission**: the value is still stored, still synced and still returned by the API, exactly as Foundry's "an indication to user applications" (p.111) describes. Making it look like access control would be worse than not having it, because somebody would use it as one.
 2. **Standard Object Views.** Generated from the object type; no builder UI needed. Biggest visible gain in this file, and now unblocked — visibility is the input it was waiting for.
-3. **Link type per-side display names and self-links.** Small, currently inexpressible.
+3. ~~**Link type per-side display names and self-links**~~ — **done (`STATUS.md` §123)**, less the one test named above. Self-links turned out to already work; only the naming was missing.
 4. **Action parameters and rules.** The structural change everything in §5 depends on.
 5. **Time series and media reference property types.** Both unlock Workshop widgets; both need a storage decision first.
 6. **Configured Object Views**, reusing the Workshop runtime.

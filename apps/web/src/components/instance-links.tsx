@@ -54,6 +54,12 @@ function LinkGroup({
   onOpen: (stop: LinkStop) => void;
 }) {
   const arrow = group.direction === "outbound" ? "→" : "←";
+  // The name of the side being traversed *to* (Foundry `object-link-types`
+  // p.192). Already resolved by the server against the link's own name, so an
+  // unnamed side reads exactly as it did before sides could be named — and a
+  // self-link's two directions finally read differently ("Manager" one way,
+  // "Direct reports" the other) instead of showing one word twice.
+  const label = group.side_name || group.display_name;
   return (
     <section style={{ marginBottom: 18 }}>
       <div
@@ -61,7 +67,7 @@ function LinkGroup({
         style={{ justifyContent: "space-between", alignItems: "baseline" }}
       >
         <h3 style={{ fontSize: 13.5, margin: 0 }}>
-          {group.display_name} {arrow} {group.far_type_display_name}
+          {label} {arrow} {group.far_type_display_name}
           <span className="slug" style={{ marginLeft: 8, fontWeight: 400 }}>
             {propertyLabel(group.near_property)} = {propertyLabel(group.far_property)}
           </span>

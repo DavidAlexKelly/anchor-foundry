@@ -1063,6 +1063,10 @@ export interface LinkedInstances {
   cardinality: LinkCardinality;
   /** "outbound" when the instance's type is the link's from end. */
   direction: "outbound" | "inbound";
+  /** What the side being traversed *to* is called (Foundry
+   * `object-link-types` p.192), already resolved against the link's own
+   * display name. */
+  side_name: string;
   far_type_id: string;
   far_type_display_name: string;
   near_property: string;

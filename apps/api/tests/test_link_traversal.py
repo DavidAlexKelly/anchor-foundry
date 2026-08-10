@@ -198,9 +198,14 @@ def ontology(client: TestClient, fx: Fixture, store: str) -> dict:
 
     reports_to = client.post(
         f"{_wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        # **A self-link with two names** (Foundry `object-link-types` p.192's
+        # own example, Direct Report <-> Manager). The two directions are the
+        # whole reason per-side names exist: one label cannot mean both "my
+        # manager" and "my reports".
         json={"api_name": f"reports_to_{tag}", "display_name": "Reports to",
               "from_type_id": person, "to_type_id": person, "cardinality": "one_to_many",
-              "from_property": "manager_id", "to_property": "$primary_key"},
+              "from_property": "manager_id", "to_property": "$primary_key",
+              "from_side_name": "Direct reports", "to_side_name": "Manager"},
     )
     assert reports_to.status_code == 201, reports_to.text
 
@@ -395,3 +400,39 @@ def test_traversal_needs_a_real_instance_and_a_visible_type(
         headers=hdr(fx.outsider_sub),
     )
     assert r.status_code == 404, "outside the workspace: 404, never 403"
+
+
+# ---- per-side names (parity ontology.md §2; object-link-types p.192) ---------
+def test_a_self_links_two_directions_read_differently(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """`ontology.md` §8: "a self-link between Employee and Employee renders both
+    directions with distinct names."
+
+    The traversal already returned a self-link twice, once per direction — what
+    it could not do was say which was which, because both rows carried the
+    link's single `display_name`. Asserting on `side_name` is asserting the
+    thing that was actually missing.
+    """
+    people = _instances(client, fx, ontology["person"])
+    groups = _links(client, fx, ontology["person"], people["1"]["id"])
+    tag = ontology["tag"]
+
+    outbound = groups[f"reports_to_{tag}:outbound"]
+    inbound = groups[f"reports_to_{tag}:inbound"]
+    assert outbound["side_name"] == "Manager", "traversing to the `to` side"
+    assert inbound["side_name"] == "Direct reports", "and back the other way"
+    # The link's own name is still there and still the same on both, which is
+    # exactly why it could not do this job.
+    assert outbound["display_name"] == inbound["display_name"] == "Reports to"
+
+
+def test_a_link_with_no_side_names_falls_back_to_its_own(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """Every link type that existed before sides could be named keeps the label
+    it had — which is what makes migration 0043 invisible."""
+    people = _instances(client, fx, ontology["person"])
+    groups = _links(client, fx, ontology["person"], people["1"]["id"])
+    works_in = groups[f"works_in_{ontology['tag']}:outbound"]
+    assert works_in["side_name"] == "Works in" == works_in["display_name"]

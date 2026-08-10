@@ -695,6 +695,7 @@ def _normalise_join(
 _LINK_SELECT = """
         SELECT lt.id, lt.api_name, lt.display_name, lt.cardinality, lt.created_at,
                lt.from_property, lt.to_property,
+               lt.from_side_name, lt.to_side_name,
                lt.from_object_type_id, f.display_name AS from_display_name,
                lt.to_object_type_id, t.display_name AS to_display_name
           FROM link_types lt
@@ -768,6 +769,11 @@ async def links_for_type(
                 "far_property": link["to_property"],
                 "far_type_id": link["to_object_type_id"],
                 "far_type_display_name": link["to_display_name"],
+                # The name of the side you arrive at (Foundry p.192). Going
+                # from -> to lands on the `to` side, so that is its name.
+                # Falls back to the link's single name, which is what every
+                # link type had before sides could be named separately.
+                "side_name": link["to_side_name"] or link["display_name"],
             })
         if str(link["to_object_type_id"]) == str(type_id):
             out.append({
@@ -777,6 +783,7 @@ async def links_for_type(
                 "far_property": link["from_property"],
                 "far_type_id": link["from_object_type_id"],
                 "far_type_display_name": link["from_display_name"],
+                "side_name": link["from_side_name"] or link["display_name"],
             })
     return out
 
@@ -793,6 +800,8 @@ async def create_link_type(
     created_by: UUID,
     from_property: str | None = None,
     to_property: str | None = None,
+    from_side_name: str | None = None,
+    to_side_name: str | None = None,
 ) -> dict[str, Any]:
     if not _PROP_API_RE.match(api_name):
         raise ValueError(f"invalid link api_name {api_name!r}")
@@ -818,12 +827,13 @@ async def create_link_type(
         """
         INSERT INTO link_types (workspace_id, api_name, display_name,
                                 from_object_type_id, to_object_type_id,
-                                cardinality, created_by, from_property, to_property)
+                                cardinality, created_by, from_property, to_property,
+                                from_side_name, to_side_name)
         VALUES (:wid, :api, :name, :from, :to, CAST(:card AS link_cardinality), :by,
-                :fprop, :tprop)
+                :fprop, :tprop, :fside, :tside)
         RETURNING id, api_name, display_name, from_object_type_id,
                   to_object_type_id, cardinality, created_at,
-                  from_property, to_property
+                  from_property, to_property, from_side_name, to_side_name
         """,
         {
             "wid": str(workspace_id),
@@ -835,6 +845,8 @@ async def create_link_type(
             "by": str(created_by),
             "fprop": from_property,
             "tprop": to_property,
+            "fside": (from_side_name or "").strip() or None,
+            "tside": (to_side_name or "").strip() or None,
         },
     )
     assert row is not None
@@ -848,8 +860,10 @@ async def set_link_join(
     *,
     from_property: str | None,
     to_property: str | None,
+    from_side_name: str | None = None,
+    to_side_name: str | None = None,
 ) -> dict[str, Any]:
-    """Map (or unmap) the properties a link joins on, in place.
+    """Map (or unmap) the properties a link joins on, and name its two sides.
 
     Only the join is mutable. Changing an endpoint or the cardinality would
     make it a different relationship wearing the same name - delete and
@@ -872,10 +886,18 @@ async def set_link_join(
         )
     await conn.execute(
         text(
-            "UPDATE link_types SET from_property = :fprop, to_property = :tprop "
+            "UPDATE link_types SET from_property = :fprop, to_property = :tprop, "
+            # COALESCE, so a caller that only means to change the join does not
+            # blank the names by omitting them. Clearing a name is therefore not
+            # expressible here, which is the right trade: an unnamed side falls
+            # back to the link's own name, so nobody is stuck with a wrong one.
+            "       from_side_name = COALESCE(:fside, from_side_name), "
+            "       to_side_name = COALESCE(:tside, to_side_name) "
             "WHERE id = :lid AND workspace_id = :wid"
         ),
         {"fprop": from_property, "tprop": to_property,
+         "fside": (from_side_name or "").strip() or None,
+         "tside": (to_side_name or "").strip() or None,
          "lid": str(link_id), "wid": str(workspace_id)},
     )
     return await get_link_type(conn, workspace_id, link_id)
