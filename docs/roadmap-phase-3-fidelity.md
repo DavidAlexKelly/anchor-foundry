@@ -189,7 +189,11 @@ Code Workspaces brings "JupyterLab®, RStudio® Workbench, and VS Code third-par
 
 That sentence is the argument against starting here. The container IDE is layered *on* the browser IDE, not instead of it. Its own docs also say that for large-scale pipelines and data connections, "other Foundry tools have more functionality than Code Workspaces" (`code-workspaces` p.3).
 
-**Recommendation: do not start here.** B.1–B.4 close most of the felt gap at a fraction of the cost and are prerequisites either way. Revisit when the remaining complaint is specifically "I want my own extensions and a terminal".
+**Recommendation: do not start here.** B.1–B.4 close most of the felt gap at a fraction of the cost and are prerequisites either way.
+
+And the "extensions and a terminal" caveat turns out to be the whole of it. Foundry's feature comparison across its three code surfaces (`vs-code` p.7–8) shows Code Repositories answering **No** to exactly three things — shell terminal, keybinding customization, public extensions — while answering **Yes** to Python preview, debugger, and unit tests, and being the *only* one of the three that can do Java transforms, SQL integration and TypeScript function preview. The docs then state the division of labour outright: Code Repositories "is the intended platform tool for pull request reviews and repository management" (`vs-code` p.14).
+
+So VS Code does not replace the browser IDE in Foundry; it sits beside it and hands users back for review. That is a much stronger argument for finishing the browser IDE first than this section originally made, and it is written up as a scope boundary in [`parity/code-repositories.md` §11](parity/code-repositories.md).
 
 ---
 

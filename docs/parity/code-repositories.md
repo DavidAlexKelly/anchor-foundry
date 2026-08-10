@@ -122,7 +122,31 @@ The docs add a note we should honour: "You should not delete any branches that y
 | Create a PR, choosing the base branch | ◑ | |
 | **Line-by-line review with comments** | ◑ | §52 built a review surface; verify it is line-level, not file-level |
 | Require at least one approving review before merge, per repository settings | ✅ | §28 review-gated promotion |
-| **See how changes affect datasets** when reviewing transform code | ○ | "Analyze the impact of changes" (TOC §11) |
+| **See how changes affect datasets** when reviewing transform code | ○ | see §4.1 |
+
+### 4.1 Impact analysis (p.52–55)
+
+The largest single gap in this file, and the one that most changes what a review *is*. Ours reviews text; Foundry reviews the consequences of text.
+
+Impact analysis requires the affected datasets to have been built on **both** the head and the base branch — head "to validate that the code builds properly, the outputs appear as expected, and that all Data Expectations are met", base "to compare the outputs to the latest version of the target" (p.52). The PR page warns when affected datasets are **stale** and offers **Configure and build** to review and build them.
+
+| Feature | Status | Notes |
+|---|---|---|
+| List of directly affected datasets | ○ | Python repos derive this from Transforms Level Logic Versioning; Java treats a dataset as affected if its source file changed (p.53) |
+| **Add datasets to analysis** — pull derived datasets in, plus every intermediate between (p.54) | ○ | |
+| **Code** — changes to the source file only | ◑ | our diff is the source file |
+| **Schema** — column changes on the output dataset | ○ | we detect schema drift on syncs (§5); this is the same question asked of a proposal |
+| **Security** — changes to markings applied to the output | ○ | |
+| **Expectations** — data expectations on the head branch | ◑ | we have quality gating (§11), not surfaced on a proposal |
+| Trashed datasets shown faded | ○ | |
+| Inaccessible datasets marked as such rather than hidden | ○ | a small honesty that is easy to get wrong |
+| Staleness warning + Configure and build | ○ | |
+| **Pipeline review tab** — lineage view of affected datasets; select a node to see the code and schema changes that produced it (p.54–55) | ○ | we have the lineage graph (§14) |
+| **Per-file approve/reject**, shown as an indicator on the corresponding output dataset node in the graph (p.55) | ○ | |
+
+Two limits Palantir states plainly and we should copy rather than discover: the staleness warning "only covers affected datasets within a specific code repository" and says nothing about stale parent datasets outside it or about uncommitted changes (p.52); and reviewing affected datasets requires access to the data, so an inaccessible dataset is labelled, not silently dropped (p.53).
+
+**Sequencing.** This depends on the publish path (§55) knowing which datasets a proposal touches, and on being able to build a dataset on a branch without promoting it. Neither exists yet, so this is late — but it is worth naming early, because "which datasets does this change break" is the question a data platform exists to answer, and a review surface that cannot answer it is a code-review tool that happens to live next to data.
 
 ---
 
@@ -201,3 +225,49 @@ Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types,
 - **Tests panel** — a failing test is reported as failing. A test suite that cannot fail is the exact thing this repo does not accept.
 - **Checks** — a check that fails blocks the merge, and the block names the check.
 - **Tags** — a tag pinned to a commit still resolves to that commit after the branch moves on.
+
+---
+
+## 11. What "full integrated VS Code" actually means
+
+**Source:** `docs/pal/foundry_vs-code.pdf` (37 pages) and `foundry_code-workspaces.pdf` (134 pages). Citations in this section are to `vs-code` unless stated.
+
+The request that started this work was *"I want a full integrated VS Code like in Foundry."* Foundry ships a feature-comparison table across its three code surfaces (p.7–8), and it settles the question more precisely than any amount of reasoning about it could.
+
+**Code Repositories — the browser IDE this specification describes — answers "No" to exactly three things:**
+
+| | Code Repositories | VS Code workspaces |
+|---|---|---|
+| Shell terminal | **No** | Yes (remote host) |
+| Keybinding customization | **No** | Yes |
+| Public extension support | **N/A** | No — local extension only, if the organization allows it |
+
+And three capabilities run the *other* way — things the browser IDE has that VS Code workspaces do not:
+
+| | Code Repositories | VS Code workspaces |
+|---|---|---|
+| Java transforms | Yes | **No** |
+| SQL integration | Yes | **No** |
+| TypeScript function preview | Yes | **No** |
+
+Everything else in the table — Python transform preview, debugger support, unit tests — is **Yes** on both.
+
+The division of labour is stated outright (p.14):
+
+> "**Code Repositories:** A Palantir-built IDE focused on all code-management needs, including editing, version control, change management, and continuous integration. **This is the intended platform tool for pull request reviews and repository management.**"
+
+> "**VS Code:** A VS Code environment deployed on Palantir infrastructure… Provides the familiar VS Code editing experience with automatic environment setup and integration with Foundry resources."
+
+VS Code does not replace the browser IDE in Foundry. It sits beside it for people who want a terminal and their own keybindings, and it sends them back to Code Repositories to review a pull request. Foundry even makes the relationship structural: a repository opens in VS Code via an **Open in VS Code** button in Code Repositories' upper right, and the default can be flipped per user from the **Settings tab** of any repository (p.3) — the tab in §6 of this document.
+
+### What this means for scope
+
+**The three missing things are the entire ask, and they are the expensive part.** A terminal means a container per user with a persistent volume, an authenticating proxy, idle shutdown, and a security model for a shell inside the VPC. That is `docs/decisions/0004-running-customer-code.md` again with a much larger blast radius: the transform runner is a batch task with an empty task role and a fixed entrypoint, and an interactive shell is none of those things.
+
+**So the scope boundary is:** everything in §1–§10 is in. A terminal, keybinding customization and third-party extensions are **out**, and named here so that skipping them is a decision rather than an oversight — consistent with `README.md`'s treatment of Code Workspaces.
+
+This is not a compromise dressed up as a principle. It is what Foundry itself did: shipped a browser IDE with no terminal and no extensions, made it the mandatory surface for reviewing changes, and added VS Code beside it years later for the people who wanted a shell. Delivering §1–§10 delivers the IDE the complaint is actually about. If "I want my own extensions and a terminal" survives that, it is a separate project with its own decision record.
+
+### Acceptance test
+
+There isn't one, and that is the point. The check on this section is negative: **no item in the build order (§9) depends on a terminal, a per-user container, or an extension host.** If one appears, this boundary has moved and should move deliberately.

@@ -10,37 +10,36 @@
  * onClick calling window.open breaks cmd-click, middle-click, "open in new
  * window" and the browser's own back-forward behaviour, all of which people
  * use on a list of things without thinking about it.
+ *
+ * **The kind filter lives in the URL** (`?kind=dataset&kind=model`), which is
+ * what lets a pillar page *be* this browser with a filter applied rather than
+ * a second implementation of the same list beside it - parity stage 1, and the
+ * reason `KIND_LABELS` is exported. It follows §99's rule: the URL is the
+ * state, not a copy of it, so a filtered link survives a reload and the back
+ * button steps through filters the way a reader expects. The other controls
+ * stay in component state deliberately - a half-typed search box is not
+ * something anybody wants to send someone.
  */
 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { resources as resourcesApi } from "@/lib/api";
 import type { Resource, ResourceKind } from "@/lib/types";
+import { useUrlState } from "@/components/use-url-state";
+import {
+  KIND_LABELS,
+  isKind,
+  kindLabel,
+  selectedKinds,
+  toggleKind as nextKinds,
+} from "@/components/resource-filter";
+
+// Re-exported because callers already import them from here, and the filter
+// module is an implementation detail of where the logic is testable from.
+export { KIND_LABELS, isKind, kindLabel };
 
 const PAGE = 25;
 
-/** Order matters: this is the order the filter chips appear in, and it runs
- * roughly source → derived → published, which is the order somebody reads a
- * project in. */
-export const KIND_LABELS: { kind: ResourceKind; label: string; plural: string }[] = [
-  { kind: "connection", label: "Connection", plural: "Connections" },
-  { kind: "dataset", label: "Dataset", plural: "Datasets" },
-  { kind: "model", label: "Model", plural: "Models" },
-  { kind: "object_type", label: "Object type", plural: "Object types" },
-  { kind: "canvas_app", label: "Canvas app", plural: "Canvas apps" },
-  { kind: "code_repo", label: "Repository", plural: "Repositories" },
-];
-
-const LABEL: Record<ResourceKind, string> = Object.fromEntries(
-  KIND_LABELS.map((k) => [k.kind, k.label]),
-) as Record<ResourceKind, string>;
-
-export function kindLabel(kind: ResourceKind): string {
-  return LABEL[kind] ?? kind;
-}
-
-/** Relative for anything recent, absolute once "3 weeks ago" stops being more
- * useful than a date. */
 export function whenText(iso: string): string {
   const then = new Date(iso).getTime();
   const mins = Math.round((Date.now() - then) / 60000);
@@ -58,11 +57,31 @@ export function ResourceBrowser({
   workspaceId: string;
   projectId: string;
 }) {
-  const [kinds, setKinds] = useState<ResourceKind[]>([]);
+  const url = useUrlState();
+  // Unknown kinds are dropped rather than passed through: a hand-typed
+  // `?kind=nonsense` would otherwise reach the API as a filter matching
+  // nothing, and the reader would see an empty project rather than a
+  // disregarded filter.
+  const kinds = selectedKinds(url.all("kind"));
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<"updated_at" | "name" | "kind">("updated_at");
   const [page, setPage] = useState(0);
   const [includeWorkspace, setIncludeWorkspace] = useState(false);
+
+  /** Page number resets whenever the kind filter changes - including via the
+   * back button, which is why this is not simply a `setPage(0)` inside the
+   * chip handler. Filters live in the URL and the page number does not, so
+   * stepping back to a narrower filter while on page 3 would otherwise ask the
+   * API for rows 75-100 of a list with eight rows in it and render "no
+   * resources" over a project that has plenty. Adjusting state during render
+   * is the documented React pattern for deriving state from a changing input;
+   * it re-renders before committing, so no flash of the wrong page. */
+  const kindKey = kinds.join(",");
+  const [lastKindKey, setLastKindKey] = useState(kindKey);
+  if (kindKey !== lastKindKey) {
+    setLastKindKey(kindKey);
+    setPage(0);
+  }
 
   const counts = useQuery({
     queryKey: ["resource-counts", workspaceId, projectId],
@@ -90,8 +109,11 @@ export function ResourceBrowser({
   });
 
   function toggleKind(kind: ResourceKind) {
-    setPage(0);
-    setKinds((cur) => (cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind]));
+    // Computed from what is *currently* in the URL rather than from `kinds`,
+    // which is a render-time snapshot: ticking two chips faster than the
+    // router settles would otherwise drop the first. `useUrlState` documents
+    // this as the reason its setter takes a function.
+    url.set((current) => ({ kind: nextKinds(current.getAll("kind"), kind) }));
   }
 
   const rows = listing.data?.resources ?? [];
