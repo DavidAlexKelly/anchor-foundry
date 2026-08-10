@@ -66,6 +66,22 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 | Drawers and modals | ✅ | |
 | Open / Close events per overlay | ✅ | Foundry calls these **Layers** events (p.81) |
 
+### 1.5 Style formatting (p.57–62)
+
+Configurable at **page, section and widget level**. This is unglamorous and it is most of the distance between "a canvas" and "looks like Workshop" — it is what a builder reaches for in the first ten minutes, and none of it is hard.
+
+| Feature | Status | Notes |
+|---|---|---|
+| Section header formatting: Block, Contained, Floating | ○ | (p.58) |
+| Background colours: five preset shades **per theme**, Blueprint palette, transparent | ○ | (p.58) |
+| Custom hex background, with module-level saved colours reusable on sections and pages | ○ | (p.59) |
+| Widgets auto-switch light/dark **by background brightness** | ○ | (p.59–60) — a rule, not a style; needs a test. Pick a contrast threshold and assert a widget on a dark custom background renders its light variant |
+| Border styles: Bordered, Outer drop shadow, Inner shadow, Borderless | ○ | (p.60) |
+| Padding scale: None, Compact 16px, Regular 24/48, Large 40/62, Custom | ○ | (p.62) |
+| Inner section style applied to all child sections | ○ | (p.62) |
+
+The auto-switching rule is the only item here with behaviour worth testing; the rest are tokens and a settings panel. Doing the whole block together is cheaper than doing it piecemeal, because they share one style-resolution path from page → section → widget.
+
 ---
 
 ## 2. Widget configuration
