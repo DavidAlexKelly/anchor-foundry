@@ -104,15 +104,81 @@ export function useCanvasVariable(id: string | null | undefined): unknown {
   return id ? resolved[id] : undefined;
 }
 
-export function CanvasParameterProvider({ children }: { children: React.ReactNode }) {
-  const [values, setValues] = useState<Record<string, unknown>>({});
-  const set = useCallback((name: string, value: unknown) => {
-    setValues((current) => ({ ...current, [name]: value }));
-  }, []);
-  const setMany = useCallback((next: Record<string, unknown>) => {
-    setValues((current) => ({ ...current, ...next }));
-  }, []);
-  const value = useMemo(() => ({ values, set, setMany }), [values, set, setMany]);
+export function CanvasParameterProvider({
+  children,
+  seed,
+  link,
+}: {
+  children: React.ReactNode;
+  /** Starting values, applied once. Used to initialise interface variables from
+   * URL query parameters (Foundry p.165, p.198) — a *starting* value, not a
+   * binding, so the first widget interaction overwrites it and the URL does not
+   * fight the viewer for control of the filter. */
+  seed?: Record<string, unknown>;
+  /** Set on an embedded module whose host has mapped variables into it.
+   *
+   * The two-way part of Foundry's interface, p.127: "Any change to a variable
+   * value in either the child or parent module … will be reflected in all
+   * modules where the variable is mapped." So a mapped name does not live here
+   * at all — reads come from the host's values and writes go to the host's
+   * setter, which makes one value with two views of it rather than two values
+   * that have to be kept in step. */
+  link?: {
+    /** child variable id -> host variable id */
+    bindings: Record<string, string>;
+    values: Record<string, unknown>;
+    set: (name: string, value: unknown) => void;
+  };
+}) {
+  const [values, setValues] = useState<Record<string, unknown>>(seed ?? {});
+  const set = useCallback(
+    (name: string, value: unknown) => {
+      const hostName = link?.bindings[name];
+      if (hostName) {
+        link.set(hostName, value);
+        return;
+      }
+      setValues((current) => ({ ...current, [name]: value }));
+    },
+    [link],
+  );
+  const setMany = useCallback(
+    (next: Record<string, unknown>) => {
+      if (link) {
+        for (const [name, value] of Object.entries(next)) {
+          const hostName = link.bindings[name];
+          if (hostName) link.set(hostName, value);
+        }
+      }
+      setValues((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          Object.entries(next).filter(([name]) => !link?.bindings[name]),
+        ),
+      }));
+    },
+    [link],
+  );
+
+  // The host's value for every bound name, overlaid on our own. Overlaid rather
+  // than merged into state so there is exactly one copy: a bound name that also
+  // had a local value would drift the moment the host changed and nothing here
+  // noticed.
+  const linked = link
+    ? Object.fromEntries(
+        Object.entries(link.bindings).map(([childName, hostName]) => [
+          childName,
+          link.values[hostName],
+        ]),
+      )
+    : null;
+  const merged = useMemo(
+    () => (linked ? { ...values, ...linked } : values),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [values, JSON.stringify(linked)],
+  );
+
+  const value = useMemo(() => ({ values: merged, set, setMany }), [merged, set, setMany]);
   return <ParameterContext.Provider value={value}>{children}</ParameterContext.Provider>;
 }
 

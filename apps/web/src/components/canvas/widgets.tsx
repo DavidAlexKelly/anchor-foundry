@@ -17,6 +17,7 @@ import {
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
 import { VariableBridge } from "./VariableBridge";
 import {
+  CanvasParameterProvider,
   useCanvasEnv,
   useCanvasPage,
   useCanvasParameter,
@@ -2273,14 +2274,27 @@ CanvasTimeSeries.craft = {
 export function CanvasEmbeddedModule({
   moduleId = null,
   title = "",
+  interface: mapping = {},
 }: {
   moduleId?: string | null;
   title?: string;
+  /** child external ID -> host variable id. Keyed by external ID because that
+   * is the name the child publishes; the host side is a variable id because
+   * that is what this document uses everywhere else. */
+  interface?: Record<string, string>;
 }) {
   const {
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, projectId } = useCanvasEnv();
+  // The host's side of the boundary. `resolved` rather than raw values because
+  // the host's *definition* is what backs a mapped variable (p.127) - and a
+  // definition's output is its resolved value, not whatever a widget last typed
+  // into it. `set` is the write path back, which is what makes the sharing
+  // two-way: "any change to a variable value in either the child or parent
+  // module will be reflected in all modules where the variable is mapped".
+  const host = useCanvasVariables();
+  const hostParams = useCanvasParameters();
 
   const embedded = useQuery({
     queryKey: ["canvas-embedded", workspaceId, projectId, moduleId],
@@ -2290,6 +2304,20 @@ export function CanvasEmbeddedModule({
 
   const definition = embedded.data?.definition;
   const layout = definition ? layoutOf(definition) : null;
+  const childVariables = definition ? variablesOf(definition) : {};
+
+  // The mapping arrives keyed by external ID; everything downstream works in
+  // variable ids, so it is translated once, here. An external ID the child no
+  // longer publishes simply drops out - the save path refuses that document,
+  // but a child edited *after* the host was saved can still produce one, and a
+  // viewer should get a module missing one input rather than a crash.
+  const bindings: Record<string, string> = {};
+  for (const [externalId, hostVid] of Object.entries(mapping)) {
+    if (!hostVid) continue;
+    const target = Object.values(childVariables).find((v) => v.external_id === externalId);
+    if (target) bindings[target.id] = hostVid;
+  }
+  const boundIds = Object.keys(bindings);
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
@@ -2316,21 +2344,34 @@ export function CanvasEmbeddedModule({
         </p>
       )}
       {layout && Object.keys(layout).length > 0 && (
-        <div className="canvas-embedded" data-module={moduleId ?? ""}>
-          {/* Its own bridge, so the inner module's variables resolve against
-              the inner module. Sharing the outer one would resolve the wrong
-              declarations against the wrong document. */}
-          <VariableBridge
-            workspaceId={workspaceId}
-            projectId={projectId}
-            appId={moduleId!}
-            declared={variablesOf(definition)}
-            events={eventsOf(definition) as never}
+        <div
+          className="canvas-embedded"
+          data-module={moduleId ?? ""}
+          data-bound={boundIds.join(",")}
+        >
+          {/* Its own parameter scope, linked to the host for exactly the
+              variables that were mapped. Everything else stays private, which
+              is what keeps two modules that both declare `v_filter` from
+              silently reading each other's value. */}
+          <CanvasParameterProvider
+            link={{ bindings, values: host.resolved, set: hostParams.set }}
           >
-            <Editor resolver={CANVAS_RESOLVER} enabled={false}>
-              <Frame data={JSON.stringify(layout)} />
-            </Editor>
-          </VariableBridge>
+            {/* Its own bridge, so the inner module's variables resolve against
+                the inner module. Sharing the outer one would resolve the wrong
+                declarations against the wrong document. */}
+            <VariableBridge
+              workspaceId={workspaceId}
+              projectId={projectId}
+              appId={moduleId!}
+              declared={childVariables}
+              events={eventsOf(definition) as never}
+              bound={boundIds}
+            >
+              <Editor resolver={CANVAS_RESOLVER} enabled={false}>
+                <Frame data={JSON.stringify(layout)} />
+              </Editor>
+            </VariableBridge>
+          </CanvasParameterProvider>
         </div>
       )}
     </div>
@@ -2366,12 +2407,8 @@ function EmbeddedModuleSettings() {
             <option key={app.id} value={app.id}>{app.name}</option>
           ))}
         </select>
-        {/* Said here because the alternative - discovering it when a variable
-            silently does nothing - is much worse. */}
-        <span className="field-hint">
-          It runs on its own variables; nothing is passed in from this module
-        </span>
       </label>
+      <InterfaceMapping moduleId={moduleId} />
       <label className="field">
         <span className="field-label">Title</span>
         <input
@@ -2384,9 +2421,101 @@ function EmbeddedModuleSettings() {
   );
 }
 
+/** The child's interface, and what this module passes into it (Foundry p.127).
+ *
+ * > "Once a child module is selected, the module interface for the child module
+ * > will be shown in the widget configuration panel. This allows you to map
+ * > parent module variables to child module interface variables."
+ *
+ * Only same-kind host variables are offered per row, because a mismatch is a
+ * save the API refuses — offering it here would be building a dropdown whose
+ * purpose is to produce an error. The other three refusals cannot be prevented
+ * by a dropdown and are left to the API, which is where they belong. */
+function InterfaceMapping({ moduleId }: { moduleId: string | null }) {
+  const { workspaceId, projectId } = useCanvasEnv();
+  const {
+    mapping,
+    actions: { setProp },
+  } = useNode((node) => ({ mapping: node.data.props.interface ?? {} }));
+  const hostVariables = useCanvasVariables().declared;
+
+  const child = useQuery({
+    queryKey: ["canvas-embedded", workspaceId, projectId, moduleId],
+    queryFn: () => canvasApi.get(workspaceId, projectId, moduleId!),
+    enabled: !!moduleId,
+  });
+
+  if (!moduleId) return null;
+  if (child.isPending) return <p className="field-hint">Loading its interface…</p>;
+
+  const published = Object.values(
+    child.data?.definition ? variablesOf(child.data.definition) : {},
+  ).filter((v) => v.interface && v.external_id);
+
+  if (published.length === 0) {
+    return (
+      <p className="field-hint">
+        That module publishes no interface variables, so nothing can be passed
+        into it. A variable joins the interface by being given an external ID
+        with the interface toggle on.
+      </p>
+    );
+  }
+
+  return (
+    <div className="field" data-testid="embed-interface">
+      <span className="field-label">Passed into it</span>
+      {published.map((variable) => {
+        const externalId = variable.external_id!;
+        const compatible = Object.values(hostVariables).filter((h) => h.kind === variable.kind);
+        return (
+          <label key={externalId} className="field">
+            <span className="field-label">
+              {variable.interface?.display_name || variable.label}
+              {variable.interface?.required && <em> (required)</em>}
+            </span>
+            <select
+              value={(mapping as Record<string, string>)[externalId] ?? ""}
+              data-testid={`embed-map-${externalId}`}
+              onChange={(e) =>
+                setProp((p: { interface?: Record<string, string> }) => {
+                  const next = { ...(p.interface ?? {}) };
+                  if (e.target.value) next[externalId] = e.target.value;
+                  else delete next[externalId];
+                  p.interface = next;
+                })
+              }
+            >
+              <option value="">Not passed — it uses its own definition</option>
+              {compatible.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.label}
+                </option>
+              ))}
+            </select>
+            {variable.interface?.description && (
+              <span className="field-hint">{variable.interface.description}</span>
+            )}
+            {compatible.length === 0 && (
+              <span className="field-hint">
+                This module has no {variable.kind} variable to pass in.
+              </span>
+            )}
+          </label>
+        );
+      })}
+      {/* The consequence people get backwards, said where the choice is made. */}
+      <span className="field-hint">
+        A mapped variable is backed by <em>this</em> module&apos;s definition — the
+        embedded module&apos;s own default and derivation are ignored for it.
+      </span>
+    </div>
+  );
+}
+
 CanvasEmbeddedModule.craft = {
   displayName: "Embedded module",
-  props: { moduleId: null, title: "" },
+  props: { moduleId: null, title: "", interface: {} },
   related: { settings: EmbeddedModuleSettings },
 };
 

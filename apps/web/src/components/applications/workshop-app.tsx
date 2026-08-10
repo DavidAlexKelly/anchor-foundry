@@ -30,6 +30,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
+import { useSearchParams } from "next/navigation";
+import { seedFromQuery } from "@/components/canvas/pure";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import type { WorkshopEventDef } from "@/components/canvas/events";
 import {
@@ -252,6 +254,7 @@ function CanvasEnvBridge({
   appId,
   variables,
   events,
+  seed,
   children,
 }: {
   workspaceId: string;
@@ -259,6 +262,7 @@ function CanvasEnvBridge({
   appId: string;
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEventDef>;
+  seed?: Record<string, unknown>;
   children: React.ReactNode;
 }) {
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
@@ -268,7 +272,7 @@ function CanvasEnvBridge({
           tree, so a filter set in Preview survives switching back to Edit -
           the alternative resets every filter each time the mode flips, which
           makes a filter impossible to actually try out. */}
-      <CanvasParameterProvider>
+      <CanvasParameterProvider seed={seed}>
         {/* Resolves what the viewer has selected into what each variable is
             worth. The builder passes its *working* variables, not the saved
             ones, so a set configured a moment ago drives the table without a
@@ -309,6 +313,9 @@ function Toolbox() {
 }
 
 export function WorkshopApplication({ resource }: { resource: ResolvedResource }) {
+  // Interface variables initialised from the URL (Foundry p.165). The same
+  // external IDs an embedding module maps - one mechanism, three consumers.
+  const search = useSearchParams();
   const workspaceId = resource.workspace_id;
   const projectId = resource.project_id;
   const appId = resource.kind_id;
@@ -376,6 +383,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         appId={app.id}
         variables={variables}
         events={eventsOf(app.definition)}
+        seed={seedFromQuery(variables, search)}
       >
         <ActionBar
           app={app}

@@ -1420,6 +1420,20 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .vars-id { margin: -4px 0 0; font-size: 10.5px; }
 .vars-id code { font-family: var(--font-mono); }
+/* The module interface (Foundry p.163): set apart from the fields above it
+   because it is a different kind of statement — the ones above describe the
+   variable, these publish it. */
+.vars-interface {
+  display: grid; gap: 8px; padding: 8px; border-radius: var(--radius);
+  background: var(--paper); border: 1px solid var(--line);
+}
+/* A checkbox reads as a row, not a stacked field: `.vars-editor label` sets
+   `display: grid`, which would otherwise put the box on its own line above its
+   own label and leave the two looking unrelated. */
+.vars-editor .vars-toggle {
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px;
+}
+.vars-editor .vars-toggle input { width: auto; padding: 0; }
 .vars-value { margin: 0; font-size: 11.5px; }
 .vars-value code { font-family: var(--font-mono); }
 .vars-derivation {

@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MIN_SHARE, formatWeights, parseWeights, pivotClauses, resizeWeights, roundWeight,
-  seriesLabel,
+  seedFromQuery, seriesLabel,
 } from "./pure";
 
 describe("pivotClauses", () => {
@@ -194,5 +194,69 @@ describe("roundWeight and formatWeights", () => {
     // wrote a value the parser then read differently would drift a little on
     // every gesture.
     expect(parseWeights(written, 2)).toEqual([1.24, 0.76]);
+  });
+});
+
+// ---- the module interface, initialised from a URL (Foundry p.165) ----------
+describe("seedFromQuery", () => {
+  const iface = (id: string, kind: string, externalId: string) => ({
+    id,
+    kind,
+    external_id: externalId,
+    interface: {},
+  });
+
+  it("seeds an interface variable from its external ID", () => {
+    const seed = seedFromQuery(
+      { v_a: iface("v_a", "string", "status") },
+      new URLSearchParams("?status=open"),
+    );
+    expect(seed).toEqual({ v_a: "open" });
+  });
+
+  it("ignores a variable that has an external ID but is not on the interface", () => {
+    // Otherwise every stable name - including ones that exist only for state
+    // saving - becomes settable by anyone who can write a link.
+    const seed = seedFromQuery(
+      { v_a: { id: "v_a", kind: "string", external_id: "status" } },
+      new URLSearchParams("?status=open"),
+    );
+    expect(seed).toEqual({});
+  });
+
+  it("leaves a variable alone when the query does not mention it", () => {
+    const seed = seedFromQuery(
+      { v_a: iface("v_a", "string", "status") },
+      new URLSearchParams("?other=1"),
+    );
+    expect(seed).toEqual({});
+  });
+
+  it("parses numbers and booleans", () => {
+    const seed = seedFromQuery(
+      { v_n: iface("v_n", "number", "count"), v_b: iface("v_b", "boolean", "open") },
+      new URLSearchParams("?count=42&open=true"),
+    );
+    expect(seed).toEqual({ v_n: 42, v_b: true });
+  });
+
+  it("skips a value it cannot parse rather than defaulting it", () => {
+    // A wrong number is indistinguishable from a chosen one once it is drawn.
+    // `toEqual` treats `{v_n: undefined}` as `{}`, so it cannot tell "skipped"
+    // from "set to undefined" - and the difference is the whole assertion.
+    // Asserting on the keys is what makes this test able to fail.
+    const seed = seedFromQuery(
+      { v_n: iface("v_n", "number", "count") },
+      new URLSearchParams("?count=banana"),
+    );
+    expect(Object.keys(seed)).toEqual([]);
+  });
+
+  it("refuses object sets and picked objects rather than half-working", () => {
+    const seed = seedFromQuery(
+      { v_s: iface("v_s", "object_set", "set"), v_o: iface("v_o", "single_object", "obj") },
+      new URLSearchParams("?set=x&obj=y"),
+    );
+    expect(Object.keys(seed)).toEqual([]);
   });
 });
