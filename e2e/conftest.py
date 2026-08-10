@@ -208,7 +208,35 @@ def open_builder(page, module) -> None:
     settled(page)
 
 
+# Console noise the *dev server* makes, which no deployed build can produce and
+# no test should fail on.
+#
+# The favicon 404 was the first. The second was found the hard way: a full-suite
+# run failed once on `test_resource_filter` with
+#
+#   "Failed to fetch RSC payload for http://localhost:3100/home.
+#    Falling back to browser navigation."
+#
+# and passed on every re-run, which read convincingly as flakiness for two
+# sessions. It is not flaky - it is Next's router prefetching a route while the
+# dev server is recompiling, which happens exactly when somebody is editing
+# source during a run. The message even names its source: `hot-reloader-client`.
+# Next says "falling back to browser navigation" because it *recovered*, so
+# failing on it is failing on a message about something that worked.
+#
+# Matched narrowly on purpose. "Failed to fetch" on its own would swallow a real
+# API call that did not come back, which is precisely the class of bug this
+# assertion exists to catch.
+DEV_SERVER_NOISE = (
+    "favicon",
+    "Failed to fetch RSC payload",
+    "hot-reloader-client",
+)
+
+
 def no_console_errors(page) -> list[str]:
-    """Console errors worth failing on. The favicon 404 is the dev server's,
-    not the app's."""
-    return [e for e in page.console_errors if "favicon" not in e]
+    """Console errors worth failing on - the app's, not the dev server's."""
+    return [
+        e for e in page.console_errors
+        if not any(ignored in e for ignored in DEV_SERVER_NOISE)
+    ]

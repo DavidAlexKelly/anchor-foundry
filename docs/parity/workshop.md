@@ -18,18 +18,24 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 |---|---|---|
 | Toggle header visibility | ✅ | |
 | Title, used for browser tab name | ◑ | we set a title; it does not drive the document title (p.47) |
-| Custom colour for title text | ○ | |
-| Application logo — icon, with colour | ○ | (p.47) |
-| Application logo — uploaded image, with height and position | ○ | position is left/center/right horizontal, top/bottom vertical (p.47) |
-| Favourite-in-view-mode toggle | ○ | |
-| Header background colour | ○ | |
+| Custom colour for title text | ○ | belongs with §1.5's style block, not here |
+| Application logo — icon, with colour | ○ | (p.47); needs an icon library — see the divergence below |
+| Application logo — uploaded image, with height and position | ○ | (p.47); needs an image-upload decision, which attachments (§39) already has a shape for |
+| Favourite-in-view-mode toggle | ○ | there is no favourites feature to toggle into |
+| Header background colour | ○ | §1.5 |
 | **Horizontal orientation** | ✅ | §80 |
-| Header height (horizontal) | ○ | |
-| **Vertical orientation** | ○ | displayed on the left (p.48) |
-| Vertical width | ○ | |
-| Vertical collapsibility, collapsed-by-default | ○ | (p.48) |
+| Header height (horizontal) | ✅ | |
+| **Vertical orientation** | ✅ | displayed on the left (p.48) |
+| Vertical width | ✅ | |
+| Vertical collapsibility, collapsed-by-default | ✅ | (p.48) |
 | Collapsed-state image | ○ | requires a header image first (p.49) |
-| Collapsed behaviour: Button Group and Tabs show icons only, **all other widgets hidden** | ○ | (p.49) — a rule, not a style; needs a test |
+| Collapsed behaviour: Button Group and Tabs show icons only, **all other widgets hidden** | ✅ | (p.49) — the rule, and the reason `e2e/test_vertical_header.py` exists |
+
+**The collapse rule is the only part of a header that is behaviour rather than styling**, and it is implemented as one: the header reads its children's node types and renders only `CanvasButton` and `CanvasTabs` when collapsed. The mutation that renders everything anyway turns the test red.
+
+**Divergence: there is no icon library.** Foundry offers an icon picker; a Button and a Page take a one-or-two-character `icon` instead — an emoji, an initial — and an unset one falls back to the label's first letter. The *behaviour* p.49 describes (drop the text, show a glyph) is faithful; the picker is not built. The label survives as the `aria-label` and `title`, so a collapsed header stays navigable by anything that is not eyes.
+
+**The container becomes a row, decided in code rather than by `:has()`.** A vertical header needs its *parent* to lay out as a row, and a child cannot set that — so `CanvasContainer` reads its own children for a vertical header. A CSS `:has()` selector would have been shorter and is exactly the silent-failure shape this repo has already been caught by twice: an unsupported selector is nothing at all, and the symptom would be a header above the page rather than beside it.
 
 ### 1.2 Pages
 

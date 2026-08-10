@@ -291,3 +291,18 @@ export const CanvasActionsProvider = ActionsContext.Provider;
 export function useCanvasActions(): CanvasActions {
   return useContext(ActionsContext);
 }
+
+
+/** Whether the module header is collapsed (Foundry p.49).
+ *
+ * A context rather than a prop because the rule reaches past the header's own
+ * children: a Tabs widget draws one button per *page*, and it has to know to
+ * drop the labels. Defaults to false, so every widget outside a header - which
+ * is most of them - reads the same value it would have read before this
+ * existed.
+ */
+export const CanvasHeaderCollapsedContext = createContext(false);
+
+export function useHeaderCollapsed(): boolean {
+  return useContext(CanvasHeaderCollapsedContext);
+}
