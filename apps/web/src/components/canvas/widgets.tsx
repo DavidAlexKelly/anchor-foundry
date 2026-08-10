@@ -2432,7 +2432,16 @@ function EmbeddedModuleSettings() {
  * save the API refuses — offering it here would be building a dropdown whose
  * purpose is to produce an error. The other three refusals cannot be prevented
  * by a dropdown and are left to the API, which is where they belong. */
-function InterfaceMapping({ moduleId }: { moduleId: string | null }) {
+function InterfaceMapping({
+  moduleId,
+  except = null,
+}: {
+  moduleId: string | null;
+  /** An external ID the caller configures itself, so it is not offered twice.
+   * A Loop layout owns its item variable - it supplies one object per copy -
+   * and listing it here as well would be two controls writing one mapping. */
+  except?: string | null;
+}) {
   const { workspaceId, projectId } = useCanvasEnv();
   const {
     mapping,
@@ -2451,7 +2460,7 @@ function InterfaceMapping({ moduleId }: { moduleId: string | null }) {
 
   const published = Object.values(
     child.data?.definition ? variablesOf(child.data.definition) : {},
-  ).filter((v) => v.interface && v.external_id);
+  ).filter((v) => v.interface && v.external_id && v.external_id !== except);
 
   if (published.length === 0) {
     return (
@@ -2518,6 +2527,397 @@ CanvasEmbeddedModule.craft = {
   displayName: "Embedded module",
   props: { moduleId: null, title: "", interface: {} },
   related: { settings: EmbeddedModuleSettings },
+};
+
+// ---- Loop layout (parity workshop.md §1.3; Foundry p.129-136) ---------------
+/**
+ * One embedded module per object in a set.
+ *
+ * > "Loop layouts allow you to loop over an object set or array, displaying an
+ * > embedded module for each object in the set or each entry in the array used
+ * > as input." (p.129)
+ *
+ * **Why this is not just a card list.** An Object Table or Card List has a
+ * fixed set of features; a loop layout renders a whole *module* per object, so
+ * "any feature combination available in Workshop" can be used for each one
+ * (p.129) — its own widgets, its own events, its own actions. Foundry's own
+ * example is a kanban board where each ticket is a module instance.
+ *
+ * **It was unblocked by the module interface**, not built alongside it: p.135
+ * says loop variable mapping "works the same way as the embedded module
+ * interface configuration", so this is that mechanism applied per row rather
+ * than a second one.
+ *
+ * **The loop variable is per-instance; every other mapping is shared.** p.135
+ * is explicit — the other interface variables are "the same variable reference
+ * for each looped instance, allowing variable state to be shared across looped
+ * instances and the parent module". So the object goes in as a seeded value on
+ * a provider keyed by the object's own id, and everything else goes through the
+ * host link that `CanvasEmbeddedModule` already uses.
+ *
+ * **Sorting is not offered**, and that is decision 0006 rather than an
+ * omission: properties are stored untyped, so an ordered comparison means one
+ * thing on Postgres and another on OpenSearch. p.132 also notes Foundry applies
+ * a primary key sort behind any user sort "to ensure a consistent ordering" —
+ * which is what the object set evaluation already does, so the order is stable
+ * even without the control.
+ */
+export function CanvasLoopSection({
+  objectSetVariable = null,
+  moduleId = null,
+  itemVariable = null,
+  interface: mapping = {},
+  paging = "limit",
+  maxItems = 12,
+  pageSize = 12,
+  display = "list",
+  maxColumns = 3,
+  minCardWidth = 220,
+}: {
+  objectSetVariable?: string | null;
+  moduleId?: string | null;
+  /** The child's interface variable, by external ID, that receives each object. */
+  itemVariable?: string | null;
+  interface?: Record<string, string>;
+  paging?: "limit" | "paged";
+  maxItems?: number;
+  pageSize?: number;
+  display?: "list" | "grid";
+  maxColumns?: number;
+  minCardWidth?: number;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, projectId, mode } = useCanvasEnv();
+  const host = useCanvasVariables();
+  const hostParams = useCanvasParameters();
+
+  const definition = useCanvasVariable(objectSetVariable);
+  const child = useQuery({
+    queryKey: ["canvas-embedded", workspaceId, projectId, moduleId],
+    queryFn: () => canvasApi.get(workspaceId, projectId, moduleId!),
+    enabled: !!moduleId,
+  });
+  const childVariables = child.data?.definition ? variablesOf(child.data.definition) : {};
+  const byExternalId = (externalId: string | null) =>
+    externalId
+      ? Object.values(childVariables).find((v) => v.external_id === externalId) ?? null
+      : null;
+
+  const itemTarget = byExternalId(itemVariable);
+  // Everything except the loop variable, resolved the same way the Embedded
+  // Module widget resolves its mapping.
+  const shared: Record<string, string> = {};
+  for (const [externalId, hostVid] of Object.entries(mapping)) {
+    if (!hostVid || externalId === itemVariable) continue;
+    const target = byExternalId(externalId);
+    if (target) shared[target.id] = hostVid;
+  }
+
+  // `limit` shows one page of at most `maxItems`; `paged` walks the set
+  // (p.134). Both are a page size to `useSetPage`; only the controls differ.
+  const size = paging === "paged" ? Math.max(1, pageSize) : Math.max(1, maxItems);
+  const page = useSetPage(workspaceId, definition, {
+    pageSize: size,
+    variablesPending: host.pending,
+  });
+
+  const layout = child.data?.definition ? layoutOf(child.data.definition) : null;
+  const ready = !!moduleId && !!itemTarget && !!layout;
+
+  if (mode === "edit" && !ready) {
+    return (
+      <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+        <p className="canvas-widget-empty">
+          {!objectSetVariable
+            ? "Loop — choose an object set in Settings"
+            : !moduleId
+              ? "Loop — choose a module to repeat"
+              : !itemTarget
+                ? "Loop — choose which of that module's interface variables receives each object"
+                : "Loading…"}
+        </p>
+      </div>
+    );
+  }
+
+  const rows = page.rows ?? [];
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {page.unresolved && <p className="canvas-widget-empty">Loading…</p>}
+      {page.isError && (
+        <p className="canvas-widget-empty">Couldn&apos;t load the objects to loop over.</p>
+      )}
+      {ready && !page.unresolved && rows.length === 0 && !page.isError && (
+        <p className="canvas-widget-empty">Nothing in that set.</p>
+      )}
+      {ready && (
+        <div
+          className={`canvas-loop canvas-loop--${display}`}
+          data-count={rows.length}
+          style={
+            display === "grid"
+              ? {
+                  // `auto-fill` with a floor rather than a fixed column count:
+                  // p.134 configures *both* a max column count and a minimum
+                  // card width, and a card narrower than its minimum is the
+                  // failure the minimum exists to prevent - so the width wins
+                  // and the maximum caps what a wide screen does with the room.
+                  gridTemplateColumns: `repeat(auto-fill, minmax(${minCardWidth}px, 1fr))`,
+                  maxWidth: maxColumns > 0 ? maxColumns * (minCardWidth + 12) : undefined,
+                }
+              : undefined
+          }
+        >
+          {rows.map((instance) => (
+            <div className="canvas-loop-item" key={instance.id}>
+              {/* Keyed by the object's id, so each object gets its own provider
+                  and its own layout state - p.129: each instance "functions
+                  independently from other embedded module instances, and has
+                  its own variable scope and layout state". A shared provider
+                  would make selecting a row in one card select it in all. */}
+              <CanvasParameterProvider
+                seed={{ [itemTarget!.id]: selectionOf(instance, page.typeId).object }}
+                link={{ bindings: shared, values: host.resolved, set: hostParams.set }}
+              >
+                <VariableBridge
+                  workspaceId={workspaceId}
+                  projectId={projectId}
+                  appId={moduleId!}
+                  declared={childVariables}
+                  events={eventsOf(child.data!.definition) as never}
+                  bound={[itemTarget!.id, ...Object.keys(shared)]}
+                >
+                  <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
+                    <Frame data={JSON.stringify(layout)} />
+                  </Editor>
+                </VariableBridge>
+              </CanvasParameterProvider>
+            </div>
+          ))}
+        </div>
+      )}
+      {ready && paging === "paged" && (page.total ?? 0) > size && (
+        <div className="canvas-loop-pager">
+          <button
+            type="button"
+            className="btn quiet"
+            disabled={page.offset === 0}
+            onClick={() => page.setOffset(Math.max(0, page.offset - size))}
+          >
+            Previous
+          </button>
+          <span className="soft">
+            {page.offset + 1}–{Math.min(page.offset + size, page.total ?? 0)} of {page.total}
+          </span>
+          <button
+            type="button"
+            className="btn quiet"
+            disabled={page.offset + size >= (page.total ?? 0)}
+            onClick={() => page.setOffset(page.offset + size)}
+          >
+            Next
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LoopSectionSettings() {
+  const { workspaceId, projectId } = useCanvasEnv();
+  const {
+    objectSetVariable, moduleId, itemVariable, mapping,
+    paging, maxItems, pageSize, display, maxColumns, minCardWidth,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    moduleId: node.data.props.moduleId,
+    itemVariable: node.data.props.itemVariable,
+    mapping: node.data.props.interface ?? {},
+    paging: node.data.props.paging,
+    maxItems: node.data.props.maxItems,
+    pageSize: node.data.props.pageSize,
+    display: node.data.props.display,
+    maxColumns: node.data.props.maxColumns,
+    minCardWidth: node.data.props.minCardWidth,
+  }));
+  const { declared } = useCanvasVariables();
+  const apps = useQuery({
+    queryKey: ["canvas-apps", workspaceId, projectId],
+    queryFn: () => canvasApi.list(workspaceId, projectId),
+  });
+  const child = useQuery({
+    queryKey: ["canvas-embedded", workspaceId, projectId, moduleId],
+    queryFn: () => canvasApi.get(workspaceId, projectId, moduleId!),
+    enabled: !!moduleId,
+  });
+  const published = Object.values(
+    child.data?.definition ? variablesOf(child.data.definition) : {},
+  ).filter((v) => v.interface && v.external_id);
+  // p.134: the child "must have a module interface object set variable if
+  // configured to loop over an object set". Ours is `single_object`, which is
+  // the kind that actually describes one object - see the spec note.
+  const candidates = published.filter((v) => v.kind === "single_object");
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Object set to loop through</span>
+        <select
+          value={objectSetVariable ?? ""}
+          data-testid="loop-set"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {Object.values(declared)
+            .filter((v) => v.kind === "object_set")
+            .map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+        </select>
+      </label>
+
+      <label className="field">
+        <span className="field-label">Module to repeat</span>
+        <select
+          value={moduleId ?? ""}
+          data-testid="loop-module"
+          onChange={(e) =>
+            setProp((p: { moduleId: string | null }) => (p.moduleId = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {(apps.data ?? []).map((app) => (
+            <option key={app.id} value={app.id}>{app.name}</option>
+          ))}
+        </select>
+      </label>
+
+      {moduleId && (
+        <label className="field">
+          <span className="field-label">Receives each object</span>
+          <select
+            value={itemVariable ?? ""}
+            data-testid="loop-item"
+            onChange={(e) =>
+              setProp((p: { itemVariable: string | null }) =>
+                (p.itemVariable = e.target.value || null))
+            }
+          >
+            <option value="">Choose…</option>
+            {candidates.map((v) => (
+              <option key={v.external_id} value={v.external_id!}>
+                {v.interface?.display_name || v.label}
+              </option>
+            ))}
+          </select>
+          {candidates.length === 0 && (
+            <span className="field-hint">
+              That module publishes no single-object interface variable, so there
+              is nowhere to put each object. Add one in its Variables panel.
+            </span>
+          )}
+          {/* p.135's warning, carried across rather than left to be discovered. */}
+          <span className="field-hint">
+            Each copy gets its own object. Changing this variable inside the
+            module itself is not supported.
+          </span>
+        </label>
+      )}
+
+      <label className="field">
+        <span className="field-label">Paging</span>
+        <select
+          value={paging ?? "limit"}
+          data-testid="loop-paging"
+          onChange={(e) => setProp((p: { paging: string }) => (p.paging = e.target.value))}
+        >
+          <option value="limit">Limit — one page, up to a maximum</option>
+          <option value="paged">Paged</option>
+        </select>
+      </label>
+      {paging === "paged" ? (
+        <label className="field">
+          <span className="field-label">Items per page</span>
+          <input
+            type="number" min={1}
+            value={pageSize ?? 12}
+            onChange={(e) => setProp((p: { pageSize: number }) => (p.pageSize = Number(e.target.value) || 1))}
+          />
+        </label>
+      ) : (
+        <label className="field">
+          <span className="field-label">Max items to display</span>
+          <input
+            type="number" min={1}
+            value={maxItems ?? 12}
+            data-testid="loop-max"
+            onChange={(e) => setProp((p: { maxItems: number }) => (p.maxItems = Number(e.target.value) || 1))}
+          />
+        </label>
+      )}
+
+      <label className="field">
+        <span className="field-label">Display</span>
+        <select
+          value={display ?? "list"}
+          data-testid="loop-display"
+          onChange={(e) => setProp((p: { display: string }) => (p.display = e.target.value))}
+        >
+          <option value="list">List</option>
+          <option value="grid">Grid</option>
+        </select>
+      </label>
+      {display === "grid" && (
+        <>
+          <label className="field">
+            <span className="field-label">Max columns</span>
+            <input
+              type="number" min={1}
+              value={maxColumns ?? 3}
+              onChange={(e) => setProp((p: { maxColumns: number }) => (p.maxColumns = Number(e.target.value) || 1))}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Min card width (px)</span>
+            <input
+              type="number" min={80}
+              value={minCardWidth ?? 220}
+              onChange={(e) => setProp((p: { minCardWidth: number }) => (p.minCardWidth = Number(e.target.value) || 80))}
+            />
+          </label>
+        </>
+      )}
+
+      {moduleId && published.length > candidates.length && (
+        <InterfaceMapping moduleId={moduleId} except={itemVariable} />
+      )}
+
+      {/* Said rather than offered. Decision 0006: properties are stored
+          untyped, so an ordered comparison means one thing on Postgres and
+          another on OpenSearch. */}
+      <p className="field-hint">
+        Sorting by a property is not available yet — see
+        <code> docs/decisions/0006</code>. The order is the set&apos;s own, which
+        is stable.
+      </p>
+    </>
+  );
+}
+
+CanvasLoopSection.craft = {
+  displayName: "Loop",
+  props: {
+    objectSetVariable: null, moduleId: null, itemVariable: null, interface: {},
+    paging: "limit", maxItems: 12, pageSize: 12,
+    display: "list", maxColumns: 3, minCardWidth: 220,
+  },
+  related: { settings: LoopSectionSettings },
 };
 
 // ---- Map (ROADMAP Canvas item 4) --------------------------------------------
@@ -3858,15 +4258,37 @@ function childList(children: React.ReactNode): React.ReactNode[] {
  * three unreadable columns; the roadmap asks for responsive rules per section
  * type, and for a column section the rule is "stop being columns".
  */
+const SECTION_LABELS: Record<string, string> = {
+  columns: "Columns",
+  rows: "Rows",
+  flow: "Flow",
+  toolbar: "Toolbar",
+};
+
 export function CanvasSection({
   direction = "columns",
   weights = "",
   gap = 12,
   minHeight = 0,
   visibleWhen = null,
+  scroll = false,
   children,
 }: {
-  direction?: "columns" | "rows";
+  /** Foundry's section layouts (p.54). Columns, Rows and Tabs were here; Flow
+   * and Toolbar are the two that are a *section* rather than a widget.
+   *
+   * - **Flow** — "turns the current section in a vertically scrolling container
+   *   to allow module building to configure widgets that stretch beyond the
+   *   displayed interface of a module". So: rows, content-height children, and
+   *   it scrolls. Distinct from Rows-with-scrolling because a Flow child keeps
+   *   its natural height rather than sharing the section's out by weight.
+   * - **Toolbar** — "configures sections to function as a horizontal toolbar
+   *   optimized for smaller widgets like Button Groups or Metric Cards". So:
+   *   columns, but children take the width they need instead of an equal share,
+   *   which is what stops three buttons spreading across a whole page. */
+  direction?: "columns" | "rows" | "flow" | "toolbar";
+  /** Rows only: p.54's "Enable scrolling" option. */
+  scroll?: boolean;
   /** How tall a **row** section is, in pixels. Blank means "as tall as its
    *  contents", which is the sensible default and the reason proportions on a
    *  row section did nothing until this existed: `flex-grow` shares out *free*
@@ -3896,6 +4318,10 @@ export function CanvasSection({
   } = useNode();
   const { mode } = useCanvasEnv();
   const { hidden, marker } = useVisibility(visibleWhen);
+  // Only Columns and Rows divide their space between children, so only they
+  // have proportions to configure or handles to drag. Flow and Toolbar are
+  // about *not* doing that.
+  const shares = direction === "columns" || direction === "rows";
   const parts = childList(children);
   const parsed = parseWeights(weights, parts.length);
 
@@ -3976,13 +4402,18 @@ export function CanvasSection({
           section is doing, the way a page's label does. */}
       {mode === "edit" && (
         <p className="canvas-section-label">
-          {direction === "columns" ? "Columns" : "Rows"}
-          {parts.length > 1 ? ` · ${parsed.map(roundWeight).join(":")}` : ""}
+          {SECTION_LABELS[direction] ?? "Section"}
+          {shares && parts.length > 1 ? ` · ${parsed.map(roundWeight).join(":")}` : ""}
         </p>
       )}
       <div
         className="canvas-section-parts"
-        style={{ gap, ...(direction === "rows" && minHeight > 0 ? { minHeight } : {}) }}
+        style={{
+          gap,
+          ...(direction === "rows" && minHeight > 0 ? { minHeight } : {}),
+          ...(direction === "rows" && scroll ? { overflowY: "auto" } : {}),
+          ...(direction === "flow" && minHeight > 0 ? { maxHeight: minHeight } : {}),
+        }}
         ref={partsRef}
       >
         {parts.map((child, index) => (
@@ -3992,7 +4423,15 @@ export function CanvasSection({
               // `flex-grow` rather than a width: the children then share
               // whatever is left after gaps, so the arithmetic does not have to
               // know how many gaps there are.
-              style={{ flexGrow: effective[index] ?? 1, flexBasis: 0, minWidth: 0 }}
+              style={
+                shares
+                  ? { flexGrow: effective[index] ?? 1, flexBasis: 0, minWidth: 0 }
+                  // Flow and Toolbar children keep their natural size: a
+                  // toolbar whose three buttons each took a third of the page
+                  // is not a toolbar, and a flow whose children were squeezed
+                  // to fit would defeat the scrolling it exists for.
+                  : { flexGrow: 0, flexShrink: 0, minWidth: 0 }
+              }
             >
               {child}
             </div>
@@ -4001,7 +4440,7 @@ export function CanvasSection({
                 the author's rather than the reader's. */}
             {mode === "edit"
               && index < parts.length - 1
-              && (direction === "columns" || minHeight > 0) && (
+              && shares && (direction === "columns" || minHeight > 0) && (
               <div
                 role="separator"
                 tabIndex={0}
@@ -4032,6 +4471,7 @@ export function CanvasSection({
 function SectionSettings() {
   const {
     direction,
+    scroll,
     weights,
     gap,
     minHeight,
@@ -4039,6 +4479,7 @@ function SectionSettings() {
     actions: { setProp },
   } = useNode((node) => ({
     direction: node.data.props.direction,
+    scroll: node.data.props.scroll,
     weights: node.data.props.weights,
     gap: node.data.props.gap,
     minHeight: node.data.props.minHeight,
@@ -4058,8 +4499,18 @@ function SectionSettings() {
         >
           <option value="columns">Columns</option>
           <option value="rows">Rows</option>
+          <option value="flow">Flow</option>
+          <option value="toolbar">Toolbar</option>
         </select>
+        <span className="field-hint">
+          {direction === "flow"
+            ? "A vertically scrolling container for content taller than the screen"
+            : direction === "toolbar"
+              ? "A horizontal strip; its widgets keep their own width"
+              : "Its widgets share the space by the proportions below"}
+        </span>
       </label>
+      {(direction ?? "columns") !== "flow" && direction !== "toolbar" && (
       <label className="field">
         <span className="field-label">Proportions</span>
         <input
@@ -4073,7 +4524,19 @@ function SectionSettings() {
             : "One number per widget, e.g. 2,1 for two-thirds and a third. Drag the handles between them"}
         </span>
       </label>
+      )}
       {direction === "rows" && (
+        <label className="vars-toggle field">
+          <input
+            type="checkbox"
+            checked={!!scroll}
+            data-testid="section-scroll"
+            onChange={(e) => setProp((p: { scroll: boolean }) => (p.scroll = e.target.checked))}
+          />
+          Enable scrolling
+        </label>
+      )}
+      {(direction === "rows" || direction === "flow") && (
         <label className="field">
           <span className="field-label">Height</span>
           <input
@@ -4106,7 +4569,7 @@ function SectionSettings() {
 
 CanvasSection.craft = {
   displayName: "Section",
-  props: { direction: "columns", weights: "", gap: 12, minHeight: 0, visibleWhen: null },
+  props: { direction: "columns", weights: "", gap: 12, minHeight: 0, visibleWhen: null, scroll: false },
   isCanvas: true,
   related: { settings: SectionSettings },
 };
@@ -4591,6 +5054,7 @@ export const CANVAS_RESOLVER = {
   CanvasPivotTable,
   CanvasTimeSeries,
   CanvasEmbeddedModule,
+  CanvasLoopSection,
   CanvasChart,
   CanvasMap,
   CanvasMetricCard,
@@ -4600,7 +5064,8 @@ export const CANVAS_RESOLVER = {
 export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: string }[] = [
   { key: "CanvasHeader", label: "Header", hint: "A toolbar above every page; one per module" },
   { key: "CanvasPage", label: "Page", hint: "A screen of the app; Tabs move between them" },
-  { key: "CanvasSection", label: "Section", hint: "Split a page into columns or rows" },
+  { key: "CanvasSection", label: "Section", hint: "Columns, rows, a flow or a toolbar" },
+  { key: "CanvasLoopSection", label: "Loop", hint: "One embedded module per object in a set" },
   { key: "CanvasOverlay", label: "Overlay", hint: "A modal or drawer over the page" },
   { key: "CanvasTabs", label: "Tabs", hint: "One button per page" },
   { key: "CanvasButton", label: "Button", hint: "Runs the events wired to its click" },

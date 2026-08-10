@@ -834,14 +834,27 @@ def embedded_modules(document: Any) -> set[str]:
         # string in hand-written and converted documents. Both are in the
         # stored corpus, and assuming the first form raised `AttributeError` on
         # the second - a save path that crashed rather than refusing.
-        node_type = node.get("type")
-        resolved = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type
-        if str(resolved or "") != "CanvasEmbeddedModule":
+        if _embedding_node(node) is None:
             continue
         module_id = (node.get("props") or {}).get("moduleId")
         if isinstance(module_id, str) and module_id:
             found.add(module_id)
     return found
+
+
+# Both node types embed a module, and both must be seen by every rule that
+# cares - the cycle walk, the depth limit, the interface check. A Loop layout
+# that was invisible here could close a cycle the server refuses everywhere
+# else, and the loop would be found by a viewer's browser rather than by its
+# author (`docs/pal/foundry_workshop.pdf` p.129).
+EMBEDDING_NODES = ("CanvasEmbeddedModule", "CanvasLoopSection")
+
+
+def _embedding_node(node: Any) -> str | None:
+    node_type = node.get("type")
+    resolved = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type
+    name = str(resolved or "")
+    return name if name in EMBEDDING_NODES else None
 
 
 @dataclass(frozen=True)
@@ -857,6 +870,11 @@ class Embed:
     # public name, a variable id is a private one, and a mapping is exactly the
     # place where one is translated into the other.
     mapping: dict[str, str] = field(default_factory=dict)
+    # Loop layouts only: the child interface variable that receives each object
+    # (p.135). Not part of `mapping` because it is not mapped to a host
+    # variable - the loop supplies one object per copy, so its source is the set
+    # being looped rather than anything the host declares.
+    item_external_id: str | None = None
 
 
 def embeds(document: Any) -> list[Embed]:
@@ -872,9 +890,8 @@ def embeds(document: Any) -> list[Embed]:
     for node_id, node in (layout or {}).items():
         if not isinstance(node, dict):
             continue
-        node_type = node.get("type")
-        resolved = node_type.get("resolvedName") if isinstance(node_type, dict) else node_type
-        if str(resolved or "") != "CanvasEmbeddedModule":
+        kind = _embedding_node(node)
+        if kind is None:
             continue
         props = node.get("props") or {}
         module_id = props.get("moduleId")
@@ -899,7 +916,15 @@ def embeds(document: Any) -> list[Embed]:
                     f"the mapping for {external_id!r} must name a variable of this module"
                 )
             mapping[str(external_id)] = host_vid
-        out.append(Embed(node=str(node_id), module_id=module_id, mapping=mapping))
+        item = props.get("itemVariable") if kind == "CanvasLoopSection" else None
+        out.append(
+            Embed(
+                node=str(node_id),
+                module_id=module_id,
+                mapping=mapping,
+                item_external_id=item if isinstance(item, str) and item else None,
+            )
+        )
     return out
 
 

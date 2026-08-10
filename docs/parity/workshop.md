@@ -41,16 +41,27 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 | Switch page via Layout event | ✅ | |
 | Variable-Based Page Selection | ○ | a string variable backs the current page; **note the documented gotcha** — a Switch-to-Page event does *not* update it (p.81) |
 
-### 1.3 Sections — we have three of six layouts
+### 1.3 Sections — all six layouts
 
 | Layout | Status | Notes |
 |---|---|---|
 | Columns | ✅ | |
-| Rows | ✅ | Foundry's has an **Enable scrolling** option (p.54) — ○ |
+| Rows | ✅ | **Enable scrolling** (p.54) ✅ |
 | Tabs | ✅ | |
-| **Flow** | ○ | vertically scrolling container for widgets that exceed the viewport (p.54) |
-| **Toolbar** | ○ | horizontal, "optimized for smaller widgets like Button Groups or Metric Cards" (p.54) |
-| **Loop** | ○ | loop over an object set or array, rendering an embedded module per entry (p.54); depends on §4 |
+| **Flow** | ✅ | vertically scrolling container for widgets that exceed the viewport (p.54) |
+| **Toolbar** | ✅ | horizontal, "optimized for smaller widgets like Button Groups or Metric Cards" (p.54); its widgets keep their own width rather than sharing the row, which is what separates it from Columns |
+| **Loop** | ◑ | over an **object set** ✅ (p.129–136); over an **array** ○ — see below |
+
+**Loop layouts** were unblocked by §3.4 rather than built alongside it: p.135 says loop variable mapping "works the same way as the embedded module interface configuration". Done: the set to loop, the module to repeat, the child interface variable that receives each object, the other interface variables (shared across copies, per p.135), Limit and Paged paging (p.134), List and Grid display with max columns and min card width (p.134). Each copy gets its own variable scope and layout state, per p.129 — the assertion the feature rests on, since one shared scope renders the right number of cards all showing the same object.
+
+| Loop feature | Status | Notes |
+|---|---|---|
+| Loop an object set | ✅ | |
+| Loop an **array** | ○ | p.132–133. Our `array` kind has no element type, so "a variable typed to the array type" (p.134) cannot be expressed or checked. Needs a typed-array kind first; refused rather than half-built |
+| Sort by property | ○ | decision 0006 — properties are stored untyped, so an ordered comparison means one thing on Postgres and another on OpenSearch. The set's own order is stable, which p.132 says Foundry also guarantees via a primary-key sort behind user sorts |
+| Interface variable warning | ✅ | p.135's "unexpected behavior may occur" is carried into the settings panel rather than left to be discovered |
+
+**One divergence worth naming.** p.134 says the child "must have a module interface object set variable" for an object-set loop, while p.135 describes mapping "objects from the object set". We use our `single_object` kind, which is the one that actually describes a single object, and the server refuses anything else. If Foundry genuinely hands over a one-object *set*, this is a difference in the type, not in the behaviour.
 
 | Section feature | Status | Notes |
 |---|---|---|
@@ -203,7 +214,7 @@ The `recompute {variable}` event is the other half of this and is missing from �
 | **Interface variable mapping** | ✅ | the §114 deferral is closed; §3.4 |
 | Sibling-to-sibling communication through shared interface variables | ◑ | works by construction — two embeds mapped to one host variable share it through the host — but **untested**, so it is a claim about the design rather than a demonstrated behaviour (p.164) |
 | Embedded module may modify interface variables through events | ◑ | the write path exists and is two-way per p.127; a `set_variable` in the child on a mapped id routes to the host. Also untested (p.164) |
-| **Loop layouts** — one embedded module per object in a set | ○ | (p.54) |
+| **Loop layouts** — one embedded module per object in a set | ✅ | (p.54, p.129–136); §1.3 |
 | Open Workshop module event, passing values into the target's interface | ○ | (p.165) |
 | In edit mode, opening a child from a reference carries the current interface values through, for debugging | ○ | (p.165) — small, and a genuinely thoughtful touch |
 

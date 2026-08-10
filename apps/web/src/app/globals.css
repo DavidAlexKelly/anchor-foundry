@@ -586,6 +586,11 @@ button { font: inherit; cursor: pointer; }
 }
 .canvas-frame-area .canvas-block:hover { border-color: var(--line-strong); }
 .canvas-widget-empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; margin: 0; }
+/* Loop layout (Foundry p.129-136): one embedded module per object. */
+.canvas-loop { display: flex; flex-direction: column; gap: 10px; }
+.canvas-loop--grid { display: grid; gap: 10px; }
+.canvas-loop-item { min-width: 0; }
+.canvas-loop-pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 11.5px; }
 .canvas-settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 /* Foundry's three widget-configuration tabs (p.65-68). */
 .canvas-settings-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
@@ -1575,6 +1580,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-section-parts { display: flex; min-width: 0; }
 .canvas-section--columns > .canvas-section-parts { flex-direction: row; }
 .canvas-section--rows > .canvas-section-parts { flex-direction: column; }
+/* Flow scrolls; a toolbar is a strip whose widgets keep their own width. */
+.canvas-section--flow > .canvas-section-parts { flex-direction: column; overflow-y: auto; }
+.canvas-section--toolbar > .canvas-section-parts { flex-direction: row; align-items: center; flex-wrap: wrap; }
 .canvas-section-part { min-width: 0; }
 .canvas-section-label {
   font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;

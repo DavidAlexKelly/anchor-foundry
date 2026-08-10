@@ -871,3 +871,103 @@ def test_the_host_resolves_a_bound_variable_for_the_child(client: TestClient, fx
                         json={"values": {"v_in": "child", "v_derived": "from host"},
                               "bound": ["v_derived"]})
     assert bound.json()["values"]["v_derived"] == "from host", "the host's value wins"
+
+
+# ---- loop layouts (parity workshop.md §1.3; Foundry p.129-136) ---------------
+# A loop embeds a module per object, so everything that is true of an embed is
+# true of it - the cycle walk, the depth limit, the interface check. These are
+# the parts that are *only* true of a loop.
+def _loop_node(module_id: str, item: str | None = "obj", mapping: dict | None = None) -> dict:
+    props: dict = {"moduleId": module_id, "objectSetVariable": "v_set"}
+    if item is not None:
+        props["itemVariable"] = item
+    if mapping is not None:
+        props["interface"] = mapping
+    return {"type": {"resolvedName": "CanvasLoopSection"}, "props": props, "parent": "ROOT",
+            "nodes": []}
+
+
+def _looping(module_id: str, item: str | None = "obj", mapping: dict | None = None) -> dict:
+    return {
+        "format": 2, "events": {},
+        "variables": {"v_set": {"id": "v_set", "kind": "object_set", "label": "Set",
+                                "object_set": {"object_type_id": str(uuid.uuid4())}}},
+        "layout": {
+            "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                     "props": {}, "nodes": ["l0"], "linkedNodes": {}},
+            "l0": _loop_node(module_id, item, mapping),
+        },
+    }
+
+
+def _loop_child(kind: str = "single_object") -> dict:
+    """A module publishing one interface variable for the loop to fill."""
+    return {
+        "format": 2, "events": {},
+        "variables": {
+            "v_obj": {"id": "v_obj", "kind": kind, "label": "The object",
+                      "external_id": "obj", "interface": {"display_name": "Object"}},
+        },
+        "layout": {"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                            "props": {}, "nodes": [], "linkedNodes": {}}},
+    }
+
+
+def test_a_loop_over_a_module_with_a_single_object_interface_is_allowed(client: TestClient, fx: Fixture) -> None:
+    host, child = _embed_app(client, fx, f"Loop {fx.tag}"), _embed_app(client, fx, f"Card {fx.tag}")
+    assert _put_definition(client, fx, child, _loop_child()).status_code == 200
+    r = _put_definition(client, fx, host, _looping(child))
+    assert r.status_code == 200, r.text
+
+
+def test_a_loop_needs_the_child_to_publish_the_named_variable(client: TestClient, fx: Fixture) -> None:
+    host, child = _embed_app(client, fx, f"Loop2 {fx.tag}"), _embed_app(client, fx, f"Card2 {fx.tag}")
+    assert _put_definition(client, fx, child, _loop_child()).status_code == 200
+    r = _put_definition(client, fx, host, _looping(child, item="nosuch"))
+    assert r.status_code == 422
+    assert "to receive each object" in r.json()["detail"]
+
+
+def test_a_loop_refuses_an_item_variable_that_is_not_a_single_object(client: TestClient, fx: Fixture) -> None:
+    """A loop hands over one object at a time (p.135), so a set or a string on
+    the other side is a mapping that cannot mean what it says."""
+    host, child = _embed_app(client, fx, f"Loop3 {fx.tag}"), _embed_app(client, fx, f"Card3 {fx.tag}")
+    assert _put_definition(client, fx, child, _loop_child(kind="string")).status_code == 200
+    r = _put_definition(client, fx, host, _looping(child))
+    assert r.status_code == 422
+    assert "has to be a single_object and it is a string" in r.json()["detail"]
+
+
+def test_a_loop_cannot_close_a_cycle(client: TestClient, fx: Fixture) -> None:
+    """The refusal that would otherwise be found by a viewer's browser. A loop
+    node the embed walk could not see would be a hole in a rule enforced
+    everywhere else."""
+    app_id = _embed_app(client, fx, f"Loop self {fx.tag}")
+    r = _put_definition(client, fx, app_id, _looping(app_id))
+    assert r.status_code == 422
+    assert "cannot embed itself" in r.json()["detail"]
+
+
+def test_a_loops_other_interface_variables_are_checked_like_an_embeds(client: TestClient, fx: Fixture) -> None:
+    """p.135: apart from the item variable, "loop layout variable mapping works
+    the same way as the embedded module interface configuration"."""
+    host, child = _embed_app(client, fx, f"Loop4 {fx.tag}"), _embed_app(client, fx, f"Card4 {fx.tag}")
+    document = _loop_child()
+    document["variables"]["v_mode"] = {
+        "id": "v_mode", "kind": "string", "label": "Mode",
+        "external_id": "mode", "interface": True,
+    }
+    assert _put_definition(client, fx, child, document).status_code == 200
+    r = _put_definition(client, fx, host, _looping(child, mapping={"mode": "v_missing"}))
+    assert r.status_code == 422
+    assert "does not declare" in r.json()["detail"]
+
+
+def test_a_required_item_variable_is_satisfied_by_the_loop_itself(client: TestClient, fx: Fixture) -> None:
+    """It is supplied by the set being looped, so it is not "unmapped" - the
+    required check has to know that or a loop could never be saved."""
+    host, child = _embed_app(client, fx, f"Loop5 {fx.tag}"), _embed_app(client, fx, f"Card5 {fx.tag}")
+    document = _loop_child()
+    document["variables"]["v_obj"]["interface"] = {"required": True}
+    assert _put_definition(client, fx, child, document).status_code == 200
+    assert _put_definition(client, fx, host, _looping(child)).status_code == 200

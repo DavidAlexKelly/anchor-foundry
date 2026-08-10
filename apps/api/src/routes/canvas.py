@@ -337,12 +337,35 @@ async def _check_interface(
                 "this module's definition, so the two have to be the same kind"
             )
 
+    # A Loop layout's item variable (p.135). Same failure as an unknown mapping
+    # - a loop that looks configured and passes no object - but it needs its own
+    # check because it is not in `mapping`: nothing on the host backs it, the
+    # set being looped does.
+    if embed.item_external_id is not None:
+        target = interface.get(embed.item_external_id)
+        if target is None:
+            offered = ", ".join(sorted(interface)) or "nothing"
+            raise variables_service.VariableError(
+                f"{child_name!r} has no interface variable called "
+                f"{embed.item_external_id!r} to receive each object. Its interface "
+                f"offers: {offered}"
+            )
+        if target.kind != "single_object":
+            raise variables_service.VariableError(
+                f"a loop gives {child_name!r} one object at a time, so "
+                f"{embed.item_external_id!r} has to be a single_object and it is a "
+                f"{target.kind}"
+            )
+
     missing = sorted(
         external_id
         for external_id, variable in interface.items()
         if variable.interface is not None
         and variable.interface.required
         and external_id not in embed.mapping
+        # The loop's item variable *is* supplied - by the set being looped -
+        # so a required one is satisfied rather than missing.
+        and external_id != embed.item_external_id
     )
     if missing:
         raise variables_service.VariableError(

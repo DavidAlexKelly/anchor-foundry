@@ -2413,6 +2413,37 @@ The tab names are asserted in a test rather than assumed, because an earlier roa
 
 ---
 
+### 118. Loop layouts, and the last two section types (this session)
+
+`docs/parity/workshop.md` §1.3. Foundry has six section layouts; we had three. Flow and Toolbar are small. Loop is not, and it is the one §116 made possible:
+
+> "Loop layouts allow you to loop over an object set or array, displaying an embedded module for each object in the set or each entry in the array used as input." (p.129)
+
+**Why it is not a Card List.** An Object Table or Card List has a fixed set of features; a loop renders a whole *module* per object, so "any feature combination available in Workshop" applies to each one (p.129) — its own widgets, events and actions. Foundry's example is a kanban board where every ticket is a module instance.
+
+**It was unblocked rather than built alongside.** p.135: loop variable mapping "works the same way as the embedded module interface configuration". So this is §116's mechanism applied per row — the loop supplies one object to a child interface variable, and every *other* mapped variable is shared across all copies, which is what p.135 says: they are "the same variable reference for each looped instance".
+
+**The claim the feature rests on is per-instance scoping** (p.129: each copy "has its own variable scope and layout state"). One shared scope is the failure that looks like success — the right number of cards, all showing the same object. So the browser test derives each card's text from the object it was handed and asserts three different names. The mutation that makes every copy receive the first row turns it red; the mutation that collapses the React key does not test the same thing and was replaced.
+
+**Flow and Toolbar are distinguished by what they do *not* do.** Columns and Rows divide their space between children by weight; Flow and Toolbar leave children their natural size. A toolbar whose three buttons each took a third of the page is a Columns section, so the test asserts they are side by side *and* together take well under the full width — the second half is the one that fails when the distinction is removed.
+
+**Two things refused with a reason rather than half-built:**
+
+* **Looping an array** (p.132–133). Our `array` kind has no element type, so "a variable typed to the array type" (p.134) cannot be expressed or checked. It needs a typed-array kind first.
+* **Sorting by property** — decision 0006 again, the same untyped-properties gap that already blocks ordered filters and table sorts. Worth noting p.132 says Foundry applies a primary-key sort behind any user sort "to ensure a consistent ordering", which is what the object set evaluation already does, so the order is stable without the control.
+
+**The server had to learn that a Loop embeds a module.** `CanvasLoopSection` joins `CanvasEmbeddedModule` in the set of embedding node types, so the cycle walk, the depth limit and the interface checks all see it. A loop invisible to that walk would be a hole in a rule enforced everywhere else, and the cycle would be found by a viewer's browser rather than by its author. Four loop-specific refusals, all mutation-tested: an item variable the child does not publish, one that is not a `single_object`, a cycle through a loop, and the ordinary mapping refusals. A *required* item variable counts as satisfied — the set being looped supplies it — which the required check had to be told, or no loop could ever be saved.
+
+**One divergence, named rather than smoothed over.** p.134 says the child "must have a module interface object set variable" for an object-set loop, while p.135 describes mapping "objects from the object set". We require `single_object`, the kind that actually describes one object. If Foundry genuinely passes a one-object set, this differs in the type and not in the behaviour.
+
+**The test helper had a real bug.** `e2e/api.py`'s `layout()` forced every node to `parent: ROOT` and listed all of them as ROOT's children, so a section's children were also drawn as its siblings — nesting was simply not expressible. It now respects a spec's own `parent`, `nodes` and `isCanvas`, and ROOT lists only top-level nodes.
+
+**816 API tests, 1 skipped, 43 vitest, 58 browser.**
+
+**One flaky browser test, and it is not this change.** `test_resource_filter.py::test_kind_in_the_url_filters_the_table` failed once in a full run and passed in isolation, alongside these files, and on a full re-run. Recorded rather than dismissed: it asserts the Type column holds *exactly* one kind, so the likely cause is a read landing mid-re-render despite the `all_inner_texts` snapshot the same file already documents. Worth watching; if it recurs, the fix is probably to wait for a stable row count before snapshotting kinds.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

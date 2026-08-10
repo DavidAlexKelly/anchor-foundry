@@ -221,23 +221,33 @@ def layout(nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:
     Format 2 (decision 0002) wants every node to name its parent and the root
     to list its children; spelling that out in every test would bury what each
     test is actually about.
+
+    **Nesting**: a spec may name its own `parent` and list its own `nodes`, for
+    the layouts that contain other widgets (a Flow or Toolbar section, a Tabs
+    widget). Anything without a `parent` is a child of ROOT, and ROOT lists only
+    those - the first version of this put *every* node in ROOT's list, so a
+    section's children were also drawn as its siblings.
     """
     out: dict[str, Any] = {
         "ROOT": {
             "type": {"resolvedName": "CanvasContainer"},
             "isCanvas": True,
             "props": {},
-            "nodes": list(nodes),
+            "nodes": [nid for nid, spec in nodes.items() if not spec.get("parent")],
             "linkedNodes": {},
         }
     }
     for node_id, spec in nodes.items():
-        out[node_id] = {
+        node: dict[str, Any] = {
             "type": {"resolvedName": spec["resolvedName"]},
             "props": spec.get("props", {}),
-            "parent": "ROOT",
-            "nodes": [],
+            "parent": spec.get("parent", "ROOT"),
+            "nodes": list(spec.get("nodes", [])),
         }
+        if spec.get("isCanvas"):
+            node["isCanvas"] = True
+            node["linkedNodes"] = {}
+        out[node_id] = node
     return out
 
 
