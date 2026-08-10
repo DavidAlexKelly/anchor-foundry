@@ -39,6 +39,14 @@ PROPERTY_TYPES = {
     "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
     "json", "attachment",
 }
+
+# How prominently an application should show a property (Foundry
+# `object-link-types` p.111). **A display hint, never a permission**: a hidden
+# property is still stored, still synced, and still returned by this API to
+# anybody who may read the object type at all. Foundry's own wording is "an
+# indication to user applications", and treating it as access control would be
+# worse than not having it, because somebody would rely on it as one.
+PROPERTY_VISIBILITIES = ("normal", "prominent", "hidden")
 CARDINALITIES = {"one_to_one", "one_to_many", "many_to_many"}
 
 _TYPE_API_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,99}$")
@@ -87,7 +95,16 @@ async def list_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str
                ot.colour, ot.title_property_id, ot.resource_id,
                ot.created_at, ot.updated_at,
                (SELECT count(*) FROM object_type_sources s
-                 WHERE s.object_type_id = ot.id) AS source_count
+                 WHERE s.object_type_id = ot.id) AS source_count,
+               -- Just the hidden ones, not every property. A browser listing
+               -- types needs to know which columns not to draw
+               -- (`object-link-types` p.111) and nothing else about them, and
+               -- shipping every property of every type to answer that would
+               -- make a list endpoint pay for a detail one.
+               COALESCE((SELECT array_agg(p.api_name ORDER BY p.sort_order)
+                           FROM object_type_properties p
+                          WHERE p.object_type_id = ot.id
+                            AND p.visibility = 'hidden'), '{}') AS hidden_properties
           FROM object_types ot
          WHERE ot.workspace_id = :wid
          ORDER BY ot.display_name
@@ -116,7 +133,8 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
     rows = await fetch_all(
         conn,
         """
-        SELECT id, api_name, display_name, data_type, required, description, sort_order
+        SELECT id, api_name, display_name, data_type, required, description, sort_order,
+               visibility
           FROM object_type_properties
          WHERE object_type_id = :tid ORDER BY sort_order, api_name
         """,
@@ -136,6 +154,12 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
         seen.add(api)
         if str(prop["data_type"]) not in PROPERTY_TYPES:
             raise ValueError(f"invalid property type {prop['data_type']!r}")
+        visibility = str(prop.get("visibility") or "normal")
+        if visibility not in PROPERTY_VISIBILITIES:
+            raise ValueError(
+                f"invalid visibility {visibility!r} for {api!r}; expected one of "
+                + ", ".join(PROPERTY_VISIBILITIES)
+            )
 
 
 async def create_type(
@@ -210,9 +234,10 @@ async def _write_property_rows(
             conn,
             """
             INSERT INTO object_type_properties (object_type_id, api_name, display_name,
-                                                data_type, required, description, sort_order)
+                                                data_type, required, description, sort_order,
+                                                visibility)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
-                    :required, :descr, :sort)
+                    :required, :descr, :sort, CAST(:vis AS property_visibility))
             RETURNING id
             """,
             {
@@ -223,6 +248,7 @@ async def _write_property_rows(
                 "required": bool(prop.get("required", False)),
                 "descr": str(prop.get("description", "")),
                 "sort": index,
+                "vis": str(prop.get("visibility") or "normal"),
             },
         )
         assert prow is not None

@@ -915,6 +915,12 @@ export interface SavedSearch {
 }
 
 // ---- objects (ontology) -----------------------------------------------------
+/** How prominently applications should show a property (Foundry
+ * `object-link-types` p.111). **A display hint, never a permission**: a hidden
+ * property is still stored and still returned by the API — access control is
+ * RLS, and it is somewhere else. */
+export type PropertyVisibility = "normal" | "prominent" | "hidden";
+
 export type PropertyDataType =
   | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint"
   | "json" | "attachment";
@@ -946,6 +952,8 @@ export interface ObjectTypeProperty {
   required: boolean;
   description: string;
   sort_order: number;
+  /** Defaults to "normal" on a property saved before visibility existed. */
+  visibility: PropertyVisibility;
 }
 
 export interface ObjectTypeSummary {
@@ -957,6 +965,10 @@ export interface ObjectTypeSummary {
   colour: string;
   title_property_id: string | null;
   source_count: number;
+  /** api_names an application should not draw (Foundry `object-link-types`
+   * p.111). Only the hidden ones — a list endpoint should not carry every
+   * property of every type to answer "which columns do I skip". */
+  hidden_properties: string[];
   /** Where this type opens as an application (`/r/{id}`, item 4.2). */
   resource_id: string;
   created_at: string;

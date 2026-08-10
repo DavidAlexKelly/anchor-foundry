@@ -568,6 +568,7 @@ export interface PropertyInput {
   data_type: import("./types").PropertyDataType;
   required?: boolean;
   description?: string;
+  visibility?: import("./types").PropertyVisibility;
 }
 
 /** What a saved search is saved *as*. Deliberately the same four parameters
