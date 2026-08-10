@@ -225,3 +225,49 @@ Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types,
 - **Tests panel** — a failing test is reported as failing. A test suite that cannot fail is the exact thing this repo does not accept.
 - **Checks** — a check that fails blocks the merge, and the block names the check.
 - **Tags** — a tag pinned to a commit still resolves to that commit after the branch moves on.
+
+---
+
+## 11. What "full integrated VS Code" actually means
+
+**Source:** `docs/pal/foundry_vs-code.pdf` (37 pages) and `foundry_code-workspaces.pdf` (134 pages). Citations in this section are to `vs-code` unless stated.
+
+The request that started this work was *"I want a full integrated VS Code like in Foundry."* Foundry ships a feature-comparison table across its three code surfaces (p.7–8), and it settles the question more precisely than any amount of reasoning about it could.
+
+**Code Repositories — the browser IDE this specification describes — answers "No" to exactly three things:**
+
+| | Code Repositories | VS Code workspaces |
+|---|---|---|
+| Shell terminal | **No** | Yes (remote host) |
+| Keybinding customization | **No** | Yes |
+| Public extension support | **N/A** | No — local extension only, if the organization allows it |
+
+And three capabilities run the *other* way — things the browser IDE has that VS Code workspaces do not:
+
+| | Code Repositories | VS Code workspaces |
+|---|---|---|
+| Java transforms | Yes | **No** |
+| SQL integration | Yes | **No** |
+| TypeScript function preview | Yes | **No** |
+
+Everything else in the table — Python transform preview, debugger support, unit tests — is **Yes** on both.
+
+The division of labour is stated outright (p.14):
+
+> "**Code Repositories:** A Palantir-built IDE focused on all code-management needs, including editing, version control, change management, and continuous integration. **This is the intended platform tool for pull request reviews and repository management.**"
+
+> "**VS Code:** A VS Code environment deployed on Palantir infrastructure… Provides the familiar VS Code editing experience with automatic environment setup and integration with Foundry resources."
+
+VS Code does not replace the browser IDE in Foundry. It sits beside it for people who want a terminal and their own keybindings, and it sends them back to Code Repositories to review a pull request. Foundry even makes the relationship structural: a repository opens in VS Code via an **Open in VS Code** button in Code Repositories' upper right, and the default can be flipped per user from the **Settings tab** of any repository (p.3) — the tab in §6 of this document.
+
+### What this means for scope
+
+**The three missing things are the entire ask, and they are the expensive part.** A terminal means a container per user with a persistent volume, an authenticating proxy, idle shutdown, and a security model for a shell inside the VPC. That is `docs/decisions/0004-running-customer-code.md` again with a much larger blast radius: the transform runner is a batch task with an empty task role and a fixed entrypoint, and an interactive shell is none of those things.
+
+**So the scope boundary is:** everything in §1–§10 is in. A terminal, keybinding customization and third-party extensions are **out**, and named here so that skipping them is a decision rather than an oversight — consistent with `README.md`'s treatment of Code Workspaces.
+
+This is not a compromise dressed up as a principle. It is what Foundry itself did: shipped a browser IDE with no terminal and no extensions, made it the mandatory surface for reviewing changes, and added VS Code beside it years later for the people who wanted a shell. Delivering §1–§10 delivers the IDE the complaint is actually about. If "I want my own extensions and a terminal" survives that, it is a separate project with its own decision record.
+
+### Acceptance test
+
+There isn't one, and that is the point. The check on this section is negative: **no item in the build order (§9) depends on a terminal, a per-user container, or an extension host.** If one appears, this boundary has moved and should move deliberately.
