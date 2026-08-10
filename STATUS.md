@@ -2440,7 +2440,41 @@ The tab names are asserted in a test rather than assumed, because an earlier roa
 
 **816 API tests, 1 skipped, 43 vitest, 58 browser.**
 
-**One flaky browser test, and it is not this change.** `test_resource_filter.py::test_kind_in_the_url_filters_the_table` failed once in a full run and passed in isolation, alongside these files, and on a full re-run. Recorded rather than dismissed: it asserts the Type column holds *exactly* one kind, so the likely cause is a read landing mid-re-render despite the `all_inner_texts` snapshot the same file already documents. Worth watching; if it recurs, the fix is probably to wait for a stable row count before snapshotting kinds.
+**One flaky browser test, and it is not this change.** `test_resource_filter.py::test_kind_in_the_url_filters_the_table` failed once in a full run and passed in isolation, alongside these files, and on a full re-run. **Diagnosed in §119, and the guess here was wrong** — it was not a torn read of the Type column, it was a dev-server console message. See §119.
+
+---
+
+### 119. The vertical header, and the "flake" that was not one (this session)
+
+`docs/parity/workshop.md` §1.1. Most of a header is styling — a title colour, a background, a logo. One part is a **rule**, and it is the whole reason this was worth doing before the versions dialog:
+
+> "When enabling collapsed headers, the Button Group and Tabs widgets will also have collapsed states that will only show the icons; the text will be dropped in this state. **All other widgets will be hidden** when a module header is collapsed." (p.49)
+
+So a collapsed header is not a narrower header; it is a different set of widgets. The header reads its children's node types and renders only `CanvasButton` and `CanvasTabs` when collapsed. `e2e/test_vertical_header.py` asserts all three halves in one place — the header is collapsed, the two survivors are drawn, the third widget is *not* — and the mutation that renders everything anyway turns it red.
+
+Also done: orientation, vertical width, horizontal height, collapsibility and collapsed-by-default (p.47–48). Collapsing is offered only on a vertical header, because a collapsed horizontal one would have no control left to undo it.
+
+**Two divergences, both named in the spec rather than left to be discovered.**
+
+* **There is no icon library.** Foundry has an icon picker; a Button and a Page take a one-or-two-character `icon` instead, falling back to the label's first letter when unset. The behaviour p.49 describes — drop the text, show a glyph — is faithful; the picker is not built. The label survives as `aria-label` and `title`, so a collapsed header stays navigable by anything that is not eyes.
+* **A collapsed header of blank buttons would be worse than an approximate glyph**, which is why the fallback exists at all: with no icons configured there would be no way to tell one button from another.
+
+**The container becomes a row in code, not in CSS.** A vertical header needs its *parent* laid out as a row, and a child cannot set that, so `CanvasContainer` reads its own children for one. A `:has()` selector would have been three lines shorter and is exactly the silent-failure shape this file already records twice: an unsupported or misspelled selector is nothing at all, and the symptom would be a header rendered above the page rather than beside it — wrong, but not obviously broken.
+
+**The correction: §118's "flaky test" was not flaky.** It failed again here, and this time the message was visible:
+
+```
+Failed to fetch RSC payload for http://localhost:3100/home.
+Falling back to browser navigation.
+```
+
+That is Next's router prefetching a route while the **dev server is recompiling** — which happens exactly when somebody is editing source during a suite run, and never in a deployed build. The message names its own source (`hot-reloader-client`) and says it *recovered*. §118 guessed at a torn read of the Type column and was wrong; the guess is now corrected there rather than left standing.
+
+`no_console_errors` ignores it, alongside the favicon 404 it already ignored, and the reasoning is in the code. Matched narrowly on purpose: a bare "Failed to fetch" would swallow a real API call that never came back, which is the class of bug the assertion exists to catch.
+
+**43 vitest, 65 browser, all green.** No server changes, so the API suite is unaffected.
+
+**Still open in stage 2:** the versions dialog, and organising the Widget setup tab variables-first.
 
 ---
 

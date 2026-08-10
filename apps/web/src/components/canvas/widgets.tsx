@@ -18,8 +18,10 @@ import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
 import { VariableBridge } from "./VariableBridge";
 import { CanvasNode } from "./SettingsPanel";
 import {
+  CanvasHeaderCollapsedContext,
   CanvasParameterProvider,
   useCanvasEnv,
+  useHeaderCollapsed,
   useCanvasPage,
   useCanvasParameter,
   useCanvasParameters,
@@ -101,13 +103,32 @@ export function CanvasContainer({
 }) {
   const {
     connectors: { connect, drag },
-  } = useNode();
+    childIds,
+  } = useNode((node) => ({ childIds: node.data.nodes ?? [] }));
+  const { query } = useEditor();
   const { hidden, marker } = useVisibility(visibleWhen);
+  // **A vertical header turns this container into a row** (p.47: "on the left
+  // of the module"). Decided here rather than by the header, because the thing
+  // that has to change is the *parent's* direction and a child cannot set it.
+  //
+  // Read explicitly rather than with a CSS `:has()` selector: an undefined or
+  // unsupported selector is silently nothing, which this repo has already been
+  // caught by twice, and the failure would be a header rendered above the page
+  // instead of beside it - wrong, but not obviously broken.
+  const asideHeader = childIds.some((cid: string) => {
+    try {
+      const node = query.node(cid).get();
+      return node?.data?.name === "CanvasHeader"
+        && node.data.props.orientation === "vertical";
+    } catch {
+      return false;
+    }
+  });
   if (hidden) return null;
   return (
     <div
       ref={(ref) => connectDragDrop(ref, connect, drag)}
-      className="canvas-block"
+      className={`canvas-block${asideHeader ? " canvas-block--aside" : ""}`}
       style={{ background: background || "transparent", padding: padding ?? 12 }}
     >
       {marker && <p className="canvas-hidden-marker">{marker}</p>}
@@ -4593,35 +4614,131 @@ CanvasSection.craft = {
 export function CanvasHeader({
   title = "",
   sticky = true,
+  orientation = "horizontal",
+  height = 0,
+  width = 220,
+  collapsible = false,
+  collapsedByDefault = false,
   children,
 }: {
   title?: string;
   sticky?: boolean;
+  /** p.47: "horizontal (at the top) or vertical (on the left) of the module". */
+  orientation?: "horizontal" | "vertical";
+  /** Horizontal only (p.47). 0 means "as tall as its contents". */
+  height?: number;
+  /** Vertical only (p.48). */
+  width?: number;
+  /** Vertical only (p.48), with the option to start collapsed. */
+  collapsible?: boolean;
+  collapsedByDefault?: boolean;
   children?: React.ReactNode;
 }) {
   const {
     connectors: { connect, drag },
-  } = useNode();
+    childIds,
+  } = useNode((node) => ({ childIds: node.data.nodes ?? [] }));
+  const { query } = useEditor();
   // `{{v_id}}` like every other text, so a header can name what the viewer is
   // looking at rather than only what the app is called.
   const { resolved } = useCanvasVariables();
+  const vertical = orientation === "vertical";
+  const [collapsed, setCollapsed] = useState(collapsible && collapsedByDefault);
+  // Collapsing is a vertical-header affordance (p.48); a horizontal header that
+  // had been collapsed and then switched would otherwise stay hidden with no
+  // control left to undo it.
+  const isCollapsed = vertical && collapsible && collapsed;
+
+  // **p.49, and it is a rule rather than a style**: "When enabling collapsed
+  // headers, the Button Group and Tabs widgets will also have collapsed states
+  // that will only show the icons; the text will be dropped in this state. All
+  // other widgets will be hidden when a module header is collapsed."
+  //
+  // Which means the header has to know what *kind* each child is, and a React
+  // element cannot be asked - Craft wraps it. The node ids are in the same
+  // order as the rendered children, so the two zip together.
+  const parts = childList(children);
+  const names = childIds.map((cid: string) => {
+    try {
+      return String(query.node(cid).get().data.name ?? "");
+    } catch {
+      return "";
+    }
+  });
+  const visible = isCollapsed
+    ? parts.filter((_, i) => COLLAPSED_WIDGETS.includes(names[i] ?? ""))
+    : parts;
+
   return (
-    <header
-      ref={(ref) => connectDragDrop(ref, connect, drag)}
-      className={`canvas-header${sticky ? " canvas-header--sticky" : ""}`}
-    >
-      {title.trim() && <p className="canvas-header-title">{interpolate(title, resolved)}</p>}
-      {children}
-    </header>
+    <CanvasHeaderCollapsedContext.Provider value={isCollapsed}>
+      <header
+        ref={(ref) => connectDragDrop(ref, connect, drag)}
+        className={[
+          "canvas-header",
+          `canvas-header--${orientation}`,
+          sticky ? "canvas-header--sticky" : "",
+          isCollapsed ? "canvas-header--collapsed" : "",
+        ].filter(Boolean).join(" ")}
+        data-collapsed={isCollapsed ? "true" : "false"}
+        style={
+          vertical
+            ? { width: isCollapsed ? 56 : width, flex: `0 0 ${isCollapsed ? 56 : width}px` }
+            : height > 0
+              ? { minHeight: height }
+              : undefined
+        }
+      >
+        {vertical && collapsible && (
+          <button
+            type="button"
+            className="canvas-header-toggle"
+            aria-expanded={!isCollapsed}
+            aria-label={isCollapsed ? "Expand the header" : "Collapse the header"}
+            onClick={() => setCollapsed((was) => !was)}
+          >
+            {isCollapsed ? "»" : "«"}
+          </button>
+        )}
+        {/* The title goes with the text: p.49 drops labels in the collapsed
+            state, and a title is nothing but a label. */}
+        {!isCollapsed && title.trim() && (
+          <p className="canvas-header-title">{interpolate(title, resolved)}</p>
+        )}
+        {visible}
+      </header>
+    </CanvasHeaderCollapsedContext.Provider>
   );
+}
+
+/** The only two widgets that survive a collapsed header (p.49). */
+const COLLAPSED_WIDGETS = ["CanvasButton", "CanvasTabs"];
+
+/** What to draw where the text used to be.
+ *
+ * Foundry drops the label and shows the configured icon. With no icon picker,
+ * an unset icon falls back to the label's first character rather than to
+ * nothing - a collapsed header of blank buttons is worse than an approximate
+ * glyph, because there is no way to tell which one is which. */
+function glyphFor(icon: string | undefined, label: string | undefined): string {
+  const chosen = (icon ?? "").trim();
+  if (chosen) return chosen;
+  return (label ?? "").trim().charAt(0).toUpperCase() || "•";
 }
 
 function HeaderSettings() {
   const {
-    title,
-    sticky,
+    title, sticky, orientation, height, width, collapsible, collapsedByDefault,
     actions: { setProp },
-  } = useNode((node) => ({ title: node.data.props.title, sticky: node.data.props.sticky }));
+  } = useNode((node) => ({
+    title: node.data.props.title,
+    sticky: node.data.props.sticky,
+    orientation: node.data.props.orientation,
+    height: node.data.props.height,
+    width: node.data.props.width,
+    collapsible: node.data.props.collapsible,
+    collapsedByDefault: node.data.props.collapsedByDefault,
+  }));
+  const vertical = orientation === "vertical";
   return (
     <>
       <label className="field">
@@ -4633,12 +4750,74 @@ function HeaderSettings() {
         <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
       </label>
       <label className="field">
-        <span className="field-label">Stays put while the page scrolls</span>
+        <span className="field-label">Orientation</span>
+        <select
+          value={orientation ?? "horizontal"}
+          data-testid="header-orientation"
+          onChange={(e) => setProp((p: { orientation: string }) => (p.orientation = e.target.value))}
+        >
+          <option value="horizontal">Horizontal — at the top</option>
+          <option value="vertical">Vertical — on the left</option>
+        </select>
+      </label>
+      {vertical ? (
+        <>
+          <label className="field">
+            <span className="field-label">Width (px)</span>
+            <input
+              type="number" min={80}
+              value={width ?? 220}
+              data-testid="header-width"
+              onChange={(e) => setProp((p: { width: number }) => (p.width = Number(e.target.value) || 80))}
+            />
+          </label>
+          <label className="vars-toggle field">
+            <input
+              type="checkbox"
+              checked={!!collapsible}
+              data-testid="header-collapsible"
+              onChange={(e) => setProp((p: { collapsible: boolean }) => (p.collapsible = e.target.checked))}
+            />
+            Collapsible
+          </label>
+          {collapsible && (
+            <label className="vars-toggle field">
+              <input
+                type="checkbox"
+                checked={!!collapsedByDefault}
+                data-testid="header-collapsed-default"
+                onChange={(e) =>
+                  setProp((p: { collapsedByDefault: boolean }) => (p.collapsedByDefault = e.target.checked))
+                }
+              />
+              Collapsed by default
+            </label>
+          )}
+          {/* p.49's rule, said where somebody chooses it rather than found by
+              wondering where the rest of the header went. */}
+          <p className="field-hint">
+            Collapsed, only Button and Tabs widgets show — as icons, with their
+            labels dropped. Everything else in the header is hidden.
+          </p>
+        </>
+      ) : (
+        <label className="field">
+          <span className="field-label">Height (px)</span>
+          <input
+            type="number" min={0}
+            value={height ?? 0}
+            placeholder="as tall as its contents"
+            onChange={(e) => setProp((p: { height: number }) => (p.height = Number(e.target.value) || 0))}
+          />
+        </label>
+      )}
+      <label className="vars-toggle field">
         <input
           type="checkbox"
           checked={sticky ?? true}
           onChange={(e) => setProp((p: { sticky: boolean }) => (p.sticky = e.target.checked))}
         />
+        Stays put while the page scrolls
       </label>
     </>
   );
@@ -4646,7 +4825,10 @@ function HeaderSettings() {
 
 CanvasHeader.craft = {
   displayName: "Header",
-  props: { title: "", sticky: true },
+  props: {
+    title: "", sticky: true, orientation: "horizontal",
+    height: 0, width: 220, collapsible: false, collapsedByDefault: false,
+  },
   isCanvas: true,
   related: { settings: HeaderSettings },
 };
@@ -4717,23 +4899,42 @@ export function CanvasPage({
 function PageSettings() {
   const {
     title,
+    icon,
     actions: { setProp },
-  } = useNode((node) => ({ title: node.data.props.title }));
+  } = useNode((node) => ({ title: node.data.props.title, icon: node.data.props.icon }));
   return (
-    <label className="field">
-      <span className="field-label">Page title</span>
-      <input
-        value={title ?? ""}
-        onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
-      />
-      <span className="field-hint">Shown on a Tabs widget</span>
-    </label>
+    <>
+      <label className="field">
+        <span className="field-label">Page title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+        <span className="field-hint">Shown on a Tabs widget</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Icon</span>
+        <input
+          value={icon ?? ""}
+          maxLength={2}
+          data-testid="page-icon"
+          placeholder={(title ?? "P").charAt(0).toUpperCase()}
+          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+        />
+        {/* The tab is what carries it, which is why it is configured on the
+            page rather than on the Tabs widget: one Tabs widget draws a button
+            per page, so an icon on the widget could only be one icon. */}
+        <span className="field-hint">
+          Shown instead of the title on a Tabs widget in a collapsed header.
+        </span>
+      </label>
+    </>
   );
 }
 
 CanvasPage.craft = {
   displayName: "Page",
-  props: { title: "Page" },
+  props: { title: "Page", icon: "" },
   isCanvas: true,
   related: { settings: PageSettings },
 };
@@ -4855,12 +5056,20 @@ export function CanvasTabs() {
   const eventContext = useEventContext(undefined, useOverlayIds());
   const { events: moduleEvents } = useCanvasVariables();
 
-  const pages: { id: string; title: string }[] = [];
+  // p.49: in a collapsed header a Tabs widget "will only show the icons; the
+  // text will be dropped". The icon belongs to the *page*, because that is what
+  // each tab stands for.
+  const collapsed = useHeaderCollapsed();
+  const pages: { id: string; title: string; icon: string }[] = [];
   try {
     for (const id of query.node("ROOT").get().data.nodes ?? []) {
       const node = query.node(id).get();
       if (node?.data?.name === "CanvasPage") {
-        pages.push({ id, title: String(node.data.props.title ?? "Page") });
+        pages.push({
+          id,
+          title: String(node.data.props.title ?? "Page"),
+          icon: String(node.data.props.icon ?? ""),
+        });
       }
     }
   } catch {
@@ -4871,7 +5080,7 @@ export function CanvasTabs() {
   return (
     <nav
       ref={(ref) => connectDragDrop(ref, connect, drag)}
-      className="canvas-tabs"
+      className={`canvas-tabs${collapsed ? " canvas-tabs--collapsed" : ""}`}
       aria-label="Pages"
     >
       {pages.length === 0 && <span className="canvas-widget-empty">Add a page to this app</span>}
@@ -4881,6 +5090,8 @@ export function CanvasTabs() {
           type="button"
           className={`canvas-tab${page.id === activeId ? " on" : ""}`}
           aria-current={page.id === activeId}
+          title={collapsed ? page.title : undefined}
+          aria-label={collapsed ? page.title : undefined}
           onClick={() => {
             const wired = eventsFor(moduleEvents, nodeId, "click");
             if (wired.length > 0) {
@@ -4894,7 +5105,7 @@ export function CanvasTabs() {
             go(page.id);
           }}
         >
-          {page.title}
+          {collapsed ? glyphFor(page.icon, page.title) : page.title}
         </button>
       ))}
     </nav>
@@ -4925,10 +5136,16 @@ CanvasTabs.craft = { displayName: "Tabs", props: {} };
  */
 export function CanvasButton({
   label = "Button",
+  icon = "",
   style = "primary",
   enabledVariable = null,
 }: {
   label?: string;
+  /** Shown instead of the label in a collapsed header (p.49). One or two
+   * characters - an emoji, an initial. **Foundry offers an icon library and we
+   * do not**, so this is the divergence: the behaviour (drop the text, show a
+   * glyph) is faithful, the picker is not built. */
+  icon?: string;
   style?: "primary" | "quiet" | "danger";
   /** A variable that must be truthy for the button to be pressable. Unset
    * means always pressable — an app whose buttons are all dead until somebody
@@ -4943,6 +5160,7 @@ export function CanvasButton({
   const { resolved, events: moduleEvents } = useCanvasVariables();
   const eventContext = useEventContext(undefined, useOverlayIds());
 
+  const collapsed = useHeaderCollapsed();
   const wired = eventsFor(moduleEvents, nodeId, "click");
   const gate = enabledVariable ? resolved[enabledVariable] : undefined;
   // Only an explicitly falsy value disables. `undefined` is "not resolved
@@ -4955,16 +5173,20 @@ export function CanvasButton({
     <span ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-button-wrap">
       <button
         type="button"
-        className={`btn${style === "primary" ? "" : ` ${style}`}`}
+        className={`btn${style === "primary" ? "" : ` ${style}`}${collapsed ? " btn-collapsed" : ""}`}
         disabled={disabled}
+        // The label becomes the accessible name when the text is dropped, so a
+        // collapsed header is still navigable by anything that is not eyes.
+        title={collapsed ? interpolate(label ?? "", resolved) : undefined}
+        aria-label={collapsed ? interpolate(label ?? "", resolved) : undefined}
         onClick={() => {
           if (mode === "edit") return;
           if (wired.length > 0) runEvents(wired, eventContext);
         }}
       >
-        {interpolate(label ?? "", resolved)}
+        {collapsed ? glyphFor(icon, label) : interpolate(label ?? "", resolved)}
       </button>
-      {mode === "edit" && wired.length === 0 && (
+      {mode === "edit" && !collapsed && wired.length === 0 && (
         <span className="canvas-widget-empty"> nothing wired to this click yet</span>
       )}
     </span>
@@ -4974,11 +5196,13 @@ export function CanvasButton({
 function ButtonSettings() {
   const {
     label,
+    icon,
     style,
     enabledVariable,
     actions: { setProp },
   } = useNode((node) => ({
     label: node.data.props.label,
+    icon: node.data.props.icon,
     style: node.data.props.style,
     enabledVariable: node.data.props.enabledVariable,
   }));
@@ -4992,6 +5216,19 @@ function ButtonSettings() {
           onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
         />
         <span className="field-hint">{"{{v_id}}"} shows a variable&apos;s current value</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Icon</span>
+        <input
+          value={icon ?? ""}
+          maxLength={2}
+          data-testid="button-icon"
+          placeholder={(label ?? "B").charAt(0).toUpperCase()}
+          onChange={(e) => setProp((p: { icon: string }) => (p.icon = e.target.value))}
+        />
+        <span className="field-hint">
+          Shown instead of the label in a collapsed header. Blank uses the first letter.
+        </span>
       </label>
       <label className="field">
         <span className="field-label">Style</span>
@@ -5032,7 +5269,7 @@ function ButtonSettings() {
 
 CanvasButton.craft = {
   displayName: "Button",
-  props: { label: "Button", style: "primary", enabledVariable: null },
+  props: { label: "Button", icon: "", style: "primary", enabledVariable: null },
   related: { settings: ButtonSettings },
 };
 
