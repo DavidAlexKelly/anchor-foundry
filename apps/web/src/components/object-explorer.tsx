@@ -38,6 +38,7 @@ import { useState } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
+import { displayValue } from "@/components/object-value";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
 import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
 
@@ -467,9 +468,9 @@ export function ObjectExplorer({
                         <td className="slug">{i.primary_key}</td>
                         {columns.map((c) => (
                           <td key={c}>
-                            {i.properties[c] === undefined || i.properties[c] === null
-                              ? "∅"
-                              : String(i.properties[c])}
+                            {/* `String(value)` here rendered every geopoint as
+                                "[object Object]" — see object-value.ts. */}
+                            {displayValue(i.properties[c])}
                           </td>
                         ))}
                         <td className="slug">{new Date(i.updated_at).toLocaleString()}</td>
