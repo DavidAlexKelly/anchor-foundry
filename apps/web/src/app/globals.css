@@ -587,6 +587,25 @@ button { font: inherit; cursor: pointer; }
 .canvas-frame-area .canvas-block:hover { border-color: var(--line-strong); }
 .canvas-widget-empty { color: var(--ink-soft); font-size: 12.5px; font-style: italic; margin: 0; }
 .canvas-settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+/* Foundry's three widget-configuration tabs (p.65-68). */
+.canvas-settings-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.canvas-settings-tab {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 6px 9px; font-size: 11.5px; color: var(--ink-soft);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.canvas-settings-tab:hover { color: var(--ink); }
+.canvas-settings-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.canvas-settings-body { display: grid; gap: 10px; }
+.canvas-raw-json {
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  padding: 7px; border: 1px solid var(--line-strong); border-radius: var(--radius);
+  resize: vertical; white-space: pre;
+}
+.canvas-raw-json-error {
+  margin: 0; padding: 6px 8px; font-size: 11.5px;
+  color: var(--danger); background: var(--danger-wash); border-radius: var(--radius);
+}
 
 /* ---- link explorer (Objects item 3) -------------------------------------- */
 .link-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }

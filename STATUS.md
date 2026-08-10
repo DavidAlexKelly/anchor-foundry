@@ -2380,6 +2380,39 @@ So a variable gains an **external ID** — a stable, author-chosen name — and 
 
 ---
 
+### 117. A widget's configuration, in Foundry's three tabs (this session)
+
+`docs/parity/workshop.md` §2. Our settings panel was one flat list of whatever a widget's own `related.settings` offered. Foundry splits it three ways (p.65–68) and the split says what kind of statement each control is:
+
+- **Widget setup** — "the input and output variables of a widget … as well as any additional configuration and display options" (p.65). The panel we already had, moved behind a tab.
+- **Metadata** — rename, and the raw JSON (p.67–68).
+- **Display** — sizing only: Auto (max), Absolute, Flex (p.68).
+
+The tab names are asserted in a test rather than assumed, because an earlier roadmap draft guessed "Widget setup / Display / Actions" and was wrong on two of the three. Reading the actual page is what corrected it.
+
+**The raw JSON editor is why this was worth doing early.** It "displays how the current widget's setup is stored in JSON and offers advanced module builders the option to quickly view, edit, or copy this configuration in its raw format" (p.68). We already persist `format: 2` documents, so this was hours of work — and it makes every widget option Foundry documents and we have not built a form for *survivable* rather than blocking. That matters most for the widget long tail, where the alternative is a form per option before anything can be configured at all.
+
+**It replaces rather than merges**, so a prop deleted in the editor is deleted from the widget. Merging would make deletion impossible and the editor would be showing a configuration that is not the widget's.
+
+**Sizing is height, deliberately, and the reason is in the docs.** Foundry's description is height-first and says Auto (max) "is not available for setting the width of widgets in a column layout". Per-widget *width* here is already a solved problem with a different mechanism — a section distributes width to its children by weight, draggable between them (§section-resize). A second per-widget width control would put two numbers in charge of one dimension with no rule for which wins. Not built, and the spec says so rather than leaving it to be discovered.
+
+**One wrapper, not twenty-odd widgets.** Sizing is applied through `<Editor onRender>`, Craft's supported hook for exactly this, wired into all three editors (builder, published viewer, embedded module). It **returns the node untouched when there is no sizing**, which is the common case — so a module that configures none renders exactly as it did before, with no extra element in any flex chain. There is a test that the wrapper is absent by default, and it needed its own module fixture: the sizing tests save onto the shared one, and a claim about the default cannot be checked against a module that has since been configured.
+
+**The unknown that needed a browser:** does Craft.js carry `custom` through `serialize()` and back? Both the rename and the sizing config live there rather than in props, and if it did not, the symptom would be controls that work perfectly until you reload. It does — but that is now asserted by saving and reloading rather than believed.
+
+**Four defects, and the ratio is worse than last time: three were my tests, one was the code.**
+
+* Selecting a widget by clicking the canvas is a coin toss — the click lands on a table cell and Craft selects from the connected element. The Layout panel row names the node it selects, so that is what the fixture uses now.
+* The table draws a title column of its own, so "two columns configured" is not "two `<th>`". Every column assertion is relative to a count read first.
+* `get_by_role("alert")` is ambiguous: Next.js renders its own route announcer with that role, so the query failed on strict mode rather than on the thing under test.
+* **The one that was a real gap in the checking:** every raw-JSON assertion I first wrote passed against a *merging* implementation, because they all change a value and a merge applies a changed value. What a merge cannot do is delete. There is now a test that only deletion satisfies, and the merge mutation turns it red.
+
+**810 API tests, 43 vitest, 52 browser, all green.** Both sizing modes and the replace-not-merge rule are mutation-tested.
+
+**Newly unblocked by §116:** Loop layouts (`workshop.md` §1.3, §4) are one embedded module per entry in an object set, and p.135 says their variable mapping "works the same way as the embedded module interface configuration". That mechanism now exists, so the remaining section layouts are Flow, Toolbar and Loop rather than Flow, Toolbar and a prerequisite.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
 import { VariableBridge } from "./VariableBridge";
+import { CanvasNode } from "./SettingsPanel";
 import {
   CanvasParameterProvider,
   useCanvasEnv,
@@ -2367,7 +2368,7 @@ export function CanvasEmbeddedModule({
               events={eventsOf(definition) as never}
               bound={boundIds}
             >
-              <Editor resolver={CANVAS_RESOLVER} enabled={false}>
+              <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
                 <Frame data={JSON.stringify(layout)} />
               </Editor>
             </VariableBridge>

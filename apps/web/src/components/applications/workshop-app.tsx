@@ -42,7 +42,7 @@ import {
   type TriggerCandidate,
 } from "@/components/canvas/EventsPanel";
 import { LayoutPanel } from "@/components/canvas/LayoutPanel";
-import { SettingsPanel } from "@/components/canvas/SettingsPanel";
+import { CanvasNode, SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
@@ -376,7 +376,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   const app = appQuery.data;
 
   return (
-    <Editor resolver={CANVAS_RESOLVER} enabled={canEdit}>
+    <Editor resolver={CANVAS_RESOLVER} enabled={canEdit} onRender={CanvasNode}>
       <CanvasEnvBridge
         workspaceId={workspaceId}
         projectId={projectId}

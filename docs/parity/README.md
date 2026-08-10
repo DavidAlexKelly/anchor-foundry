@@ -135,8 +135,15 @@ but "the only authoring surface for transforms that are not yet files".
 - **State saving is the third consumer and is not built.** It keys on the same
   external ID (p.202–203). It belongs in the existing mechanism and the
   existing test file; needing anything new would mean this was built wrong.
-- Remaining in this stage: the three config tabs, the six section layouts, the
-  vertical header, the versions dialog.
+- **The three widget-configuration tabs** — done (`STATUS.md` §117). Widget
+  setup / Metadata / Display, named as p.65–68 names them. The raw JSON editor
+  is the piece worth having early: every widget option Foundry documents and we
+  have not built a form for is now survivable rather than blocking, which
+  matters most for stage 5's long tail.
+- Remaining in this stage: the six section layouts (Flow, Toolbar and Loop are
+  the missing three — **Loop is newly unblocked**, since it is one embedded
+  module per entry and the interface mapping it needs now exists), the vertical
+  header, the versions dialog.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
 | **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |

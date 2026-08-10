@@ -63,10 +63,19 @@ export function LayoutPanel() {
       // ROOT is the document itself; it has no settings anybody edits and a
       // row for it would only add an indent level to everything below.
       if (id !== "ROOT") {
+        // A rename from the Metadata tab wins over the widget's type name.
+        // p.68: renaming "will affect how the current widget is referenced
+        // through Workshop, most notably as a component in the Layout panel",
+        // which is this list - so a rename nothing here read would be a
+        // control that visibly does nothing.
+        const renamed = (node.data.custom as { displayName?: string } | undefined)?.displayName;
         out.push({
           id,
           depth,
-          label: node.data.displayName || node.data.name,
+          label: renamed || node.data.displayName || node.data.name,
+          // The *detail* still keys off the type name: it says what kind of
+          // thing this is ("Section, 2 columns"), and reading a custom name
+          // there would make it say nothing at all once one was set.
           detail: detailOf(node.data.displayName || "", node.data.props ?? {}),
         });
       }

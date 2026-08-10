@@ -90,13 +90,17 @@ Foundry's widget panel has **three** tabs (p.65–68). An earlier roadmap draft 
 
 | Tab | Contents | Status |
 |---|---|---|
-| **Widget setup** | input and output variables, plus widget-specific configuration | ◑ — we have the fields, flat, not organised as a tab with variables first |
-| **Metadata** | rename widget; **view and edit raw widget JSON** | ○ |
-| **Display** | sizing only: **Auto (max)**, **Absolute** (fixed px), **Flex** (ratio) | ○ |
+| **Widget setup** | input and output variables, plus widget-specific configuration | ✅ the tab exists and holds the per-widget panel; ◑ the panel itself is still a flat list rather than variables-first |
+| **Metadata** | rename widget; **view and edit raw widget JSON** | ✅ |
+| **Display** | sizing only: **Auto (max)**, **Absolute** (fixed px), **Flex** (ratio) | ✅ for height; **width is not per-widget here** — see below |
 
-Renaming matters more than it looks: the widget name "will affect how the current widget is referenced through Workshop, most notably as a component in the Layout panel, and also in default variable names" (p.68).
+Renaming matters more than it looks: the widget name "will affect how the current widget is referenced through Workshop, most notably as a component in the Layout panel, and also in default variable names" (p.68). The Layout panel half is done. The second half does not apply to us — we do not generate variable names from widget names — and that is a divergence rather than a gap.
 
-**The raw JSON editor is the cheapest high-value item in this file.** We already persist `format: 2` documents, so exposing and re-validating one is hours of work, and it makes every configuration we have not built a UI for survivable rather than blocking.
+**The raw JSON editor was the cheapest high-value item in this file**, and it is done. It **replaces** rather than merges, so removing a prop in the editor removes it from the widget; every other assertion about it passes just as happily against a merging implementation, which is why there is a test that only deletion can satisfy.
+
+**Sizing is height, deliberately.** Foundry's own description is height-first and says why: Auto (max) "is not available for setting the width of widgets in a column layout" (p.68). Per-widget *width* here is already solved by a different mechanism — a section distributes width to its children by weight, draggable between them (`§section-resize`). A second per-widget width control would put two numbers in charge of one dimension with no rule for which wins, so it is not built.
+
+Applied through one `<Editor onRender>` wrapper rather than in each of the twenty-odd widgets, and the wrapper **returns the node untouched when no sizing is set** — so a module that configures none renders exactly as it did before, with no extra element in any flex chain.
 
 | Other | Status | Notes |
 |---|---|---|
