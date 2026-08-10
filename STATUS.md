@@ -2545,6 +2545,24 @@ We named a link once, so one of its two directions always read backwards: from a
 
 ---
 
+### 124. Action parameters and rules, decided rather than half-built (this session)
+
+`docs/parity/ontology.md` §5's own instruction is "do parameters and rules before any of the features that depend on them", and seven separate features in that section depend on them. It is a schema change, a service change, two call sites and a form — too much to start at the end of a session and leave half-standing, which is exactly the situation this repo already answers with a decision document (0002, 0004, 0006).
+
+**`docs/decisions/0007-action-parameters-and-rules.md`.** The problem in one sentence: our action model has no word for "what the user typed". `editable_properties` is a list of property names, so the input *is* the output and there is nowhere to put an input that is not a property being overwritten. Foundry separates parameters (p.25, "the inputs of an action type… treated like variables that contain external values") from rules (p.75, "define the ways objects should change when the action is applied"), and defaults, submission criteria, filtered dropdowns, create/delete of objects and links, multi-object transactions and function-backed actions all hang off that one distinction.
+
+Three decisions worth arguing with:
+
+* **Rules are a closed vocabulary, not an expression language.** p.75 distinguishes "simple rules" from cases where they "are not sufficient" and answers the second with *functions* — which are `[fn]` and out of scope. Inventing a half-expression-language to avoid them would be building the thing we said we would not build, badly.
+* **The conversion names each parameter after the property it writes.** That is what makes the migration safe: `{property: value}` and `{parameter: value}` are the same wire shape by construction, so every saved Workshop `run_action` (§60) keeps working with no change. The consequence is that renaming a converted parameter is a breaking change, so the editor must refuse to rename one a module references — the same refusal §1.2a already makes for variables.
+* **Criteria are checked before the first rule runs**, and the acceptance test is that a refused action creates *no* dataset version. "Refused" and "refused after writing half of it" look identical from the caller, and our write-back appends a version per write.
+
+**The alternative recorded and rejected:** keep `editable_properties` and bolt criteria onto it. Cheaper, buys one of the seven, and leaves every other feature needing its own side channel — which is how a model ends up with four ways to say the same thing.
+
+Nothing is built, and the document says so at the top.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

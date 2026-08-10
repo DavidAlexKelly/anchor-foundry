@@ -181,6 +181,8 @@ Ours: declarative edits to editable properties, run from a Workshop `run_action`
 
 The parameter-and-rules model is the big one. Ours conflates "what the user types" with "what gets written"; Foundry separates them, and everything else in this section — validation, submission criteria, defaults, dropdown filtering — hangs off that separation. **Do parameters and rules before any of the features that depend on them.**
 
+**Settled in `docs/decisions/0007-action-parameters-and-rules.md` (`STATUS.md` §124), not yet built.** Three tables replacing one JSON column; rules as a small closed vocabulary rather than an expression language, because p.75 answers the hard cases with functions and those are `[fn]`; submission criteria checked before the first write. The conversion from `editable_properties` is mechanical and total, and names each parameter after the property it writes — which is what keeps every saved Workshop `run_action` working unchanged.
+
 ---
 
 ## 6. Ontology Manager (`ontology-manager`)
@@ -206,7 +208,7 @@ The parameter-and-rules model is the big one. Ours conflates "what the user type
 1. ~~**Property visibility**~~ — **done (`STATUS.md` §121)**. Stored, editable, and honoured by the Object Explorer, which no longer draws a hidden property's column. Deliberately **a display hint and not a permission**: the value is still stored, still synced and still returned by the API, exactly as Foundry's "an indication to user applications" (p.111) describes. Making it look like access control would be worse than not having it, because somebody would use it as one.
 2. **Standard Object Views.** Generated from the object type; no builder UI needed. Biggest visible gain in this file, and now unblocked — visibility is the input it was waiting for.
 3. ~~**Link type per-side display names and self-links**~~ — **done (`STATUS.md` §123)**, less the one test named above. Self-links turned out to already work; only the naming was missing.
-4. **Action parameters and rules.** The structural change everything in §5 depends on.
+4. **Action parameters and rules.** The structural change everything in §5 depends on. **Designed — decision 0007 — and next to build.**
 5. **Time series and media reference property types.** Both unlock Workshop widgets; both need a storage decision first.
 6. **Configured Object Views**, reusing the Workshop runtime.
 7. **Struct property type**, then Workshop struct variables.
