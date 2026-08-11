@@ -2631,6 +2631,28 @@ Decision 0007 (§124), which had been settled and deliberately not built. `docs/
 
 ---
 
+### 128. Submission criteria, and the rule that a check it cannot decide must fail (this session)
+
+Decision 0007's next slice, and the first thing that needed §127's parameters: a criterion is a condition over *inputs*, so until inputs had a name there was nothing to write one about.
+
+Foundry, `action-types` p.49–50: "Submission criteria (formerly known as validations) are the conditions that determine whether an action can be submitted… Actions can only be submitted if **all** the submission criteria are met." Migration 0045 stores one condition per row, each with the **failure message** p.56 requires — "the failure message informs the user about why they are blocked from submitting an Action" — and the executor refuses with that message rather than with anything of ours.
+
+**The operator names are Foundry's own** (p.54–55): `is`, `is_not`, `matches`, `is_less_than`, `is_greater_than_or_equals`, `includes`, `is_included_in`, plus p.55's "no value" for emptiness, which is a property of the right-hand side rather than an operator. A builder reading Foundry's table should find the same words here.
+
+**Two things the decision did not anticipate, both from the docs.** Conditions are over parameters *and the current user*, because p.140 is explicit that criteria are how Foundry does per-action permissions — "simple submission criteria can require a specific user ID or group ID" — and building the mechanism while omitting its main use would have been a strange thing to ship. Group membership is read server-side, so a criterion cannot be satisfied by a client claiming a group.
+
+**A condition the executor cannot decide fails.** An operator it does not know, a comparison between things that do not compare, a user attribute we cannot answer — every one of them refuses. That is not defensiveness for its own sake: p.52 warns that a NOT condition against a missing attribute "caus[es] the condition to pass and grant more access than intended", and a check whose entire job is deciding who may write has exactly one safe direction to be wrong in.
+
+**Ordered comparisons are numbers only**, and that is a refusal rather than a gap. Dates arrive as ISO-8601 text whose ordering is lexicographic *only* when the offsets match, and a criterion that is right in London and wrong in New York is worse than one that declines to answer.
+
+**The check runs before the run is opened**, which is decision 0007's own acceptance test: a refused action leaves no dataset version *and* no `action_runs` row. "Refused" and "refused after writing half of it" look identical from the caller and are very different in the data, and our write-back appends a version per write.
+
+**Eleven mutations, two of which found tests that could not fail.** Turning `is_less_than` into `<=` passed everything, because no assertion sat on the boundary — the one input that distinguishes the two operators. And writing emptiness as `not left` passed too, which would have made "priority is 0" and "approved is false" read as *unanswered*; the same trap §125 hit rendering `0` as "∅". Both tests were fixed, not the code.
+
+**872 API tests** (was 856), 82 browser. Nesting (p.56's all / any / none), multipass attributes beyond id and group, and criteria over linked objects (p.138) are named in the migration as not built rather than left to be discovered missing.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -78,6 +78,15 @@ class ActionRuleOut(BaseModel):
     sort_order: int
 
 
+class ActionCriterionOut(BaseModel):
+    """A condition that must hold for the action to be submitted (p.49-56)."""
+
+    id: UUID
+    message: str
+    config: dict[str, Any]
+    sort_order: int
+
+
 class ActionTypeOut(BaseModel):
     id: UUID
     object_type_id: UUID
@@ -87,6 +96,7 @@ class ActionTypeOut(BaseModel):
     description: str
     parameters: list[ActionParameterOut]
     rules: list[ActionRuleOut]
+    criteria: list[ActionCriterionOut]
     # **Derived from the rules, not stored** - migration 0044 dropped the
     # column. Kept on the wire because the object-type screens and the
     # Workshop `run_action` editor both ask "which properties does this action
@@ -142,6 +152,7 @@ def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
             **row,
             "parameters": parameters,
             "rules": rules,
+            "criteria": [{**c, "config": _parse_json(c["config"])} for c in row["criteria"]],
             "editable_properties": actions_service.editable_properties_of(rules),
         }
     )
@@ -274,6 +285,16 @@ async def execute_action(
         # rules write with it (against the object type and its mapping).
         bound = actions_service.bind_parameters(
             body.values, parameters=action_type["parameters"]
+        )
+        # **Before the first rule runs, and before the run is even opened**
+        # (p.49-50). "Refused" and "refused after writing half of it" look the
+        # same to the caller and are very different in the dataset, and our
+        # write-back appends a version per write - so the check has to come
+        # before anything that could leave one behind.
+        actions_service.check_criteria(
+            bound,
+            criteria=action_type["criteria"],
+            user=await actions_service.criteria_user(conn, access.auth.user_id),
         )
         values = actions_service.apply_rules(
             bound,
