@@ -136,18 +136,22 @@ def test_a_rename_a_module_depends_on_is_refused_in_the_dialog(page, api):
 
 
 def test_the_editor_offers_the_rule_kinds_that_execute(page, api):
-    """Four kinds, and **not** `delete_object`.
+    """All five, now that all five run (§138).
 
-    The schema stores five and the executor runs four; offering the fifth would
-    be an editor that lets somebody save an action which fails the first time
-    it is clicked. It appears here when it executes.
+    `delete_object` was held out of this list while the executor refused it -
+    an editor must not let somebody save an action that fails the first time it
+    is clicked - and arrived the day it ran. The list is asserted rather than
+    its length, so a kind added here without an executor turns this red.
     """
     mod = build(api, "Action editor kinds")
     open_editor(page, mod)
 
     kinds = page.get_by_label("Rule 1 kind")
     options = kinds.locator("option").all_inner_texts()
-    assert options == ["Set a property", "Create an object", "Link to an object", "Remove a link"]
+    assert options == [
+        "Set a property", "Create an object", "Link to an object", "Remove a link",
+        "Delete this object",
+    ]
 
 
 def test_switching_a_rule_to_create_asks_for_a_primary_key(page, api):

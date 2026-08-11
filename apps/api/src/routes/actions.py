@@ -370,6 +370,7 @@ async def execute_action(
             criteria=action_type["criteria"],
             user=await actions_service.criteria_user(conn, access.auth.user_id),
         )
+        deleting = actions_service.deletes_the_subject(action_type["rules"])
         creations = actions_service.object_creations(
             bound,
             rules=action_type["rules"],
@@ -433,6 +434,7 @@ async def execute_action(
                 [(str(instance["primary_key"]), column_updates)] if column_updates else [],
                 appended,
                 dest,
+                [str(instance["primary_key"])] if deleting else [],
             )
             with open(dest, "rb") as handle:
                 parquet_bytes = handle.read()
@@ -457,6 +459,17 @@ async def execute_action(
                     object_type_id=UUID(str(action_type["object_type_id"])),
                     instance_id=str(body.instance_id),
                     properties=values,
+                )
+            if deleting:
+                # The dataset is the record and the index is a projection
+                # (decision 0008), so the row goes first and the projection
+                # follows. A failure here leaves a findable object whose row is
+                # gone - visible, wrong, and repairable by a re-sync; the
+                # reverse order would lose the object while the row survived.
+                await instance_store.store_for(conn).delete_instances(
+                    search_prefix=prefix,
+                    source_id=UUID(str(source["id"])),
+                    primary_keys=[str(instance["primary_key"])],
                 )
             if creations:
                 # The index is a projection (decision 0008) - the dataset above

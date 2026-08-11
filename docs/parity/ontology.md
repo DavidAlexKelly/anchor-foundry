@@ -146,13 +146,13 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 |---|---|---|
 | Edit property values on one object | ✅ | |
 | Edit **multiple objects in one transaction** | ◑ | §134–§135 — the boundary is built and two rows of one dataset land as one version; several *modify* rules over different objects still need a rule editor that can express them |
-| **Create and delete objects** | ◑ | §135 — `create_object` builds an object of the action's own type, in the same write as everything else the action does (decision 0008). Delete, and creating another type's object, are not built |
+| **Create and delete objects** | ◑ | §135, §138 — both build and remove an object of the action's own type, in the same write as everything else the action does (decision 0008). Creating or deleting *another* type's object needs a lookup this build lacks |
 | **Create and delete links** | ◑ | §136 — a link here *is* the join property (migration 0027), so a link rule writes or clears it. Many-to-many, and setting a link from the far side, are refused with a sentence |
 | **Parameters** — typed user inputs with their own form | ✅ | §127, §129, §130 — the model executes, is editable through the API, and the form renders one input per *visible* parameter (p.25) |
 | Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
-| **Rules** — the logic mapping parameters to edits | ◑ | §127, §135, §136 — four of five kinds execute; `delete_object` is storable and refused loudly (TOC §5) |
+| **Rules** — the logic mapping parameters to edits | ✅ | §127, §135, §136, §138 — all five of p.75's simple rules execute, and the editor offers all five |
 | **Submission criteria** — conditions that must hold for submission | ◑ | §128–§131 — conditions over parameters and the current user, checked before the first write (p.49–56), editable in the Ontology Manager; no nesting (p.56's all / any / none) |
 | **Validation** — e.g. only HR may perform this action | ◑ | §128 — this *is* submission criteria (p.140: "simple submission criteria can require a specific user ID or group ID"); a criterion can require a group |
 | Configure sections in the action form | ○ | TOC §24 |
@@ -193,7 +193,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **The editor is in the Ontology Manager (§131, §137)** — one dialog per action, saved as one document, with the server's refusals shown rather than re-implemented in the browser. It offers the four rule kinds that execute; `delete_object` appears when it does.
 
-**Still to build:** the rule kinds that write no property at all — `create_object`, `delete_object`, `create_link`, `delete_link` (p.75's "simple rules"). They are blocked on a transaction boundary rather than on effort, and that blocker is now **settled in `docs/decisions/0008-one-transaction-per-action.md` (§133)**: stage every write, commit them in one Postgres transaction, one dataset version per dataset per action, and treat the search index as a projection that is repaired rather than transacted. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**All five of p.75's simple rules execute (§135–§138)**, on decision 0008's boundary: stage every write, commit in one Postgres transaction, one dataset version per dataset per action, and the search index as a projection that is repaired rather than transacted.
+
+**What is left in this section is one missing lookup, not five missing features.** Creating, deleting or linking *another* type's object needs that type's source resolved in this project — every one of those cases is refused at save time with a sentence naming it, rather than accepted and half-applied. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 

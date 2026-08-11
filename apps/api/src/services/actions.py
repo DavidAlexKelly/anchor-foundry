@@ -110,8 +110,11 @@ def apply_rules(
     for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
         kind = str(rule["kind"])
         config = _json(rule.get("config")) or {}
-        if kind == "create_object":
-            continue  # `object_creations` below; a different shape of write
+        if kind in ("create_object", "delete_object"):
+            # A different shape of write: `object_creations` adds a row and
+            # `deletes_the_subject` removes one, and neither is a property
+            # value this function can put in `writes`.
+            continue
         if kind in ("create_link", "delete_link"):
             # **A link here is a property value, not a row** (migration 0027):
             # "which instances of the far type have `to_property` equal to this
@@ -161,9 +164,22 @@ def apply_rules(
         writes[prop] = ontology_service.coerce_property_value(
             property_types.get(prop, "string"), bound[parameter]
         )
-    if not writes and not any(str(r["kind"]) == "create_object" for r in rules):
+    if not writes and not any(
+        str(r["kind"]) in ("create_object", "delete_object") for r in rules
+    ):
         raise ValueError("submit at least one value to write")
     return writes
+
+
+def deletes_the_subject(rules: list[dict[str, Any]]) -> bool:
+    """Whether this action removes the object it was run against (p.75).
+
+    A boolean rather than a list, because that is all a `delete_object` rule
+    can mean in this build: the object is the one the action was run against,
+    and deleting somebody *else's* object needs a way to name it - which is the
+    same missing lookup that keeps `create_object` to one type.
+    """
+    return any(str(rule["kind"]) == "delete_object" for rule in rules)
 
 
 def object_creations(
@@ -907,6 +923,12 @@ def _validate_definition(
                     "the object to link to"
                 )
             continue
+        if kind == "delete_object":
+            if config.get("object"):
+                raise ValueError(
+                    "this build can only delete the object the action was run against"
+                )
+            continue
         if kind != "modify_object":
             # Storable, so the schema and the editor agree, and refused by
             # `apply_rules` at execute time (§127). Refusing to *save* one
@@ -918,6 +940,16 @@ def _validate_definition(
             raise ValueError(f"a rule reads {parameter!r}, which is not a parameter")
         if prop not in property_types:
             raise ValueError(f"a rule writes {prop!r}, which is not a property of this object type")
+
+    kinds = {str(rule.get("kind", "")) for rule in rules}
+    if "delete_object" in kinds and kinds & {"modify_object", "create_link", "delete_link"}:
+        # Writing a property of a row and removing the row are not two things
+        # that happen in some order - they are a contradiction, and the order
+        # they happen to run in is not a specification. Refused where somebody
+        # can still see both rules.
+        raise ValueError(
+            "an action cannot both change and delete the same object"
+        )
 
     for criterion in criteria:
         if not str(criterion.get("message") or "").strip():
