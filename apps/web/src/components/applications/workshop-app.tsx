@@ -29,6 +29,7 @@ import { Editor, Element, Frame, useEditor } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
+import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { useSearchParams } from "next/navigation";
 import { seedFromQuery } from "@/components/canvas/pure";
@@ -96,6 +97,9 @@ function VersionsDialog({
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
+  // p.193's Changelog panel. Null until somebody asks: a diff is two more
+  // fetches, and the dialog's first job is the list of versions.
+  const [comparing, setComparing] = useState<{ from: number | null; to: number } | null>(null);
 
   const versions = useQuery({
     queryKey: ["canvas-versions", app.id],
@@ -185,6 +189,23 @@ function VersionsDialog({
                   >
                     View
                   </button>
+                  {/* p.193's single selection - "compare it to the previous
+                      version". The range form is the same panel with a `from`,
+                      and the row's own button is the question people actually
+                      have while reading a list of saves. */}
+                  <button
+                    type="button" className="btn quiet"
+                    data-testid={`changes-v${v.version_number}`}
+                    onClick={() =>
+                      setComparing(
+                        comparing?.to === v.version_number && comparing?.from === null
+                          ? null
+                          : { from: null, to: v.version_number },
+                      )
+                    }
+                  >
+                    Changes
+                  </button>
                   {canEdit && v.version_number !== app.published_version && (
                     <button
                       type="button" className="btn quiet"
@@ -209,6 +230,16 @@ function VersionsDialog({
           ))}
         </tbody>
       </table>
+
+      {comparing && (
+        <ChangelogPanel
+          workspaceId={workspaceId}
+          projectId={projectId}
+          appId={app.id}
+          from={comparing.from}
+          to={comparing.to}
+        />
+      )}
 
       {canEdit && (
         <>
