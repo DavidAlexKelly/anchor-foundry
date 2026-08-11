@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -370,6 +370,12 @@ async def execute_action(
             criteria=action_type["criteria"],
             user=await actions_service.criteria_user(conn, access.auth.user_id),
         )
+        creations = actions_service.object_creations(
+            bound,
+            rules=action_type["rules"],
+            property_types=property_types,
+            mapped_properties=set(column_mappings.values()),
+        )
         values = actions_service.apply_rules(
             bound,
             rules=action_type["rules"],
@@ -400,20 +406,37 @@ async def execute_action(
         local_path = await anyio.to_thread.run_sync(
             storage.local_path, str(source["s3_location"])
         )
+        # Every row this action writes, in one file (decision 0008). A modify
+        # and a create are two writes and must land as **one** version: three
+        # versions carrying the same `produced_by_id` would be a history that
+        # has to be interpreted, and a failure between them would leave a
+        # dataset nobody asked for.
+        appended = [
+            {
+                str(source["primary_key_column"]): creation["primary_key"],
+                **{
+                    reverse_map[prop]: ontology_service.column_value(
+                        property_types.get(prop, "string"), value
+                    )
+                    for prop, value in creation["properties"].items()
+                },
+            }
+            for creation in creations
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             dest = os.path.join(tmp, "out.parquet")
             schema, row_count = await anyio.to_thread.run_sync(
-                engine.write_back_row,
+                engine.write_rows,
                 local_path,
                 str(source["primary_key_column"]),
-                str(instance["primary_key"]),
-                column_updates,
+                [(str(instance["primary_key"]), column_updates)] if column_updates else [],
+                appended,
                 dest,
             )
             with open(dest, "rb") as handle:
                 parquet_bytes = handle.read()
         async with user_connection(access.auth.user_id) as conn:
-            updated_dataset = await dataset_service.add_version(
+            staged = await dataset_service.stage_version(
                 conn,
                 storage,
                 dataset_id=UUID(str(source["dataset_id"])),
@@ -425,13 +448,31 @@ async def execute_action(
                 produced_by_id=run_id,
                 created_by=access.auth.user_id,
             )
-            dataset_version = int(updated_dataset["current_version"])
-            await instance_store.store_for(conn).update_properties(
-                search_prefix=prefix,
-                object_type_id=UUID(str(action_type["object_type_id"])),
-                instance_id=str(body.instance_id),
-                properties=values,
-            )
+            committed = await dataset_service.commit_versions(conn, [staged])
+            dataset_version = int(committed[str(source["dataset_id"])]["current_version"])
+            if values:
+                await instance_store.store_for(conn).update_properties(
+                    search_prefix=prefix,
+                    object_type_id=UUID(str(action_type["object_type_id"])),
+                    instance_id=str(body.instance_id),
+                    properties=values,
+                )
+            if creations:
+                # The index is a projection (decision 0008) - the dataset above
+                # is the record. Upserted here so a created object is findable
+                # immediately rather than at the next sync; a failure here is
+                # repairable by re-syncing the source, which a half-written
+                # dataset would not be.
+                await instance_store.store_for(conn).upsert_instances(
+                    search_prefix=prefix,
+                    object_type_id=UUID(str(action_type["object_type_id"])),
+                    source_id=UUID(str(source["id"])),
+                    rows=[
+                        (creation["primary_key"], creation["properties"])
+                        for creation in creations
+                    ],
+                    synced_at=datetime.now(timezone.utc),
+                )
     except DatasetEngineError as exc:
         ok, error = False, str(exc)
 

@@ -543,3 +543,224 @@ def test_a_viewer_cannot_edit_a_definition(
         json={"parameters": [], "rules": [], "criteria": []},
     )
     assert r.status_code == 403
+
+
+# ---- create_object (decision 0008's first second-write) ------------------------
+def _versions(client: TestClient, fx: Fixture, dataset_id: str) -> int:
+    r = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/{dataset_id}",
+        headers=hdr(fx.viewer_sub),
+    )
+    return int(r.json()["current_version"])
+
+
+@pytest.fixture(scope="module")
+def dataset_of(client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str) -> str:
+    """The dataset behind the ticket type, so a version count can be read."""
+    r = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.viewer_sub),
+    )
+    source = next(s for s in r.json() if s["object_type_id"] == ticket_type_id)
+    return source["dataset_id"]
+
+
+def with_create(client: TestClient, fx: Fixture, type_id: str) -> dict:
+    """An action that modifies the ticket it runs on *and* creates another."""
+    action = make_action(client, fx, type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "new_key", "display_name": "New ticket id", "data_type": "string"},
+                {"api_name": "new_status", "display_name": "New status", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "create_object",
+                 "config": {"primary_key": "new_key",
+                            "properties": {"status": "new_status"}}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+    return action
+
+
+def test_a_modify_and_a_create_produce_one_dataset_version(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str, dataset_of: str
+) -> None:
+    """**Decision 0008's second acceptance test**, and the first time this
+    codebase writes two rows in one action. One version, not two: three
+    versions carrying the same `produced_by_id` would be a history that has to
+    be interpreted rather than read."""
+    action = with_create(client, fx, ticket_type_id)
+    before = _versions(client, fx, dataset_of)
+    key = str(uuid.uuid4().int % 9_000_000 + 1000)  # the column is an INTEGER
+
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "triaged", "new_key": key, "new_status": "open"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+    assert _versions(client, fx, dataset_of) == before + 1
+
+    # Both writes landed: the edited ticket and the new one.
+    rows = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/{dataset_of}/query",
+        headers=hdr(fx.viewer_sub),
+        json={"sql": "SELECT ticket_id, status FROM dataset ORDER BY ticket_id"},
+    ).json()["rows"]
+    by_key = {str(row[0]): row[1] for row in rows}
+    assert by_key[key] == "open", by_key
+    assert by_key["1"] == "triaged", by_key
+
+
+def test_a_failed_create_leaves_the_modify_unapplied(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str, dataset_of: str
+) -> None:
+    """**`ontology.md` §8's requirement**, and decision 0008's first acceptance
+    test: an action whose second write fails leaves the first unapplied.
+
+    The create names a primary key that already exists, which the engine
+    refuses. Nothing may reach the dataset - not the modify, not a version.
+    """
+    action = with_create(client, fx, ticket_type_id)
+    before = _versions(client, fx, dataset_of)
+    status_before = client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances/{instance_id}",
+        headers=hdr(fx.viewer_sub),
+    ).json()["properties"]["status"]
+
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              # "1" is the ticket the fixture already has.
+              "values": {"status": "should-not-land", "new_key": "1", "new_status": "open"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
+    assert "already exists" in r.json()["error"]
+
+    assert _versions(client, fx, dataset_of) == before, "a refused action versioned the dataset"
+    after = client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances/{instance_id}",
+        headers=hdr(fx.viewer_sub),
+    ).json()["properties"]["status"]
+    assert after == status_before, "the modify survived a failed create"
+
+
+def test_the_created_object_is_findable_immediately(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str
+) -> None:
+    """The dataset is the record and the index is a projection (decision 0008),
+    but a projection nobody updates is a created object that does not exist
+    until the next sync."""
+    action = with_create(client, fx, ticket_type_id)
+    key = str(uuid.uuid4().int % 9_000_000 + 1000)  # the column is an INTEGER
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "open", "new_key": key, "new_status": "queued"}},
+    )
+    assert r.status_code == 200, r.text
+
+    items = client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances", headers=hdr(fx.viewer_sub)
+    ).json()["items"]
+    created = [i for i in items if i["primary_key"] == key]
+    assert len(created) == 1, [i["primary_key"] for i in items]
+    assert created[0]["properties"]["status"] == "queued"
+
+
+def test_a_create_rule_naming_another_object_type_is_refused_at_save(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """Storable in the schema, unbuildable here: creating an object of another
+    type needs that type's source resolved in this project. Named at save time
+    rather than accepted and silently ignored at execute time."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+            ],
+            "rules": [{"kind": "create_object",
+                       "config": {"object_type": str(uuid.uuid4()), "primary_key": "status",
+                                  "properties": {"status": "status"}}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "own object type" in r.text
+
+
+def test_a_create_rule_setting_something_that_is_not_a_property_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "status", "display_name": "Status", "data_type": "string"}],
+            "rules": [{"kind": "create_object",
+                       "config": {"primary_key": "status",
+                                  "properties": {"invented": "status"}}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "not a property" in r.text
+
+
+def test_a_new_key_of_the_wrong_type_says_why(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str
+) -> None:
+    """`ticket_id` is an INTEGER column, and DuckDB's own message for a value
+    that will not convert is "Attempting to execute an unsuccessful or closed
+    pending query result" - a sentence with nothing in it for the person who
+    typed the value. The reason is on the *second* line, and this is the one
+    place that reads further."""
+    action = with_create(client, fx, ticket_type_id)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "open", "new_key": "not-a-number", "new_status": "open"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
+    assert "could not add a row" in r.json()["error"]
+    assert "not-a-number" in r.json()["error"]
+
+
+def test_a_create_rule_with_no_primary_key_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """A row with no identity is not a created object - nothing can address it,
+    and the next sync would treat it as a stranger. Refused at save, where the
+    rule is still in front of the person who wrote it."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "status", "display_name": "Status", "data_type": "string"}],
+            "rules": [{"kind": "create_object", "config": {"properties": {"status": "status"}}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "primary_key" in r.text

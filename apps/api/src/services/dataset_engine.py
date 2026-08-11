@@ -537,34 +537,91 @@ def _quote_column(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def write_back_row(
+def write_rows(
     parquet_path: str,
     primary_key_column: str,
-    primary_key_value: str,
-    column_updates: dict[str, Any],
+    updates: list[tuple[str, dict[str, Any]]],
+    appends: list[dict[str, Any]],
     dest_path: str,
 ) -> tuple[list[ColumnSchema], int]:
-    """Update one row (matched by primary key) in a dataset's Parquet file
-    and write the result to dest_path as a new version. Used by Actions
-    write-back - every mutation still produces a new dataset_versions row
-    rather than silently overwriting data, matching the rest of the
-    platform's dataset model."""
+    """Apply a set of row updates and row appends, and write **one** file.
+
+    Decision 0008: an action is "a single transaction" (Foundry `action-types`
+    p.2), and in a Parquet-backed dataset that means one output file and one
+    version however many rows an action touched. Three versions with the same
+    `produced_by_id` would be a history that has to be interpreted rather than
+    read, and a failure between them would leave a dataset nobody asked for.
+
+    Every write lands in one DuckDB table before anything is copied out, so a
+    failure on the third row leaves the file on disk untouched - there is no
+    half-written output to clean up, because the output is written last.
+
+    **An append whose primary key already exists is refused.** Instance identity
+    is `(source_id, primary_key)`, so a duplicate key would produce two objects
+    that no query could tell apart - the same failure the STATUS note about two
+    sources feeding one object type describes, arrived at from the other side.
+    """
     con = duckdb.connect()
     try:
         try:
             con.execute(f"CREATE TABLE t AS SELECT * FROM read_parquet({parquet_path!r})")
             pk_col = _quote_column(primary_key_column)
-            (matched,) = con.execute(
-                f"SELECT count(*) FROM t WHERE CAST({pk_col} AS VARCHAR) = ?",
-                [primary_key_value],
-            ).fetchone()
-            if not matched:
-                raise DatasetEngineError(
-                    f"no row with {primary_key_column} = {primary_key_value!r} in this dataset"
+
+            for primary_key_value, column_updates in updates:
+                (matched,) = con.execute(
+                    f"SELECT count(*) FROM t WHERE CAST({pk_col} AS VARCHAR) = ?",
+                    [primary_key_value],
+                ).fetchone()
+                if not matched:
+                    raise DatasetEngineError(
+                        f"no row with {primary_key_column} = {primary_key_value!r} in this dataset"
+                    )
+                if not column_updates:
+                    continue
+                set_clause = ", ".join(f"{_quote_column(c)} = ?" for c in column_updates)
+                params = list(column_updates.values()) + [primary_key_value]
+                con.execute(
+                    f"UPDATE t SET {set_clause} WHERE CAST({pk_col} AS VARCHAR) = ?", params
                 )
-            set_clause = ", ".join(f"{_quote_column(c)} = ?" for c in column_updates)
-            params = list(column_updates.values()) + [primary_key_value]
-            con.execute(f"UPDATE t SET {set_clause} WHERE CAST({pk_col} AS VARCHAR) = ?", params)
+
+            for row in appends:
+                key = row.get(primary_key_column)
+                if key is None or str(key) == "":
+                    raise DatasetEngineError(
+                        f"a new row needs a value for {primary_key_column!r}"
+                    )
+                (clash,) = con.execute(
+                    f"SELECT count(*) FROM t WHERE CAST({pk_col} AS VARCHAR) = ?", [str(key)]
+                ).fetchone()
+                if clash:
+                    raise DatasetEngineError(
+                        f"a row with {primary_key_column} = {str(key)!r} already exists"
+                    )
+                columns = ", ".join(_quote_column(c) for c in row)
+                placeholders = ", ".join("?" for _ in row)
+                # Columns the caller said nothing about are left NULL rather
+                # than defaulted: a dataset column this platform knows nothing
+                # about is not ours to invent a value for.
+                try:
+                    con.execute(
+                        f"INSERT INTO t ({columns}) VALUES ({placeholders})", list(row.values())
+                    )
+                except duckdb.Error as exc:
+                    # **DuckDB buries the reason under a sentence about
+                    # internals.** A value that will not convert reports as
+                    # "Attempting to execute an unsuccessful or closed pending
+                    # query result", with `Conversion Error: Could not convert
+                    # string 'T9' to INT32` on the *second* line - so `_clean`,
+                    # which keeps the first line everywhere else, would hand the
+                    # user the one sentence with nothing in it. This is the one
+                    # place that reads further, because supplying a value of the
+                    # wrong type for a column is a thing people will do.
+                    detail = next(
+                        (line.strip() for line in str(exc).splitlines()[1:] if line.strip()),
+                        _clean(exc),
+                    )
+                    raise DatasetEngineError(f"could not add a row: {detail}") from exc
+
             described = con.execute("DESCRIBE t").fetchall()
             schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
             row_count = int(con.execute("SELECT count(*) FROM t").fetchone()[0])
@@ -575,6 +632,21 @@ def write_back_row(
             raise DatasetEngineError(_clean(exc)) from exc
     finally:
         con.close()
+
+
+def write_back_row(
+    parquet_path: str,
+    primary_key_column: str,
+    primary_key_value: str,
+    column_updates: dict[str, Any],
+    dest_path: str,
+) -> tuple[list[ColumnSchema], int]:
+    """One row updated, written as a new version. The single-write shape, kept
+    because most callers have exactly one and `write_rows` reads oddly with a
+    one-element list at every call site."""
+    return write_rows(
+        parquet_path, primary_key_column, [(primary_key_value, column_updates)], [], dest_path
+    )
 
 
 # ---- model transforms --------------------------------------------------------

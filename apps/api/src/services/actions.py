@@ -109,10 +109,12 @@ def apply_rules(
     for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
         kind = str(rule["kind"])
         config = _json(rule.get("config")) or {}
+        if kind == "create_object":
+            continue  # `object_creations` below; a different shape of write
         if kind != "modify_object":
-            # The schema admits four more kinds and nothing can create one
-            # yet. Refusing loudly beats writing nothing and reporting success,
-            # which is what a silent `continue` would do the day one appears.
+            # Three kinds left, and nothing can create one yet. Refusing loudly
+            # beats writing nothing and reporting success, which is what a
+            # silent `continue` would do the day one appears.
             raise ValueError(f"this build cannot apply a {kind!r} rule yet")
         prop = str(config.get("property", ""))
         parameter = str(config.get("parameter", ""))
@@ -125,9 +127,74 @@ def apply_rules(
         writes[prop] = ontology_service.coerce_property_value(
             property_types.get(prop, "string"), bound[parameter]
         )
-    if not writes:
+    if not writes and not any(str(r["kind"]) == "create_object" for r in rules):
         raise ValueError("submit at least one value to write")
     return writes
+
+
+def object_creations(
+    bound: dict[str, Any],
+    *,
+    rules: list[dict[str, Any]],
+    property_types: dict[str, str],
+    mapped_properties: set[str],
+) -> list[dict[str, Any]]:
+    """The rows a `create_object` rule adds (Foundry p.75).
+
+    The first rule kind that writes something other than the object the action
+    was run against, and therefore the first one that needs decision 0008's
+    boundary: an action with a modify *and* a create is two writes, and two
+    writes have to land as one version or not at all.
+
+    Config is `{"primary_key": <parameter>, "properties": {<property>:
+    <parameter>}}` - the same property-to-parameter shape `modify_object` uses,
+    because a create is a modify of a row that does not exist yet, plus the one
+    thing a modify never needs.
+
+    **The primary key is separate because it is not a property.** An object's
+    identity lives in a *dataset column* named by its source's
+    `primary_key_column`, and that column is frequently not mapped to any
+    property at all - the fixture ticket type has `status` and `site` and no
+    `ticket_id`. A create that could only set properties could therefore never
+    give the new object an identity, which is exactly the shape of hole that
+    only shows up when something real is written through it.
+
+    **Only this action's own object type**, for now. A rule creating an object
+    of *another* type needs that type's source resolved in this project, which
+    is a lookup rather than a difficulty - and it is not built, so a config
+    naming another type is refused at save time rather than half-applied here.
+
+    A property with no dataset column is refused for the same reason a modify
+    refuses one: there is nowhere to put it, and a create that silently dropped
+    half a row would be worse than one that did not happen.
+    """
+    from . import ontology as ontology_service
+
+    creations: list[dict[str, Any]] = []
+    for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
+        if str(rule["kind"]) != "create_object":
+            continue
+        config = _json(rule.get("config")) or {}
+        key_parameter = str(config.get("primary_key", ""))
+        key = bound.get(key_parameter)
+        if key is None or str(key).strip() == "":
+            raise ValueError(
+                "a create_object rule needs a value for the new object's primary key"
+            )
+        row: dict[str, Any] = {}
+        for prop, parameter in (config.get("properties") or {}).items():
+            prop, parameter = str(prop), str(parameter)
+            if parameter not in bound:
+                continue  # not supplied, no default - the column stays empty
+            if prop not in mapped_properties:
+                raise ValueError(
+                    f"{prop!r} has no dataset column mapped on this instance's source"
+                )
+            row[prop] = ontology_service.coerce_property_value(
+                property_types.get(prop, "string"), bound[parameter]
+            )
+        creations.append({"primary_key": str(key), "properties": row})
+    return creations
 
 
 class CriteriaRefusal(ValueError):
@@ -693,6 +760,7 @@ def _validate_definition(
     rules: list[dict[str, Any]],
     criteria: list[dict[str, Any]],
     property_types: dict[str, str],
+    object_type_id: UUID,
 ) -> None:
     """Refuse a definition that could not be executed, at save time.
 
@@ -719,6 +787,37 @@ def _validate_definition(
         if kind not in _RULE_KINDS:
             raise ValueError(f"unknown rule kind {kind!r}")
         config = rule.get("config") or {}
+        if kind == "create_object":
+            # Checked here rather than at execute time, because every refusal
+            # below is one somebody can still fix while they are looking at the
+            # rule they typed.
+            if str(config.get("primary_key", "")) not in seen:
+                # Without one the rule can only produce a row with no identity,
+                # and an object nobody can address is not a created object.
+                raise ValueError(
+                    "a create_object rule needs a `primary_key` naming a parameter"
+                )
+            properties = config.get("properties") or {}
+            if not isinstance(properties, dict) or not properties:
+                raise ValueError("a create_object rule needs at least one property to set")
+            for prop, parameter in properties.items():
+                if str(parameter) not in seen:
+                    raise ValueError(
+                        f"a create_object rule reads {parameter!r}, which is not a parameter"
+                    )
+                if str(prop) not in property_types:
+                    raise ValueError(
+                        f"a create_object rule sets {prop!r}, which is not a property of "
+                        "this object type"
+                    )
+            if config.get("object_type") and str(config["object_type"]) != str(object_type_id):
+                # Storable in the schema, unbuildable here: creating an object
+                # of another type needs that type's source resolved in this
+                # project. Named rather than accepted and ignored.
+                raise ValueError(
+                    "this build can only create objects of the action's own object type"
+                )
+            continue
         if kind != "modify_object":
             # Storable, so the schema and the editor agree, and refused by
             # `apply_rules` at execute time (§127). Refusing to *save* one
@@ -782,7 +881,8 @@ async def set_definition(
         for p in await ontology_service.list_properties(conn, object_type_id)
     }
     _validate_definition(
-        parameters=parameters, rules=rules, criteria=criteria, property_types=property_types
+        parameters=parameters, rules=rules, criteria=criteria,
+        property_types=property_types, object_type_id=object_type_id,
     )
 
     # **The refusal decision 0007 names.** Checked against what is *going*, not
