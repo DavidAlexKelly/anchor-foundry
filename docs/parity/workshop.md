@@ -263,7 +263,7 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 | Descriptions viewable, addable and **editable after the fact** | ✅ | (p.192) |
 | Setting: **Automatically publish when saving** | ✅ | (p.192) |
 | Setting: **Always prompt for a version description** | ✅ | (p.192); a prompt, never a validation rule — the server accepts an empty description whatever the setting says |
-| **Changelog panel** — range or single-version diff | ○ | highlights "additions, deletions, changes, moves, and newly unused elements", with JSON diffs and a visual hierarchy (p.193). The biggest remaining piece of §6 and the prerequisite for module branching |
+| **Changelog panel** — range or single-version diff | ◑ | §132 — all five kinds ("additions, deletions, changes, moves, and newly unused elements"), single and range selection (p.193). The JSON diff view and the visual hierarchy are not built |
 | `/dev/` vs `/latest/` in the URL — last saved vs last published | ○ | (p.166); one route, and save-versus-publish becomes checkable by a human |
 | Module branching and rebasing, with conflict resolution in the Changelog panel | ○ | (p.193) — out of scope for now, but the Changelog panel is its prerequisite |
 

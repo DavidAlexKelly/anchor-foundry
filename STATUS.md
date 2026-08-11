@@ -2709,6 +2709,27 @@ One dialog on the Actions table, saved as **one document** — the three lists c
 
 ---
 
+### 132. The Changelog panel (this session)
+
+`docs/parity/workshop.md` §6's biggest remaining gap, and the prerequisite the spec names for module branching. Foundry p.193: "Use the Changelog panel to visualize differences between module versions… The Changelog panel highlights **additions, deletions, changes, moves, and newly unused elements**."
+
+Five kinds, and they are not interchangeable — which is the whole reason this is not `JSON.stringify(a) !== JSON.stringify(b)`:
+
+* **a move is not a change.** A Craft node stores its parent and its siblings' order inside the same object as its props, so a deep comparison calls every drag a change and buries the one thing that is actually different about it. Position is compared separately: parent *and* index, because a widget dragged into another section changes the first and one dragged up a column changes the second.
+* **a newly unused variable is not a deletion.** It is still declared and still valid; the widget that read it is gone. Saying "deleted" would send somebody looking for a removal that never happened. "Newly" is doing work too — a module full of variables nothing ever read would otherwise flag all of them on every save.
+
+**Variable references are found by walking the whole document**, not by checking a list of known prop names. Widgets bind variables through a dozen differently-named props (`objectSetVariable`, `subjectVariable`, `selectionVariable`, …) and text reads them through `{{v_id}}` interpolation; a list would go stale the first time somebody added a widget, silently, by reporting a variable as unused because nothing knew to look at the prop that reads it.
+
+`workshop.md`'s own acceptance criterion for this — "moving a widget between sections produces a *move*, not a delete plus an add" — is a test, and the mutation that compares whole nodes turns it red. **Seven mutations on the diff, three on the panel**, all red, including the one that would have made the panel compare a version against itself.
+
+**Not built, and named rather than implied:** p.193's JSON diff view and its visual hierarchy. This answers *what* changed; showing the exact modification is a second piece of work. The rebasing UI p.193 says reuses this panel needs branching, which this build does not have.
+
+**80 vitest** (was 65), **92 browser** (was 89), 880 API.
+
+**Two environment failures cost time and are worth recording.** `apps/web/node_modules` came back pruned to 19 packages — no react, no vitest — and my first repair made it worse: `npm ci` *inside* `apps/web` is wrong for an npm workspace, and it replaced a correct hoisted tree with a standalone partial one. The install belongs at the repo root, which is where the workspace's `node_modules` lives. Separately, the dev **database had been rolled back five migrations**, which surfaced as a 500 on creating a canvas app (`column "auto_publish_on_save" does not exist`) rather than as anything resembling a missing migration. `packages/db/migrate.py` is idempotent and fixed it in one command.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
@@ -2747,6 +2768,8 @@ One dialog on the Actions table, saved as **one document** — the three lists c
 - **An applied migration is immutable, and that includes its comments.** `migrate.py` checksums the file, so editing one - even to fix prose that is actively wrong - makes every database that already applied it refuse to migrate at all. Hit in §92: §90's docstring correction to `0034` blocked `0036` from applying, and would have blocked it in production too. Corrections to a migration's *prose* go in `packages/db/migrations/ERRATA.md`; the runner ignores `.md`. There is no escape hatch and there should not be one - the guard cannot tell a comment from a statement from a hash, and a runner that tried would be a runner that sometimes let a changed statement through.
 
 - **`scripts/dev-up.sh` used to hang any caller without a terminal, and the fix is one word: `setsid --fork`.** A script runs with job control off, so a backgrounded command stays in the shell's process group and is therefore *not* a process-group leader - and `setsid` only forks when its caller is one. Without a fork it `exec`s in place, so the dev server kept the pid of the script's own child and the script sat in `wait` for a process that never exits. Interactively nobody notices: the prompt comes back. Piped, `dev-up.sh | tail` printed **nothing at all** until the pipe closed, and the pipe could not close while a child held it - a 20-hour-old `dev-up.sh` was still parked in `do_wait` when this was found, and every agent or CI run that had to start a server had been paying minutes for it. With the fork, a piped run that starts the API returns in **3.6 seconds**; without it, the same run produces no output and is still going at 30. Both servers also take `< /dev/null` now, for the same reason one level down.
+
+- **This sandbox loses state without warning, and the two shapes it takes both read as application bugs.** The dev **database** can come back several migrations behind: the symptom is a 500 from an ordinary write naming a column that does not exist (`auto_publish_on_save`, in §132), not anything that says "unmigrated". Re-run `packages/db/migrate.py`; it is idempotent. And `apps/web/node_modules` can come back pruned to a fraction of itself while the running dev server carries on serving from its loaded modules, so the first sign is a test runner that cannot find `vitest/config`. **Reinstall from the repo root** (`npm ci` at the top level) - this is an npm workspace, and `npm ci` inside `apps/web` replaces the correct hoisted tree with a standalone partial one that shadows it.
 
 - **A migration that drops a column makes the previous API version fail, for as long as it is still running.** Migration 0044 drops `action_types.editable_properties`, and the control plane applies migrations as part of a version update - so between "migrated" and "new image serving", every request through `list_action_types` is a 500. Hit locally the moment 0044 landed: the dev API had been up since the previous day and every Workshop save returned 500 with `column at.editable_properties does not exist`, which reads as a broken feature rather than a stale process. Restarting the API fixed it. Nothing in this build needs zero-downtime yet, and the honest note is that when it does, a drop has to be its own later migration - write the new tables, deploy the code that reads them, *then* drop - rather than one migration doing both.
 

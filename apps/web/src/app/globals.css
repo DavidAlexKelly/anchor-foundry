@@ -1838,3 +1838,18 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   margin: 4px 0 8px; font-size: 10.5px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ink-soft); font-weight: 600;
 }
+
+/* ---- the Changelog panel (Foundry p.193) ---------------------------------
+   Five kinds of change, five readings. Colour is not the only signal - each
+   chip carries its word - because "added" and "deleted" as two shades of the
+   same thing is a distinction somebody has to be able to make in greyscale,
+   and the words are what p.193 itself uses. */
+.changelog { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.changelog-section { margin-bottom: 14px; }
+.changelog-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.changelog-list li { padding: 3px 0; font-size: 13px; }
+.changelog-list .slug { font-size: 11px; color: var(--ink-soft); }
+.chip-added { background: var(--brass-wash); color: var(--brass); }
+.chip-deleted { background: var(--danger-wash); color: var(--danger); }
+.chip-moved,
+.chip-unused { background: var(--paper); color: var(--ink-soft); box-shadow: inset 0 0 0 1px var(--line); }
