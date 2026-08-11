@@ -2803,6 +2803,21 @@ Each is checked at save time, where the rule is still in front of the person who
 Six mutations, all red, including the two that make each rule kind a no-op. **898 API tests** (was 892). `delete_object` is the last unimplemented kind, and it is the one that needs a row *removed* rather than written — a different shape again.
 ---
 
+### 137. The rule kinds, reachable from the editor (this session)
+
+§135 and §136 built `create_object`, `create_link` and `delete_link`, and the editor still offered only "set a property" — so the executor could run four kinds and a person could type one. The Rules section now has a kind selector.
+
+**`delete_object` is deliberately absent.** The schema stores five kinds and the executor runs four; offering the fifth would be an editor that lets somebody save an action which fails the first time it is clicked. It appears when it executes, and a browser test asserts the list rather than its length.
+
+**Changing a rule's kind drops its config.** The shapes have nothing in common — a leftover `property` on a link rule is a field the server would refuse for a reason nobody could see on screen. The mutation that carries the old config across turns the round-trip test red.
+
+**The link dropdown offers only links this action can set** — from side, not many-to-many, joined on a real property — which is a convenience rather than a rule: the server still decides, and §136's refusals still fire for anything typed past the UI.
+
+Two mutations, both red. **95 browser tests** (was 92).
+
+**The sandbox ate `node_modules` and the database again**, mid-unit, exactly as §132 describes: `tsc` started failing on `Cannot find module 'vitest'` (root install pruned to 16 packages) and the API 500'd on `column "visibility" does not exist` (five migrations rolled back). Both recoveries are the ones already recorded — `npm ci` at the *root*, and `migrate.py`. Worth noting the frequency rather than only the fix: twice in one session, and neither failure announces itself as environmental.
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

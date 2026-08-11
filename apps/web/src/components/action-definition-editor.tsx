@@ -37,6 +37,20 @@ const PARAMETER_TYPES = [
   "geopoint", "json", "attachment", "object",
 ];
 
+/** The rule kinds this build can execute, and what to call them.
+ *
+ * `delete_object` is missing on purpose: the schema stores it and the executor
+ * refuses it loudly, so offering it here would be an editor that lets somebody
+ * save an action which fails the first time it is clicked. It appears when it
+ * executes.
+ */
+const RULE_KINDS = [
+  ["modify_object", "Set a property"],
+  ["create_object", "Create an object"],
+  ["create_link", "Link to an object"],
+  ["delete_link", "Remove a link"],
+];
+
 /** p.54–55's operators, named as Foundry names them. */
 const OPERATORS = [
   ["is", "is"],
@@ -91,6 +105,21 @@ export function ActionDefinitionEditor({
     queryFn: () => objApi.getType(workspaceId, action.object_type_id),
   });
   const properties = type.data?.properties ?? [];
+
+  // Only the links this action *can* set: the join property lives on the from
+  // side, so a link whose from side is another type would be refused on save.
+  // Narrowing the list is a convenience; the server still decides.
+  const links = useQuery({
+    queryKey: ["link-types", workspaceId],
+    queryFn: () => objApi.listLinkTypes(workspaceId),
+  });
+  const settableLinks = (links.data ?? []).filter(
+    (l) =>
+      l.from_object_type_id === action.object_type_id &&
+      l.cardinality !== "many_to_many" &&
+      l.from_property &&
+      l.from_property !== "$primary_key",
+  );
 
   const save = useMutation({
     mutationFn: () =>
@@ -244,52 +273,174 @@ export function ActionDefinitionEditor({
         What the action does with them. This build applies <code>modify_object</code>; the
         other kinds are storable and refused at run time until they are implemented.
       </p>
-      <table className="table" data-testid="rule-rows">
-        <thead><tr><th>Writes property</th><th>From parameter</th><th aria-label="Remove" /></tr></thead>
-        <tbody>
-          {rules.map((r, i) => (
-            <tr key={i}>
-              <td>
-                <select
-                  value={String(r.config.property ?? "")}
-                  aria-label={`Rule ${i + 1} property`}
-                  onChange={(e) =>
-                    setRules(rules.map((rule, j) =>
-                      j === i ? { ...rule, config: { ...rule.config, property: e.target.value } } : rule))
-                  }
-                >
-                  <option value="">Choose…</option>
-                  {properties.map((prop) => (
-                    <option key={prop.api_name} value={prop.api_name}>
-                      {prop.display_name || prop.api_name}
-                    </option>
-                  ))}
-                </select>
-              </td>
-              <td>
-                <select
-                  value={String(r.config.parameter ?? "")}
-                  aria-label={`Rule ${i + 1} parameter`}
-                  onChange={(e) =>
-                    setRules(rules.map((rule, j) =>
-                      j === i ? { ...rule, config: { ...rule.config, parameter: e.target.value } } : rule))
-                  }
-                >
-                  <option value="">Choose…</option>
-                  {parameters.map((p) => (
-                    <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
-                  ))}
-                </select>
-              </td>
-              <td>
+      <div data-testid="rule-rows">
+        {rules.map((r, i) => {
+          const config = r.config as Record<string, unknown>;
+          const patch = (next: Record<string, unknown>) =>
+            setRules(rules.map((rule, j) => (j === i ? { ...rule, config: next } : rule)));
+          return (
+            <div key={i} className="card" style={{ marginBottom: 10 }} data-rule={r.kind}>
+              <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+                <Field label="Rule">
+                  <select
+                    value={r.kind}
+                    aria-label={`Rule ${i + 1} kind`}
+                    onChange={(e) =>
+                      // The config is dropped rather than carried across: the
+                      // shapes have nothing in common, and a leftover
+                      // `property` on a link rule is a field the server would
+                      // refuse for a reason nobody could see on screen.
+                      setRules(rules.map((rule, j) =>
+                        j === i ? { kind: e.target.value, config: {} } : rule))
+                    }
+                  >
+                    {RULE_KINDS.map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </Field>
+
+                {r.kind === "modify_object" && (
+                  <>
+                    <Field label="Property">
+                      <select
+                        value={String(config.property ?? "")}
+                        aria-label={`Rule ${i + 1} property`}
+                        onChange={(e) => patch({ ...config, property: e.target.value })}
+                      >
+                        <option value="">Choose…</option>
+                        {properties.map((prop) => (
+                          <option key={prop.api_name} value={prop.api_name}>
+                            {prop.display_name || prop.api_name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="From parameter">
+                      <select
+                        value={String(config.parameter ?? "")}
+                        aria-label={`Rule ${i + 1} parameter`}
+                        onChange={(e) => patch({ ...config, parameter: e.target.value })}
+                      >
+                        <option value="">Choose…</option>
+                        {parameters.map((p) => (
+                          <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  </>
+                )}
+
+                {r.kind === "create_object" && (
+                  <>
+                    {/* The primary key is separate because it is not a
+                        property - an object's identity lives in a dataset
+                        column, which is frequently mapped to nothing. */}
+                    <Field label="Primary key from">
+                      <select
+                        value={String(config.primary_key ?? "")}
+                        aria-label={`Rule ${i + 1} primary key`}
+                        onChange={(e) => patch({ ...config, primary_key: e.target.value })}
+                      >
+                        <option value="">Choose…</option>
+                        {parameters.map((p) => (
+                          <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="Sets property">
+                      <select
+                        value={Object.keys((config.properties as object) ?? {})[0] ?? ""}
+                        aria-label={`Rule ${i + 1} creates property`}
+                        onChange={(e) => {
+                          const parameter = Object.values(
+                            (config.properties as Record<string, string>) ?? {},
+                          )[0] ?? "";
+                          patch({
+                            ...config,
+                            properties: e.target.value ? { [e.target.value]: parameter } : {},
+                          });
+                        }}
+                      >
+                        <option value="">Choose…</option>
+                        {properties.map((prop) => (
+                          <option key={prop.api_name} value={prop.api_name}>
+                            {prop.display_name || prop.api_name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="From parameter">
+                      <select
+                        value={Object.values(
+                          (config.properties as Record<string, string>) ?? {},
+                        )[0] ?? ""}
+                        aria-label={`Rule ${i + 1} creates from`}
+                        onChange={(e) => {
+                          const property = Object.keys((config.properties as object) ?? {})[0] ?? "";
+                          patch({
+                            ...config,
+                            properties: property ? { [property]: e.target.value } : {},
+                          });
+                        }}
+                      >
+                        <option value="">Choose…</option>
+                        {parameters.map((p) => (
+                          <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  </>
+                )}
+
+                {(r.kind === "create_link" || r.kind === "delete_link") && (
+                  <>
+                    <Field label="Link">
+                      <select
+                        value={String(config.link_type ?? "")}
+                        aria-label={`Rule ${i + 1} link`}
+                        onChange={(e) => patch({ ...config, link_type: e.target.value })}
+                      >
+                        <option value="">Choose…</option>
+                        {settableLinks.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.display_name} → {l.to_display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    {r.kind === "create_link" && (
+                      <Field label="To object from">
+                        <select
+                          value={String(config.target ?? "")}
+                          aria-label={`Rule ${i + 1} target`}
+                          onChange={(e) => patch({ ...config, target: e.target.value })}
+                        >
+                          <option value="">Choose…</option>
+                          {parameters.map((p) => (
+                            <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    )}
+                  </>
+                )}
+
                 <button className="btn quiet" onClick={() => setRules(rules.filter((_, j) => j !== i))}>
                   Remove
                 </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </div>
+              {(r.kind === "create_link" || r.kind === "delete_link") &&
+                settableLinks.length === 0 && (
+                  <p className="field-hint">
+                    No link on this object type can be set by an action — the join property
+                    lives on the other side, or the link is many-to-many.
+                  </p>
+                )}
+            </div>
+          );
+        })}
+      </div>
       <button
         className="btn quiet"
         onClick={() => setRules([...rules, { kind: "modify_object", config: {} }])}

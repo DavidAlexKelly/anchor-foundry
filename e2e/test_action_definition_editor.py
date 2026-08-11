@@ -133,3 +133,55 @@ def test_a_rename_a_module_depends_on_is_refused_in_the_dialog(page, api):
     # retyped.
     expect(page.get_by_role("dialog")).to_be_visible()
     assert [p["api_name"] for p in definition(api, mod)["parameters"]] == ["status"]
+
+
+def test_the_editor_offers_the_rule_kinds_that_execute(page, api):
+    """Four kinds, and **not** `delete_object`.
+
+    The schema stores five and the executor runs four; offering the fifth would
+    be an editor that lets somebody save an action which fails the first time
+    it is clicked. It appears here when it executes.
+    """
+    mod = build(api, "Action editor kinds")
+    open_editor(page, mod)
+
+    kinds = page.get_by_label("Rule 1 kind")
+    options = kinds.locator("option").all_inner_texts()
+    assert options == ["Set a property", "Create an object", "Link to an object", "Remove a link"]
+
+
+def test_switching_a_rule_to_create_asks_for_a_primary_key(page, api):
+    """The field that only a create needs, and the one my first design left
+    out: an object's identity lives in a dataset column, which is frequently
+    mapped to no property at all."""
+    mod = build(api, "Action editor create")
+    open_editor(page, mod)
+
+    page.get_by_label("Rule 1 kind").select_option("create_object")
+    expect(page.get_by_label("Rule 1 primary key")).to_be_visible()
+    # And the modify-only fields are gone rather than left showing a stale
+    # value the server would refuse for a reason nobody could see.
+    expect(page.get_by_label("Rule 1 property")).to_have_count(0)
+
+
+def test_a_create_rule_typed_in_the_dialog_saves_and_runs(page, api):
+    """The round trip: what the dialog writes is what the executor reads."""
+    mod = build(api, "Action editor create runs")
+    open_editor(page, mod)
+
+    page.get_by_role("button", name="Add a parameter").click()
+    page.get_by_label("Parameter 2 name").fill("new_key")
+    page.get_by_label("Parameter 2 label").fill("New ticket id")
+
+    page.get_by_label("Rule 1 kind").select_option("create_object")
+    page.get_by_label("Rule 1 primary key").select_option("new_key")
+    page.get_by_label("Rule 1 creates property").select_option("status")
+    page.get_by_label("Rule 1 creates from").select_option("status")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    stored = definition(api, mod)
+    assert [r["kind"] for r in stored["rules"]] == ["create_object"]
+    assert stored["rules"][0]["config"] == {
+        "primary_key": "new_key", "properties": {"status": "status"}
+    }
