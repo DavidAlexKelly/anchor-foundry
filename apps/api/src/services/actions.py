@@ -126,6 +126,13 @@ def apply_rules(
             link = (link_types or {}).get(str(config.get("link_type", "")))
             if link is None:
                 raise ValueError("this action names a link type this workspace does not have")
+            if config.get("object"):
+                # The join property is on the *other* object, which a parameter
+                # names - `object_modifications` writes it, for the same reason
+                # a named modify goes there: a different row, in a source this
+                # function was never given.
+                writes_elsewhere = True
+                continue
             prop = str(link["from_property"] or "")
             if prop in ("", "$primary_key"):
                 # Rewriting a primary key is not linking, it is replacing the
@@ -224,7 +231,11 @@ def object_deletions(
 
 
 def modification_targets(
-    bound: dict[str, Any], *, rules: list[dict[str, Any]], default_object_type_id: UUID
+    bound: dict[str, Any],
+    *,
+    rules: list[dict[str, Any]],
+    default_object_type_id: UUID,
+    link_types: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """The objects, other than the subject, that this action's rules change.
 
@@ -235,12 +246,19 @@ def modification_targets(
     type (there must be exactly one); a modify does not have to guess, because
     the instance already says which source it came from.
 
+    Two rule shapes name an object here, and they say which type differently. A
+    `modify_object` says it outright in `object_type`. A link rule written from
+    the far side does not have to: the join property is on the link's *from*
+    side, so the link type already names the type of the object being written,
+    and letting the rule repeat it would be a second answer that could disagree.
+
     Returns `{object_type_id, instance_id}`, deduplicated - two rules setting
     two properties of the same named object are one object to look up.
     """
     targets: list[dict[str, Any]] = []
     for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
-        if str(rule["kind"]) != "modify_object":
+        kind = str(rule["kind"])
+        if kind not in ("modify_object", "create_link", "delete_link"):
             continue
         config = _json(rule.get("config")) or {}
         parameter = str(config.get("object", ""))
@@ -254,10 +272,14 @@ def modification_targets(
             raise ValueError(
                 f"{parameter!r} names the object to change and no value was supplied"
             )
-        target = {
-            "object_type_id": str(config.get("object_type") or default_object_type_id),
-            "instance_id": str(named),
-        }
+        if kind == "modify_object":
+            type_id = str(config.get("object_type") or default_object_type_id)
+        else:
+            link = (link_types or {}).get(str(config.get("link_type", "")))
+            if link is None:
+                raise ValueError("this action names a link type this workspace does not have")
+            type_id = str(link["from_object_type_id"])
+        target = {"object_type_id": type_id, "instance_id": str(named)}
         if target not in targets:
             targets.append(target)
     return targets
@@ -269,14 +291,27 @@ def object_modifications(
     rules: list[dict[str, Any]],
     contexts: dict[tuple[str, str], dict[str, Any]],
     default_object_type_id: UUID,
+    link_types: dict[str, dict[str, Any]] | None = None,
+    subject: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The property writes this action makes to objects a parameter names (p.75).
 
-    The third shape of "some object other than the one I was run against", and
-    the last one `docs/parity/ontology.md` §5 was waiting on. A `modify_object`
-    rule with an `object` in its config means *that* object rather than the
-    subject; everything else about the rule is unchanged, which is why it is
-    the same rule kind and not a fourth one.
+    "Some object other than the one I was run against", for the two rule kinds
+    that can mean one. A `modify_object` rule with an `object` in its config
+    means *that* object rather than the subject; everything else about the rule
+    is unchanged, which is why it is the same rule kind and not a fourth one.
+
+    **A link rule with an `object` is the far side of migration 0027's
+    derivation.** A link here is a property value: the *from* side holds
+    `from_property` and instances of the *to* side match on `to_property`. A
+    rule written on the from side sets its own row's foreign key, which
+    `apply_rules` does. A rule written on the **to** side - this action's
+    object type is the far end - can only link by writing the *other* object's
+    foreign key, and the value it writes is not a parameter at all: it is this
+    subject's `to_property`, because the link the rule creates is a link to
+    *this* object. `delete_link` clears the same column. That is why these
+    rules take an `object` and no `target`: the parameter says which object,
+    and the subject says what to point it at.
 
     **Keyed by instance, not by type.** `object_creations` can key its contexts
     by object type because a new row has no source of its own yet and the type
@@ -295,33 +330,63 @@ def object_modifications(
 
     merged: dict[tuple[str, str], dict[str, Any]] = {}
     for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
-        if str(rule["kind"]) != "modify_object":
+        kind = str(rule["kind"])
+        if kind not in ("modify_object", "create_link", "delete_link"):
             continue
         config = _json(rule.get("config")) or {}
         parameter = str(config.get("object", ""))
         if not parameter:
             continue
-        key = (
-            str(config.get("object_type") or default_object_type_id),
-            str(bound[parameter]),
-        )
+        link = (link_types or {}).get(str(config.get("link_type", "")))
+        if kind == "modify_object":
+            type_id = str(config.get("object_type") or default_object_type_id)
+        elif link is None:
+            raise ValueError("this action names a link type this workspace does not have")
+        else:
+            type_id = str(link["from_object_type_id"])
+        key = (type_id, str(bound[parameter]))
         context = contexts.get(key)
         if context is None:
             # Resolved by the caller, which had to find the instance to know
             # its source. Missing here means the caller and this function
             # disagree about which objects the rules name.
             raise ValueError("this action changes an object it could not resolve")
-        value_parameter = str(config.get("parameter", ""))
-        if value_parameter not in bound:
-            continue  # not supplied, no default - nothing to write
-        prop = str(config.get("property", ""))
+        if kind == "modify_object":
+            value_parameter = str(config.get("parameter", ""))
+            if value_parameter not in bound:
+                continue  # not supplied, no default - nothing to write
+            prop = str(config.get("property", ""))
+            value = bound[value_parameter]
+        else:
+            prop = str(link["from_property"] or "")
+            # **The subject supplies the value, so `to_property` is read here
+            # and not by the caller.** A link to this object is that object's
+            # foreign key holding this object's `to_property`; when the link
+            # joins on identity, that is the primary key, which is not a
+            # property and does not live in `properties`.
+            to_property = str(link["to_property"] or "")
+            value = (
+                None if kind == "delete_link"
+                else (subject or {}).get("primary_key") if to_property == "$primary_key"
+                else ((subject or {}).get("properties") or {}).get(to_property)
+            )
+            if kind == "create_link" and value is None:
+                # Nothing to point the other object at. Writing None anyway
+                # would be a `delete_link` reporting itself as a create.
+                raise ValueError(
+                    "this object has no value for the property this link joins on, so "
+                    "nothing can be linked to it"
+                )
         if prop not in context["mapped_properties"]:
             raise ValueError(
                 f"{prop!r} has no dataset column mapped on the source the object to "
                 "change came from"
             )
-        merged.setdefault(key, {})[prop] = ontology_service.coerce_property_value(
-            context["property_types"].get(prop, "string"), bound[value_parameter]
+        merged.setdefault(key, {})[prop] = (
+            None if value is None
+            else ontology_service.coerce_property_value(
+                context["property_types"].get(prop, "string"), value
+            )
         )
     return [
         {"object_type_id": type_id, "instance_id": instance_id, "properties": properties}
@@ -333,15 +398,15 @@ def object_modifications(
 def changes_the_subject(rules: list[dict[str, Any]]) -> bool:
     """Whether any rule writes a property of the object the action ran on.
 
-    A link rule always does - `_validate_definition` refuses one written from
-    the far side, so its foreign key is on the subject's row. A `modify_object`
-    does unless it names another object.
+    Neither a link rule nor a `modify_object` does when it names another
+    object: the foreign key a far-side link writes is on that object's row, not
+    on this one's.
     """
     for rule in rules:
         kind = str(rule["kind"])
-        if kind in ("create_link", "delete_link"):
-            return True
-        if kind == "modify_object" and not (_json(rule.get("config")) or {}).get("object"):
+        if (_json(rule.get("config")) or {}).get("object"):
+            continue
+        if kind in ("create_link", "delete_link", "modify_object"):
             return True
     return False
 
@@ -1140,14 +1205,36 @@ def _validate_definition(
             link = (link_types or {}).get(str(config.get("link_type", "")))
             if link is None:
                 raise ValueError("a link rule names a link type this workspace does not have")
-            if str(link["from_object_type_id"]) != str(object_type_id):
-                # The foreign key lives on the *from* side. A rule on the other
-                # side would write a different object, in a different dataset -
-                # which decision 0008's boundary can hold, and nothing resolves
-                # that dataset yet. Named rather than silently one-sided.
+            far_side = str(link["from_object_type_id"]) != str(object_type_id)
+            if far_side and str(link["to_object_type_id"]) != str(object_type_id):
                 raise ValueError(
-                    "a link rule can only be set from the side that holds the join property, "
-                    "and this action's object type is the other one"
+                    "a link rule names a link type neither of whose ends is this action's "
+                    "object type"
+                )
+            if far_side and not config.get("object"):
+                # The foreign key lives on the *from* side. Written from the
+                # **to** side there is no "this object's column" to set - the
+                # rule can only write some *other* object's, and which one is
+                # not a thing a link type knows. So the far side needs the
+                # parameter that says which, and the near side must not have
+                # one: on that side the rule already knows whose row it writes.
+                raise ValueError(
+                    "a link rule written from the side that does not hold the join property "
+                    "needs an `object` naming the parameter that says which object to link"
+                )
+            if not far_side and config.get("object"):
+                raise ValueError(
+                    "a link rule from the side that holds the join property writes this "
+                    "action's own object, so it cannot also name one"
+                )
+            if far_side and str(config.get("object")) not in seen:
+                raise ValueError(
+                    f"a link rule links {config.get('object')!r}, which is not a parameter"
+                )
+            if far_side and str(link["to_property"] or "") == "":
+                # Nothing on this side to point the other object at.
+                raise ValueError(
+                    "this link type joins on nothing, so an action cannot set it"
                 )
             if str(link["cardinality"]) == "many_to_many":
                 # A many-to-many link cannot be expressed by one foreign key,
@@ -1161,7 +1248,13 @@ def _validate_definition(
                     "this link type joins on the primary key or on nothing, so an action "
                     "cannot set it"
                 )
-            if kind == "create_link" and str(config.get("target", "")) not in seen:
+            if (
+                kind == "create_link" and not far_side
+                and str(config.get("target", "")) not in seen
+            ):
+                # Near side only. On the far side the value is not a parameter
+                # at all - it is this object's `to_property`, because the link
+                # the rule creates is a link *to this object*.
                 raise ValueError(
                     "a create_link rule needs a `target` naming the parameter that supplies "
                     "the object to link to"

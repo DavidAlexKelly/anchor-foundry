@@ -2881,6 +2881,26 @@ The third and last of p.75's "some object other than the one I was run against" 
 **`editable_properties` stayed what its name says.** It is derived from the rules and answers "which properties does this action write **on its own object**" for the change-impact report and the Workshop `run_action` editor. A named modify writes another object's property, so it is excluded — otherwise an effect citing `code` would be citing a property of a different row, and the impact report would claim this action writes the subject's type when it writes a parameter's.
 
 Four mutations, all red. **914 API tests** (was 907), 95 browser. §139–§141 are API-only: the definition dialog still offers the subject-only shapes, so naming a second object is something the editing endpoint can express and the editor cannot yet.
+
+---
+
+### 142. Linking two named objects, from the end that holds no foreign key (this session)
+
+The last shape `docs/parity/ontology.md` §5 was waiting on, and the one the earlier link work named as its own limit: "a link rule can only be set from the side that holds the join property, and this action's object type is the other one". That refusal is gone. A link rule written from the **to** side names the from-side object through a parameter and writes *its* join property.
+
+**The value is not a parameter, which is the whole point.** A link here is derived (migration 0027): instances of the far type match on `to_property` equal to this instance's `from_property`. From the near side the rule sets its own row's foreign key, and *which object to link to* is the input. From the far side there is no row of its own to write — the input is *which object to link*, and the value is fixed: this object's `to_property`, because the link being created is a link to this object. So a far-side rule takes an `object` and no `target`, a near-side rule takes a `target` and no `object`, and each is refused with a sentence if it carries the other's field.
+
+**The subject is read as this action leaves it.** `apply_rules` now runs before `object_modifications` and its writes are laid over the stored properties. An action that changes `status` and links a Team on `status` in one submit would otherwise write the value the ticket had *before* the submit — a link that stops holding the moment the action finishes. The mutation that reads the stored properties alone is red on exactly that test.
+
+**A create with nothing to point at is refused.** If the subject has no value for the property the link joins on, writing the blank anyway would be a `delete_link` reporting itself as a create.
+
+**A second test outlived its restriction, exactly as §139's did.** "A link rule from the wrong side is refused" asserted a refusal that this build lifts. Repointed rather than deleted, to what is still true: from that side the rule needs the parameter naming the object, and without one there is nothing it could mean.
+
+**One mutation survived the first pass** — `changes_the_subject` skipping rules that name another object. §138's contradiction is about the subject, and nothing asserted that deleting the subject while changing *another* object is allowed. Fixed in the test, not the code: "close this ticket and update the team" is a definition somebody will write, and a check counting every modify would refuse it.
+
+Left deliberately: a far-side `create_link` on an action that also deletes the subject is allowed. The other object ends up holding a value matching a row that no longer exists, which the derived-link model already handles — traversal finds nothing, exactly as it does for any value that matches nothing. Refusing it would be a rule nobody asked for.
+
+Four mutations, all red. **921 API tests** (was 914), 95 browser. Still API-only: the definition dialog offers the subject-only shapes, so §139-§142 are things the editing endpoint can express and the editor cannot yet.
 ---
 
 ## What's not started

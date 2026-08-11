@@ -866,12 +866,17 @@ def test_a_create_link_rule_writes_the_join_property(
     assert "no dataset column mapped" in r.text
 
 
-def test_a_link_rule_from_the_wrong_side_is_refused(
+def test_a_link_rule_from_the_wrong_side_needs_the_object_it_links(
     client: TestClient, fx: Fixture, linked: dict
 ) -> None:
-    """The foreign key lives on the *from* side. A rule on the other side would
-    write a different object in a different dataset - which decision 0008's
-    boundary can hold and nothing resolves yet."""
+    """The foreign key lives on the *from* side, so a rule on the other side
+    has no column of its own to write - it can only write some other object's,
+    and which one is not a thing a link type knows.
+
+    Until §142 that was the whole refusal. Now the rule is legal *with* the
+    parameter that names the object; without one there is still nothing it
+    could mean, which is what this asserts.
+    """
     action = make_action(client, fx, linked["team_type_id"], ["code"])
     r = client.put(
         f"{wbase(fx)}/action-types/{action['id']}/definition",
@@ -884,7 +889,7 @@ def test_a_link_rule_from_the_wrong_side_is_refused(
         },
     )
     assert r.status_code == 422
-    assert "the other one" in r.text
+    assert "needs an `object` naming the parameter" in r.text
 
 
 def test_a_create_link_rule_without_a_target_is_refused(
@@ -1651,6 +1656,275 @@ def test_changing_one_object_and_deleting_another_is_not_a_contradiction(
                             "property": "code", "parameter": "code"}},
                 {"kind": "delete_object",
                  "config": {"object_type": linked["team_type_id"], "object": "other"}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+
+# ---- linking two named objects from the far side (§142) ------------------------
+@pytest.fixture(scope="module")
+def far_link(client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict) -> str:
+    """A link whose join property is on the **Team** side.
+
+    `linked` runs Ticket → Team on `priority`, which the ticket source does not
+    map - fine for asserting refusals, useless for asserting a write. This one
+    runs Team → Ticket on `code`, which the team source does map, so an action
+    on a *Ticket* is on the side that holds no foreign key and has to write the
+    Team's.
+    """
+    r = client.post(
+        f"{wbase(fx)}/link-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"handles_{uuid.uuid4().hex[:6]}",
+            "display_name": "Handles",
+            "from_type_id": linked["team_type_id"],
+            "to_type_id": ticket_type_id,
+            "cardinality": "one_to_many",
+            "from_property": "code",
+            "to_property": "status",
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_a_link_rule_from_the_far_side_writes_the_named_object(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, far_link: str, team_dataset: str, dataset_of: str,
+) -> None:
+    """**Both ends of a link named, from the end that holds no foreign key.**
+
+    A link here is derived from a property value (migration 0027), so linking
+    is writing that value - and when the action's object type is the *to* side
+    there is no value of its own to write. The rule names the from-side object
+    through a parameter and writes *its* join property with *this* object's
+    `to_property`, which is what makes it a link to this object rather than a
+    modify with extra steps.
+    """
+    team = make_team(client, fx, ticket_type_id, instance_id, linked, "unlinked")
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "team", "display_name": "Team", "data_type": "object"}],
+            "rules": [{"kind": "create_link",
+                       "config": {"link_type": far_link, "object": "team"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    subject = client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances/{instance_id}",
+        headers=hdr(fx.viewer_sub),
+    ).json()
+    teams_before = _versions(client, fx, team_dataset)
+    tickets_before = _versions(client, fx, dataset_of)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"team": team["id"]}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+
+    # Only the Team's dataset moved: the subject is the end of the link that
+    # holds nothing, so nothing on it changed.
+    assert _versions(client, fx, team_dataset) == teams_before + 1
+    assert _versions(client, fx, dataset_of) == tickets_before
+    linked_team = next(
+        t for t in client.get(
+            f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+            headers=hdr(fx.viewer_sub),
+        ).json()["items"] if t["id"] == team["id"]
+    )
+    assert linked_team["properties"]["code"] == subject["properties"]["status"]
+
+
+def test_a_far_side_link_uses_the_value_this_action_leaves(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, far_link: str, team_dataset: str,
+) -> None:
+    """The action changes `status` *and* links on it. Reading the stored value
+    would write the one the ticket had before the submit and create a link that
+    does not hold the moment the action finishes."""
+    team = make_team(client, fx, ticket_type_id, instance_id, linked, "stale")
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    assert client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "create_link",
+                 "config": {"link_type": far_link, "object": "team"}},
+            ],
+            "criteria": [],
+        },
+    ).status_code == 200
+
+    fresh = f"handled_{uuid.uuid4().hex[:6]}"
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"status": fresh, "team": team["id"]}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+    assert r.json()["instance"]["properties"]["status"] == fresh
+    linked_team = next(
+        t for t in client.get(
+            f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+            headers=hdr(fx.viewer_sub),
+        ).json()["items"] if t["id"] == team["id"]
+    )
+    assert linked_team["properties"]["code"] == fresh
+
+
+def test_a_far_side_delete_link_clears_the_named_object(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, far_link: str, team_dataset: str,
+) -> None:
+    """Deleting a link is clearing the same column creating it wrote - on the
+    other object, which is the only thing the far side changes."""
+    team = make_team(client, fx, ticket_type_id, instance_id, linked, "attached")
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    assert client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "team", "display_name": "Team", "data_type": "object"}],
+            "rules": [{"kind": "delete_link",
+                       "config": {"link_type": far_link, "object": "team"}}],
+            "criteria": [],
+        },
+    ).status_code == 200
+
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"team": team["id"]}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+    linked_team = next(
+        t for t in client.get(
+            f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+            headers=hdr(fx.viewer_sub),
+        ).json()["items"] if t["id"] == team["id"]
+    )
+    assert linked_team["properties"]["code"] is None
+
+
+def test_a_near_side_link_rule_cannot_also_name_an_object(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """On the side that holds the join property the rule already knows whose
+    row it writes - its own. A parameter naming another object would be a
+    second answer, and the two can disagree."""
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+                {"api_name": "code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [{"kind": "create_link",
+                       "config": {"link_type": linked["link_id"], "target": "code",
+                                  "object": "team"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "cannot also name one" in r.text
+
+
+def test_a_far_side_link_rule_reading_a_non_parameter_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, far_link: str
+) -> None:
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "code", "display_name": "Code", "data_type": "string"}],
+            "rules": [{"kind": "create_link",
+                       "config": {"link_type": far_link, "object": "team"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "which is not a parameter" in r.text
+
+
+def test_a_far_side_link_to_an_object_with_no_join_value_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, far_link: str, team_dataset: str,
+) -> None:
+    """This link joins on `status`; blanking it leaves nothing to point the
+    Team at, and writing the blank anyway would be a `delete_link` reporting
+    itself as a create."""
+    team = make_team(client, fx, ticket_type_id, instance_id, linked, "waiting")
+    blanker = make_action(client, fx, ticket_type_id, ["status"])
+    assert client.put(
+        f"{wbase(fx)}/action-types/{blanker['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "create_link",
+                 "config": {"link_type": far_link, "object": "team"}},
+            ],
+            "criteria": [],
+        },
+    ).status_code == 200
+    r = client.post(
+        f"{abase(fx)}/{blanker['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"status": None, "team": team["id"]}},
+    )
+    assert r.status_code == 422
+    assert "nothing can be linked to it" in r.text
+
+
+def test_deleting_the_subject_and_changing_another_object_is_allowed(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """§138's contradiction is about the *subject*: writing a property of a row
+    and removing the same row. A rule that names another object writes a
+    different row, so the two rules do not disagree - and a check that counted
+    every modify would refuse "close this ticket and update the team".
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+                {"api_name": "code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "team",
+                            "property": "code", "parameter": "code"}},
+                {"kind": "delete_object", "config": {}},
             ],
             "criteria": [],
         },
