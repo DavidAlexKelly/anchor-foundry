@@ -2529,6 +2529,22 @@ To do that, the type *list* now reports `hidden_properties` — only the hidden 
 
 ---
 
+### 122. The standard Object View, generated from the object type (this session)
+
+`docs/parity/ontology.md` §4.1; Foundry `object-views` p.10–11: "Foundry automatically creates a standard Object View… The standard Object View matches the object type's configuration by spotlighting prominent properties… Normal properties are displayed in a regular table, and hidden properties are not visible."
+
+**Generated, never configured** — there is no builder, no saved document and nothing to publish. The view *is* the object type's configuration read back, which is what makes it worth having early: every object type became navigable the moment it existed, with no per-type work at all. §121's visibility is the whole input, and the Linked objects groups moved inside the view rather than sitting beside it, per p.11.
+
+Two of Foundry's four type-aware renderings are out of reach, and the reason is a missing property *type* rather than a missing view: media reference and time series are ○ in `ontology.md` §1.1 and will land with the types. Geopoint → Map is built.
+
+**Four bugs, all mine, and the last cost the most.** `e2e/api.py` built CSV by joining on commas, so a geopoint (`"51.5,-0.12"`) made a row wider than its header and the upload came back "primary key column 'id' is not in the dataset" — a message about the key, from a fault in another column; it uses the `csv` module now. The Explorer is workspace-wide at `/explore`, not under a project. The dev database holds thousands of objects from past runs, so "click the first row" opened a stranger's object. And **`conftest.settled` waits for a canvas widget, which the Explorer does not have** — so it timed out before any of the test body ran, and every assertion reported "the view is not here" about code that had never executed. Three rounds of diagnosis went into the component before the fault turned out to be the wait.
+
+That last one exposed a real design flaw, now fixed: the view's test id was only on its *success* branch, so a failure to load and a failure to render looked identical from outside. The marker belongs on the view, not on its success — `data-state` says which.
+
+*(Written later, in §126: the commit that built this never added its own section here, and `ontology.md` §4.1 had been pointing at a number that did not exist. Reconstructed from the commit and the code, not from memory.)*
+
+---
+
 ### 123. Naming both sides of a link, and a gap that was not one (this session)
 
 `docs/parity/ontology.md` §2. Foundry, `object-link-types` p.192:
@@ -2574,6 +2590,24 @@ The Explorer lists instances across *several* object types at once, so its colum
 **The test that stops the fix being worse than the bug** is the one for `"Smith, Ada"`. A geopoint round-trips through a dataset column as `"lat,lon"`, so the string form has to be recognised — and a name with a comma in it must not then be reformatted as a coordinate pair. Mutation-tested along with the absence check, where `!value` instead of an explicit null/undefined test would have rendered `0` and `false` as "∅".
 
 **50 vitest tests.** Nothing else changed.
+
+---
+
+### 126. The browser tab, and a line of code no test could fail (this session)
+
+`docs/parity/workshop.md` §1.1's last ◑. Foundry, `workshop` p.47: "Set a title for the header. This title will also be used to set the browser tab or Carbon workspace tab name. **If a title is not set, the Workshop module resource name will be used instead.**"
+
+We set a header title and it stayed in the header — `document.title` appeared nowhere in `apps/web/src`, so every module, published or in the builder, sat in a tab reading `Anchor`. Small, and the kind of thing that only matters when somebody has six of them open.
+
+`components/canvas/module-title.ts` is the fallback chain as a pure function — header title, else resource name, with whitespace-only treated as unset — and `useModuleTitle` is the two-line effect that assigns it. Both the builder application and the published route call it. **Interpolation is deliberately not done**: a title may contain `{{v_id}}`, variables resolve after the first render, and a tab that flickered from `Site {{v_name}}` to `Site Alpha` on every load would be worse than a stable one.
+
+**Two mutants earned their keep, in opposite directions.**
+
+The first found a missing test. Deleting the `CanvasHeader` type check — so *any* node's `title` prop became the tab — left all five unit tests green, because no fixture had a non-header widget carrying a title. Several widgets do; a chart's caption is not the tab name. The sixth test fixes that.
+
+The second found dead code. The hook originally captured `document.title` and restored it on unmount, on the reasoning that leaving a module would otherwise strand its name in the tab of every page visited afterwards. Deleting that cleanup left the whole browser file green — Next re-applies the route's own metadata on a client-side navigation, so the tab is already right by the time a restore would run. **The cleanup was removed rather than kept unfalsifiable**, and the check that would have caught it stayed: it now documents the assumption instead of the code.
+
+Four browser checks in `e2e/test_module_tab_title.py`, and unwiring the hook turns all four red. **56 vitest tests**, `tsc` clean.
 
 ---
 
