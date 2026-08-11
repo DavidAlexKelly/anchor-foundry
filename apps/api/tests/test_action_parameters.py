@@ -764,3 +764,215 @@ def test_a_create_rule_with_no_primary_key_is_refused(
     )
     assert r.status_code == 422
     assert "primary_key" in r.text
+
+
+# ---- link rules (p.75's "create and delete links") ----------------------------
+@pytest.fixture(scope="module")
+def linked(client: TestClient, fx: Fixture, ticket_type_id: str) -> dict:
+    """A Team type, and a link from Ticket to Team joined on `owner`.
+
+    A link here is **derived** from a property value (migration 0027): "which
+    instances of the far type have `to_property` equal to this instance's
+    `from_property`". So the Ticket side holds the foreign key, and creating a
+    link is writing it.
+    """
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"ParamTeam{fx.tag}",
+            "display_name": f"ParamTeam {fx.tag}",
+            "properties": [{"api_name": "code", "data_type": "string"}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    team_type_id = r.json()["id"]
+    r = client.post(
+        f"{wbase(fx)}/link-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"owned_by_{uuid.uuid4().hex[:6]}",
+            "display_name": "Owned by",
+            "from_type_id": ticket_type_id,
+            "to_type_id": team_type_id,
+            "cardinality": "one_to_many",
+            "from_property": "priority",
+            "to_property": "code",
+        },
+    )
+    assert r.status_code == 201, r.text
+    return {"team_type_id": team_type_id, "link_id": r.json()["id"]}
+
+
+def test_a_create_link_rule_writes_the_join_property(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str, linked: dict
+) -> None:
+    """p.75 lists creating links among the simple rules. In this platform the
+    link *is* the property value, so the rule writes it - and `priority` is the
+    join property, which is why this is not just a modify with another name."""
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team", "display_name": "Team", "data_type": "string"},
+            ],
+            "rules": [{"kind": "create_link",
+                       "config": {"link_type": linked["link_id"], "target": "team"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    # `priority` is not mapped to a dataset column on this source, so the write
+    # is refused for the reason every unmapped write is - which is the same
+    # sentence a modify would produce, and proves the rule went down the write
+    # path rather than being quietly ignored.
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"team": "alpha"}},
+    )
+    assert r.status_code == 422
+    assert "no dataset column mapped" in r.text
+
+
+def test_a_link_rule_from_the_wrong_side_is_refused(
+    client: TestClient, fx: Fixture, linked: dict
+) -> None:
+    """The foreign key lives on the *from* side. A rule on the other side would
+    write a different object in a different dataset - which decision 0008's
+    boundary can hold and nothing resolves yet."""
+    action = make_action(client, fx, linked["team_type_id"], ["code"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "code", "display_name": "Code", "data_type": "string"}],
+            "rules": [{"kind": "create_link",
+                       "config": {"link_type": linked["link_id"], "target": "code"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "the other one" in r.text
+
+
+def test_a_create_link_rule_without_a_target_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    action = make_action(client, fx, ticket_type_id, ["priority"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "team", "display_name": "Team", "data_type": "string"}],
+            "rules": [{"kind": "create_link", "config": {"link_type": linked["link_id"]}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "target" in r.text
+
+
+def test_a_link_rule_naming_an_unknown_link_type_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "team", "display_name": "Team", "data_type": "string"}],
+            "rules": [{"kind": "create_link",
+                       "config": {"link_type": str(uuid.uuid4()), "target": "team"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "does not have" in r.text
+
+
+@pytest.fixture(scope="module")
+def mapped_link(client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict) -> str:
+    """A second link, joined on `status` - which *is* mapped to a dataset
+    column, so the write can actually land and be read back."""
+    r = client.post(
+        f"{wbase(fx)}/link-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"status_of_{uuid.uuid4().hex[:6]}",
+            "display_name": "Status team",
+            "from_type_id": ticket_type_id,
+            "to_type_id": linked["team_type_id"],
+            "cardinality": "one_to_many",
+            "from_property": "status",
+            "to_property": "code",
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def link_action(client: TestClient, fx: Fixture, type_id: str, kind: str, link_id: str) -> dict:
+    action = make_action(client, fx, type_id, ["status"])
+    config = {"link_type": link_id}
+    if kind == "create_link":
+        config["target"] = "team"
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "team", "display_name": "Team", "data_type": "string"}],
+            "rules": [{"kind": kind, "config": config}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+    return action
+
+
+def test_creating_a_link_lands_as_the_join_propertys_value(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str, mapped_link: str
+) -> None:
+    """The happy path, and the one that shows a link *is* the property value in
+    this platform (migration 0027) rather than a row somewhere else."""
+    action = link_action(client, fx, ticket_type_id, "create_link", mapped_link)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"team": "alpha"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    assert r.json()["instance"]["properties"]["status"] == "alpha"
+
+
+def test_deleting_a_link_clears_it(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str, mapped_link: str
+) -> None:
+    """`delete_link` needs no target: there is one join property and clearing it
+    is the whole operation. It takes a value first so the clearing is visible -
+    a test that asserted "empty" against an already-empty property would pass
+    against a rule that did nothing."""
+    create = link_action(client, fx, ticket_type_id, "create_link", mapped_link)
+    client.post(
+        f"{abase(fx)}/{create['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"team": "beta"}},
+    )
+    assert client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances/{instance_id}",
+        headers=hdr(fx.viewer_sub),
+    ).json()["properties"]["status"] == "beta"
+
+    remove = link_action(client, fx, ticket_type_id, "delete_link", mapped_link)
+    r = client.post(
+        f"{abase(fx)}/{remove['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+    assert not r.json()["instance"]["properties"].get("status")

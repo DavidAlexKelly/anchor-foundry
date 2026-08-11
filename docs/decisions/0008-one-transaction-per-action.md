@@ -1,6 +1,6 @@
 # 0008 — One transaction per action
 
-**Status:** decided and **built** for the rule kinds that exist (`STATUS.md` §134–§135). `add_version` splits into `stage_version` and `commit_versions`; an action's writes land as one dataset version; `create_object` is the first rule that produces a second write. What remains is `delete_object`, the link rules, and creating an object of *another* type.
+**Status:** decided and **built** for the rule kinds that exist (`STATUS.md` §134–§135). `add_version` splits into `stage_version` and `commit_versions`; an action's writes land as one dataset version; `create_object` is the first rule that produces a second write. What remains is `delete_object`, and the cases that write a *second dataset*: creating an object of another type, and setting a link from the side that does not hold the join property.
 **Parity items:** `docs/parity/ontology.md` §5 (the rule kinds that write no property) and §8 (an action editing two objects where the second fails must leave *neither* applied).
 **Source:** `docs/pal/foundry_action-types.pdf` (174 pp). Citations are `(p.2)`.
 **Follows:** decision 0007, which is built (`STATUS.md` §127–§131). This is the blocker its last section named.

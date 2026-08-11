@@ -381,6 +381,7 @@ async def execute_action(
             rules=action_type["rules"],
             property_types=property_types,
             mapped_properties=set(column_mappings.values()),
+            link_types=await actions_service.link_types_for(conn, access.workspace_id),
         )
         run_id = await actions_service.open_run(
             conn,
