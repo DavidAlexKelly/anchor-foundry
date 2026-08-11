@@ -48,7 +48,7 @@ const RULE_KINDS = [
   ["create_object", "Create an object"],
   ["create_link", "Link to an object"],
   ["delete_link", "Remove a link"],
-  ["delete_object", "Delete this object"],
+  ["delete_object", "Delete an object"],
 ];
 
 /** p.54–55's operators, named as Foundry names them. */
@@ -68,6 +68,39 @@ type Criterion = ActionDefinitionInput["criteria"][number];
 
 function side(spec: unknown): Record<string, unknown> {
   return (spec ?? {}) as Record<string, unknown>;
+}
+
+/** The properties of whichever object type a rule writes.
+ *
+ * Its own component because a rule can now name a type other than the one the
+ * action hangs off (§139–§141), and "which properties may I pick" then has a
+ * different answer per rule. React Query keys on the type id, so several rules
+ * pointing at one type share a single fetch and a fourth rule pointing
+ * somewhere else does not re-fetch the first three.
+ */
+function PropertySelect({
+  workspaceId, typeId, value, label, onChange,
+}: {
+  workspaceId: string;
+  typeId: string;
+  value: string;
+  label: string;
+  onChange: (next: string) => void;
+}) {
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId),
+  });
+  return (
+    <select value={value} aria-label={label} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Choose…</option>
+      {(type.data?.properties ?? []).map((prop) => (
+        <option key={prop.api_name} value={prop.api_name}>
+          {prop.display_name || prop.api_name}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 export function ActionDefinitionEditor({
@@ -98,28 +131,38 @@ export function ActionDefinitionEditor({
   );
   const [failure, setFailure] = useState<string | null>(null);
 
-  // The object type's properties, so a rule picks a real one. Narrowing what
-  // can be *said*, not deciding what is legal - the server does that.
-  const type = useQuery({
-    queryKey: ["object-type", action.object_type_id],
-    queryFn: () => objApi.getType(workspaceId, action.object_type_id),
+  // Every object type in the workspace, so a rule can name one other than the
+  // action's own (§139–§141). Summaries only: the properties of whichever type
+  // a given rule names are fetched by `PropertySelect`, because carrying every
+  // property of every type here to answer one dropdown would be the list
+  // endpoint doing a detail endpoint's job.
+  const types = useQuery({
+    queryKey: ["object-types", workspaceId],
+    queryFn: () => objApi.listTypes(workspaceId),
   });
-  const properties = type.data?.properties ?? [];
 
-  // Only the links this action *can* set: the join property lives on the from
-  // side, so a link whose from side is another type would be refused on save.
-  // Narrowing the list is a convenience; the server still decides.
   const links = useQuery({
     queryKey: ["link-types", workspaceId],
     queryFn: () => objApi.listLinkTypes(workspaceId),
   });
+  // Both ends now (§142). The join property lives on the *from* side: a rule on
+  // that side writes its own object's, and a rule on the other side writes the
+  // named object's, so a link touching this type at either end is settable. One
+  // that touches it at neither, or that no single foreign key can express,
+  // still is not. Narrowing the list is a convenience; the server decides.
   const settableLinks = (links.data ?? []).filter(
     (l) =>
-      l.from_object_type_id === action.object_type_id &&
+      (l.from_object_type_id === action.object_type_id ||
+        (l.to_object_type_id === action.object_type_id && l.to_property)) &&
       l.cardinality !== "many_to_many" &&
       l.from_property &&
       l.from_property !== "$primary_key",
   );
+  /** Whether a link rule writes the *other* object's row rather than this one's. */
+  const isFarSide = (linkTypeId: unknown) => {
+    const link = settableLinks.find((l) => l.id === String(linkTypeId ?? ""));
+    return !!link && link.from_object_type_id !== action.object_type_id;
+  };
 
   const save = useMutation({
     mutationFn: () =>
@@ -270,14 +313,30 @@ export function ActionDefinitionEditor({
 
       <h3 className="field-label" style={{ marginTop: 24 }}>Rules</h3>
       <p className="field-hint">
-        What the action does with them. This build applies <code>modify_object</code>; the
-        other kinds are storable and refused at run time until they are implemented.
+        What the action does with them. A rule writes the object the action was run
+        against, or one a parameter names — several objects, of several types, all in
+        one transaction.
       </p>
       <div data-testid="rule-rows">
         {rules.map((r, i) => {
           const config = r.config as Record<string, unknown>;
           const patch = (next: Record<string, unknown>) =>
             setRules(rules.map((rule, j) => (j === i ? { ...rule, config: next } : rule)));
+          // Which object this rule writes, and therefore whose properties its
+          // pickers offer. Absent `object_type` means the action's own.
+          const ruleTypeId = String(config.object_type ?? action.object_type_id);
+          /** Point the rule at another type, or back at the subject.
+           *
+           * Both fields move together: an `object_type` with no `object` names
+           * a *set*, which the server refuses, and an `object` left behind when
+           * somebody picks "this object" again would silently keep writing
+           * somewhere else. The property goes too, because it belonged to the
+           * type the rule no longer names.
+           */
+          const retarget = (typeId: string) => {
+            const { object: _o, object_type: _t, property: _p, ...rest } = config;
+            patch(typeId ? { ...rest, object_type: typeId } : rest);
+          };
           return (
             <div key={i} className="card" style={{ marginBottom: 10 }} data-rule={r.kind}>
               <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
@@ -300,21 +359,53 @@ export function ActionDefinitionEditor({
                   </select>
                 </Field>
 
+                {(r.kind === "modify_object" || r.kind === "delete_object") && (
+                  <>
+                    <Field label="On">
+                      <select
+                        value={config.object_type ? ruleTypeId : ""}
+                        aria-label={`Rule ${i + 1} object type`}
+                        onChange={(e) => retarget(e.target.value)}
+                      >
+                        <option value="">This object</option>
+                        {(types.data ?? []).map((t) => (
+                          <option key={t.id} value={t.id}>{t.display_name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    {!!config.object_type && (
+                      <Field label="Which one">
+                        <select
+                          value={String(config.object ?? "")}
+                          aria-label={`Rule ${i + 1} which object`}
+                          onChange={(e) => patch({ ...config, object: e.target.value })}
+                        >
+                          <option value="">Choose…</option>
+                          {/* Only `object` parameters: p.25's type for a
+                              parameter that holds an object. A string one would
+                              carry a primary key, which is not what the
+                              executor looks an instance up by. */}
+                          {parameters
+                            .filter((p) => p.data_type === "object")
+                            .map((p) => (
+                              <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                            ))}
+                        </select>
+                      </Field>
+                    )}
+                  </>
+                )}
+
                 {r.kind === "modify_object" && (
                   <>
                     <Field label="Property">
-                      <select
+                      <PropertySelect
+                        workspaceId={workspaceId}
+                        typeId={ruleTypeId}
                         value={String(config.property ?? "")}
-                        aria-label={`Rule ${i + 1} property`}
-                        onChange={(e) => patch({ ...config, property: e.target.value })}
-                      >
-                        <option value="">Choose…</option>
-                        {properties.map((prop) => (
-                          <option key={prop.api_name} value={prop.api_name}>
-                            {prop.display_name || prop.api_name}
-                          </option>
-                        ))}
-                      </select>
+                        label={`Rule ${i + 1} property`}
+                        onChange={(next) => patch({ ...config, property: next })}
+                      />
                     </Field>
                     <Field label="From parameter">
                       <select
@@ -333,6 +424,24 @@ export function ActionDefinitionEditor({
 
                 {r.kind === "create_object" && (
                   <>
+                    {/* A create can name any type with a dataset in this
+                        project (§139); the properties below then come from
+                        *that* type, which is what the server checks against. */}
+                    <Field label="Of type">
+                      <select
+                        value={config.object_type ? ruleTypeId : ""}
+                        aria-label={`Rule ${i + 1} creates type`}
+                        onChange={(e) => {
+                          const { object_type: _t, properties: _p, ...rest } = config;
+                          patch(e.target.value ? { ...rest, object_type: e.target.value } : rest);
+                        }}
+                      >
+                        <option value="">This object type</option>
+                        {(types.data ?? []).map((t) => (
+                          <option key={t.id} value={t.id}>{t.display_name}</option>
+                        ))}
+                      </select>
+                    </Field>
                     {/* The primary key is separate because it is not a
                         property - an object's identity lives in a dataset
                         column, which is frequently mapped to nothing. */}
@@ -349,26 +458,21 @@ export function ActionDefinitionEditor({
                       </select>
                     </Field>
                     <Field label="Sets property">
-                      <select
+                      <PropertySelect
+                        workspaceId={workspaceId}
+                        typeId={ruleTypeId}
                         value={Object.keys((config.properties as object) ?? {})[0] ?? ""}
-                        aria-label={`Rule ${i + 1} creates property`}
-                        onChange={(e) => {
+                        label={`Rule ${i + 1} creates property`}
+                        onChange={(next) => {
                           const parameter = Object.values(
                             (config.properties as Record<string, string>) ?? {},
                           )[0] ?? "";
                           patch({
                             ...config,
-                            properties: e.target.value ? { [e.target.value]: parameter } : {},
+                            properties: next ? { [next]: parameter } : {},
                           });
                         }}
-                      >
-                        <option value="">Choose…</option>
-                        {properties.map((prop) => (
-                          <option key={prop.api_name} value={prop.api_name}>
-                            {prop.display_name || prop.api_name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </Field>
                     <Field label="From parameter">
                       <select
@@ -393,7 +497,7 @@ export function ActionDefinitionEditor({
                   </>
                 )}
 
-                {r.kind === "delete_object" && (
+                {r.kind === "delete_object" && !config.object_type && (
                   <p className="field-hint" style={{ marginBottom: 0 }}>
                     Deletes the object the action was run against. An action cannot both
                     change and delete the same object.
@@ -406,7 +510,14 @@ export function ActionDefinitionEditor({
                       <select
                         value={String(config.link_type ?? "")}
                         aria-label={`Rule ${i + 1} link`}
-                        onChange={(e) => patch({ ...config, link_type: e.target.value })}
+                        onChange={(e) => {
+                          // Both sides' fields go: a link picked on the other
+                          // end asks a different question, and the answer to
+                          // the old one is refused on save for a reason that
+                          // is no longer on screen.
+                          const { target: _t, object: _o, ...rest } = config;
+                          patch({ ...rest, link_type: e.target.value });
+                        }}
                       >
                         <option value="">Choose…</option>
                         {settableLinks.map((l) => (
@@ -416,12 +527,40 @@ export function ActionDefinitionEditor({
                         ))}
                       </select>
                     </Field>
-                    {r.kind === "create_link" && (
+                    {/* **Which field appears depends on which end this action
+                        is on.** On the from side the rule writes its own
+                        object's join property and the input is which object to
+                        point at (`target`). On the to side there is no column
+                        of its own: the input is which object to link
+                        (`object`), and the value is this object's, so there is
+                        nothing else to ask for (§142). */}
+                    {isFarSide(config.link_type) ? (
+                      <Field label="Object to link">
+                        <select
+                          value={String(config.object ?? "")}
+                          aria-label={`Rule ${i + 1} link object`}
+                          onChange={(e) => {
+                            const { target: _t, ...rest } = config;
+                            patch({ ...rest, object: e.target.value });
+                          }}
+                        >
+                          <option value="">Choose…</option>
+                          {parameters
+                            .filter((p) => p.data_type === "object")
+                            .map((p) => (
+                              <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                            ))}
+                        </select>
+                      </Field>
+                    ) : r.kind === "create_link" ? (
                       <Field label="To object from">
                         <select
                           value={String(config.target ?? "")}
                           aria-label={`Rule ${i + 1} target`}
-                          onChange={(e) => patch({ ...config, target: e.target.value })}
+                          onChange={(e) => {
+                            const { object: _o, ...rest } = config;
+                            patch({ ...rest, target: e.target.value });
+                          }}
                         >
                           <option value="">Choose…</option>
                           {parameters.map((p) => (
@@ -429,7 +568,7 @@ export function ActionDefinitionEditor({
                           ))}
                         </select>
                       </Field>
-                    )}
+                    ) : null}
                   </>
                 )}
 
@@ -440,8 +579,8 @@ export function ActionDefinitionEditor({
               {(r.kind === "create_link" || r.kind === "delete_link") &&
                 settableLinks.length === 0 && (
                   <p className="field-hint">
-                    No link on this object type can be set by an action — the join property
-                    lives on the other side, or the link is many-to-many.
+                    No link on this object type can be set by an action — it is
+                    many-to-many, or it joins on the primary key, or on nothing.
                   </p>
                 )}
             </div>

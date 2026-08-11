@@ -152,7 +152,7 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
-| **Rules** — the logic mapping parameters to edits | ✅ | §127, §135, §136, §138 — all five of p.75's simple rules execute, and the editor offers all five |
+| **Rules** — the logic mapping parameters to edits | ✅ | §127, §135–§143 — all five of p.75's simple rules execute against the subject or an object a parameter names, and the editor offers every shape |
 | **Submission criteria** — conditions that must hold for submission | ◑ | §128–§131 — conditions over parameters and the current user, checked before the first write (p.49–56), editable in the Ontology Manager; no nesting (p.56's all / any / none) |
 | **Validation** — e.g. only HR may perform this action | ◑ | §128 — this *is* submission criteria (p.140: "simple submission criteria can require a specific user ID or group ID"); a criterion can require a group |
 | Configure sections in the action form | ○ | TOC §24 |
@@ -191,7 +191,7 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **The action form renders from parameters (§130)**: visible ones get a field, hidden ones are sent but not drawn (p.25), defaults and current values seed them (p.27), required blocks submission, and a refused submission shows the criterion's own failure message (p.56). It deliberately does *not* evaluate criteria itself to grey the button out in advance — that would be a second implementation of a rule governing writes, in another language, free to disagree with the first.
 
-**The editor is in the Ontology Manager (§131, §137)** — one dialog per action, saved as one document, with the server's refusals shown rather than re-implemented in the browser. It offers the four rule kinds that execute; `delete_object` appears when it does.
+**The editor is in the Ontology Manager (§131, §137, §143)** — one dialog per action, saved as one document, with the server's refusals shown rather than re-implemented in the browser. It offers every rule kind that executes, and every shape each one can take.
 
 **All five of p.75's simple rules execute (§135–§138)**, on decision 0008's boundary: stage every write, commit in one Postgres transaction, one dataset version per dataset per action, and the search index as a projection that is repaired rather than transacted.
 
@@ -201,7 +201,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **Both ends of a link can be named (§142).** A link rule written from the side that holds no foreign key names the other object through a parameter and writes *its* join property with this object's `to_property` — as this action leaves it, so an action that changes the joined-on property and links on it in the same submit does not create a link that stops holding the moment it finishes. `delete_link` clears the same column.
 
-What is left of §5 is the editor UI for naming objects at all: §139–§142 are API-only, so the definition dialog still offers the subject-only shapes. Many-to-many links stay refused — one foreign key cannot express one, and this platform has no join table to put the second half in. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**The dialog can say all of it (§143).** A rule picks which object it writes — this one, or one an `object` parameter names — and its property dropdown comes from *that* type; a create picks the type it creates; a link rule asks "which object to point at" or "which object to link" depending on which end this action's type is. Only `object`-typed parameters are offered where an instance is wanted, because a string one would carry a primary key and the executor looks instances up by id.
+
+What is left of §5: many-to-many links stay refused — one foreign key cannot express one, and this platform has no join table to put the second half in. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 
