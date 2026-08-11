@@ -1397,3 +1397,262 @@ def test_deleting_an_object_that_is_not_there_is_refused(
         json={"instance_id": instance_id, "values": {"team": str(uuid.uuid4())}},
     )
     assert r.status_code == 404
+
+
+# ---- changing an object a parameter names (§141) -------------------------------
+def make_team(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, code: str,
+) -> dict:
+    """A Team row to aim a second action at, made the way an action makes one."""
+    creator = make_action(client, fx, ticket_type_id, ["status"])
+    assert client.put(
+        f"{wbase(fx)}/action-types/{creator['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team_id", "display_name": "Team id", "data_type": "string"},
+                {"api_name": "team_code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [{"kind": "create_object",
+                       "config": {"object_type": linked["team_type_id"],
+                                  "primary_key": "team_id",
+                                  "properties": {"code": "team_code"}}}],
+            "criteria": [],
+        },
+    ).status_code == 200
+    key = f"T{uuid.uuid4().hex[:6]}"
+    assert client.post(
+        f"{abase(fx)}/{creator['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"team_id": key, "team_code": code}},
+    ).status_code == 200
+    return next(
+        t for t in client.get(
+            f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+            headers=hdr(fx.viewer_sub),
+        ).json()["items"] if t["primary_key"] == key
+    )
+
+
+def test_an_action_can_change_an_object_a_parameter_names(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, team_dataset: str, dataset_of: str,
+) -> None:
+    """**The last of p.75's three "some other object" shapes.**
+
+    The action changes the Ticket it was run against *and* a Team a parameter
+    names - two types, two datasets, one transaction. It is the same rule kind
+    as an ordinary modify because it is the same rule; the only new thing in
+    the config is which object it means.
+    """
+    team = make_team(client, fx, ticket_type_id, instance_id, linked, "before")
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+                {"api_name": "code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "modify_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "team",
+                            "property": "code", "parameter": "code"}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+    # The far object's property is not one of *this* action's editable
+    # properties: a `run_action` effect citing `code` would be citing a
+    # property of a different object.
+    assert r.json()["editable_properties"] == ["status"]
+
+    tickets_before = _versions(client, fx, dataset_of)
+    teams_before = _versions(client, fx, team_dataset)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "escalated", "team": team["id"], "code": "after"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+
+    assert _versions(client, fx, dataset_of) == tickets_before + 1
+    assert _versions(client, fx, team_dataset) == teams_before + 1
+    assert r.json()["instance"]["properties"]["status"] == "escalated"
+    changed = next(
+        t for t in client.get(
+            f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+            headers=hdr(fx.viewer_sub),
+        ).json()["items"] if t["id"] == team["id"]
+    )
+    assert changed["properties"]["code"] == "after"
+
+
+def test_changing_an_object_that_is_not_there_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, team_dataset: str, dataset_of: str,
+) -> None:
+    """Refused before anything is staged, and no version left behind - the same
+    argument `test_deleting_an_object_that_is_not_there_is_refused` makes, from
+    the side where the subject's own write would otherwise have gone through."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    assert client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+                {"api_name": "code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "modify_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "team",
+                            "property": "code", "parameter": "code"}},
+            ],
+            "criteria": [],
+        },
+    ).status_code == 200
+
+    before = _versions(client, fx, dataset_of)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "escalated", "team": str(uuid.uuid4()), "code": "after"}},
+    )
+    assert r.status_code == 404
+    assert _versions(client, fx, dataset_of) == before
+
+
+def test_a_modify_rule_naming_an_object_it_cannot_find_a_parameter_for_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "code", "display_name": "Code", "data_type": "string"}],
+            "rules": [{"kind": "modify_object",
+                       "config": {"object": "team", "property": "code", "parameter": "code"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "which is not a parameter" in r.text
+
+
+def test_a_modify_rule_naming_a_type_without_an_object_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """A type with no object names every object of that type, and changing all
+    of them is not a rule p.75 expresses."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "code", "display_name": "Code", "data_type": "string"}],
+            "rules": [{"kind": "modify_object",
+                       "config": {"object_type": linked["team_type_id"],
+                                  "property": "code", "parameter": "code"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "also needs the parameter that says which object" in r.text
+
+
+def test_a_modify_rule_is_checked_against_the_type_it_changes(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """`status` is a Ticket property and not a Team one. Checking the rule
+    against the action's own type would let this through and write a column
+    the Team source has never heard of."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+            ],
+            "rules": [{"kind": "modify_object",
+                       "config": {"object_type": linked["team_type_id"], "object": "team",
+                                  "property": "status", "parameter": "status"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "not a property of the object type it changes" in r.text
+
+
+def test_an_action_cannot_change_and_delete_the_same_named_object(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """§138's contradiction, arrived at from the far side. Two rules that name
+    the same type and read the same parameter mean the same object, which is
+    visible in the definition rather than only at click time."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+                {"api_name": "code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "team",
+                            "property": "code", "parameter": "code"}},
+                {"kind": "delete_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "team"}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "both change and delete the same object" in r.text
+
+
+def test_changing_one_object_and_deleting_another_is_not_a_contradiction(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """The other half of the check above: two different parameters name two
+    different objects, and refusing that would refuse a definition that is
+    fine. Without this the contradiction check could be written as "any modify
+    and any delete" and nothing would notice."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+                {"api_name": "other", "display_name": "Other team", "data_type": "object"},
+                {"api_name": "code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "team",
+                            "property": "code", "parameter": "code"}},
+                {"kind": "delete_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "other"}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text

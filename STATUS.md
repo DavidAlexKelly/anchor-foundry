@@ -2867,6 +2867,20 @@ Migration 0044 gave parameters a type called `object` — p.25's "the object typ
 **I made the same mistake twice in one session, and the second time it cost less because of the first.** §139 records replacing a *slice* of a file computed between two markers, which swallowed a function. Editing the test file here, I did it again — the slice ran to end-of-file and took §139's fixtures with it. The suite said `fixture 'team_dataset' not found` within seconds, `git checkout` restored it, and the redo used a bounded slice with an explicit end marker. The lesson stands and is now written twice: **on a file this size, replace anchored text, not computed ranges.**
 
 Three mutations, all red. **907 API tests** (was 904), 95 browser.
+
+---
+
+### 141. Changing an object a parameter names (this session)
+
+The third and last of p.75's "some object other than the one I was run against" shapes. A `modify_object` rule with an `object` in its config means the object that parameter holds; everything else about the rule is unchanged, which is why it is the same rule kind rather than a fourth one. §5's "edit multiple objects in one transaction" row is now ✅ — an action can change, create and delete several objects of several types across as many datasets, and they commit together or not at all.
+
+**Contexts are keyed by instance here, not by type**, and that is the one real difference from §139. A `create_object` can key on the type because a new row has no source yet and the type must have exactly one; a *named* object does have one, and two instances of a type can legitimately come from different sources with different column mappings — so "is this property stored anywhere" has to be asked of the instance's own source. Checking against the type would answer the wrong question and write a column that source has never heard of. The property, separately, is checked against the *type the rule changes*: the mutation that checks it against the acting type instead lets `status` through onto a Team.
+
+**§138's contradiction, from the far side.** Two rules that name the same type and read the same parameter mean the same object, and changing and deleting it is the same contradiction as on the subject — visible in the definition rather than only at click time. Two *different* parameters name two different objects, and refusing that would refuse a definition that is fine; the mutation that writes the check as "any modify and any delete" is red on exactly that test. Two rules that happen to be handed the same instance at runtime are a coincidence, not a definition, and are left alone.
+
+**`editable_properties` stayed what its name says.** It is derived from the rules and answers "which properties does this action write **on its own object**" for the change-impact report and the Workshop `run_action` editor. A named modify writes another object's property, so it is excluded — otherwise an effect citing `code` would be citing a property of a different row, and the impact report would claim this action writes the subject's type when it writes a parameter's.
+
+Four mutations, all red. **914 API tests** (was 907), 95 browser. §139–§141 are API-only: the definition dialog still offers the subject-only shapes, so naming a second object is something the editing endpoint can express and the editor cannot yet.
 ---
 
 ## What's not started

@@ -374,6 +374,44 @@ async def execute_action(
             bound, rules=action_type["rules"], default_object_type_id=object_type_id
         )
 
+        # **A named object is looked up before it is written**, and its own
+        # source decides which columns exist - two instances of one type can
+        # come from different mappings, so the type is not enough to answer
+        # "is this property stored anywhere". `get_source` 404s for a source
+        # this project does not map, which is the refusal that stops an action
+        # reaching into a project the caller is not in.
+        modification_contexts: dict[tuple[str, str], dict[str, Any]] = {}
+        modification_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        for target in actions_service.modification_targets(
+            bound, rules=action_type["rules"], default_object_type_id=object_type_id
+        ):
+            key = (target["object_type_id"], target["instance_id"])
+            named = await instance_store.store_for(conn).get_instance(
+                search_prefix=prefix,
+                object_type_id=UUID(target["object_type_id"]),
+                instance_id=target["instance_id"],
+            )
+            if named is None:
+                raise NotFoundError("object to change")
+            named_source = await ontology_service.get_source(
+                conn, access.project_id, UUID(str(named["source_id"]))
+            )
+            named_mappings: dict[str, str] = _parse_json(named_source["column_mappings"])
+            modification_contexts[key] = {
+                "property_types": {
+                    p["api_name"]: p["data_type"]
+                    for p in await ontology_service.list_properties(
+                        conn, UUID(target["object_type_id"])
+                    )
+                },
+                "mapped_properties": set(named_mappings.values()),
+            }
+            modification_rows[key] = {
+                "source": named_source,
+                "primary_key": str(named["primary_key"]),
+                "mappings": named_mappings,
+            }
+
         # **One context per object type this action creates into.** A rule
         # creating another type's object has to be checked and coerced against
         # *that* type and written into *its* dataset - which is the lookup that
@@ -463,6 +501,12 @@ async def execute_action(
             contexts=contexts,
             default_object_type_id=object_type_id,
         )
+        modifications = actions_service.object_modifications(
+            bound,
+            rules=action_type["rules"],
+            contexts=modification_contexts,
+            default_object_type_id=object_type_id,
+        )
         values = actions_service.apply_rules(
             bound,
             rules=action_type["rules"],
@@ -535,6 +579,23 @@ async def execute_action(
             entry(dict(source))["updates"].append(
                 (str(instance["primary_key"]), column_updates)
             )
+        for modification in modifications:
+            row = modification_rows[
+                (modification["object_type_id"], modification["instance_id"])
+            ]
+            columns = {prop: col for col, prop in row["mappings"].items()}
+            types = modification_contexts[
+                (modification["object_type_id"], modification["instance_id"])
+            ]["property_types"]
+            entry(row["source"])["updates"].append((
+                row["primary_key"],
+                {
+                    columns[prop]: ontology_service.column_value(
+                        types.get(prop, "string"), value
+                    )
+                    for prop, value in modification["properties"].items()
+                },
+            ))
         for type_id in sources_by_type:
             rows = rows_for(type_id)
             if rows:
@@ -587,6 +648,18 @@ async def execute_action(
                     object_type_id=UUID(str(action_type["object_type_id"])),
                     instance_id=str(body.instance_id),
                     properties=values,
+                )
+            for modification in modifications:
+                # Same order and same reasoning as the subject's write above:
+                # the dataset is the record, the index is a projection
+                # (decision 0008), so a failure here leaves an object whose
+                # stored properties are stale until the next sync rather than a
+                # dataset that disagrees with itself.
+                await instance_store.store_for(conn).update_properties(
+                    search_prefix=prefix,
+                    object_type_id=UUID(modification["object_type_id"]),
+                    instance_id=modification["instance_id"],
+                    properties=modification["properties"],
                 )
             if removals:
                 # The dataset is the record and the index is a projection

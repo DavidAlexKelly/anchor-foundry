@@ -107,6 +107,7 @@ def apply_rules(
     from . import ontology as ontology_service
 
     writes: dict[str, Any] = {}
+    writes_elsewhere = False
     for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
         kind = str(rule["kind"])
         config = _json(rule.get("config")) or {}
@@ -155,6 +156,15 @@ def apply_rules(
             raise ValueError(f"this build cannot apply a {kind!r} rule yet")
         prop = str(config.get("property", ""))
         parameter = str(config.get("parameter", ""))
+        if config.get("object"):
+            # A modify of an object a *parameter* names, not of the subject:
+            # a different row, in a source this function was never given, so
+            # `object_modifications` writes it. Remembered rather than merely
+            # skipped, because the emptiness refusal below asks whether this
+            # action wrote anything at all - and this rule did.
+            if parameter in bound:
+                writes_elsewhere = True
+            continue
         if parameter not in bound:
             continue  # not supplied, no default - the rule has nothing to write
         if prop not in mapped_properties:
@@ -164,7 +174,7 @@ def apply_rules(
         writes[prop] = ontology_service.coerce_property_value(
             property_types.get(prop, "string"), bound[parameter]
         )
-    if not writes and not any(
+    if not writes and not writes_elsewhere and not any(
         str(r["kind"]) in ("create_object", "delete_object") for r in rules
     ):
         raise ValueError("submit at least one value to write")
@@ -211,6 +221,129 @@ def object_deletions(
             "instance_id": str(named),
         })
     return deletions
+
+
+def modification_targets(
+    bound: dict[str, Any], *, rules: list[dict[str, Any]], default_object_type_id: UUID
+) -> list[dict[str, Any]]:
+    """The objects, other than the subject, that this action's rules change.
+
+    Read before anything is coerced, for the same reason `creation_targets` is:
+    a property write has to be checked against the object type it lands on and
+    the *source that instance actually came from*, and neither is known until
+    the instance has been looked up. A create resolves its source from the
+    type (there must be exactly one); a modify does not have to guess, because
+    the instance already says which source it came from.
+
+    Returns `{object_type_id, instance_id}`, deduplicated - two rules setting
+    two properties of the same named object are one object to look up.
+    """
+    targets: list[dict[str, Any]] = []
+    for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
+        if str(rule["kind"]) != "modify_object":
+            continue
+        config = _json(rule.get("config")) or {}
+        parameter = str(config.get("object", ""))
+        if not parameter:
+            continue  # the subject, which the caller already has
+        named = bound.get(parameter)
+        if named is None or str(named).strip() == "":
+            # Same refusal `object_deletions` makes, for the same reason: an
+            # action that writes nothing because nobody said which object is
+            # indistinguishable from one that worked.
+            raise ValueError(
+                f"{parameter!r} names the object to change and no value was supplied"
+            )
+        target = {
+            "object_type_id": str(config.get("object_type") or default_object_type_id),
+            "instance_id": str(named),
+        }
+        if target not in targets:
+            targets.append(target)
+    return targets
+
+
+def object_modifications(
+    bound: dict[str, Any],
+    *,
+    rules: list[dict[str, Any]],
+    contexts: dict[tuple[str, str], dict[str, Any]],
+    default_object_type_id: UUID,
+) -> list[dict[str, Any]]:
+    """The property writes this action makes to objects a parameter names (p.75).
+
+    The third shape of "some object other than the one I was run against", and
+    the last one `docs/parity/ontology.md` §5 was waiting on. A `modify_object`
+    rule with an `object` in its config means *that* object rather than the
+    subject; everything else about the rule is unchanged, which is why it is
+    the same rule kind and not a fourth one.
+
+    **Keyed by instance, not by type.** `object_creations` can key its contexts
+    by object type because a new row has no source of its own yet and the type
+    must have exactly one. A named object does have one, and two instances of a
+    type can legitimately come from different sources with different column
+    mappings - so the property this rule writes might be mapped on one and not
+    the other. Checking against the type would answer the wrong question.
+
+    Returns one entry per named object, `{object_type_id, instance_id,
+    properties}`, with the rules' writes merged in `sort_order`. An entry whose
+    properties all came from unsupplied parameters is dropped rather than
+    returned empty: staging a dataset to write nothing to it would be a version
+    in the history that says nothing happened.
+    """
+    from . import ontology as ontology_service
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
+        if str(rule["kind"]) != "modify_object":
+            continue
+        config = _json(rule.get("config")) or {}
+        parameter = str(config.get("object", ""))
+        if not parameter:
+            continue
+        key = (
+            str(config.get("object_type") or default_object_type_id),
+            str(bound[parameter]),
+        )
+        context = contexts.get(key)
+        if context is None:
+            # Resolved by the caller, which had to find the instance to know
+            # its source. Missing here means the caller and this function
+            # disagree about which objects the rules name.
+            raise ValueError("this action changes an object it could not resolve")
+        value_parameter = str(config.get("parameter", ""))
+        if value_parameter not in bound:
+            continue  # not supplied, no default - nothing to write
+        prop = str(config.get("property", ""))
+        if prop not in context["mapped_properties"]:
+            raise ValueError(
+                f"{prop!r} has no dataset column mapped on the source the object to "
+                "change came from"
+            )
+        merged.setdefault(key, {})[prop] = ontology_service.coerce_property_value(
+            context["property_types"].get(prop, "string"), bound[value_parameter]
+        )
+    return [
+        {"object_type_id": type_id, "instance_id": instance_id, "properties": properties}
+        for (type_id, instance_id), properties in merged.items()
+        if properties
+    ]
+
+
+def changes_the_subject(rules: list[dict[str, Any]]) -> bool:
+    """Whether any rule writes a property of the object the action ran on.
+
+    A link rule always does - `_validate_definition` refuses one written from
+    the far side, so its foreign key is on the subject's row. A `modify_object`
+    does unless it names another object.
+    """
+    for rule in rules:
+        kind = str(rule["kind"])
+        if kind in ("create_link", "delete_link"):
+            return True
+        if kind == "modify_object" and not (_json(rule.get("config")) or {}).get("object"):
+            return True
+    return False
 
 
 def deletes_the_subject(rules: list[dict[str, Any]]) -> bool:
@@ -507,15 +640,19 @@ def editable_properties_of(rules: list[dict[str, Any]]) -> list[str]:
     callers working unchanged: the ontology change-impact report (which asks
     "does an action write this property") and the Workshop `run_action`
     validation (which refuses an effect that names a property the action does
-    not write). Exact today, because `modify_object` is the only rule kind
-    that exists; when `create_object` lands, a caller wanting "what does this
-    action touch" will need the rules themselves, and this stays what its name
-    says - the properties written on the action's own object.
+    not write). It stays what its name says - the properties written on **the
+    action's own object** - so a `modify_object` naming another object is not
+    in it: a `run_action` effect citing one of those properties would be citing
+    a property of a different row, and the change-impact report would claim
+    this action writes the subject's type when it writes a parameter's. A
+    caller wanting "everything this action touches" needs the rules themselves.
     """
     return [
         str(_json(r.get("config")).get("property"))
         for r in sorted(rules, key=lambda r: (r.get("sort_order") or 0))
-        if str(r["kind"]) == "modify_object" and _json(r.get("config")).get("property")
+        if str(r["kind"]) == "modify_object"
+        and _json(r.get("config")).get("property")
+        and not _json(r.get("config")).get("object")
     ]
 
 
@@ -1058,15 +1195,63 @@ def _validate_definition(
         prop = str(config.get("property", ""))
         if parameter not in seen:
             raise ValueError(f"a rule reads {parameter!r}, which is not a parameter")
-        if prop not in property_types:
-            raise ValueError(f"a rule writes {prop!r}, which is not a property of this object type")
+        named = config.get("object")
+        if named and str(named) not in seen:
+            raise ValueError(
+                f"a modify_object rule changes {named!r}, which is not a parameter"
+            )
+        if config.get("object_type") and not named:
+            # Same hole as `delete_object`: a type with no object names every
+            # object of that type, and changing all of them is not a rule p.75
+            # can express.
+            raise ValueError(
+                "a modify_object rule naming an object type also needs the parameter "
+                "that says which object"
+            )
+        # **Checked against the type the property lands on.** For the subject
+        # that is this action's object type; for a named object it is whatever
+        # type the rule says, and using this action's would let a rule write a
+        # property the target has never heard of.
+        target_properties = (
+            property_types if not named
+            else workspace_properties.get(str(config.get("object_type") or object_type_id))
+        )
+        if target_properties is None:
+            raise ValueError(
+                "a modify_object rule names an object type this workspace does not have"
+            )
+        if prop not in target_properties:
+            raise ValueError(
+                f"a rule writes {prop!r}, which is not a property of "
+                + ("this object type" if not named else "the object type it changes")
+            )
 
-    kinds = {str(rule.get("kind", "")) for rule in rules}
-    if deletes_the_subject(rules) and kinds & {"modify_object", "create_link", "delete_link"}:
-        # Writing a property of a row and removing the row are not two things
-        # that happen in some order - they are a contradiction, and the order
-        # they happen to run in is not a specification. Refused where somebody
-        # can still see both rules.
+    # Writing a property of a row and removing the row are not two things that
+    # happen in some order - they are a contradiction, and the order they
+    # happen to run in is not a specification. Refused where somebody can still
+    # see both rules. Two objects are the same one here when the rules say the
+    # same type and read the same parameter; two rules that *happen* to be
+    # handed the same instance at click time are a coincidence, not a
+    # definition, and refusing those would refuse a definition that is fine.
+    def _named(rule: dict[str, Any]) -> tuple[str, str] | None:
+        config = rule.get("config") or {}
+        return (
+            None if not config.get("object")
+            else (
+                str(config.get("object_type") or object_type_id),
+                str(config.get("object")),
+            )
+        )
+
+    named_deletes = {
+        _named(rule) for rule in rules if str(rule.get("kind", "")) == "delete_object"
+    } - {None}
+    named_changes = {
+        _named(rule) for rule in rules if str(rule.get("kind", "")) == "modify_object"
+    } - {None}
+    if (deletes_the_subject(rules) and changes_the_subject(rules)) or (
+        named_deletes & named_changes
+    ):
         raise ValueError(
             "an action cannot both change and delete the same object"
         )
