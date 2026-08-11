@@ -1,6 +1,6 @@
 # 0007 — Action parameters and rules
 
-**Status:** decided; the model is **built** in migration 0044 (`STATUS.md` §127), submission criteria in 0045 (§128), and the editing API in §129. The editor UI and the parameter-driven form are not.
+**Status:** decided and **built** — the model in migration 0044 (`STATUS.md` §127), submission criteria in 0045 (§128), the editing API in §129, the parameter-driven form in §130. The editor UI is not, and neither are the rule kinds that write no property.
 **Parity item:** `docs/parity/ontology.md` §5, and the one it says to do first.
 **Source:** `docs/pal/foundry_action-types.pdf` (174 pp). Citations are `(p.25)`.
 
@@ -79,7 +79,7 @@ Criteria are conditions over parameter values, evaluated server-side before the 
 Per the repo standard, each of these must be made to fail by removing the thing it tests:
 
 - ✅ **The conversion changes nothing.** Take an existing action type, run the migration, execute it with the same payload, and assert the same property values land. Mutation: convert to the wrong property, and it goes red. — `tests/test_action_conversion.py` builds a database at 0043, seeds a legacy action type and migrates the rest of the way; five mutations of the migration's own SQL were checked.
-- ◑ **A hidden parameter is not in the form and is still applied.** Both halves, one test — a hidden parameter that silently did nothing would pass a form check. — the *applied* half is checked; the form half arrives with the form.
+- ✅ **A hidden parameter is not in the form and is still applied.** Both halves, one test — a hidden parameter that silently did nothing would pass a form check. — §130, in `e2e/test_action_form.py`. The first version of the "still applied" half **could not fail**: an unsupplied parameter simply writes nothing, so the stored row was identical either way. It took a criterion *over* the hidden parameter — p.25's own use for one — to make its absence observable.
 - ✅ **A failed criterion refuses the action and names the criterion.** Mutation: skip the check, and the write goes through. — `tests/test_action_criteria.py`; eleven mutations checked, two of which found tests that could not fail (the `is_less_than` boundary, and emptiness written as falsiness).
 - ✅ **A criterion is checked before the first rule runs.** Assert no dataset version is created by a refused action — "refused" and "refused after writing half of it" look the same from the caller. — and no `action_runs` row either, since the check precedes opening one.
 - ✅ **Renaming a parameter a Workshop module calls is refused**, naming the module. — §129, and the mutation that removes the refusal goes red. Checked against what is *going* rather than what is arriving, because a parameter that survives under a new name is, to every saved module, a parameter that vanished.
