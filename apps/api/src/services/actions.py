@@ -85,6 +85,7 @@ def apply_rules(
     rules: list[dict[str, Any]],
     property_types: dict[str, str],
     mapped_properties: set[str],
+    link_types: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """What the rules write, given the bound parameters.
 
@@ -111,6 +112,39 @@ def apply_rules(
         config = _json(rule.get("config")) or {}
         if kind == "create_object":
             continue  # `object_creations` below; a different shape of write
+        if kind in ("create_link", "delete_link"):
+            # **A link here is a property value, not a row** (migration 0027):
+            # "which instances of the far type have `to_property` equal to this
+            # instance's `from_property`". So creating one is writing that
+            # foreign key and deleting one is clearing it - the same write a
+            # `modify_object` makes, arrived at from the ontology's side rather
+            # than the dataset's.
+            link = (link_types or {}).get(str(config.get("link_type", "")))
+            if link is None:
+                raise ValueError("this action names a link type this workspace does not have")
+            prop = str(link["from_property"] or "")
+            if prop in ("", "$primary_key"):
+                # Rewriting a primary key is not linking, it is replacing the
+                # object; and a link type with no properties has no foreign key
+                # to write at all.
+                raise ValueError(
+                    "this link type cannot be set by an action - it joins on the primary key "
+                    "or on nothing"
+                )
+            if prop not in mapped_properties:
+                raise ValueError(
+                    f"{prop!r} has no dataset column mapped on this instance's source"
+                )
+            if kind == "delete_link":
+                writes[prop] = None
+                continue
+            parameter = str(config.get("target", ""))
+            if parameter not in bound:
+                continue  # nothing supplied, so nothing to link to
+            writes[prop] = ontology_service.coerce_property_value(
+                property_types.get(prop, "string"), bound[parameter]
+            )
+            continue
         if kind != "modify_object":
             # Three kinds left, and nothing can create one yet. Refusing loudly
             # beats writing nothing and reporting success, which is what a
@@ -704,6 +738,29 @@ _RULE_KINDS = frozenset(
 _USER_ATTRIBUTES = frozenset({"id", "group_ids"})
 
 
+async def link_types_for(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, dict[str, Any]]:
+    """Every link type in the workspace, by id.
+
+    Read in one query and handed to both the validator and the executor,
+    because a link rule is only meaningful against the link type it names - and
+    the two would otherwise each grow their own lookup and their own idea of
+    what "the from side" is.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT id, from_object_type_id, to_object_type_id,
+               from_property, to_property, cardinality
+          FROM link_types
+         WHERE workspace_id = :wid
+        """,
+        {"wid": str(workspace_id)},
+    )
+    return {str(row["id"]): dict(row) for row in rows}
+
+
 async def parameter_usages(
     conn: AsyncConnection, workspace_id: UUID, action_type_id: UUID
 ) -> dict[str, list[str]]:
@@ -761,6 +818,7 @@ def _validate_definition(
     criteria: list[dict[str, Any]],
     property_types: dict[str, str],
     object_type_id: UUID,
+    link_types: dict[str, dict[str, Any]],
 ) -> None:
     """Refuse a definition that could not be executed, at save time.
 
@@ -816,6 +874,37 @@ def _validate_definition(
                 # project. Named rather than accepted and ignored.
                 raise ValueError(
                     "this build can only create objects of the action's own object type"
+                )
+            continue
+        if kind in ("create_link", "delete_link"):
+            link = (link_types or {}).get(str(config.get("link_type", "")))
+            if link is None:
+                raise ValueError("a link rule names a link type this workspace does not have")
+            if str(link["from_object_type_id"]) != str(object_type_id):
+                # The foreign key lives on the *from* side. A rule on the other
+                # side would write a different object, in a different dataset -
+                # which decision 0008's boundary can hold, and nothing resolves
+                # that dataset yet. Named rather than silently one-sided.
+                raise ValueError(
+                    "a link rule can only be set from the side that holds the join property, "
+                    "and this action's object type is the other one"
+                )
+            if str(link["cardinality"]) == "many_to_many":
+                # A many-to-many link cannot be expressed by one foreign key,
+                # and this platform has no join table to put the second half
+                # in. Refusing beats writing a value that means half a link.
+                raise ValueError(
+                    "a many-to-many link cannot be set by an action in this build"
+                )
+            if not link["from_property"] or str(link["from_property"]) == "$primary_key":
+                raise ValueError(
+                    "this link type joins on the primary key or on nothing, so an action "
+                    "cannot set it"
+                )
+            if kind == "create_link" and str(config.get("target", "")) not in seen:
+                raise ValueError(
+                    "a create_link rule needs a `target` naming the parameter that supplies "
+                    "the object to link to"
                 )
             continue
         if kind != "modify_object":
@@ -883,6 +972,7 @@ async def set_definition(
     _validate_definition(
         parameters=parameters, rules=rules, criteria=criteria,
         property_types=property_types, object_type_id=object_type_id,
+        link_types=await link_types_for(conn, workspace_id),
     )
 
     # **The refusal decision 0007 names.** Checked against what is *going*, not

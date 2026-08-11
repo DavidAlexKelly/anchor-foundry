@@ -2785,6 +2785,24 @@ The rule kind decision 0008 was written for, and the one that turns two of its a
 Six mutations, all red, including the one that drops the modify when a create is present and the one that allows a duplicate key. **892 API tests** (was 885).
 ---
 
+### 136. Link rules, which turn out to be property writes (this session)
+
+p.75 lists creating and deleting links among the "simple rules", and the shape they take here is decided by something already in the repo: **migration 0027 does not store edges.** A link is derived — "which instances of the far type have `to_property` equal to this instance's `from_property`" — because storing edges would mean a second sync mechanism with its own staleness and a reconciliation problem on every resync.
+
+So a link *is* the join property's value, and `create_link` writes it while `delete_link` clears it. That is the same write a `modify_object` makes, arrived at from the ontology's side rather than the dataset's — and it is worth saying plainly rather than dressing up as new machinery, because the interesting part is not the write but the four refusals around it:
+
+* **the far side.** The foreign key lives on the *from* side, so a rule attached to the other type would write a different object in a different dataset. Decision 0008's boundary can hold that; nothing resolves that dataset yet, so it is refused with a sentence rather than silently applied one-sidedly.
+* **many-to-many.** One foreign key cannot express it and there is no join table to put the second half in. A value that means half a link is worse than a refusal.
+* **`$primary_key` joins.** Rewriting a primary key is not linking, it is replacing the object.
+* **a `create_link` with no target**, which could only ever write nothing.
+
+Each is checked at save time, where the rule is still in front of the person who wrote it.
+
+**The happy-path test needed a link whose join property is actually mapped.** The first version only asserted the *refusal* for an unmapped one — true, and it never showed a link landing. The second link type joins on `status`, which the fixture's source maps, so the write can be read back; and the delete test sets a value first, because asserting "empty" against an already-empty property passes against a rule that does nothing.
+
+Six mutations, all red, including the two that make each rule kind a no-op. **898 API tests** (was 892). `delete_object` is the last unimplemented kind, and it is the one that needs a row *removed* rather than written — a different shape again.
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
