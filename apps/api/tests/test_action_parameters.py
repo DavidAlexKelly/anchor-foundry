@@ -353,3 +353,193 @@ def test_every_property_type_can_be_an_action_parameter() -> None:
     assert not missing, f"property types no action parameter can hold: {sorted(missing)}"
     # And the one word p.25 needs that the ontology has no use for.
     assert "object" in labels["action_parameter_type"]
+
+
+# ---- editing the definition ---------------------------------------------------
+def definition(client: TestClient, fx: Fixture, action_id: str, body: dict) -> object:
+    return client.put(
+        f"{wbase(fx)}/action-types/{action_id}/definition",
+        headers=hdr(fx.editor_sub),
+        json=body,
+    )
+
+
+def test_the_definition_can_be_replaced_as_one_document(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """The three lists constrain each other, so they are saved together. This
+    is what makes `hidden` and `default_value` reachable by anything other than
+    a `psql` prompt."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "status", "display_name": "New status", "data_type": "string",
+             "default_value": "triaged"},
+            {"api_name": "reason", "display_name": "Reason", "data_type": "string",
+             "required": True, "hidden": True},
+        ],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "status", "parameter": "status"}}],
+        "criteria": [{"message": "A reason is required.",
+                      "config": {"left": {"kind": "parameter", "parameter": "reason"},
+                                 "operator": "is_not", "right": {"kind": "none"}}}],
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [p["api_name"] for p in body["parameters"]] == ["status", "reason"]
+    assert body["parameters"][0]["default_value"] == "triaged"
+    assert body["parameters"][1]["hidden"] is True
+    assert [c["message"] for c in body["criteria"]] == ["A reason is required."]
+    # Replaced, not merged: the old converted parameter list is gone, and the
+    # only way to tell the two apart is a save that removes something.
+    assert len(body["rules"]) == 1
+
+
+def test_a_rule_naming_something_that_is_not_a_parameter_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """The executor would refuse this at click time, in front of somebody who
+    did not write it. §1.2a made the same argument for Workshop variables."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [{"api_name": "status", "display_name": "Status", "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "status", "parameter": "typo"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 422
+    assert "not a parameter" in r.text
+
+
+def test_a_rule_writing_something_that_is_not_a_property_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [{"api_name": "status", "display_name": "Status", "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "invented", "parameter": "status"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 422
+    assert "not a property" in r.text
+
+
+def test_a_criterion_with_no_message_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """p.56's failure message is what a blocked user is told. A criterion
+    without one refuses in silence, which is the problem the message exists to
+    solve."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [{"api_name": "status", "display_name": "Status", "data_type": "string"}],
+        "rules": [],
+        "criteria": [{"message": "   ",
+                      "config": {"left": {"kind": "parameter", "parameter": "status"},
+                                 "operator": "is", "right": {"kind": "value", "value": "open"}}}],
+    })
+    assert r.status_code == 422
+
+
+def test_a_criterion_reading_a_user_attribute_we_cannot_answer_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """Refused at save time as well as at execute time. The executor fails the
+    condition (§128, fail-closed); saving it would mean an action that always
+    refuses and never says why until somebody reads the code."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [{"api_name": "status", "display_name": "Status", "data_type": "string"}],
+        "rules": [],
+        "criteria": [{"message": "Only acme.",
+                      "config": {"left": {"kind": "current_user", "attribute": "organisation"},
+                                 "operator": "is", "right": {"kind": "value", "value": "acme"}}}],
+    })
+    assert r.status_code == 422
+    assert "cannot answer" in r.text
+
+
+def test_removing_a_parameter_a_workshop_module_calls_is_refused_by_name(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """**Decision 0007's last named acceptance test.**
+
+    A saved `run_action` effect names parameters in its `values`. Renaming one
+    is, to that module, a parameter that vanished - and the failure would
+    arrive at click time in front of somebody who never touched the action. The
+    refusal names the module, because the person who has to fix it is usually
+    not the person who typed the rename.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    app = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/canvas-apps",
+        headers=hdr(fx.editor_sub), json={"name": f"Closer {uuid.uuid4().hex[:6]}"},
+    ).json()
+    saved = client.put(
+        f"{wbase(fx)}/projects/{fx.project}/canvas-apps/{app['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"definition": {
+            "format": 2,
+            "layout": {"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                                "props": {}, "nodes": ["btn"], "linkedNodes": {}},
+                       "btn": {"type": {"resolvedName": "CanvasButton"},
+                               "props": {"label": "Close"}, "parent": "ROOT",
+                               "nodes": [], "linkedNodes": {}}},
+            "variables": {"v_ticket": {"id": "v_ticket", "kind": "single_object",
+                                       "label": "Ticket"}},
+            "events": {"e1": {"id": "e1", "trigger": {"node": "btn", "on": "click"},
+                              "effects": [{"type": "run_action",
+                                           "config": {"action": action["id"],
+                                                      "subject": "v_ticket",
+                                                      "values": {"status": "closed"}}}]}},
+        }},
+    )
+    assert saved.status_code in (200, 201), saved.text
+
+    r = definition(client, fx, action["id"], {
+        "parameters": [{"api_name": "new_status", "display_name": "Status",
+                        "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "status", "parameter": "new_status"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 409, r.text
+    assert "'status'" in r.text
+    assert "Closer" in r.text
+
+    # And the action is untouched - a refusal that half-applied would be worse
+    # than the rename it refused.
+    after = client.get(
+        f"{wbase(fx)}/action-types/{action['id']}", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert [p["api_name"] for p in after["parameters"]] == ["status"]
+
+
+def test_renaming_a_parameter_nobody_calls_is_allowed(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """The other half. Without it, a refusal that fired on *every* rename would
+    pass the test above."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = definition(client, fx, action["id"], {
+        "parameters": [{"api_name": "new_status", "display_name": "Status",
+                        "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "status", "parameter": "new_status"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 200, r.text
+    assert [p["api_name"] for p in r.json()["parameters"]] == ["new_status"]
+
+
+def test_a_viewer_cannot_edit_a_definition(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.viewer_sub),
+        json={"parameters": [], "rules": [], "criteria": []},
+    )
+    assert r.status_code == 403
