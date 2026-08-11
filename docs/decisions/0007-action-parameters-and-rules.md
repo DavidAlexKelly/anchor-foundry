@@ -1,6 +1,6 @@
 # 0007 — Action parameters and rules
 
-**Status:** decided and **built** — the model in migration 0044 (`STATUS.md` §127), submission criteria in 0045 (§128), the editing API in §129, the parameter-driven form in §130. The editor UI is not, and neither are the rule kinds that write no property.
+**Status:** decided and **built** — the model in migration 0044 (`STATUS.md` §127), submission criteria in 0045 (§128), the editing API in §129, the parameter-driven form in §130, the editor in §131. What remains is the rule kinds that write no property, which need a transaction boundary this build does not have.
 **Parity item:** `docs/parity/ontology.md` §5, and the one it says to do first.
 **Source:** `docs/pal/foundry_action-types.pdf` (174 pp). Citations are `(p.25)`.
 
