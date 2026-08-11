@@ -1137,6 +1137,39 @@ export interface ObjectInstancePage {
 }
 
 // ---- actions (write-back) ----------------------------------------------------
+/** An input the action declares (Foundry `action-types` p.25). */
+export interface ActionParameter {
+  id: string;
+  api_name: string;
+  display_name: string;
+  data_type: string;
+  required: boolean;
+  /** `null` means no default, which is not the same as a default of null - see
+   * migration 0044. */
+  default_value: unknown;
+  /** p.25: "each parameter can be individually configured as to whether they
+   * are exposed in the form or not". A hidden parameter is still applied. */
+  hidden: boolean;
+  sort_order: number;
+}
+
+/** What the action does with them (p.75). */
+export interface ActionRule {
+  id: string;
+  kind: string;
+  config: Record<string, unknown>;
+  sort_order: number;
+}
+
+/** A condition that must hold for the action to be submitted (p.49-56). */
+export interface ActionCriterion {
+  id: string;
+  /** p.56's failure message: what the blocked user is told. */
+  message: string;
+  config: Record<string, unknown>;
+  sort_order: number;
+}
+
 export interface ActionType {
   id: string;
   object_type_id: string;
@@ -1144,6 +1177,13 @@ export interface ActionType {
   api_name: string;
   display_name: string;
   description: string;
+  parameters: ActionParameter[];
+  rules: ActionRule[];
+  criteria: ActionCriterion[];
+  /** Derived from the rules rather than stored (migration 0044). Still on the
+   * wire because the object-type screens and the `run_action` editor ask
+   * "which properties does this action write", and that question has this
+   * exact answer while `modify_object` is the only rule kind. */
   editable_properties: string[];
   created_at: string;
   updated_at: string;

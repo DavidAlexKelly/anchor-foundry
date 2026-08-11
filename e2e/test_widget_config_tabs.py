@@ -34,13 +34,23 @@ from conftest import eventually, no_console_errors, open_builder, settled
 ROWS = 30
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def module(api):
     """One tall table, so a max-height has something to clip.
 
     Thirty rows rather than three: an "Auto (max)" of 120px has to be visibly
     smaller than the natural height or the assertion would pass against a
     widget that ignored it entirely.
+
+    **Per test, not per module**, and that is not a preference. Four of the
+    tests below *save* onto this module - an edited column list, a removed
+    prop, a rename, a stored height - so a shared one hands each test whatever
+    the last one left behind. The symptom was the suite passing in isolation
+    and failing in company, with a different subset failing each run: the
+    sizing test's `natural > 240` guard depends on a column list an earlier
+    test had rewritten. This repo has now paid for the same shared-mutating-
+    fixture bug three times (§118, the versions dialog, and here); a test that
+    saves gets its own module.
     """
     mod = Module(api, "Config tabs")
     type_id = mod.object_type(
@@ -107,7 +117,21 @@ def tab(page, name: str):
 
 
 def save(page):
+    """Click Save **and wait for it to land**.
+
+    Every caller reloads straight afterwards, and a reload that beats the PUT
+    throws the edit away - the page comes back showing what the server still
+    has, which reads exactly like a feature that does not persist. In isolation
+    the write is fast enough to hide it; under a full-file run it is not, which
+    is why this file failed in company and passed alone with a different subset
+    each time.
+
+    The builder already says when the write has landed - the version line gains
+    "· saved" on success - so this waits for the application's own statement
+    rather than for a sleep.
+    """
     page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator(".ws-actions .sub")).to_contain_text("saved")
 
 
 def test_the_panel_offers_foundrys_three_tabs(page, module):

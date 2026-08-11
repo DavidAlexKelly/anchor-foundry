@@ -32,8 +32,8 @@ import { eventsFor, interpolate, run as runEvents, useEventContext } from "./eve
 import { invalidateCanvasReads } from "./refresh";
 import { describeSet, selectionOf, useSetPage } from "./object-set";
 import {
-  MIN_SHARE, formatWeights, parseWeights, pivotClauses, resizeWeights, roundWeight,
-  seriesLabel, type PivotPick,
+  MIN_SHARE, formatWeights, inputTypeFor, parseWeights, pivotClauses, resizeWeights,
+  roundWeight, seedActionForm, seriesLabel, type PivotPick,
 } from "./pure";
 import {
   chartQuery,
@@ -3907,21 +3907,23 @@ export function CanvasActionForm({
 
   // The fields start at what the object currently says, so the form shows the
   // thing being edited rather than an empty box beside it. Re-seeded whenever
-  // the subject changes - picking a different row and finding the last one's
-  // values still typed in would be an edit about to go to the wrong object.
-  const subjectKey = subjectVariable ? String(subject?.id ?? "") : "";
+  // the chosen object changes - picking a different row and finding the last
+  // one's values still typed in would be an edit about to go to the wrong
+  // object.
+  //
+  // **Both ways of choosing, not only the bound one.** This used to seed only
+  // when a `subjectVariable` was set, so the dropdown form started blank - and
+  // once parameters arrived that stopped being cosmetic: a hidden parameter is
+  // seeded rather than typed (p.25), so in the dropdown form it was never sent
+  // at all and its rule quietly wrote nothing.
+  const chosen = subjectVariable
+    ? subject
+    : instancesQ.data?.items.find((i) => i.id === picked);
+  const chosenKey = String(chosen?.id ?? "");
   const [seeded, setSeeded] = useState<string | null>(null);
-  if (subjectVariable && subjectKey !== seeded) {
-    setSeeded(subjectKey);
-    const from = subject?.properties ?? {};
-    setValues(
-      Object.fromEntries(
-        (actionType?.editable_properties ?? []).map((p) => [
-          p,
-          from[p] === undefined || from[p] === null ? "" : String(from[p]),
-        ]),
-      ),
-    );
+  if (chosenKey !== seeded) {
+    setSeeded(chosenKey);
+    setValues(seedActionForm(actionType?.parameters ?? [], chosen?.properties ?? {}));
   }
 
   const execute = useMutation({
@@ -3947,6 +3949,12 @@ export function CanvasActionForm({
   });
 
   const live = mode === "run";
+  // p.25: hidden parameters are supplied by the caller and never drawn. The
+  // form still sends them - `values` carries every parameter it seeded.
+  const visible = (actionType?.parameters ?? []).filter((p) => !p.hidden);
+  const missingRequired = visible.filter(
+    (p) => p.required && !String(values[p.api_name] ?? "").trim(),
+  );
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
@@ -3979,23 +3987,49 @@ export function CanvasActionForm({
               </select>
             </label>
           )}
-          {actionType.editable_properties.map((prop) => (
-            <label className="field" key={prop}>
-              <span className="field-label">{prop}</span>
+          {visible.map((parameter) => (
+            <label className="field" key={parameter.api_name} data-parameter={parameter.api_name}>
+              <span className="field-label">
+                {parameter.display_name || parameter.api_name}
+                {parameter.required && <span aria-hidden> *</span>}
+              </span>
               <input
-                type="text"
-                value={values[prop] ?? ""}
-                onChange={(e) => setValues({ ...values, [prop]: e.target.value })}
+                type={inputTypeFor(parameter.data_type)}
+                value={values[parameter.api_name] ?? ""}
+                required={parameter.required}
+                aria-required={parameter.required}
+                onChange={(e) => setValues({ ...values, [parameter.api_name]: e.target.value })}
                 disabled={!live}
               />
             </label>
           ))}
-          <button type="submit" className="btn" disabled={!live || !instanceId || execute.isPending}>
+          <button
+            type="submit"
+            className="btn"
+            disabled={!live || !instanceId || execute.isPending || missingRequired.length > 0}
+          >
             {execute.isPending ? "Submitting…" : "Submit"}
           </button>
+          {missingRequired.length > 0 && live && (
+            <p className="canvas-widget-empty" data-testid="action-form-missing">
+              {missingRequired.map((p) => p.display_name || p.api_name).join(", ")} is required.
+            </p>
+          )}
           {!live && <p className="canvas-widget-empty">Submitting is disabled while editing - use Preview to try it.</p>}
           {execute.isSuccess && execute.data.ok && <p className="login-note">Saved.</p>}
           {execute.isSuccess && !execute.data.ok && <div className="form-error">{execute.data.error}</div>}
+          {/* **A refused submission, in the criterion's own words** (p.56).
+              The server sends back the failure message the builder wrote, and
+              this draws it unchanged. The form deliberately does *not*
+              evaluate criteria itself to grey the button out in advance: that
+              would be a second implementation of a rule that governs writes,
+              in another language, free to disagree with the first - and this
+              repo has already paid for mirrored logic more than once. */}
+          {execute.isError && (
+            <div className="form-error" data-testid="action-form-refused">
+              {(execute.error as Error).message}
+            </div>
+          )}
         </form>
       )}
     </div>

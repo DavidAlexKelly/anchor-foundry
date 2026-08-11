@@ -148,7 +148,7 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Edit **multiple objects in one transaction** | ○ | |
 | **Create and delete objects** | ○ | |
 | **Create and delete links** | ○ | the Assign Employee example creates an Employee→Manager link |
-| **Parameters** — typed user inputs with their own form | ◑ | §127, §129 — the model executes and is editable through the API; the *form* still renders one input per writable property |
+| **Parameters** — typed user inputs with their own form | ✅ | §127, §129, §130 — the model executes, is editable through the API, and the form renders one input per *visible* parameter (p.25) |
 | Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
@@ -189,7 +189,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **The definition is editable through the API (§129)** — `PUT /action-types/{id}/definition` replaces parameters, rules and criteria as one document, validated as a unit, and **refuses removing or renaming a parameter a Workshop module calls**, naming the module. That was decision 0007's last named acceptance test, and it is the reason a whole-document endpoint rather than per-row ones: the three lists constrain each other.
 
-**Still to build, in order:** the editor UI in the Ontology Manager; the action form, rendering one input per *visible* parameter and greying out submission against the criteria it can now read; then the rule kinds that write no property at all. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**The action form renders from parameters (§130)**: visible ones get a field, hidden ones are sent but not drawn (p.25), defaults and current values seed them (p.27), required blocks submission, and a refused submission shows the criterion's own failure message (p.56). It deliberately does *not* evaluate criteria itself to grey the button out in advance — that would be a second implementation of a rule governing writes, in another language, free to disagree with the first.
+
+**Still to build, in order:** the editor UI in the Ontology Manager (the API is there, §129); then the rule kinds that write no property at all. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 

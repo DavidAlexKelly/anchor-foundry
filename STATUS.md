@@ -2671,6 +2671,26 @@ Nine mutations, all red, including the two that matter: remove the refusal, and 
 
 ---
 
+### 130. The action form, rendered from parameters — and two tests that could not fail (this session)
+
+Decision 0007's last piece of user-facing work. The form drew one text box per *editable property*; it now draws one per **visible parameter**, which is what p.25 describes and what makes §127's `hidden`, `required` and `default_value` mean anything to somebody who is not holding a `psql` prompt.
+
+**What it does.** Visible parameters get a field labelled with their display name, typed loosely (`number` for integer and float, `date` for date, text otherwise — the *server* coerces, and a browser-side type stricter than `coerce_property_value` would refuse values the platform accepts). Fields start at the object's current value, falling back to the parameter's default (p.27) and then to empty. Required parameters block submission — the one rule the form can decide by itself. A refused submission draws the criterion's own failure message (p.56).
+
+**What it deliberately does not do:** evaluate criteria itself to grey the button out in advance. That would be a second implementation of a rule governing writes, in another language, free to disagree with the first — and this repo has already paid for mirrored logic more than once (the connector registries, the expectations evaluator).
+
+**A gap found while wiring it.** Seeding only ever ran when the form was bound to a `single_object` variable, so the dropdown form started blank. Cosmetic before parameters; not after — a hidden parameter is *seeded* rather than typed, so in the dropdown form it was never sent at all and its rule quietly wrote nothing. Both ways of choosing now seed.
+
+**Two tests could not fail, and both were found by mutation rather than by reading.**
+
+The first: "a hidden parameter is still applied". A hidden parameter that the form drops is simply *not supplied*, and an unsupplied parameter's rule writes nothing — so the stored row is identical whether the form sent it or not. The test passed against a form that filtered hidden parameters out of its submission entirely. What makes the difference observable is a criterion *over* the hidden parameter, which is p.25's own use for one: the action is refused when it does not arrive. Fixed in the fixture, not the assertion.
+
+The second was in `test_widget_config_tabs.py` and is older than this work. Three of its tests had been failing intermittently — a different subset each run, passing in isolation — and there were two causes stacked. Four tests **saved onto a shared module fixture**, so each got whatever the last one left behind (the third time this repo has paid for that; §118 and the versions dialog were the others). And `save()` clicked Save and **reloaded without waiting for the write to land**, so under load the reload beat the PUT and the page came back showing what the server still had — which reads exactly like a feature that does not persist. The builder already says when a save has landed ("· saved" in the version line); the helper now waits for the application's own statement rather than for a sleep. Three consecutive full-file runs green, and *faster* than the flaky version.
+
+**65 vitest** (was 56), **87 browser** (was 82), `tsc` clean. Six mutations on the seeding helper and four on the form, all red.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -178,3 +178,65 @@ function coerce(raw: string, kind: string): unknown {
       return undefined;
   }
 }
+
+// ---- the action form (decision 0007) ---------------------------------------
+
+/** A parameter, as the form needs it. Structural rather than imported so this
+ * module keeps importing nothing. */
+type FormParameter = {
+  api_name: string;
+  data_type: string;
+  hidden: boolean;
+  default_value?: unknown;
+};
+
+/** What the form starts with, for one object.
+ *
+ * Three sources in a deliberate order:
+ *
+ *   1. **the object's current value**, because this is an edit form and showing
+ *      a blank box beside the thing being edited is how somebody blanks a
+ *      property they only meant to look at;
+ *   2. **the parameter's default** (p.27) when the object has nothing to say -
+ *      which is every parameter that is not named after a property;
+ *   3. **empty**.
+ *
+ * **Hidden parameters are seeded too, and that is the point of them.** p.25's
+ * example passes a *previous* value into a hidden parameter so that a rule can
+ * compare against it; a form that skipped them would leave the caller unable
+ * to supply what the action was built to receive. They are absent from the
+ * fields, not from the submission.
+ */
+export function seedActionForm(
+  parameters: FormParameter[],
+  properties: Record<string, unknown>,
+): Record<string, string> {
+  const seeded: Record<string, string> = {};
+  for (const parameter of parameters) {
+    const current = properties[parameter.api_name];
+    const fallback = parameter.default_value;
+    const value =
+      current !== undefined && current !== null
+        ? current
+        : fallback !== undefined && fallback !== null
+          ? fallback
+          : "";
+    seeded[parameter.api_name] =
+      typeof value === "object" ? JSON.stringify(value) : String(value);
+  }
+  return seeded;
+}
+
+/** The `<input type>` for a parameter.
+ *
+ * Modest on purpose. A number field stops "twelve" reaching a rule that writes
+ * an integer property, and a date field gives a picker; everything else is
+ * text, because the *server* coerces (`ontology.coerce_property_value`, shared
+ * with the sync path) and a browser-side type that disagreed with it would
+ * refuse values the platform accepts.
+ */
+export function inputTypeFor(dataType: string): string {
+  if (dataType === "integer" || dataType === "float") return "number";
+  if (dataType === "date") return "date";
+  return "text";
+}
