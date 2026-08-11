@@ -12,6 +12,7 @@ import {
   type PropertyInput,
 } from "@/lib/api";
 import { ActionDefinitionEditor } from "@/components/action-definition-editor";
+import { ObjectViewEditor } from "@/components/object-view-editor";
 import { Dialog, Field } from "@/components/dialog";
 import {
   EditObjectTypeDialog,
@@ -884,6 +885,9 @@ export default function ObjectsPage() {
   // The id, not the row: the edit dialog needs the full definition (properties
   // and the title property), which the summary list does not carry.
   const [editingType, setEditingType] = useState<string | null>(null);
+  // The object type whose configured view is being chosen. Name as well as id,
+  // because the dialog's title says which type and the row already knows it.
+  const [viewingType, setViewingType] = useState<{ id: string; name: string } | null>(null);
   const [creatingSource, setCreatingSource] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
   const [definingAction, setDefiningAction] = useState<ActionType | null>(null);
@@ -1005,6 +1009,19 @@ export default function ObjectsPage() {
                           onClick={() => setEditingType(t.id)}
                         >
                           Edit
+                        </button>
+                      )}
+                      {canEditOntology && (
+                        // Which view a reader of this type gets
+                        // (`object-views` p.2). Beside Edit because it is a
+                        // property of the type in the same sense its
+                        // properties are - just one stored one table over.
+                        <button
+                          className="btn quiet"
+                          style={{ padding: "3px 9px", fontSize: 12 }}
+                          onClick={() => setViewingType({ id: t.id, name: t.display_name })}
+                        >
+                          View
                         </button>
                       )}
                       {canEditOntology && (
@@ -1196,6 +1213,14 @@ export default function ObjectsPage() {
           projectId={project.id}
           types={types.data}
           onClose={() => setCreatingSource(false)}
+        />
+      )}
+      {viewingType && workspace && (
+        <ObjectViewEditor
+          workspaceId={workspace.id}
+          typeId={viewingType.id}
+          typeName={viewingType.name}
+          onClose={() => setViewingType(null)}
         />
       )}
       {definingAction && workspace && (

@@ -22,7 +22,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Dialog } from "@/components/dialog";
 import { objects as objApi } from "@/lib/api";
-import { StandardObjectView } from "@/components/standard-object-view";
+import { ObjectView } from "@/components/object-view";
 import { PRIMARY_KEY_REF, type LinkedInstances, type ObjectInstance } from "@/lib/types";
 
 export type LinkStop = {
@@ -176,12 +176,13 @@ export function LinkExplorerDialog({
         </nav>
       )}
 
-      {/* The standard Object View (Foundry `object-views` p.10) above the
-          links, because the object is what you came to see and the Linked
-          objects component is a *part* of that view rather than a separate
-          screen (p.11). The dialog was links-only before there was a view to
-          put them under. */}
-      <StandardObjectView
+      {/* The Object View (Foundry `object-views` p.10-11) above the links,
+          because the object is what you came to see and the Linked objects
+          component is a *part* of that view rather than a separate screen. The
+          dialog was links-only before there was a view to put them under;
+          `ObjectView` now decides between the generated one and a configured
+          module, and offers the reader the switch p.2 guarantees. */}
+      <ObjectView
         workspaceId={workspaceId}
         typeId={here.typeId}
         instance={here.instance}

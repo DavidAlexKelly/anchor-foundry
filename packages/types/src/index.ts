@@ -994,6 +994,26 @@ export interface ObjectTypeDetail {
  * advisory (a retyped link join still traverses, since the join compares the
  * text form of both values).
  */
+/**
+ * Which Workshop module stands in for an object type's standard view
+ * (`object-views` p.2–4, db 0046).
+ *
+ * A pointer, not a document: the view *is* the module. `subject_variable` is
+ * the whole binding — the `single_object` variable that receives the object
+ * being looked at.
+ */
+export interface ObjectView {
+  id: string;
+  object_type_id: string;
+  canvas_app_id: string;
+  canvas_app_name: string;
+  /** `full` (p.3, comprehensive) or `panel` (p.4, for embedding). */
+  form_factor: string;
+  subject_variable: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ObjectTypeImpact {
   property: string;
   change: "removed" | "retyped";
