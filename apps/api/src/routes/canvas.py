@@ -437,7 +437,7 @@ async def save_definition(
         # Only on the way in: see `validate_module` for why reading a document
         # does not re-check it against live state.
         known = {
-            str(a["id"]): [str(p) for p in (a.get("editable_properties") or [])]
+            str(a["id"]): actions_service.editable_properties_of(a["rules"])
             for a in await actions_service.list_action_types(conn, access.workspace_id)
         }
         try:

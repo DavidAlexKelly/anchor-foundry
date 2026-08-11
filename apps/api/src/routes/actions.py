@@ -56,6 +56,28 @@ def _parse_json(value: Any) -> Any:
     return json.loads(value) if isinstance(value, str) else value
 
 
+class ActionParameterOut(BaseModel):
+    """An input the action declares (Foundry `action-types` p.25)."""
+
+    id: UUID
+    api_name: str
+    display_name: str
+    data_type: str
+    required: bool
+    default_value: Any | None
+    hidden: bool
+    sort_order: int
+
+
+class ActionRuleOut(BaseModel):
+    """What the action does with them (p.75)."""
+
+    id: UUID
+    kind: str
+    config: dict[str, Any]
+    sort_order: int
+
+
 class ActionTypeOut(BaseModel):
     id: UUID
     object_type_id: UUID
@@ -63,6 +85,15 @@ class ActionTypeOut(BaseModel):
     api_name: str
     display_name: str
     description: str
+    parameters: list[ActionParameterOut]
+    rules: list[ActionRuleOut]
+    # **Derived from the rules, not stored** - migration 0044 dropped the
+    # column. Kept on the wire because the object-type screens and the
+    # Workshop `run_action` editor both ask "which properties does this action
+    # write", and that question still has this exact answer while
+    # `modify_object` is the only rule kind. It goes when the action form
+    # itself moves to parameters (decision 0007, "the form gets harder before
+    # it gets better").
     editable_properties: list[str]
     created_at: datetime
     updated_at: datetime
@@ -101,7 +132,19 @@ class ExecuteResult(BaseModel):
 
 
 def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
-    return ActionTypeOut(**{**row, "editable_properties": _parse_json(row["editable_properties"])})
+    rules = [{**r, "config": _parse_json(r["config"])} for r in row["rules"]]
+    # `default_value` is deliberately not run through `_parse_json` - see
+    # `bind_parameters`: a jsonb scalar comes back already decoded, and parsing
+    # it again raises.
+    parameters = list(row["parameters"])
+    return ActionTypeOut(
+        **{
+            **row,
+            "parameters": parameters,
+            "rules": rules,
+            "editable_properties": actions_service.editable_properties_of(rules),
+        }
+    )
 
 
 # ---- action types (workspace-scoped) ----------------------------------------
@@ -226,9 +269,15 @@ async def execute_action(
         column_mappings: dict[str, str] = _parse_json(source["column_mappings"])
         # Normalised, not just checked: a geopoint submitted as "51.5,-0.12"
         # is stored in the same shape as one that arrived from a sync.
-        values = actions_service.validate_submitted_values(
-            body.values,
-            editable_properties=_parse_json(action_type["editable_properties"]),
+        # Two steps, because they answer different questions: what did the
+        # caller supply (against the declared parameters), and what do the
+        # rules write with it (against the object type and its mapping).
+        bound = actions_service.bind_parameters(
+            body.values, parameters=action_type["parameters"]
+        )
+        values = actions_service.apply_rules(
+            bound,
+            rules=action_type["rules"],
             property_types=property_types,
             mapped_properties=set(column_mappings.values()),
         )

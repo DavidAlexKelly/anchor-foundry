@@ -411,8 +411,8 @@ def test_backfill_moves_postgres_instances_and_keeps_the_audit_trail(
         # A historical action run pointing at one of them.
         action_type_id = conn.execute(
             """INSERT INTO action_types (workspace_id, object_type_id, api_name,
-                                         display_name, editable_properties)
-               VALUES (%s, %s, %s, 'Backfill probe', '[]'::jsonb) RETURNING id""",
+                                         display_name)
+               VALUES (%s, %s, %s, 'Backfill probe') RETURNING id""",
             (fx.workspace, mapped["type_id"], f"probe_{uuid.uuid4().hex[:6]}"),
         ).fetchone()[0]
         run_id = conn.execute(
