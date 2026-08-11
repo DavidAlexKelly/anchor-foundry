@@ -2901,6 +2901,22 @@ The last shape `docs/parity/ontology.md` §5 was waiting on, and the one the ear
 Left deliberately: a far-side `create_link` on an action that also deletes the subject is allowed. The other object ends up holding a value matching a row that no longer exists, which the derived-link model already handles — traversal finds nothing, exactly as it does for any value that matches nothing. Refusing it would be a rule nobody asked for.
 
 Four mutations, all red. **921 API tests** (was 914), 95 browser. Still API-only: the definition dialog offers the subject-only shapes, so §139-§142 are things the editing endpoint can express and the editor cannot yet.
+
+---
+
+### 143. The dialog catches up with the endpoint (this session)
+
+§139-§142 each ended with the same sentence: the editing endpoint can express this and the editor cannot. Four units of API with no way to reach them is a gap that grows, so this closes it before anything else is built on top.
+
+**One control answers "which object", for both kinds that can name one.** A `modify_object` and a `delete_object` get an *On* picker - this object, or a type - and a *Which one* picker naming the parameter that holds it. `object_type` and `object` move together in both directions: an `object_type` left behind with no `object` names a *set*, which the server refuses, and an `object` left behind when somebody picks "this object" again would keep writing somewhere else while the dialog says otherwise. The mutation that keeps one of them is red.
+
+**The property dropdown follows the rule, not the action.** `PropertySelect` is its own component keyed on the object type id, so each rule offers the properties of whatever type *it* writes and several rules on one type share a single fetch. The mutation that reads the action's own type everywhere is red on a rule setting a property the action's type does not have - which is the whole point of naming another object.
+
+**Only `object` parameters are offered where an instance is wanted.** p.25's type is what holds one; a string parameter would carry a primary key, and the executor looks an instance up by id. Offering it would be offering a definition that fails on the first click, which is the same rule that kept `delete_object` out of the kind list until it ran.
+
+**A link rule asks a different question at each end.** From the side that holds the join property: which object to point at (`target`). From the other side: which object to link (`object`), with the value coming from this object. Changing the link type clears both, because the answer to the old question is refused for a reason no longer on screen. The mutation that always shows the near-side field is red.
+
+Four mutations, all red. **921 API tests**, **100 browser tests** (was 95).
 ---
 
 ## What's not started
