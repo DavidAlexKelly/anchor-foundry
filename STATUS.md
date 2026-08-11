@@ -2768,6 +2768,23 @@ It splits: `stage_version` writes the bytes and touches no metadata; `commit_ver
 
 ---
 
+### 135. `create_object`, the first rule that writes twice (this session)
+
+The rule kind decision 0008 was written for, and the one that turns two of its acceptance tests from ○ into ✅. p.75 lists creating objects among the "simple rules"; until now the executor had one kind and one object, which is a single write and not a transaction — a different thing that had been looking the same.
+
+**A modify and a create in one action produce one dataset version.** `write_back_row` generalised into `write_rows`, which applies a set of updates *and* a set of appends into one DuckDB table and copies the file out **last**. So a failure on the third row leaves the file on disk untouched — there is no half-written output to clean up, because the output is written at the end. The version is staged and committed through §134's split.
+
+**The failure case is now real and tested**: a create whose primary key already exists refuses, and the modify beside it never reaches the dataset. That is `ontology.md` §8's requirement, and before this there was no way to write it because there was no second write to fail.
+
+**The fixture found a hole in my own design.** A `create_object` rule mapped properties to parameters, exactly like `modify_object` — and could therefore never give the new object an identity, because **the primary key is a dataset column and frequently not a property at all**. The fixture ticket type has `status` and `site` and no `ticket_id`. The rule config now carries `primary_key` naming the parameter that supplies it, separate from the properties, and a rule without one is refused at save time.
+
+**DuckDB buries the one message a user needs.** A create whose key will not convert to the column's type reports as *"Attempting to execute an unsuccessful or closed pending query result"* — a sentence with nothing in it — and puts `Conversion Error: Could not convert string 'T9' to INT32` on the **second** line. `_clean` keeps the first line everywhere else in this module and is right to; the append path reads further, because supplying a value of the wrong type is a thing people will do rather than a bug.
+
+**Only the action's own object type.** Creating another type's object needs that type's source resolved in this project — a lookup rather than a difficulty, not built, and refused at save time with a sentence saying so rather than accepted and silently ignored.
+
+Six mutations, all red, including the one that drops the modify when a create is present and the one that allows a duplicate key. **892 API tests** (was 885).
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

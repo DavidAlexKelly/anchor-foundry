@@ -145,14 +145,14 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Feature | Status | Notes |
 |---|---|---|
 | Edit property values on one object | ✅ | |
-| Edit **multiple objects in one transaction** | ○ | |
-| **Create and delete objects** | ○ | |
+| Edit **multiple objects in one transaction** | ◑ | §134–§135 — the boundary is built and two rows of one dataset land as one version; several *modify* rules over different objects still need a rule editor that can express them |
+| **Create and delete objects** | ◑ | §135 — `create_object` builds an object of the action's own type, in the same write as everything else the action does (decision 0008). Delete, and creating another type's object, are not built |
 | **Create and delete links** | ○ | the Assign Employee example creates an Employee→Manager link |
 | **Parameters** — typed user inputs with their own form | ✅ | §127, §129, §130 — the model executes, is editable through the API, and the form renders one input per *visible* parameter (p.25) |
 | Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
-| **Rules** — the logic mapping parameters to edits | ◑ | §127 — `modify_object` executes; the other four kinds are storable and refused loudly (TOC §5) |
+| **Rules** — the logic mapping parameters to edits | ◑ | §127, §135 — `modify_object` and `create_object` execute; the other three are storable and refused loudly (TOC §5) |
 | **Submission criteria** — conditions that must hold for submission | ◑ | §128–§131 — conditions over parameters and the current user, checked before the first write (p.49–56), editable in the Ontology Manager; no nesting (p.56's all / any / none) |
 | **Validation** — e.g. only HR may perform this action | ◑ | §128 — this *is* submission criteria (p.140: "simple submission criteria can require a specific user ID or group ID"); a criterion can require a group |
 | Configure sections in the action form | ○ | TOC §24 |
