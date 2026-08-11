@@ -2750,6 +2750,24 @@ Nothing is built, and the document says so at the top.
 
 ---
 
+### 134. Staging a dataset version before committing it (this session)
+
+Decision 0008's first part, and the mechanism the rest of `ontology.md` §5 waits on. `add_version` wrote the Parquet object and bumped `current_version` in one breath — fine for one write, and impossible to make atomic for two.
+
+It splits: `stage_version` writes the bytes and touches no metadata; `commit_versions` makes a *set* of staged versions current. `add_version` stays, implemented as stage-then-commit, so the single-write callers did not change and "one write" is still one line.
+
+**The ordering is the whole point.** The slow, non-transactional, *discardable* half happens first. A staged version is invisible — no `datasets` row points at the object, no `dataset_versions` row mentions it — so if the commit never comes, what is left behind is an unreferenced key in a bucket rather than a dataset whose history disagrees with its contents. The reverse order would need a distributed transaction to be correct.
+
+**Atomicity was already there and unused.** `user_connection` opens one transaction for the whole request (`lib/db.py`), so the UPDATEs and INSERTs in `commit_versions` already commit or roll back together. What the function adds is that the *set* is written in one place, so an action with several writes cannot commit half of them by construction rather than by each caller remembering to be careful. Worth stating plainly: this piece of work is mostly *shape*, and the shape is what makes the next piece possible.
+
+**One refusal the decision did not anticipate.** Staging reads `current_version` and the commit happens later, so another writer can land in between. Both silent options are worse than a refusal: the INSERT would collide with the row somebody else created, or — if it took whatever number was free — these bytes would be filed in the history under their version. It refuses by name and says nothing was applied.
+
+**Five tests, four mutations.** Two of decision 0008's five acceptance tests are now green; the other three need a rule kind that produces a second write, and the document says so rather than implying they are done. The mutation that matters most — make staging commit — turns every test in the file red.
+
+**885 API tests** (was 880).
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

@@ -14,6 +14,7 @@ layer.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -443,6 +444,140 @@ async def version_location(
     return dict(row)
 
 
+@dataclass(frozen=True)
+class StagedVersion:
+    """A dataset version whose bytes are written and whose row is not.
+
+    Decision 0008: an action is "a single transaction" (Foundry `action-types`
+    p.2), and ours could not be while every write bumped `current_version` on
+    its own. The split is what makes one possible - the slow, non-transactional,
+    *discardable* half happens first, and the cheap atomic half happens last.
+
+    **A staged version is invisible.** No `datasets` row points at the object
+    and no `dataset_versions` row mentions it, so no reader can reach it; if the
+    commit never comes, what is left behind is an unreferenced key in the
+    bucket. That is the trade this decision makes on purpose - garbage is
+    recoverable, and a dataset whose history disagrees with its contents is not.
+    """
+
+    dataset_id: UUID
+    version: int
+    parquet_key: str
+    schema_json: str
+    row_count: int
+    produced_by_kind: str
+    produced_by_id: UUID | None
+    created_by: UUID
+
+
+async def stage_version(
+    conn: AsyncConnection,
+    storage: StorageGateway,
+    *,
+    dataset_id: UUID,
+    workspace_id: UUID,
+    parquet_bytes: bytes,
+    schema: list[ColumnSchema],
+    row_count: int,
+    produced_by_kind: str,
+    produced_by_id: UUID | None,
+    created_by: UUID,
+) -> StagedVersion:
+    """Write the bytes; touch no metadata."""
+    import json
+
+    ws_prefix = await workspace_s3_prefix(conn, workspace_id)
+    current = await fetch_one(
+        conn, "SELECT current_version FROM datasets WHERE id = :id", {"id": str(dataset_id)}
+    )
+    if current is None:
+        raise NotFoundError("dataset")
+    version = int(current["current_version"]) + 1
+    parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
+    storage.put(parquet_key, parquet_bytes)
+    return StagedVersion(
+        dataset_id=dataset_id,
+        version=version,
+        parquet_key=parquet_key,
+        schema_json=json.dumps([c.as_dict() for c in schema]),
+        row_count=row_count,
+        produced_by_kind=produced_by_kind,
+        produced_by_id=produced_by_id,
+        created_by=created_by,
+    )
+
+
+async def commit_versions(
+    conn: AsyncConnection, staged: list[StagedVersion]
+) -> dict[str, dict[str, Any]]:
+    """Make every staged version current, or none of them.
+
+    Atomic because `user_connection` is one transaction (`lib/db.py`) - the
+    UPDATEs and INSERTs below either all commit with it or all roll back, and
+    the caller does not have to arrange anything for that to be true. What this
+    function adds is that the *set* is written in one place, so an action with
+    several writes cannot commit half of them by construction rather than by
+    the caller remembering to be careful.
+
+    **Refuses a staged version whose dataset has moved on.** Staging reads
+    `current_version` and commit happens later, so another writer can land in
+    between - and the INSERT would then collide with the row it created. A
+    named refusal beats a unique-violation traceback, and beats far more the
+    silent alternative of taking whatever version number is free and writing
+    somebody else's bytes into the history under it.
+    """
+    committed: dict[str, dict[str, Any]] = {}
+    for record in staged:
+        current = await fetch_one(
+            conn,
+            "SELECT current_version FROM datasets WHERE id = :id",
+            {"id": str(record.dataset_id)},
+        )
+        if current is None:
+            raise NotFoundError("dataset")
+        if int(current["current_version"]) + 1 != record.version:
+            raise ConflictError(
+                f"this dataset was versioned by something else while this write was "
+                f"being prepared (expected v{record.version}, found "
+                f"v{int(current['current_version']) + 1}). Nothing was applied."
+            )
+        updated = await fetch_one(
+            conn,
+            """
+            UPDATE datasets
+               SET s3_location = :loc, table_schema = CAST(:schema AS jsonb),
+                   row_count = :rows, current_version = :version
+             WHERE id = :id
+            RETURNING id, project_id, name, slug, row_count, current_version
+            """,
+            {
+                "loc": record.parquet_key, "schema": record.schema_json,
+                "rows": record.row_count, "version": record.version,
+                "id": str(record.dataset_id),
+            },
+        )
+        assert updated is not None
+        await conn.execute(
+            _text(
+                """
+                INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
+                                              table_schema, row_count, produced_by_kind,
+                                              produced_by_id, created_by)
+                VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, :kind, :pbid, :by)
+                """
+            ),
+            {
+                "did": str(record.dataset_id), "version": record.version,
+                "key": record.parquet_key, "schema": record.schema_json,
+                "rows": record.row_count, "kind": record.produced_by_kind,
+                "pbid": str(record.produced_by_id) if record.produced_by_id else None,
+                "by": str(record.created_by),
+            },
+        )
+        committed[str(record.dataset_id)] = dict(updated)
+    return committed
+
+
 async def add_version(
     conn: AsyncConnection,
     storage: StorageGateway,
@@ -459,48 +594,17 @@ async def add_version(
     """Append a new version to an already-known dataset in place - the
     simpler single-purpose case where uploads/model-outputs/syncs' own
     create-or-version-by-slug logic doesn't apply because the dataset id is
-    already known (used by action write-back)."""
-    import json
+    already known.
 
-    ws_prefix = await workspace_s3_prefix(conn, workspace_id)
-    current = await fetch_one(
-        conn, "SELECT current_version FROM datasets WHERE id = :id", {"id": str(dataset_id)}
+    Stage and commit in one call, for the callers that write exactly one
+    dataset and have nothing to be atomic *with*. Kept as its own function
+    rather than left for each caller to spell out, so that "one write" stays
+    one line and only the callers that need a boundary carry one.
+    """
+    record = await stage_version(
+        conn, storage,
+        dataset_id=dataset_id, workspace_id=workspace_id, parquet_bytes=parquet_bytes,
+        schema=schema, row_count=row_count, produced_by_kind=produced_by_kind,
+        produced_by_id=produced_by_id, created_by=created_by,
     )
-    if current is None:
-        raise NotFoundError("dataset")
-    version = int(current["current_version"]) + 1
-    parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-    storage.put(parquet_key, parquet_bytes)
-    schema_json = json.dumps([c.as_dict() for c in schema])
-
-    updated = await fetch_one(
-        conn,
-        """
-        UPDATE datasets
-           SET s3_location = :loc, table_schema = CAST(:schema AS jsonb),
-               row_count = :rows, current_version = :version
-         WHERE id = :id
-        RETURNING id, project_id, name, slug, row_count, current_version
-        """,
-        {
-            "loc": parquet_key, "schema": schema_json, "rows": row_count,
-            "version": version, "id": str(dataset_id),
-        },
-    )
-    assert updated is not None
-    await fetch_one(
-        conn,
-        """
-        INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
-                                      table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by)
-        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, :kind, :pbid, :by)
-        RETURNING id
-        """,
-        {
-            "did": str(dataset_id), "version": version, "key": parquet_key,
-            "schema": schema_json, "rows": row_count, "kind": produced_by_kind,
-            "pbid": str(produced_by_id) if produced_by_id else None, "by": str(created_by),
-        },
-    )
-    return dict(updated)
+    return (await commit_versions(conn, [record]))[str(dataset_id)]

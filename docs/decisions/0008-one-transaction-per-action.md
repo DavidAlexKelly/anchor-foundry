@@ -1,6 +1,6 @@
 # 0008 — One transaction per action
 
-**Status:** decided, not built.
+**Status:** decided; **part 1 is built** (`STATUS.md` §134) — `add_version` is split into `stage_version` and `commit_versions`, and a set of writes commits together or not at all. Parts 2 and 3 arrive with the rule kinds that need them.
 **Parity items:** `docs/parity/ontology.md` §5 (the rule kinds that write no property) and §8 (an action editing two objects where the second fails must leave *neither* applied).
 **Source:** `docs/pal/foundry_action-types.pdf` (174 pp). Citations are `(p.2)`.
 **Follows:** decision 0007, which is built (`STATUS.md` §127–§131). This is the blocker its last section named.
@@ -86,11 +86,13 @@ The honest consequence, stated rather than buried: **for a window after a partly
 
 Per the repo standard, each of these must be made to fail by removing the thing it tests:
 
-- **An action whose second rule fails leaves the first unapplied.** The acceptance test `ontology.md` §8 asks for by name. Mutation: commit each write as it is staged, and the dataset comes back with one rule applied.
-- **An action that rewrites two rows of one dataset produces exactly one new version.** Mutation: version per write, and the count goes to two.
-- **An action touching two datasets commits both or neither.** Fail the second commit and assert the first dataset's `current_version` is unchanged.
-- **A staged version nothing committed is invisible.** No `dataset_versions` row, no change to `current_version`, and the dataset still reads as it did.
-- **A failed index update is recorded on the action run and repaired by a re-sync**, rather than being silent or fatal.
+- ○ **An action whose second rule fails leaves the first unapplied.** The acceptance test `ontology.md` §8 asks for by name. Mutation: commit each write as it is staged, and the dataset comes back with one rule applied. — the *mechanism* is built and tested below; the action-level test waits for a rule kind that produces a second write.
+- ○ **An action that rewrites two rows of one dataset produces exactly one new version.** Mutation: version per write, and the count goes to two.
+- ✅ **An action touching two datasets commits both or neither.** Fail the second commit and assert the first dataset's `current_version` is unchanged. — `tests/test_version_staging.py`.
+- ✅ **A staged version nothing committed is invisible.** No `dataset_versions` row, no change to `current_version`, and the dataset still reads as it did. — and the mutation that makes staging commit turns every test in the file red.
+- ○ **A failed index update is recorded on the action run and repaired by a re-sync**, rather than being silent or fatal.
+
+**One check this list did not anticipate, added while building:** a staged version whose dataset was versioned by *something else* in the meantime is refused by name. Staging reads `current_version` and the commit happens later, so the window is real — and the two silent alternatives are both worse than a refusal: colliding with the row somebody else created, or taking whatever version number is free and filing these bytes in the history under it.
 
 ## The alternative that was rejected
 
