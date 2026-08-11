@@ -2837,6 +2837,23 @@ Four mutations, all red. **901 API tests** (was 898), 95 browser.
 `ontology.md` §5's rules row is ✅. What is left in that section is **one missing lookup, not five missing features**: creating, deleting or linking another type's object needs that type's source resolved in this project, and every one of those cases is refused at save time with a sentence naming it.
 ---
 
+### 139. The missing lookup: creating another type's object (this session)
+
+§135 and §138 both stopped at the same wall, and §138 named it: "one missing lookup, not five missing features". This is the lookup. A `create_object` rule can now name **any object type with a dataset mapped in this project**, and the row goes into that type's dataset.
+
+**It is the first action to write two datasets**, which is the case decision 0008's `commit_versions` was written for and which nothing had exercised. A Ticket is modified and a Team is created; each dataset gets exactly one new version; both commit together or neither does. The acceptance test the decision listed as "an action touching two datasets commits both or neither" is now an *action-level* test rather than a service-level one — the Team key already exists, the second write refuses, and the Ticket's dataset is untouched.
+
+**Validation moved to the type being created.** A rule's properties are checked against the object type it creates, not the one the action hangs off — the mutation that checks against the acting type instead lets through a rule that would write a column the target dataset has never heard of. The validator needed a workspace-wide property map for that, which is one query rather than one per referenced type.
+
+**Two ways a target can fail to resolve, and they need different sentences.** No source in this project means nothing says where that type's rows live. *Several* sources means nothing says which of them a new object belongs to — and picking one would be a guess written into somebody's data. Both are refused; the message says which.
+
+**A test outlived the restriction it was written against.** §128's "a rule kind this build cannot apply is refused not ignored" asserted a refusal that no longer exists, because all five kinds now execute. Rather than delete it, it became the same claim about what *can* still be unplaceable: a target type with no dataset here. The point it was making — a skipped rule reports success for an action that did half of what it says — is the same one.
+
+**One self-inflicted detour.** My first edit replaced a slice of `actions.py` computed between two function names, and the slice spanned `check_criteria` — which vanished. The suite said so immediately (`module has no attribute 'check_criteria'`), and the fix was to restore from HEAD and redo the change with anchored replacements. Worth recording as the argument against index-based edits on a file this size.
+
+Three mutations, all red. **904 API tests** (was 901).
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

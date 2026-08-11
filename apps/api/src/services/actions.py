@@ -182,12 +182,32 @@ def deletes_the_subject(rules: list[dict[str, Any]]) -> bool:
     return any(str(rule["kind"]) == "delete_object" for rule in rules)
 
 
+def creation_targets(
+    rules: list[dict[str, Any]], *, default_object_type_id: UUID
+) -> list[str]:
+    """Which object types this action's `create_object` rules write.
+
+    Read before anything is resolved, because the route has to find each type's
+    source in this project before it can coerce a single value - and a type
+    with no source here is a refusal rather than a write.
+    """
+    targets: list[str] = []
+    for rule in rules:
+        if str(rule["kind"]) != "create_object":
+            continue
+        config = _json(rule.get("config")) or {}
+        target = str(config.get("object_type") or default_object_type_id)
+        if target not in targets:
+            targets.append(target)
+    return targets
+
+
 def object_creations(
     bound: dict[str, Any],
     *,
     rules: list[dict[str, Any]],
-    property_types: dict[str, str],
-    mapped_properties: set[str],
+    contexts: dict[str, dict[str, Any]],
+    default_object_type_id: UUID,
 ) -> list[dict[str, Any]]:
     """The rows a `create_object` rule adds (Foundry p.75).
 
@@ -209,10 +229,11 @@ def object_creations(
     give the new object an identity, which is exactly the shape of hole that
     only shows up when something real is written through it.
 
-    **Only this action's own object type**, for now. A rule creating an object
-    of *another* type needs that type's source resolved in this project, which
-    is a lookup rather than a difficulty - and it is not built, so a config
-    naming another type is refused at save time rather than half-applied here.
+    **`contexts` carries one entry per target type** - its property types and
+    the properties its source maps - because a rule creating another type's
+    object must be checked against *that* type rather than against the one the
+    action happens to hang off. `object_type` defaults to the action's own,
+    which is what every rule written before cross-type creates still says.
 
     A property with no dataset column is refused for the same reason a modify
     refuses one: there is nowhere to put it, and a create that silently dropped
@@ -225,6 +246,17 @@ def object_creations(
         if str(rule["kind"]) != "create_object":
             continue
         config = _json(rule.get("config")) or {}
+        target = str(config.get("object_type") or default_object_type_id)
+        context = contexts.get(target)
+        if context is None:
+            # Resolved by the caller; missing means the type has no dataset in
+            # this project, which is a refusal rather than a silent skip.
+            raise ValueError(
+                "this action creates an object of a type that has no dataset mapped in "
+                "this project"
+            )
+        property_types = context["property_types"]
+        mapped_properties = context["mapped_properties"]
         key_parameter = str(config.get("primary_key", ""))
         key = bound.get(key_parameter)
         if key is None or str(key).strip() == "":
@@ -238,12 +270,14 @@ def object_creations(
                 continue  # not supplied, no default - the column stays empty
             if prop not in mapped_properties:
                 raise ValueError(
-                    f"{prop!r} has no dataset column mapped on this instance's source"
+                    f"{prop!r} has no dataset column mapped on the source for its object type"
                 )
             row[prop] = ontology_service.coerce_property_value(
                 property_types.get(prop, "string"), bound[parameter]
             )
-        creations.append({"primary_key": str(key), "properties": row})
+        creations.append(
+            {"object_type_id": target, "primary_key": str(key), "properties": row}
+        )
     return creations
 
 
@@ -754,6 +788,33 @@ _RULE_KINDS = frozenset(
 _USER_ATTRIBUTES = frozenset({"id", "group_ids"})
 
 
+async def properties_by_type(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, dict[str, str]]:
+    """Every object type in the workspace, and its properties' declared types.
+
+    One query rather than one per referenced type: a `create_object` rule can
+    name any type in the workspace, and the validator has to check what it sets
+    against *that* type rather than against the one the action hangs off.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT ot.id AS object_type_id, p.api_name, p.data_type
+          FROM object_types ot
+          LEFT JOIN object_type_properties p ON p.object_type_id = ot.id
+         WHERE ot.workspace_id = :wid
+        """,
+        {"wid": str(workspace_id)},
+    )
+    grouped: dict[str, dict[str, str]] = {}
+    for row in rows:
+        entry = grouped.setdefault(str(row["object_type_id"]), {})
+        if row["api_name"]:
+            entry[str(row["api_name"])] = str(row["data_type"])
+    return grouped
+
+
 async def link_types_for(
     conn: AsyncConnection, workspace_id: UUID
 ) -> dict[str, dict[str, Any]]:
@@ -835,6 +896,7 @@ def _validate_definition(
     property_types: dict[str, str],
     object_type_id: UUID,
     link_types: dict[str, dict[str, Any]],
+    workspace_properties: dict[str, dict[str, str]],
 ) -> None:
     """Refuse a definition that could not be executed, at save time.
 
@@ -874,23 +936,22 @@ def _validate_definition(
             properties = config.get("properties") or {}
             if not isinstance(properties, dict) or not properties:
                 raise ValueError("a create_object rule needs at least one property to set")
+            target = str(config.get("object_type") or object_type_id)
+            target_properties = workspace_properties.get(target)
+            if target_properties is None:
+                raise ValueError(
+                    "a create_object rule names an object type this workspace does not have"
+                )
             for prop, parameter in properties.items():
                 if str(parameter) not in seen:
                     raise ValueError(
                         f"a create_object rule reads {parameter!r}, which is not a parameter"
                     )
-                if str(prop) not in property_types:
+                if str(prop) not in target_properties:
                     raise ValueError(
                         f"a create_object rule sets {prop!r}, which is not a property of "
-                        "this object type"
+                        "the object type it creates"
                     )
-            if config.get("object_type") and str(config["object_type"]) != str(object_type_id):
-                # Storable in the schema, unbuildable here: creating an object
-                # of another type needs that type's source resolved in this
-                # project. Named rather than accepted and ignored.
-                raise ValueError(
-                    "this build can only create objects of the action's own object type"
-                )
             continue
         if kind in ("create_link", "delete_link"):
             link = (link_types or {}).get(str(config.get("link_type", "")))
@@ -1005,6 +1066,7 @@ async def set_definition(
         parameters=parameters, rules=rules, criteria=criteria,
         property_types=property_types, object_type_id=object_type_id,
         link_types=await link_types_for(conn, workspace_id),
+        workspace_properties=await properties_by_type(conn, workspace_id),
     )
 
     # **The refusal decision 0007 names.** Checked against what is *going*, not

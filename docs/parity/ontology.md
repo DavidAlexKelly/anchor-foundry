@@ -145,8 +145,8 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Feature | Status | Notes |
 |---|---|---|
 | Edit property values on one object | ✅ | |
-| Edit **multiple objects in one transaction** | ◑ | §134–§135 — the boundary is built and two rows of one dataset land as one version; several *modify* rules over different objects still need a rule editor that can express them |
-| **Create and delete objects** | ◑ | §135, §138 — both build and remove an object of the action's own type, in the same write as everything else the action does (decision 0008). Creating or deleting *another* type's object needs a lookup this build lacks |
+| Edit **multiple objects in one transaction** | ◑ | §134–§139 — two *datasets* now commit together or not at all; several `modify` rules over different objects still need a way to name the other object |
+| **Create and delete objects** | ✅ | §135, §138, §139 — create any type with a dataset in this project, delete the object the action ran on, all in one transaction (decision 0008) |
 | **Create and delete links** | ◑ | §136 — a link here *is* the join property (migration 0027), so a link rule writes or clears it. Many-to-many, and setting a link from the far side, are refused with a sentence |
 | **Parameters** — typed user inputs with their own form | ✅ | §127, §129, §130 — the model executes, is editable through the API, and the form renders one input per *visible* parameter (p.25) |
 | Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
@@ -195,7 +195,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **All five of p.75's simple rules execute (§135–§138)**, on decision 0008's boundary: stage every write, commit in one Postgres transaction, one dataset version per dataset per action, and the search index as a projection that is repaired rather than transacted.
 
-**What is left in this section is one missing lookup, not five missing features.** Creating, deleting or linking *another* type's object needs that type's source resolved in this project — every one of those cases is refused at save time with a sentence naming it, rather than accepted and half-applied. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**The lookup is built (§139).** A `create_object` rule can name any object type with a dataset mapped in this project; the row goes into *that* dataset, and both datasets commit together or not at all — which is the case decision 0008's `commit_versions` was written for and nothing had exercised until now.
+
+**What is left is naming a *second object*.** Deleting or linking one that is not the object the action ran against needs a parameter that identifies it, which is a parameter *type* (`object`) the model has and nothing yet resolves. Every such case is refused at save time with a sentence naming it. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 

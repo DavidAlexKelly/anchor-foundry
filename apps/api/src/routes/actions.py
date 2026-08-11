@@ -371,11 +371,58 @@ async def execute_action(
             user=await actions_service.criteria_user(conn, access.auth.user_id),
         )
         deleting = actions_service.deletes_the_subject(action_type["rules"])
+
+        # **One context per object type this action creates into.** A rule
+        # creating another type's object has to be checked and coerced against
+        # *that* type and written into *its* dataset - which is the lookup that
+        # kept cross-type creates out of §135, and the first thing to put two
+        # datasets inside one action.
+        sources_by_type: dict[str, dict[str, Any]] = {str(object_type_id): dict(source)}
+        contexts: dict[str, dict[str, Any]] = {
+            str(object_type_id): {
+                "property_types": property_types,
+                "mapped_properties": set(column_mappings.values()),
+            }
+        }
+        for target in actions_service.creation_targets(
+            action_type["rules"], default_object_type_id=object_type_id
+        ):
+            if target in contexts:
+                continue
+            candidates = [
+                row for row in await ontology_service.list_sources(
+                    conn, access.project_id, access.workspace_id
+                )
+                if str(row["object_type_id"]) == target
+            ]
+            if len(candidates) != 1:
+                # None: nothing in this project says where that type's rows
+                # live. Several: nothing says *which* of them a new object
+                # belongs to, and picking one would be a guess written into
+                # somebody's data.
+                raise ValueError(
+                    "this action creates an object of a type with "
+                    f"{'no' if not candidates else 'more than one'} dataset mapped in "
+                    "this project"
+                )
+            target_source = await ontology_service.get_source(
+                conn, access.project_id, UUID(str(candidates[0]["id"]))
+            )
+            target_mappings: dict[str, str] = _parse_json(target_source["column_mappings"])
+            sources_by_type[target] = target_source
+            contexts[target] = {
+                "property_types": {
+                    p["api_name"]: p["data_type"]
+                    for p in await ontology_service.list_properties(conn, UUID(target))
+                },
+                "mapped_properties": set(target_mappings.values()),
+            }
+
         creations = actions_service.object_creations(
             bound,
             rules=action_type["rules"],
-            property_types=property_types,
-            mapped_properties=set(column_mappings.values()),
+            contexts=contexts,
+            default_object_type_id=object_type_id,
         )
         values = actions_service.apply_rules(
             bound,
@@ -413,18 +460,27 @@ async def execute_action(
         # versions carrying the same `produced_by_id` would be a history that
         # has to be interpreted, and a failure between them would leave a
         # dataset nobody asked for.
-        appended = [
-            {
-                str(source["primary_key_column"]): creation["primary_key"],
-                **{
-                    reverse_map[prop]: ontology_service.column_value(
-                        property_types.get(prop, "string"), value
-                    )
-                    for prop, value in creation["properties"].items()
-                },
-            }
-            for creation in creations
-        ]
+        def rows_for(type_id: str) -> list[dict[str, Any]]:
+            """The rows to append to one type's dataset, in its own columns."""
+            target_source = sources_by_type[type_id]
+            mappings: dict[str, str] = _parse_json(target_source["column_mappings"])
+            columns = {prop: col for col, prop in mappings.items()}
+            types = contexts[type_id]["property_types"]
+            return [
+                {
+                    str(target_source["primary_key_column"]): creation["primary_key"],
+                    **{
+                        columns[prop]: ontology_service.column_value(
+                            types.get(prop, "string"), value
+                        )
+                        for prop, value in creation["properties"].items()
+                    },
+                }
+                for creation in creations
+                if creation["object_type_id"] == type_id
+            ]
+
+        appended = rows_for(str(object_type_id))
         with tempfile.TemporaryDirectory() as tmp:
             dest = os.path.join(tmp, "out.parquet")
             schema, row_count = await anyio.to_thread.run_sync(
@@ -451,7 +507,42 @@ async def execute_action(
                 produced_by_id=run_id,
                 created_by=access.auth.user_id,
             )
-            committed = await dataset_service.commit_versions(conn, [staged])
+            staged_all = [staged]
+            # Every other type's rows, each into its own dataset, staged before
+            # anything is committed - decision 0008's boundary, and the first
+            # time an action puts two datasets inside it.
+            others = [t for t in sources_by_type if t != str(object_type_id)]
+            for target in others:
+                target_source = sources_by_type[target]
+                target_path = await anyio.to_thread.run_sync(
+                    storage.local_path, str(target_source["s3_location"])
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    target_dest = os.path.join(tmp, "out.parquet")
+                    target_schema, target_rows = await anyio.to_thread.run_sync(
+                        engine.write_rows,
+                        target_path,
+                        str(target_source["primary_key_column"]),
+                        [],
+                        rows_for(target),
+                        target_dest,
+                    )
+                    with open(target_dest, "rb") as handle:
+                        target_bytes = handle.read()
+                staged_all.append(
+                    await dataset_service.stage_version(
+                        conn, storage,
+                        dataset_id=UUID(str(target_source["dataset_id"])),
+                        workspace_id=access.workspace_id,
+                        parquet_bytes=target_bytes,
+                        schema=target_schema,
+                        row_count=target_rows,
+                        produced_by_kind="action",
+                        produced_by_id=run_id,
+                        created_by=access.auth.user_id,
+                    )
+                )
+            committed = await dataset_service.commit_versions(conn, staged_all)
             dataset_version = int(committed[str(source["dataset_id"])]["current_version"])
             if values:
                 await instance_store.store_for(conn).update_properties(
@@ -477,16 +568,21 @@ async def execute_action(
                 # immediately rather than at the next sync; a failure here is
                 # repairable by re-syncing the source, which a half-written
                 # dataset would not be.
-                await instance_store.store_for(conn).upsert_instances(
-                    search_prefix=prefix,
-                    object_type_id=UUID(str(action_type["object_type_id"])),
-                    source_id=UUID(str(source["id"])),
-                    rows=[
+                for type_id, target_source in sources_by_type.items():
+                    rows = [
                         (creation["primary_key"], creation["properties"])
                         for creation in creations
-                    ],
-                    synced_at=datetime.now(timezone.utc),
-                )
+                        if creation["object_type_id"] == type_id
+                    ]
+                    if not rows:
+                        continue
+                    await instance_store.store_for(conn).upsert_instances(
+                        search_prefix=prefix,
+                        object_type_id=UUID(type_id),
+                        source_id=UUID(str(target_source["id"])),
+                        rows=rows,
+                        synced_at=datetime.now(timezone.utc),
+                    )
     except DatasetEngineError as exc:
         ok, error = False, str(exc)
 
