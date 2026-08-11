@@ -31,6 +31,7 @@ import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
 import { CanvasNode } from "@/components/canvas/SettingsPanel";
 import { seedFromQuery } from "@/components/canvas/pure";
+import { useModuleTitle } from "@/components/canvas/module-title";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
 
@@ -58,6 +59,11 @@ export default function PublishedAppPage() {
     queryFn: () => canvasApi.getPublished(workspace!.id, params.appId),
     enabled: !!workspace,
   });
+
+  // The tab name (p.47). A viewer of a published module gets the same title a
+  // builder sees, falling back to the app's name - `useModuleTitle` waits for
+  // the fetch rather than blanking the tab while it is in flight.
+  useModuleTitle(layoutOf(app.data?.definition), app.data?.name ?? "");
 
   if (wsPending || app.isPending) {
     return <main className="page"><div className="state">Loading app…</div></main>;

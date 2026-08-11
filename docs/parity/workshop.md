@@ -17,7 +17,7 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 | Feature | Status | Notes |
 |---|---|---|
 | Toggle header visibility | ✅ | |
-| Title, used for browser tab name | ◑ | we set a title; it does not drive the document title (p.47) |
+| Title, used for browser tab name | ✅ | §126 — the header title is the tab, falling back to the resource name (p.47) |
 | Custom colour for title text | ○ | belongs with §1.5's style block, not here |
 | Application logo — icon, with colour | ○ | (p.47); needs an icon library — see the divergence below |
 | Application logo — uploaded image, with height and position | ○ | (p.47); needs an image-upload decision, which attachments (§39) already has a shape for |

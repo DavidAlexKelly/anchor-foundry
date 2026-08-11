@@ -48,6 +48,7 @@ import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/compon
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
 import { eventsOf, hasLayout, layoutOf, moduleFrom, variablesOf } from "@/lib/workshop-module";
+import { useModuleTitle } from "@/components/canvas/module-title";
 import type {
   CanvasAppDetail,
   CanvasPublishScope,
@@ -628,6 +629,11 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     queryFn: () => canvasApi.get(workspaceId, projectId!, appId),
     enabled: !!projectId,
   });
+
+  // The tab name (p.47). Above the early returns because it is a hook, and
+  // fed the *saved* document rather than the editor's live node map: retyping
+  // a header title should not rewrite the tab on every keystroke.
+  useModuleTitle(layoutOf(appQuery.data?.definition), resource.name);
 
   const canEdit = project ? project.effective_role !== "viewer" : false;
   const canPublish = workspace?.effective_role === "admin";
