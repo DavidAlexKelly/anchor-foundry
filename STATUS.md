@@ -2818,6 +2818,25 @@ Two mutations, both red. **95 browser tests** (was 92).
 **The sandbox ate `node_modules` and the database again**, mid-unit, exactly as §132 describes: `tsc` started failing on `Cannot find module 'vitest'` (root install pruned to 16 packages) and the API 500'd on `column "visibility" does not exist` (five migrations rolled back). Both recoveries are the ones already recorded — `npm ci` at the *root*, and `migrate.py`. Worth noting the frequency rather than only the fix: twice in one session, and neither failure announces itself as environmental.
 ---
 
+### 138. `delete_object`, and the projection that has to be told (this session)
+
+The last of p.75's five simple rules, and the only one that **removes** rather than writes — which makes it the only one where the search index has to be told something the dataset cannot tell it by itself. A modify or a create leaves a row for the next sync to find; a delete leaves an absence, and an absence is not something a re-sync of that row can communicate.
+
+So this needed the first new store method since the OpenSearch cutover: `delete_instances`, in both implementations, **scoped by `(source_id, primary_key)`** because that pair *is* instance identity here — two sources feeding one object type can each hold a "1", and deleting a row from one dataset must not remove the other's.
+
+**Order follows decision 0008.** The row goes first and the projection follows: a failure between them leaves a findable object whose row is gone — visible, wrong, and repairable by a re-sync. The reverse order would lose the object while the row survived, which nothing would ever notice.
+
+**An action cannot both change and delete the same object.** Not two things in some order — a contradiction, and the order they happen to run in is not a specification. Refused at save time, where both rules are still on screen.
+
+**A delete of a row that is not there is refused**, rather than treated as already-done: an action that reports success for a row it could not find is one nobody can tell from an action that deleted something.
+
+**The editor got the fifth kind the same day.** It had been held out on the rule that an editor must not let somebody save an action which fails the first time it is clicked (§137), and the browser test asserts the *list* — so a kind offered without an executor turns it red.
+
+Four mutations, all red. **901 API tests** (was 898), 95 browser.
+
+`ontology.md` §5's rules row is ✅. What is left in that section is **one missing lookup, not five missing features**: creating, deleting or linking another type's object needs that type's source resolved in this project, and every one of those cases is refused at save time with a sentence naming it.
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

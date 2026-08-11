@@ -39,16 +39,16 @@ const PARAMETER_TYPES = [
 
 /** The rule kinds this build can execute, and what to call them.
  *
- * `delete_object` is missing on purpose: the schema stores it and the executor
- * refuses it loudly, so offering it here would be an editor that lets somebody
- * save an action which fails the first time it is clicked. It appears when it
- * executes.
+ * All five now (§138). `delete_object` was held back while the executor
+ * refused it, on the rule that an editor must not let somebody save an action
+ * which fails the first time it is clicked; it arrived here the day it ran.
  */
 const RULE_KINDS = [
   ["modify_object", "Set a property"],
   ["create_object", "Create an object"],
   ["create_link", "Link to an object"],
   ["delete_link", "Remove a link"],
+  ["delete_object", "Delete this object"],
 ];
 
 /** p.54–55's operators, named as Foundry names them. */
@@ -391,6 +391,13 @@ export function ActionDefinitionEditor({
                       </select>
                     </Field>
                   </>
+                )}
+
+                {r.kind === "delete_object" && (
+                  <p className="field-hint" style={{ marginBottom: 0 }}>
+                    Deletes the object the action was run against. An action cannot both
+                    change and delete the same object.
+                  </p>
                 )}
 
                 {(r.kind === "create_link" || r.kind === "delete_link") && (

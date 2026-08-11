@@ -543,6 +543,7 @@ def write_rows(
     updates: list[tuple[str, dict[str, Any]]],
     appends: list[dict[str, Any]],
     dest_path: str,
+    deletes: list[str] | None = None,
 ) -> tuple[list[ColumnSchema], int]:
     """Apply a set of row updates and row appends, and write **one** file.
 
@@ -621,6 +622,22 @@ def write_rows(
                         _clean(exc),
                     )
                     raise DatasetEngineError(f"could not add a row: {detail}") from exc
+
+            for primary_key_value in deletes or []:
+                (matched,) = con.execute(
+                    f"SELECT count(*) FROM t WHERE CAST({pk_col} AS VARCHAR) = ?",
+                    [primary_key_value],
+                ).fetchone()
+                if not matched:
+                    # Refused rather than treated as already-done: an action
+                    # that reports success for a row it could not find is one
+                    # nobody can tell from one that deleted something.
+                    raise DatasetEngineError(
+                        f"no row with {primary_key_column} = {primary_key_value!r} to delete"
+                    )
+                con.execute(
+                    f"DELETE FROM t WHERE CAST({pk_col} AS VARCHAR) = ?", [primary_key_value]
+                )
 
             described = con.execute("DESCRIBE t").fetchall()
             schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]

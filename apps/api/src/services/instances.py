@@ -139,6 +139,27 @@ async def delete_stale_instances(
     return result.rowcount or 0
 
 
+async def delete_instances(
+    conn: AsyncConnection, *, source_id: UUID, primary_keys: list[str]
+) -> int:
+    """Remove named instances of one source (§138).
+
+    By `(source_id, primary_key)` rather than by key alone, because that pair
+    *is* instance identity here - two sources feeding one object type can each
+    hold a "1".
+    """
+    if not primary_keys:
+        return 0
+    result = await conn.execute(
+        text(
+            "DELETE FROM object_instances WHERE source_id = :sid "
+            "AND primary_key = ANY(CAST(:keys AS text[]))"
+        ),
+        {"sid": str(source_id), "keys": [str(k) for k in primary_keys]},
+    )
+    return result.rowcount or 0
+
+
 async def list_for_type(
     conn: AsyncConnection, object_type_id: UUID, *, limit: int, offset: int
 ) -> tuple[list[dict[str, Any]], int]:

@@ -81,6 +81,10 @@ class InstanceStoreGateway(Protocol):
         self, *, search_prefix: str, source_id: UUID, synced_before: datetime
     ) -> int: ...
 
+    async def delete_instances(
+        self, *, search_prefix: str, source_id: UUID, primary_keys: list[str]
+    ) -> int: ...
+
     async def list_for_type(
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]: ...
@@ -409,6 +413,34 @@ class OpenSearchInstanceStore:
                         "filter": [
                             {"term": {"source_id": str(source_id)}},
                             {"range": {"updated_at": {"lt": synced_before.isoformat()}}},
+                        ]
+                    }
+                }
+            },
+            refresh=True,
+        )
+        return int(resp.get("deleted", 0))
+
+    async def delete_instances(
+        self, *, search_prefix: str, source_id: UUID, primary_keys: list[str]
+    ) -> int:
+        """Remove named instances (`delete_object`, §138).
+
+        Scoped by `source_id` as well as by key, because instance identity is
+        `(source_id, primary_key)` - two sources feeding one object type can
+        each hold a "1", and deleting a row from one dataset must not remove
+        the other's.
+        """
+        if not primary_keys:
+            return 0
+        resp = await self._client.delete_by_query(
+            index=_index_name(search_prefix),
+            body={
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"source_id": str(source_id)}},
+                            {"terms": {"primary_key": [str(k) for k in primary_keys]}},
                         ]
                     }
                 }
@@ -945,6 +977,15 @@ class PostgresInstanceStore:
 
         return await instances_service.delete_stale_instances(
             self._conn, source_id=source_id, synced_before=synced_before
+        )
+
+    async def delete_instances(
+        self, *, search_prefix: str, source_id: UUID, primary_keys: list[str]
+    ) -> int:
+        from . import instances as instances_service
+
+        return await instances_service.delete_instances(
+            self._conn, source_id=source_id, primary_keys=primary_keys
         )
 
     async def list_for_type(

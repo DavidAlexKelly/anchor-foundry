@@ -976,3 +976,116 @@ def test_deleting_a_link_clears_it(
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True, r.json()["error"]
     assert not r.json()["instance"]["properties"].get("status")
+
+
+# ---- delete_object (the last rule kind) ---------------------------------------
+def delete_action(client: TestClient, fx: Fixture, type_id: str) -> dict:
+    action = make_action(client, fx, type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "status", "display_name": "Status",
+                            "data_type": "string"}],
+            "rules": [{"kind": "delete_object", "config": {}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+    return action
+
+
+def test_deleting_an_object_removes_the_row_and_the_instance(
+    client: TestClient, fx: Fixture, ticket_type_id: str, dataset_of: str
+) -> None:
+    """The last of p.75's simple rules, and the only one that removes rather
+    than writes - so it is also the only one where the *index* has to be told
+    something the dataset already knows."""
+    # Its own row, created through an action, so nothing else in this file
+    # loses the instance it was using.
+    creator = with_create(client, fx, ticket_type_id)
+    key = str(uuid.uuid4().int % 9_000_000 + 1000)
+    victim = client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances", headers=hdr(fx.viewer_sub)
+    ).json()["items"][0]["id"]
+    client.post(
+        f"{abase(fx)}/{creator['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": victim, "values": {"status": "open", "new_key": key,
+                                                "new_status": "doomed"}},
+    )
+    created = next(
+        i for i in client.get(
+            f"{wbase(fx)}/object-types/{ticket_type_id}/instances", headers=hdr(fx.viewer_sub)
+        ).json()["items"] if i["primary_key"] == key
+    )
+
+    before = _versions(client, fx, dataset_of)
+    action = delete_action(client, fx, ticket_type_id)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": created["id"], "values": {}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+    assert _versions(client, fx, dataset_of) == before + 1
+
+    # Gone from the dataset...
+    rows = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/{dataset_of}/query",
+        headers=hdr(fx.viewer_sub),
+        json={"sql": "SELECT ticket_id FROM dataset"},
+    ).json()["rows"]
+    assert key not in {str(row[0]) for row in rows}
+    # ...and from the index, which is the half the dataset cannot do for itself.
+    keys = {
+        i["primary_key"] for i in client.get(
+            f"{wbase(fx)}/object-types/{ticket_type_id}/instances", headers=hdr(fx.viewer_sub)
+        ).json()["items"]
+    }
+    assert key not in keys
+
+
+def test_an_action_cannot_both_change_and_delete_the_same_object(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """Not two things in some order - a contradiction. The order they happen to
+    run in is not a specification, so it is refused where both rules are still
+    on screen."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "status", "display_name": "Status",
+                            "data_type": "string"}],
+            "rules": [
+                {"kind": "modify_object", "config": {"property": "status", "parameter": "status"}},
+                {"kind": "delete_object", "config": {}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "both change and delete" in r.text
+
+
+def test_deleting_somebody_elses_object_is_refused_at_save(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """Naming another object needs a lookup this build does not have - the same
+    missing piece that keeps `create_object` to one type."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "status", "display_name": "Status",
+                            "data_type": "string"}],
+            "rules": [{"kind": "delete_object", "config": {"object": "status"}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "run against" in r.text
