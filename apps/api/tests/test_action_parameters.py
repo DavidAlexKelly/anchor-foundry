@@ -1099,11 +1099,11 @@ def test_an_action_cannot_both_change_and_delete_the_same_object(
     assert "both change and delete" in r.text
 
 
-def test_deleting_somebody_elses_object_is_refused_at_save(
+def test_a_delete_rule_reading_something_that_is_not_a_parameter_is_refused(
     client: TestClient, fx: Fixture, ticket_type_id: str
 ) -> None:
-    """Naming another object needs a lookup this build does not have - the same
-    missing piece that keeps `create_object` to one type."""
+    """Deleting a *named* object is allowed (§140); naming it with something
+    that is not a parameter is not."""
     action = make_action(client, fx, ticket_type_id, ["status"])
     r = client.put(
         f"{wbase(fx)}/action-types/{action['id']}/definition",
@@ -1111,12 +1111,33 @@ def test_deleting_somebody_elses_object_is_refused_at_save(
         json={
             "parameters": [{"api_name": "status", "display_name": "Status",
                             "data_type": "string"}],
-            "rules": [{"kind": "delete_object", "config": {"object": "status"}}],
+            "rules": [{"kind": "delete_object", "config": {"object": "nonexistent"}}],
             "criteria": [],
         },
     )
     assert r.status_code == 422
-    assert "run against" in r.text
+    assert "not a parameter" in r.text
+
+
+def test_a_delete_rule_naming_a_type_but_no_object_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """An object type with no object names a *set*, and deleting a set is not
+    something p.75's simple rules express."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "status", "display_name": "Status",
+                            "data_type": "string"}],
+            "rules": [{"kind": "delete_object",
+                       "config": {"object_type": linked["team_type_id"]}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "which object" in r.text
 
 
 # ---- creating another type's object (§139) ------------------------------------
@@ -1266,3 +1287,113 @@ def test_a_failure_in_the_second_dataset_leaves_the_first_alone(
         headers=hdr(fx.viewer_sub),
     ).json()["properties"]["status"]
     assert after == status_before
+
+
+# ---- deleting an object a parameter names (§140) -------------------------------
+def test_an_action_can_delete_an_object_a_parameter_names(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, team_dataset: str, dataset_of: str,
+) -> None:
+    """**p.25's `object` parameter type, finally resolving to something.**
+
+    The action modifies the Ticket it was run against and deletes a *Team* a
+    parameter names - two objects, two datasets, one transaction. Changing one
+    object and deleting another is an ordinary two-object action rather than
+    the contradiction §138 refuses, and this is the test that says so.
+    """
+    creator = make_action(client, fx, ticket_type_id, ["status"])
+    client.put(
+        f"{wbase(fx)}/action-types/{creator['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "team_id", "display_name": "Team id", "data_type": "string"},
+                {"api_name": "team_code", "display_name": "Code", "data_type": "string"},
+            ],
+            "rules": [{"kind": "create_object",
+                       "config": {"object_type": linked["team_type_id"],
+                                  "primary_key": "team_id",
+                                  "properties": {"code": "team_code"}}}],
+            "criteria": [],
+        },
+    )
+    team_key = f"T{uuid.uuid4().hex[:6]}"
+    assert client.post(
+        f"{abase(fx)}/{creator['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"team_id": team_key, "team_code": "doomed"}},
+    ).status_code == 200
+    team = next(
+        t for t in client.get(
+            f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+            headers=hdr(fx.viewer_sub),
+        ).json()["items"] if t["primary_key"] == team_key
+    )
+
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "team", "display_name": "Team", "data_type": "object"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "delete_object",
+                 "config": {"object_type": linked["team_type_id"], "object": "team"}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    tickets_before = _versions(client, fx, dataset_of)
+    teams_before = _versions(client, fx, team_dataset)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "reassigned", "team": team["id"]}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+
+    assert _versions(client, fx, dataset_of) == tickets_before + 1
+    assert _versions(client, fx, team_dataset) == teams_before + 1
+    assert r.json()["instance"]["properties"]["status"] == "reassigned"
+    keys = {
+        t["primary_key"] for t in client.get(
+            f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+            headers=hdr(fx.viewer_sub),
+        ).json()["items"]
+    }
+    assert team_key not in keys
+
+
+def test_deleting_an_object_that_is_not_there_is_refused(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, team_dataset: str,
+) -> None:
+    """Success for an object nobody could find is indistinguishable from
+    success for one that was deleted."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [{"api_name": "team", "display_name": "Team", "data_type": "object"}],
+            "rules": [{"kind": "delete_object",
+                       "config": {"object_type": linked["team_type_id"], "object": "team"}}],
+            "criteria": [],
+        },
+    )
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"team": str(uuid.uuid4())}},
+    )
+    assert r.status_code == 404

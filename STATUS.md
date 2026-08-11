@@ -2854,6 +2854,21 @@ Four mutations, all red. **901 API tests** (was 898), 95 browser.
 Three mutations, all red. **904 API tests** (was 901).
 ---
 
+### 140. An `object` parameter that resolves, and one plan per dataset (this session)
+
+Migration 0044 gave parameters a type called `object` — p.25's "the object type parameter will take the value of a selected Ticket object" — and nothing had ever resolved one. A `delete_object` rule can now name an object through a parameter, which makes this the first action to act on an object it was not run against.
+
+**The refactor is the interesting half.** The write phase had grown a shape it could not keep: the acted-on dataset was special-cased and everything else was "the others". A rule deleting a row from the *same* dataset the subject lives in would then stage that dataset twice — and the second staging collides with the version the first one just claimed, which is §134's staleness refusal firing on our own writes. So the executor now builds **one plan entry per dataset**, and every rule contributes updates, appends or deletes to whichever entry its object belongs to. One file per dataset, one version per dataset, whatever the rules were.
+
+**Changing one object and deleting another is not §138's contradiction.** That refusal is about the *subject* — writing a property of a row and removing the same row. `deletes_the_subject` is now separate from `object_deletions` for exactly that reason, and the mutation that conflates them refuses a legitimate two-object action.
+
+**A named object that is not there is refused**, not skipped, for the reason §138 gives about rows: success for an object nobody could find is indistinguishable from success for one that was deleted.
+
+**I made the same mistake twice in one session, and the second time it cost less because of the first.** §139 records replacing a *slice* of a file computed between two markers, which swallowed a function. Editing the test file here, I did it again — the slice ran to end-of-file and took §139's fixtures with it. The suite said `fixture 'team_dataset' not found` within seconds, `git checkout` restored it, and the redo used a bounded slice with an explicit end marker. The lesson stands and is now written twice: **on a file this size, replace anchored text, not computed ranges.**
+
+Three mutations, all red. **907 API tests** (was 904), 95 browser.
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

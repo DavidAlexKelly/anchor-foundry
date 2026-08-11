@@ -171,15 +171,61 @@ def apply_rules(
     return writes
 
 
-def deletes_the_subject(rules: list[dict[str, Any]]) -> bool:
-    """Whether this action removes the object it was run against (p.75).
+def object_deletions(
+    bound: dict[str, Any], *, rules: list[dict[str, Any]], default_object_type_id: UUID
+) -> list[dict[str, Any]]:
+    """The objects this action removes (p.75).
 
-    A boolean rather than a list, because that is all a `delete_object` rule
-    can mean in this build: the object is the one the action was run against,
-    and deleting somebody *else's* object needs a way to name it - which is the
-    same missing lookup that keeps `create_object` to one type.
+    Two shapes, and the difference is which object is meant:
+
+      * `{}` - the object the action was run against, which is what every
+        `delete_object` rule meant before parameters could name another one;
+      * `{"object_type": <id>, "object": <parameter>}` - an object *named by a
+        parameter*, which is p.25's `object` parameter type finally resolving
+        to something.
+
+    Returns `{object_type_id, instance_id}` with `instance_id` None for the
+    subject, because the caller already knows which instance that is and
+    looking it up again would be a second answer to a settled question.
     """
-    return any(str(rule["kind"]) == "delete_object" for rule in rules)
+    deletions: list[dict[str, Any]] = []
+    for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
+        if str(rule["kind"]) != "delete_object":
+            continue
+        config = _json(rule.get("config")) or {}
+        parameter = str(config.get("object", ""))
+        if not parameter:
+            deletions.append(
+                {"object_type_id": str(default_object_type_id), "instance_id": None}
+            )
+            continue
+        named = bound.get(parameter)
+        if named is None or str(named).strip() == "":
+            # Supplied nothing: not a deletion of nothing, which would be an
+            # action reporting success for a row it never chose.
+            raise ValueError(
+                f"{parameter!r} names the object to delete and no value was supplied"
+            )
+        deletions.append({
+            "object_type_id": str(config.get("object_type") or default_object_type_id),
+            "instance_id": str(named),
+        })
+    return deletions
+
+
+def deletes_the_subject(rules: list[dict[str, Any]]) -> bool:
+    """Whether any `delete_object` rule means the object the action ran on.
+
+    Kept separate from `object_deletions` because the *contradiction* check -
+    an action cannot both change and delete the same object - is about the
+    subject only: changing one object and deleting another is an ordinary
+    two-object action, not a contradiction.
+    """
+    return any(
+        str(rule["kind"]) == "delete_object"
+        and not (_json(rule.get("config")) or {}).get("object")
+        for rule in rules
+    )
 
 
 def creation_targets(
@@ -985,9 +1031,22 @@ def _validate_definition(
                 )
             continue
         if kind == "delete_object":
-            if config.get("object"):
+            named = config.get("object")
+            if named and str(named) not in seen:
                 raise ValueError(
-                    "this build can only delete the object the action was run against"
+                    f"a delete_object rule reads {named!r}, which is not a parameter"
+                )
+            target = str(config.get("object_type") or object_type_id)
+            if named and target not in workspace_properties:
+                raise ValueError(
+                    "a delete_object rule names an object type this workspace does not have"
+                )
+            if config.get("object_type") and not named:
+                # An object type with no object names a *set*, and deleting a
+                # set is not something p.75's simple rules express.
+                raise ValueError(
+                    "a delete_object rule naming an object type also needs the parameter "
+                    "that says which object"
                 )
             continue
         if kind != "modify_object":
@@ -1003,7 +1062,7 @@ def _validate_definition(
             raise ValueError(f"a rule writes {prop!r}, which is not a property of this object type")
 
     kinds = {str(rule.get("kind", "")) for rule in rules}
-    if "delete_object" in kinds and kinds & {"modify_object", "create_link", "delete_link"}:
+    if deletes_the_subject(rules) and kinds & {"modify_object", "create_link", "delete_link"}:
         # Writing a property of a row and removing the row are not two things
         # that happen in some order - they are a contradiction, and the order
         # they happen to run in is not a specification. Refused where somebody

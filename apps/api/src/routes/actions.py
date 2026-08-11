@@ -370,7 +370,9 @@ async def execute_action(
             criteria=action_type["criteria"],
             user=await actions_service.criteria_user(conn, access.auth.user_id),
         )
-        deleting = actions_service.deletes_the_subject(action_type["rules"])
+        deletions = actions_service.object_deletions(
+            bound, rules=action_type["rules"], default_object_type_id=object_type_id
+        )
 
         # **One context per object type this action creates into.** A rule
         # creating another type's object has to be checked and coerced against
@@ -384,9 +386,13 @@ async def execute_action(
                 "mapped_properties": set(column_mappings.values()),
             }
         }
-        for target in actions_service.creation_targets(
+        needed = list(actions_service.creation_targets(
             action_type["rules"], default_object_type_id=object_type_id
-        ):
+        ))
+        for deletion in deletions:
+            if deletion["object_type_id"] not in needed:
+                needed.append(deletion["object_type_id"])
+        for target in needed:
             if target in contexts:
                 continue
             candidates = [
@@ -417,6 +423,39 @@ async def execute_action(
                 },
                 "mapped_properties": set(target_mappings.values()),
             }
+
+        # A named object has to be found before it can be removed: the rule
+        # supplies an instance id, and what a dataset needs is a primary key
+        # and the source it belongs to.
+        removals: list[dict[str, Any]] = []
+        for deletion in deletions:
+            if deletion["instance_id"] is None:
+                removals.append({
+                    "object_type_id": str(object_type_id),
+                    "source": dict(source),
+                    "primary_key": str(instance["primary_key"]),
+                })
+                continue
+            named = await instance_store.store_for(conn).get_instance(
+                search_prefix=prefix,
+                object_type_id=UUID(deletion["object_type_id"]),
+                instance_id=deletion["instance_id"],
+            )
+            if named is None:
+                # Refused rather than skipped: an action that reports success
+                # for an object it could not find is one nobody can tell from
+                # an action that deleted something.
+                raise NotFoundError("object to delete")
+            named_source = await ontology_service.get_source(
+                conn, access.project_id, UUID(str(named["source_id"]))
+            )
+            removals.append({
+                "object_type_id": deletion["object_type_id"],
+                "source": named_source,
+                "primary_key": str(named["primary_key"]),
+                "instance_id": deletion["instance_id"],
+            })
+            sources_by_type.setdefault(deletion["object_type_id"], named_source)
 
         creations = actions_service.object_creations(
             bound,
@@ -480,70 +519,68 @@ async def execute_action(
                 if creation["object_type_id"] == type_id
             ]
 
-        appended = rows_for(str(object_type_id))
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = os.path.join(tmp, "out.parquet")
-            schema, row_count = await anyio.to_thread.run_sync(
-                engine.write_rows,
-                local_path,
-                str(source["primary_key_column"]),
-                [(str(instance["primary_key"]), column_updates)] if column_updates else [],
-                appended,
-                dest,
-                [str(instance["primary_key"])] if deleting else [],
+        # **One entry per dataset, not per rule.** Two rules touching the same
+        # dataset - a modify and a delete of a different row, say - have to
+        # land in one file, or the second staging would collide with the
+        # version the first one just claimed.
+        plan: dict[str, dict[str, Any]] = {}
+
+        def entry(target_source: dict[str, Any]) -> dict[str, Any]:
+            return plan.setdefault(
+                str(target_source["dataset_id"]),
+                {"source": target_source, "updates": [], "appends": [], "deletes": []},
             )
-            with open(dest, "rb") as handle:
-                parquet_bytes = handle.read()
+
+        if column_updates:
+            entry(dict(source))["updates"].append(
+                (str(instance["primary_key"]), column_updates)
+            )
+        for type_id in sources_by_type:
+            rows = rows_for(type_id)
+            if rows:
+                entry(sources_by_type[type_id])["appends"].extend(rows)
+        for removal in removals:
+            entry(removal["source"])["deletes"].append(removal["primary_key"])
+
+        staged_all = []
         async with user_connection(access.auth.user_id) as conn:
-            staged = await dataset_service.stage_version(
-                conn,
-                storage,
-                dataset_id=UUID(str(source["dataset_id"])),
-                workspace_id=access.workspace_id,
-                parquet_bytes=parquet_bytes,
-                schema=schema,
-                row_count=row_count,
-                produced_by_kind="action",
-                produced_by_id=run_id,
-                created_by=access.auth.user_id,
-            )
-            staged_all = [staged]
-            # Every other type's rows, each into its own dataset, staged before
-            # anything is committed - decision 0008's boundary, and the first
-            # time an action puts two datasets inside it.
-            others = [t for t in sources_by_type if t != str(object_type_id)]
-            for target in others:
-                target_source = sources_by_type[target]
-                target_path = await anyio.to_thread.run_sync(
-                    storage.local_path, str(target_source["s3_location"])
+            for dataset_key, work in plan.items():
+                work_source = work["source"]
+                work_path = await anyio.to_thread.run_sync(
+                    storage.local_path, str(work_source["s3_location"])
                 )
                 with tempfile.TemporaryDirectory() as tmp:
-                    target_dest = os.path.join(tmp, "out.parquet")
-                    target_schema, target_rows = await anyio.to_thread.run_sync(
+                    dest = os.path.join(tmp, "out.parquet")
+                    work_schema, work_rows = await anyio.to_thread.run_sync(
                         engine.write_rows,
-                        target_path,
-                        str(target_source["primary_key_column"]),
-                        [],
-                        rows_for(target),
-                        target_dest,
+                        work_path,
+                        str(work_source["primary_key_column"]),
+                        work["updates"],
+                        work["appends"],
+                        dest,
+                        work["deletes"],
                     )
-                    with open(target_dest, "rb") as handle:
-                        target_bytes = handle.read()
+                    with open(dest, "rb") as handle:
+                        work_bytes = handle.read()
                 staged_all.append(
                     await dataset_service.stage_version(
                         conn, storage,
-                        dataset_id=UUID(str(target_source["dataset_id"])),
+                        dataset_id=UUID(dataset_key),
                         workspace_id=access.workspace_id,
-                        parquet_bytes=target_bytes,
-                        schema=target_schema,
-                        row_count=target_rows,
+                        parquet_bytes=work_bytes,
+                        schema=work_schema,
+                        row_count=work_rows,
                         produced_by_kind="action",
                         produced_by_id=run_id,
                         created_by=access.auth.user_id,
                     )
                 )
             committed = await dataset_service.commit_versions(conn, staged_all)
-            dataset_version = int(committed[str(source["dataset_id"])]["current_version"])
+            dataset_version = int(
+                committed.get(str(source["dataset_id"]), {"current_version": 0})[
+                    "current_version"
+                ]
+            ) or None
             if values:
                 await instance_store.store_for(conn).update_properties(
                     search_prefix=prefix,
@@ -551,17 +588,18 @@ async def execute_action(
                     instance_id=str(body.instance_id),
                     properties=values,
                 )
-            if deleting:
+            if removals:
                 # The dataset is the record and the index is a projection
                 # (decision 0008), so the row goes first and the projection
                 # follows. A failure here leaves a findable object whose row is
                 # gone - visible, wrong, and repairable by a re-sync; the
                 # reverse order would lose the object while the row survived.
-                await instance_store.store_for(conn).delete_instances(
-                    search_prefix=prefix,
-                    source_id=UUID(str(source["id"])),
-                    primary_keys=[str(instance["primary_key"])],
-                )
+                for removal in removals:
+                    await instance_store.store_for(conn).delete_instances(
+                        search_prefix=prefix,
+                        source_id=UUID(str(removal["source"]["id"])),
+                        primary_keys=[removal["primary_key"]],
+                    )
             if creations:
                 # The index is a projection (decision 0008) - the dataset above
                 # is the record. Upserted here so a created object is findable
