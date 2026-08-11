@@ -2691,6 +2691,24 @@ The second was in `test_widget_config_tabs.py` and is older than this work. Thre
 
 ---
 
+### 131. The action editor, and a test that was editing somebody else's action (this session)
+
+The last piece of decision 0007 a person could reach for and not find. The model (§127), the criteria (§128), the API (§129) and the form (§130) all landed first, so until this dialog existed the only way to declare a hidden parameter or a submission criterion was a `psql` prompt.
+
+One dialog on the Actions table, saved as **one document** — the three lists constrain each other, so there is no per-row save that could not pass through an invalid state. Parameters get a name, label, type, default, required and hidden; rules pick a property and the parameter that feeds it; criteria get a message, a parameter, one of p.54–55's operators and a value, where **leaving the value blank is p.55's "no value"** — the only way to say "must be filled in", and a different question from "equals the empty string".
+
+**Nothing is validated twice.** Every refusal lives on the server and the dialog shows what came back, including the one that names a Workshop module using a parameter the save would remove (§129). A browser-side copy of those rules would be a second implementation free to disagree with the one that actually decides whether a write happens. The dropdowns narrow what can be *said* — the parameters that exist, the properties the type has — because that is a convenience rather than a rule.
+
+**One real gap, found by the test rather than by thinking about it.** Renaming a parameter left the rules pointing at the old name, so every rename was refused for the wrong reason: "a rule reads 'status', which is not a parameter" — true, unhelpful, and about a row nobody touched. A rename now carries through the rules and criteria that name it. It deliberately does *not* rewrite a saved Workshop module: that refusal is the server's, and rewriting somebody else's app to make your rename go through is not something an editor should do quietly.
+
+**And a test that was editing a stranger's action.** The Actions table is workspace-wide, and the dev database has carried an action called "Close ticket" since August. Matching the row by display name picked *that* one, so both tests were driving a fixture from a previous session — which surfaced as a refusal naming a Workshop module this file had never created, and cost a detour through the usage scanner looking for a bug that was not there. The same trap §122 hit clicking the first of 2,219 accumulated objects. Rows are matched by `api_name` now.
+
+**Four mutations, and the fourth needed the test fixed rather than the code.** Storing a blank value as `{"value": ""}` instead of `{"kind": "none"}` passed, because the test never typed in that box and so never ran the handler that decides. It types a value and clears it now.
+
+**65 vitest, 89 browser** (was 87), `tsc` clean. Decision 0007 is built; what is left in `ontology.md` §5 is the rule kinds that write no property at all.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

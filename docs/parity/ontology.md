@@ -153,7 +153,7 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
 | **Rules** — the logic mapping parameters to edits | ◑ | §127 — `modify_object` executes; the other four kinds are storable and refused loudly (TOC §5) |
-| **Submission criteria** — conditions that must hold for submission | ◑ | §128, §129 — conditions over parameters and the current user, checked before the first write (p.49–56), editable through the API; no nesting, no UI |
+| **Submission criteria** — conditions that must hold for submission | ◑ | §128–§131 — conditions over parameters and the current user, checked before the first write (p.49–56), editable in the Ontology Manager; no nesting (p.56's all / any / none) |
 | **Validation** — e.g. only HR may perform this action | ◑ | §128 — this *is* submission criteria (p.140: "simple submission criteria can require a specific user ID or group ID"); a criterion can require a group |
 | Configure sections in the action form | ○ | TOC §24 |
 | Actions on interfaces / on structs | ○ | TOC §13–14 |
@@ -191,7 +191,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **The action form renders from parameters (§130)**: visible ones get a field, hidden ones are sent but not drawn (p.25), defaults and current values seed them (p.27), required blocks submission, and a refused submission shows the criterion's own failure message (p.56). It deliberately does *not* evaluate criteria itself to grey the button out in advance — that would be a second implementation of a rule governing writes, in another language, free to disagree with the first.
 
-**Still to build, in order:** the editor UI in the Ontology Manager (the API is there, §129); then the rule kinds that write no property at all. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**The editor is in the Ontology Manager (§131)** — one dialog per action, saved as one document, with the server's refusals shown rather than re-implemented in the browser.
+
+**Still to build:** the rule kinds that write no property at all, which need a transaction boundary our per-write dataset versioning does not yet have (§8). Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 

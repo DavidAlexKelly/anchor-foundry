@@ -11,6 +11,7 @@ import {
   objects as objApi,
   type PropertyInput,
 } from "@/lib/api";
+import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { Dialog, Field } from "@/components/dialog";
 import {
   EditObjectTypeDialog,
@@ -885,6 +886,7 @@ export default function ObjectsPage() {
   const [editingType, setEditingType] = useState<string | null>(null);
   const [creatingSource, setCreatingSource] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
+  const [definingAction, setDefiningAction] = useState<ActionType | null>(null);
   const queryClient = useQueryClient();
 
   const types = useQuery({
@@ -1103,7 +1105,7 @@ export default function ObjectsPage() {
           )}
           {actionTypes.data && actionTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>
-              <thead><tr><th>Action</th><th>Object type</th><th>Editable properties</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th>Action</th><th>Object type</th><th>Writes</th><th aria-label="Actions" /></tr></thead>
               <tbody>
                 {actionTypes.data.map((a: ActionType) => (
                   <tr key={a.id}>
@@ -1112,14 +1114,23 @@ export default function ObjectsPage() {
                     <td>{a.editable_properties.map((p) => <span key={p} className="chip" style={{ marginRight: 4 }}>{p}</span>)}</td>
                     <td>
                       {canEditOntology && (
-                        <button
-                          className="btn danger"
-                          style={{ padding: "3px 9px", fontSize: 12 }}
-                          disabled={removeAction.isPending}
-                          onClick={() => removeAction.mutate(a.id)}
-                        >
-                          Delete
-                        </button>
+                        <>
+                          <button
+                            className="btn quiet"
+                            style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
+                            onClick={() => setDefiningAction(a)}
+                          >
+                            Parameters
+                          </button>
+                          <button
+                            className="btn danger"
+                            style={{ padding: "3px 9px", fontSize: 12 }}
+                            disabled={removeAction.isPending}
+                            onClick={() => removeAction.mutate(a.id)}
+                          >
+                            Delete
+                          </button>
+                        </>
                       )}
                     </td>
                   </tr>
@@ -1185,6 +1196,13 @@ export default function ObjectsPage() {
           projectId={project.id}
           types={types.data}
           onClose={() => setCreatingSource(false)}
+        />
+      )}
+      {definingAction && workspace && (
+        <ActionDefinitionEditor
+          workspaceId={workspace.id}
+          action={definingAction}
+          onClose={() => setDefiningAction(null)}
         />
       )}
       {creatingAction && workspace && types.data && (

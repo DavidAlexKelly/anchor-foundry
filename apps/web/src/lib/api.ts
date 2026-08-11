@@ -887,6 +887,19 @@ export interface ActionTypeCreateInput {
   editable_properties: string[];
 }
 
+export interface ActionDefinitionInput {
+  parameters: {
+    api_name: string;
+    display_name: string;
+    data_type: string;
+    required?: boolean;
+    default_value?: unknown;
+    hidden?: boolean;
+  }[];
+  rules: { kind: string; config: Record<string, unknown> }[];
+  criteria: { message: string; config: Record<string, unknown> }[];
+}
+
 export const actions = {
   listTypes: (wid: string, objectTypeId?: string) =>
     request<import("./types").ActionType[]>(
@@ -899,6 +912,13 @@ export const actions = {
     }),
   removeType: (wid: string, actionTypeId: string) =>
     request<void>(`/workspaces/${wid}/action-types/${actionTypeId}`, { method: "DELETE" }),
+  /** Parameters, rules and criteria as one document (decision 0007). Whole
+   * document because they constrain each other - see the route. */
+  setDefinition: (wid: string, actionTypeId: string, input: ActionDefinitionInput) =>
+    request<import("./types").ActionType>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/definition`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
   execute: (
     wid: string,
     pid: string,
