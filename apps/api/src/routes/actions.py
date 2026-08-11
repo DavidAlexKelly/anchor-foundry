@@ -238,6 +238,80 @@ async def delete_action_type(
         )
 
 
+class ActionParameterIn(BaseModel):
+    api_name: str = Field(min_length=1, max_length=100, pattern="^[a-z][a-z0-9_]{0,99}$")
+    display_name: str = Field(min_length=1, max_length=200)
+    data_type: str = Field(min_length=1, max_length=40)
+    required: bool = False
+    default_value: Any | None = None
+    hidden: bool = False
+
+
+class ActionRuleIn(BaseModel):
+    kind: str = Field(min_length=1, max_length=40)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActionCriterionIn(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    config: dict[str, Any]
+
+
+class ActionDefinitionIn(BaseModel):
+    """The three lists as one document.
+
+    Whole-document rather than per-row because they constrain each other: a
+    rule names a parameter, a criterion names a parameter, so a per-row API
+    would have orderings in which every individually valid edit passes through
+    an invalid state. `order` is the position in the list - nothing carries a
+    sort order the caller has to keep consistent with anything else.
+    """
+
+    parameters: list[ActionParameterIn] = Field(default_factory=list, max_length=50)
+    rules: list[ActionRuleIn] = Field(default_factory=list, max_length=50)
+    criteria: list[ActionCriterionIn] = Field(default_factory=list, max_length=50)
+
+
+@router.put("/action-types/{action_type_id}/definition", response_model=ActionTypeOut)
+async def set_action_definition(
+    action_type_id: UUID,
+    body: ActionDefinitionIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ActionTypeOut:
+    """Edit an action's parameters, rules and criteria (decision 0007).
+
+    Workspace editor, the same floor as creating the action type: this changes
+    what an action *is*, not what it does to one project's data.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await actions_service.set_definition(
+            conn,
+            access.workspace_id,
+            action_type_id,
+            parameters=[p.model_dump() for p in body.parameters],
+            rules=[r.model_dump() for r in body.rules],
+            criteria=[c.model_dump() for c in body.criteria],
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="action_type.define",
+            resource_type="action_type",
+            resource_id=action_type_id,
+            workspace_id=access.workspace_id,
+            metadata={
+                "parameters": len(body.parameters),
+                "rules": len(body.rules),
+                "criteria": len(body.criteria),
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return _action_type_out(row)
+
+
 @router.get("/action-types/{action_type_id}/runs", response_model=list[ActionRunOut])
 async def action_runs(
     action_type_id: UUID,

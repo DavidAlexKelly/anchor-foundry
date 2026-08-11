@@ -624,3 +624,239 @@ async def list_runs(conn: AsyncConnection, action_type_id: UUID) -> list[dict[st
         """,
         {"atid": str(action_type_id)},
     )
+
+
+# ---- editing the definition ---------------------------------------------------
+_PARAMETER_TYPES = frozenset(
+    {"string", "integer", "float", "boolean", "date", "timestamp",
+     "geopoint", "json", "attachment", "object"}
+)
+_RULE_KINDS = frozenset(
+    {"modify_object", "create_object", "delete_object", "create_link", "delete_link"}
+)
+_USER_ATTRIBUTES = frozenset({"id", "group_ids"})
+
+
+async def parameter_usages(
+    conn: AsyncConnection, workspace_id: UUID, action_type_id: UUID
+) -> dict[str, list[str]]:
+    """Which Workshop modules name which of this action's parameters.
+
+    A saved `run_action` effect carries `{action, subject, values}` and the keys
+    of `values` are parameter names (§127: the conversion made them the same
+    words the old model used for properties). So renaming or removing a
+    parameter breaks every module that names it, silently, at click time.
+
+    §1.2a already refuses deleting a *variable* a layout uses, and this is the
+    same refusal one table over. Returns `{parameter: [module name, ...]}`, so
+    the message can say which module rather than only that one exists - the
+    person who has to fix it is usually not the person who typed the rename.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT ca.name, ca.definition
+          FROM canvas_apps ca
+         WHERE rls_project_workspace_id(ca.project_id) = :wid
+        """,
+        {"wid": str(workspace_id)},
+    )
+    target = str(action_type_id)
+    usages: dict[str, list[str]] = {}
+    for row in rows:
+        document = _json(row["definition"]) or {}
+        if not isinstance(document, dict):
+            continue
+        for event in (document.get("events") or {}).values():
+            if not isinstance(event, dict):
+                continue
+            # `{trigger, effects: [{type, config}]}` - an event is a trigger and
+            # a *list* of effects, so the action is two levels down. Reading
+            # `event["config"]` finds nothing and reports no usages, which is
+            # the shape of bug this refusal exists to prevent.
+            for effect in event.get("effects") or []:
+                if not isinstance(effect, dict) or str(effect.get("type", "")) != "run_action":
+                    continue
+                config = effect.get("config") or {}
+                if not isinstance(config, dict) or str(config.get("action", "")) != target:
+                    continue
+                for name in (config.get("values") or {}):
+                    modules = usages.setdefault(str(name), [])
+                    if str(row["name"]) not in modules:
+                        modules.append(str(row["name"]))
+    return usages
+
+
+def _validate_definition(
+    *,
+    parameters: list[dict[str, Any]],
+    rules: list[dict[str, Any]],
+    criteria: list[dict[str, Any]],
+    property_types: dict[str, str],
+) -> None:
+    """Refuse a definition that could not be executed, at save time.
+
+    Every check here has the same justification: the executor would refuse it
+    later, at click time, in front of somebody who did not write it. §1.2a made
+    that argument for Workshop variables and it is the same one.
+    """
+    seen: set[str] = set()
+    for parameter in parameters:
+        name = str(parameter.get("api_name", ""))
+        if not _API_NAME_RE.match(name):
+            raise ValueError(f"invalid parameter name {name!r}")
+        if name in seen:
+            raise ValueError(f"two parameters are both named {name!r}")
+        seen.add(name)
+        data_type = str(parameter.get("data_type", ""))
+        if data_type not in _PARAMETER_TYPES:
+            raise ValueError(f"parameter {name!r} has unknown type {data_type!r}")
+        if not str(parameter.get("display_name") or "").strip():
+            raise ValueError(f"parameter {name!r} needs a display name")
+
+    for rule in rules:
+        kind = str(rule.get("kind", ""))
+        if kind not in _RULE_KINDS:
+            raise ValueError(f"unknown rule kind {kind!r}")
+        config = rule.get("config") or {}
+        if kind != "modify_object":
+            # Storable, so the schema and the editor agree, and refused by
+            # `apply_rules` at execute time (§127). Refusing to *save* one
+            # would make the table a lie about what it holds.
+            continue
+        parameter = str(config.get("parameter", ""))
+        prop = str(config.get("property", ""))
+        if parameter not in seen:
+            raise ValueError(f"a rule reads {parameter!r}, which is not a parameter")
+        if prop not in property_types:
+            raise ValueError(f"a rule writes {prop!r}, which is not a property of this object type")
+
+    for criterion in criteria:
+        if not str(criterion.get("message") or "").strip():
+            # p.56: the failure message is what the blocked user is told. A
+            # criterion without one refuses in silence.
+            raise ValueError("every criterion needs a message saying why it refuses")
+        config = criterion.get("config") or {}
+        operator = str(config.get("operator", ""))
+        if operator not in CRITERION_OPERATORS:
+            raise ValueError(f"unknown criterion operator {operator!r}")
+        for side in ("left", "right"):
+            spec = config.get(side) or {}
+            kind = str(spec.get("kind", ""))
+            if kind == "parameter" and str(spec.get("parameter", "")) not in seen:
+                raise ValueError(
+                    f"a criterion reads {spec.get('parameter')!r}, which is not a parameter"
+                )
+            elif kind == "current_user" and str(spec.get("attribute", "id")) not in _USER_ATTRIBUTES:
+                raise ValueError(
+                    f"a criterion reads the current user's {spec.get('attribute')!r}, "
+                    "which this build cannot answer"
+                )
+            elif kind not in ("parameter", "current_user", "value", "none"):
+                raise ValueError(f"a criterion has an unknown {side} side {kind!r}")
+
+
+async def set_definition(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    action_type_id: UUID,
+    *,
+    parameters: list[dict[str, Any]],
+    rules: list[dict[str, Any]],
+    criteria: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Replace an action type's parameters, rules and criteria as one document.
+
+    **Whole-document, not per-row.** The three lists constrain each other - a
+    rule names a parameter, a criterion names a parameter - so a per-row API
+    would have an ordering in which every sequence of individually valid edits
+    passes through an invalid state. Saving the module document (decision 0002)
+    is the same shape for the same reason.
+    """
+    from . import ontology as ontology_service
+
+    action_type = await get_action_type(conn, workspace_id, action_type_id)
+    object_type_id = UUID(str(action_type["object_type_id"]))
+    property_types = {
+        p["api_name"]: p["data_type"]
+        for p in await ontology_service.list_properties(conn, object_type_id)
+    }
+    _validate_definition(
+        parameters=parameters, rules=rules, criteria=criteria, property_types=property_types
+    )
+
+    # **The refusal decision 0007 names.** Checked against what is *going*, not
+    # what is arriving: a parameter that survives under a new name is, to every
+    # saved module, a parameter that vanished.
+    surviving = {str(p["api_name"]) for p in parameters}
+    going = {str(p["api_name"]) for p in action_type["parameters"]} - surviving
+    if going:
+        usages = await parameter_usages(conn, workspace_id, action_type_id)
+        broken = sorted((name, usages[name]) for name in going if name in usages)
+        if broken:
+            detail = "; ".join(
+                f"{name!r} is used by {', '.join(repr(m) for m in modules)}"
+                for name, modules in broken
+            )
+            raise ConflictError(
+                f"this action's parameters are in use by a Workshop module: {detail}. "
+                "Change the module first, or keep the parameter's name."
+            )
+
+    for table in ("action_parameters", "action_rules", "action_criteria"):
+        await conn.execute(
+            text(f"DELETE FROM {table} WHERE action_type_id = :aid"),
+            {"aid": str(action_type_id)},
+        )
+    for order, parameter in enumerate(parameters):
+        await conn.execute(
+            text(
+                """
+                INSERT INTO action_parameters
+                    (action_type_id, api_name, display_name, data_type, required,
+                     default_value, hidden, sort_order)
+                VALUES (:aid, :api, :name, CAST(:dtype AS action_parameter_type), :required,
+                        CAST(:default AS jsonb), :hidden, :ord)
+                """
+            ),
+            {
+                "aid": str(action_type_id),
+                "api": parameter["api_name"],
+                "name": parameter["display_name"],
+                "dtype": parameter["data_type"],
+                "required": bool(parameter.get("required", False)),
+                "default": (
+                    None if parameter.get("default_value") is None
+                    else json.dumps(parameter["default_value"])
+                ),
+                "hidden": bool(parameter.get("hidden", False)),
+                "ord": order,
+            },
+        )
+    for order, rule in enumerate(rules):
+        await conn.execute(
+            text(
+                """
+                INSERT INTO action_rules (action_type_id, kind, config, sort_order)
+                VALUES (:aid, CAST(:kind AS action_rule_kind), CAST(:config AS jsonb), :ord)
+                """
+            ),
+            {
+                "aid": str(action_type_id), "kind": rule["kind"],
+                "config": json.dumps(rule.get("config") or {}), "ord": order,
+            },
+        )
+    for order, criterion in enumerate(criteria):
+        await conn.execute(
+            text(
+                """
+                INSERT INTO action_criteria (action_type_id, message, config, sort_order)
+                VALUES (:aid, :message, CAST(:config AS jsonb), :ord)
+                """
+            ),
+            {
+                "aid": str(action_type_id), "message": criterion["message"],
+                "config": json.dumps(criterion.get("config") or {}), "ord": order,
+            },
+        )
+    return await get_action_type(conn, workspace_id, action_type_id)

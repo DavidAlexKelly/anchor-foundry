@@ -1,6 +1,6 @@
 # 0007 — Action parameters and rules
 
-**Status:** decided; the model is **built** in migration 0044 (`STATUS.md` §127) and submission criteria in 0045 (§128). The editors and the parameter-driven form are not.
+**Status:** decided; the model is **built** in migration 0044 (`STATUS.md` §127), submission criteria in 0045 (§128), and the editing API in §129. The editor UI and the parameter-driven form are not.
 **Parity item:** `docs/parity/ontology.md` §5, and the one it says to do first.
 **Source:** `docs/pal/foundry_action-types.pdf` (174 pp). Citations are `(p.25)`.
 
@@ -82,7 +82,7 @@ Per the repo standard, each of these must be made to fail by removing the thing 
 - ◑ **A hidden parameter is not in the form and is still applied.** Both halves, one test — a hidden parameter that silently did nothing would pass a form check. — the *applied* half is checked; the form half arrives with the form.
 - ✅ **A failed criterion refuses the action and names the criterion.** Mutation: skip the check, and the write goes through. — `tests/test_action_criteria.py`; eleven mutations checked, two of which found tests that could not fail (the `is_less_than` boundary, and emptiness written as falsiness).
 - ✅ **A criterion is checked before the first rule runs.** Assert no dataset version is created by a refused action — "refused" and "refused after writing half of it" look the same from the caller. — and no `action_runs` row either, since the check precedes opening one.
-- ○ **Renaming a parameter a Workshop module calls is refused**, naming the module. — needs the editor; nothing can rename one yet.
+- ✅ **Renaming a parameter a Workshop module calls is refused**, naming the module. — §129, and the mutation that removes the refusal goes red. Checked against what is *going* rather than what is arriving, because a parameter that survives under a new name is, to every saved module, a parameter that vanished.
 
 ## The alternative that was rejected
 

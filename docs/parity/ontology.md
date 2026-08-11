@@ -148,12 +148,12 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Edit **multiple objects in one transaction** | ○ | |
 | **Create and delete objects** | ○ | |
 | **Create and delete links** | ○ | the Assign Employee example creates an Employee→Manager link |
-| **Parameters** — typed user inputs with their own form | ◑ | §127 — the model is built and executes; there is no editor and the form still renders one input per writable property |
-| Parameter default values | ◑ | §127 — applied on execute (p.27); nothing can set one yet but the database |
+| **Parameters** — typed user inputs with their own form | ◑ | §127, §129 — the model executes and is editable through the API; the *form* still renders one input per writable property |
+| Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
 | **Rules** — the logic mapping parameters to edits | ◑ | §127 — `modify_object` executes; the other four kinds are storable and refused loudly (TOC §5) |
-| **Submission criteria** — conditions that must hold for submission | ◑ | §128 — conditions over parameters and the current user, all of them checked before the first write (p.49–56); no nesting, no editor |
+| **Submission criteria** — conditions that must hold for submission | ◑ | §128, §129 — conditions over parameters and the current user, checked before the first write (p.49–56), editable through the API; no nesting, no UI |
 | **Validation** — e.g. only HR may perform this action | ◑ | §128 — this *is* submission criteria (p.140: "simple submission criteria can require a specific user ID or group ID"); a criterion can require a group |
 | Configure sections in the action form | ○ | TOC §24 |
 | Actions on interfaces / on structs | ○ | TOC §13–14 |
@@ -187,7 +187,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **Submission criteria are built (§128).** Migration 0045 stores one condition per row with its own failure message (p.56); every row must pass (p.50), and the check runs before the run is even opened, so a refused action leaves no dataset version and no history. The operator names are Foundry's own (p.54–55), including "no value" for emptiness. A condition the executor cannot decide **fails** — p.52's warning about NOT conditions is that a check which passes for want of an attribute grants more access than intended.
 
-**Still to build, in order:** the parameter and criteria editors, which must refuse renaming a parameter a Workshop module calls; the action form, rendering one input per *visible* parameter and greying out submission against the criteria it can now read; then the rule kinds that write no property at all. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**The definition is editable through the API (§129)** — `PUT /action-types/{id}/definition` replaces parameters, rules and criteria as one document, validated as a unit, and **refuses removing or renaming a parameter a Workshop module calls**, naming the module. That was decision 0007's last named acceptance test, and it is the reason a whole-document endpoint rather than per-row ones: the three lists constrain each other.
+
+**Still to build, in order:** the editor UI in the Ontology Manager; the action form, rendering one input per *visible* parameter and greying out submission against the criteria it can now read; then the rule kinds that write no property at all. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 

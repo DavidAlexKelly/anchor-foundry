@@ -2653,6 +2653,24 @@ Foundry, `action-types` p.49–50: "Submission criteria (formerly known as valid
 
 ---
 
+### 129. Editing an action's definition, and the rename it refuses (this session)
+
+Decision 0007's last named acceptance test, and the thing that made §127 and §128 reachable by anything other than a `psql` prompt: `PUT /workspaces/{id}/action-types/{id}/definition`.
+
+**Whole-document, not per-row.** The three lists constrain each other — a rule names a parameter, a criterion names a parameter — so a per-row API would have orderings in which every individually valid edit passes through an invalid state. Saving a Workshop module (decision 0002) is the same shape for the same reason. Position in the list *is* the sort order, so nothing carries a number the caller has to keep consistent with anything else.
+
+**What it refuses at save time**, all with one justification: the executor would refuse it later, at click time, in front of somebody who did not write it. A rule reading a name that is not a parameter; a rule writing something that is not a property of the object type; a criterion with no failure message (p.56 — a criterion that refuses in silence is the problem the message exists to solve); a criterion reading a user attribute this build cannot answer. That last one is refused at *save* as well as at execute, because §128's fail-closed rule would otherwise produce an action that always refuses and never says why until somebody reads the code.
+
+**The refusal decision 0007 named.** A saved `run_action` effect names parameters in its `values`, so renaming or removing one breaks every module that names it — silently, at click time. `set_definition` compares what is *going* against what is arriving (a parameter that survives under a new name is, to a saved module, a parameter that vanished), scans the workspace's modules, and refuses with both the parameter and the module names. §1.2a already refuses deleting a Workshop variable in use; this is the same refusal one table over.
+
+**One bug, and it was mine reading the document at the wrong depth.** An event is `{trigger, effects: [{type, config}]}` — a trigger and a *list* of effects — and my first scanner read `event["config"]`, which exists on no event. It found nothing, reported no usages, and let every rename through. The test caught it immediately because the test asserted the refusal rather than the scan; a test written the other way round would have agreed with the bug.
+
+Nine mutations, all red, including the two that matter: remove the refusal, and remove the `DELETE` that makes a save a replace rather than a merge.
+
+**880 API tests** (was 872). Next: the editor UI, then the action form rendering one input per *visible* parameter.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog
