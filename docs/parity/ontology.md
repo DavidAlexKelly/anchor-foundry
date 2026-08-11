@@ -191,7 +191,7 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **The action form renders from parameters (§130)**: visible ones get a field, hidden ones are sent but not drawn (p.25), defaults and current values seed them (p.27), required blocks submission, and a refused submission shows the criterion's own failure message (p.56). It deliberately does *not* evaluate criteria itself to grey the button out in advance — that would be a second implementation of a rule governing writes, in another language, free to disagree with the first.
 
-**The editor is in the Ontology Manager (§131)** — one dialog per action, saved as one document, with the server's refusals shown rather than re-implemented in the browser.
+**The editor is in the Ontology Manager (§131, §137)** — one dialog per action, saved as one document, with the server's refusals shown rather than re-implemented in the browser. It offers the four rule kinds that execute; `delete_object` appears when it does.
 
 **Still to build:** the rule kinds that write no property at all — `create_object`, `delete_object`, `create_link`, `delete_link` (p.75's "simple rules"). They are blocked on a transaction boundary rather than on effort, and that blocker is now **settled in `docs/decisions/0008-one-transaction-per-action.md` (§133)**: stage every write, commit them in one Postgres transaction, one dataset version per dataset per action, and treat the search index as a projection that is repaired rather than transacted. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
