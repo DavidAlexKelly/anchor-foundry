@@ -2730,6 +2730,26 @@ Five kinds, and they are not interchangeable — which is the whole reason this 
 
 ---
 
+### 133. One transaction per action, decided rather than half-built (this session)
+
+Decision 0007 ended by naming its own blocker: the rule kinds that write no property — `create_object`, `create_link` and the rest of p.75's "simple rules" — need something this build does not have. `docs/decisions/0008-one-transaction-per-action.md` settles what that is.
+
+**The problem in one sentence: an action can be half-applied, and nothing notices.** Foundry is unambiguous — "an action is a **single transaction** that changes the properties of one or more objects" (p.2), and "all edits are applied **atomically** at the end of the action call" (p.84). Ours is not one transaction. `add_version` puts a Parquet object in storage and then bumps `datasets.current_version`, once per write, and the search index is updated separately.
+
+Today the blast radius is small, and it is worth being precise about *why*, because it is not a property of the design: §127's executor collects every rule's writes into one `{property: value}` dict and applies them as one row rewrite. That is a single write, not a transaction — a different thing that happens to look the same while there is one rule kind and one object. Every remaining rule kind is a *second* write, and two writes today means two dataset versions and a failure that can land between them.
+
+**The decision, in three parts.** `add_version` splits into `stage_version` (writes the Parquet object, returns a pending record) and `commit_versions` (inserts every `dataset_versions` row and updates every `datasets` row in one Postgres transaction). One version per dataset per action, not per write. And the instance store is **repaired, not transacted** — OpenSearch has no transactions, so writing to it inside the Postgres transaction would only move the failure rather than remove it.
+
+The ordering is the whole argument: the slow, non-transactional, discardable part happens first, and the cheap atomic part happens last. A staged-but-uncommitted Parquet object is garbage in a bucket that no `datasets` row points at, so no reader can see it. The reverse order would need a distributed transaction to be correct.
+
+**The consequence is stated rather than buried:** for a window after a partly-failed action, the Object Explorer can show stale values while the dataset is correct. That is detectable and repairable by a re-sync, on a path that already exists. A half-written dataset is neither.
+
+**The alternative rejected:** keep versioning per write and add a compensating undo. No schema change, and wrong where it matters — the compensation is itself a write that can fail, the history fills with pairs of versions that have to be read as one, and a reader between them sees a state that never existed. A compensating write is what you build when you cannot have a transaction; all our metadata is in one Postgres database, so we can have one.
+
+Nothing is built, and the document says so at the top.
+
+---
+
 ## What's not started
 
 - **Code** — all four items are done (§45–§47). What is left in the pillar is optional and named rather than assumed: the git *mirror* to a remote the customer owns (§45's extension point — a git server is explicitly not on the list), and branch-to-environment mapping, which §47 declined because this platform has neither branches nor environments and inventing both to satisfy a phrase would be the tail wagging the dog

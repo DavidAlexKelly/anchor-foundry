@@ -193,7 +193,7 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **The editor is in the Ontology Manager (§131)** — one dialog per action, saved as one document, with the server's refusals shown rather than re-implemented in the browser.
 
-**Still to build:** the rule kinds that write no property at all, which need a transaction boundary our per-write dataset versioning does not yet have (§8). Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**Still to build:** the rule kinds that write no property at all — `create_object`, `delete_object`, `create_link`, `delete_link` (p.75's "simple rules"). They are blocked on a transaction boundary rather than on effort, and that blocker is now **settled in `docs/decisions/0008-one-transaction-per-action.md` (§133)**: stage every write, commit them in one Postgres transaction, one dataset version per dataset per action, and treat the search index as a projection that is repaired rather than transacted. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 
