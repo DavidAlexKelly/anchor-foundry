@@ -373,6 +373,11 @@ async def execute_action(
         deletions = actions_service.object_deletions(
             bound, rules=action_type["rules"], default_object_type_id=object_type_id
         )
+        # Read once and handed to everything that needs it: a far-side link
+        # rule names the object type it writes *through its link type*, so the
+        # lookup that resolves the named instance needs this as much as the
+        # one that coerces the value.
+        link_types = await actions_service.link_types_for(conn, access.workspace_id)
 
         # **A named object is looked up before it is written**, and its own
         # source decides which columns exist - two instances of one type can
@@ -383,7 +388,10 @@ async def execute_action(
         modification_contexts: dict[tuple[str, str], dict[str, Any]] = {}
         modification_rows: dict[tuple[str, str], dict[str, Any]] = {}
         for target in actions_service.modification_targets(
-            bound, rules=action_type["rules"], default_object_type_id=object_type_id
+            bound,
+            rules=action_type["rules"],
+            default_object_type_id=object_type_id,
+            link_types=link_types,
         ):
             key = (target["object_type_id"], target["instance_id"])
             named = await instance_store.store_for(conn).get_instance(
@@ -501,18 +509,30 @@ async def execute_action(
             contexts=contexts,
             default_object_type_id=object_type_id,
         )
-        modifications = actions_service.object_modifications(
-            bound,
-            rules=action_type["rules"],
-            contexts=modification_contexts,
-            default_object_type_id=object_type_id,
-        )
         values = actions_service.apply_rules(
             bound,
             rules=action_type["rules"],
             property_types=property_types,
             mapped_properties=set(column_mappings.values()),
-            link_types=await actions_service.link_types_for(conn, access.workspace_id),
+            link_types=link_types,
+        )
+        modifications = actions_service.object_modifications(
+            bound,
+            rules=action_type["rules"],
+            contexts=modification_contexts,
+            default_object_type_id=object_type_id,
+            link_types=link_types,
+            # A far-side link points the other object at *this* one, so the
+            # value it writes comes from the subject rather than from any
+            # parameter - **as this action leaves it**, which is why `values`
+            # is computed first and laid over the stored properties. An action
+            # that changes the property a link joins on and links on it in the
+            # same submit would otherwise write the old value and create a link
+            # that does not hold the moment the action finishes.
+            subject={
+                "primary_key": str(instance["primary_key"]),
+                "properties": {**_parse_json(instance["properties"]), **values},
+            },
         )
         run_id = await actions_service.open_run(
             conn,

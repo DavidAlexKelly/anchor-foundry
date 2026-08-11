@@ -147,7 +147,7 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Edit property values on one object | ✅ | |
 | Edit **multiple objects in one transaction** | ✅ | §134–§141 — an action can change, create and delete several objects of several types, across as many datasets, in one transaction (decision 0008) |
 | **Create and delete objects** | ✅ | §135, §138–§141 — create any type with a dataset in this project, delete or change the object the action ran on *or* one a parameter names, all in one transaction (decision 0008) |
-| **Create and delete links** | ◑ | §136 — a link here *is* the join property (migration 0027), so a link rule writes or clears it. Many-to-many, and setting a link from the far side, are refused with a sentence |
+| **Create and delete links** | ◑ | §136, §142 — a link here *is* the join property (migration 0027), so a link rule writes or clears it, from either end: the far side names the other object through a parameter and writes *its* join property. Many-to-many is refused with a sentence |
 | **Parameters** — typed user inputs with their own form | ✅ | §127, §129, §130 — the model executes, is editable through the API, and the form renders one input per *visible* parameter (p.25) |
 | Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
@@ -199,7 +199,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **Naming a second object is built (§140, §141)** — a parameter of type `object` holds an instance, and a `delete_object` or `modify_object` rule can name one. A named modify is checked against *the type it changes* and written into *the source that instance came from*, because two instances of one type can come from two sources with different column mappings; changing an object and deleting the same one is refused at save time, and changing one and deleting another is not.
 
-What is left of §5 is linking two named objects from the far side, refused at save time with a sentence rather than half-applied, and the editor UI for naming objects at all: §139–§141 are API-only, so the dialog still offers the subject-only shapes. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**Both ends of a link can be named (§142).** A link rule written from the side that holds no foreign key names the other object through a parameter and writes *its* join property with this object's `to_property` — as this action leaves it, so an action that changes the joined-on property and links on it in the same submit does not create a link that stops holding the moment it finishes. `delete_link` clears the same column.
+
+What is left of §5 is the editor UI for naming objects at all: §139–§142 are API-only, so the definition dialog still offers the subject-only shapes. Many-to-many links stay refused — one foreign key cannot express one, and this platform has no join table to put the second half in. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 
