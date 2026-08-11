@@ -1,6 +1,6 @@
 # 0007 — Action parameters and rules
 
-**Status:** decided, not built.
+**Status:** decided; the model is **built** in migration 0044 (`STATUS.md` §127). Submission criteria, the parameter editor and the parameter-driven form are not.
 **Parity item:** `docs/parity/ontology.md` §5, and the one it says to do first.
 **Source:** `docs/pal/foundry_action-types.pdf` (174 pp). Citations are `(p.25)`.
 
@@ -76,11 +76,11 @@ Criteria are conditions over parameter values, evaluated server-side before the 
 
 Per the repo standard, each of these must be made to fail by removing the thing it tests:
 
-- **The conversion changes nothing.** Take an existing action type, run the migration, execute it with the same payload, and assert the same property values land. Mutation: convert to the wrong property, and it goes red.
-- **A hidden parameter is not in the form and is still applied.** Both halves, one test — a hidden parameter that silently did nothing would pass a form check.
-- **A failed criterion refuses the action and names the criterion.** Mutation: skip the check, and the write goes through.
-- **A criterion is checked before the first rule runs.** Assert no dataset version is created by a refused action — "refused" and "refused after writing half of it" look the same from the caller.
-- **Renaming a parameter a Workshop module calls is refused**, naming the module.
+- ✅ **The conversion changes nothing.** Take an existing action type, run the migration, execute it with the same payload, and assert the same property values land. Mutation: convert to the wrong property, and it goes red. — `tests/test_action_conversion.py` builds a database at 0043, seeds a legacy action type and migrates the rest of the way; five mutations of the migration's own SQL were checked.
+- ◑ **A hidden parameter is not in the form and is still applied.** Both halves, one test — a hidden parameter that silently did nothing would pass a form check. — the *applied* half is checked; the form half arrives with the form.
+- ○ **A failed criterion refuses the action and names the criterion.** Mutation: skip the check, and the write goes through.
+- ○ **A criterion is checked before the first rule runs.** Assert no dataset version is created by a refused action — "refused" and "refused after writing half of it" look the same from the caller.
+- ○ **Renaming a parameter a Workshop module calls is refused**, naming the module. — needs the editor; nothing can rename one yet.
 
 ## The alternative that was rejected
 

@@ -436,17 +436,23 @@ async def type_impact(
                 "blocking": True,
             })
 
+    # One row per property an action writes, which after migration 0044 is a
+    # `modify_object` rule rather than a name in a jsonb column. Read here
+    # rather than through `actions_service` to keep the impact report one
+    # query - it already runs several, and this is the same question asked of
+    # a different table.
     actions = await fetch_all(
         conn,
-        "SELECT id, display_name, editable_properties FROM action_types "
-        "WHERE object_type_id = :tid",
+        """
+        SELECT at.id, at.display_name, r.config->>'property' AS property
+          FROM action_types at
+          JOIN action_rules r ON r.action_type_id = at.id AND r.kind = 'modify_object'
+         WHERE at.object_type_id = :tid
+        """,
         {"tid": str(type_id)},
     )
     for action in actions:
-        editable = action["editable_properties"]
-        if isinstance(editable, str):
-            editable = json.loads(editable)
-        for prop in editable or []:
+        for prop in [action["property"]] if action["property"] else []:
             change = changes.get(str(prop))
             if change is None:
                 continue

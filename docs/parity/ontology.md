@@ -138,7 +138,7 @@ Per-side display names and self-links are both small and both currently impossib
 
 > "An action is a single transaction that changes the properties of one or more objects, based on a user-defined logic… An action type is the definition of a set of changes or edits to objects, property values, and links that a user can take at once. **It also includes the side effect behaviors that occur with action submission.**" (p.2)
 
-Ours: declarative edits to editable properties, run from a Workshop `run_action` effect.
+Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect. Migration 0044 split what used to be one list of property names into the inputs and what is done with them.
 
 ### 5.1 Core
 
@@ -148,11 +148,11 @@ Ours: declarative edits to editable properties, run from a Workshop `run_action`
 | Edit **multiple objects in one transaction** | ○ | |
 | **Create and delete objects** | ○ | |
 | **Create and delete links** | ○ | the Assign Employee example creates an Employee→Manager link |
-| **Parameters** — typed user inputs with their own form | ◑ | we have editable properties, not a parameter model |
-| Parameter default values | ○ | TOC §7 |
+| **Parameters** — typed user inputs with their own form | ◑ | §127 — the model is built and executes; there is no editor and the form still renders one input per writable property |
+| Parameter default values | ◑ | §127 — applied on execute (p.27); nothing can set one yet but the database |
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
-| **Rules** — the logic mapping parameters to edits | ○ | TOC §5 |
+| **Rules** — the logic mapping parameters to edits | ◑ | §127 — `modify_object` executes; the other four kinds are storable and refused loudly (TOC §5) |
 | **Submission criteria** — conditions that must hold for submission | ○ | TOC §12 |
 | **Validation** — e.g. only HR may perform this action | ○ | |
 | Configure sections in the action form | ○ | TOC §24 |
@@ -181,7 +181,11 @@ Ours: declarative edits to editable properties, run from a Workshop `run_action`
 
 The parameter-and-rules model is the big one. Ours conflates "what the user types" with "what gets written"; Foundry separates them, and everything else in this section — validation, submission criteria, defaults, dropdown filtering — hangs off that separation. **Do parameters and rules before any of the features that depend on them.**
 
-**Settled in `docs/decisions/0007-action-parameters-and-rules.md` (`STATUS.md` §124), not yet built.** Three tables replacing one JSON column; rules as a small closed vocabulary rather than an expression language, because p.75 answers the hard cases with functions and those are `[fn]`; submission criteria checked before the first write. The conversion from `editable_properties` is mechanical and total, and names each parameter after the property it writes — which is what keeps every saved Workshop `run_action` working unchanged.
+**Decided in `docs/decisions/0007-action-parameters-and-rules.md` (§124); the model is built (§127).** Migration 0044 replaced the JSON column with `action_parameters` and `action_rules`, converting every existing action type into parameters named after the properties it wrote plus one `modify_object` rule each — which is what keeps every saved Workshop `run_action` working unchanged, and is tested by running the migration for real against a database seeded at 0043.
+
+Executing an action is now two steps: bind the parameters (defaults, required, unknown names refused), then apply the rules. `hidden` and `default_value` are honoured; the other four rule kinds are storable and refused loudly rather than skipped.
+
+**Still to build, in order:** submission criteria (p.9, p.13 — a condition over inputs, checked before the first write); the parameter editor, which must refuse renaming a parameter a Workshop module calls; the action form rendering one input per *visible* parameter; then the rule kinds that write no property at all.
 
 ---
 
