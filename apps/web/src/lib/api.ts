@@ -800,6 +800,25 @@ export const objects = {
     ),
   removeType: (wid: string, typeId: string) =>
     request<void>(`/workspaces/${wid}/object-types/${typeId}`, { method: "DELETE" }),
+  /** The configured Object View for a type, or null when it has none — which
+   * is the ordinary answer, not an error (`object-views` p.2). */
+  getView: (wid: string, typeId: string, formFactor = "full") =>
+    request<import("./types").ObjectView | null>(
+      `/workspaces/${wid}/object-types/${typeId}/view?form_factor=${formFactor}`,
+    ),
+  setView: (
+    wid: string, typeId: string,
+    input: { canvas_app_id: string; subject_variable: string; form_factor?: string },
+  ) =>
+    request<import("./types").ObjectView>(
+      `/workspaces/${wid}/object-types/${typeId}/view`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  clearView: (wid: string, typeId: string, formFactor = "full") =>
+    request<void>(
+      `/workspaces/${wid}/object-types/${typeId}/view?form_factor=${formFactor}`,
+      { method: "DELETE" },
+    ),
   listLinkTypes: (wid: string) =>
     request<import("./types").LinkType[]>(`/workspaces/${wid}/link-types`),
   createLinkType: (wid: string, input: LinkTypeCreateInput) =>

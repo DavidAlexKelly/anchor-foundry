@@ -38,6 +38,7 @@ from ..services import datasets as dataset_service
 from ..lib.errors import NotFoundError
 from ..services import instance_store
 from ..services import object_sets
+from ..services import object_views as object_views_service
 from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
@@ -482,6 +483,113 @@ async def delete_object_type(
             resource_type="object_type",
             resource_id=type_id,
             workspace_id=access.workspace_id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+
+# ---- configured Object Views (`object-views` p.2-4) --------------------------
+class ObjectViewOut(BaseModel):
+    """Which Workshop module stands in for this object type's standard view."""
+
+    id: UUID
+    object_type_id: UUID
+    canvas_app_id: UUID
+    canvas_app_name: str
+    form_factor: str
+    subject_variable: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ObjectViewIn(BaseModel):
+    canvas_app_id: UUID
+    subject_variable: str = Field(min_length=1, max_length=200)
+    form_factor: str = Field(default="full", max_length=16)
+
+
+@router.get("/object-types/{type_id}/view", response_model=ObjectViewOut | None)
+async def get_object_view(
+    type_id: UUID,
+    form_factor: str = Query(default="full", max_length=16),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ObjectViewOut | None:
+    """**Null, not 404, when there is none.** Every object screen asks this on
+    the way to rendering something, and "this type has no configured view" is
+    the ordinary answer rather than a mistake - p.10's standard view is what
+    happens next."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        row = await object_views_service.get_view(
+            conn, access.workspace_id, type_id, form_factor=form_factor
+        )
+    return ObjectViewOut(**row) if row else None
+
+
+@router.put("/object-types/{type_id}/view", response_model=ObjectViewOut)
+async def set_object_view(
+    type_id: UUID,
+    body: ObjectViewIn,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectViewOut:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        row = await object_views_service.set_view(
+            conn,
+            access.workspace_id,
+            type_id,
+            canvas_app_id=body.canvas_app_id,
+            subject_variable=body.subject_variable,
+            form_factor=body.form_factor,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_view.set",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={
+                "canvas_app_id": str(body.canvas_app_id),
+                "form_factor": body.form_factor,
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ObjectViewOut(**row)
+
+
+@router.delete(
+    "/object-types/{type_id}/view",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def clear_object_view(
+    type_id: UUID,
+    request: Request,
+    form_factor: str = Query(default="full", max_length=16),
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> None:
+    """Stop using a module as this type's view. The module is untouched - what
+    goes is the pointer, and what comes back is the standard view, which never
+    went anywhere (p.2)."""
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        await object_views_service.clear_view(
+            conn, access.workspace_id, type_id, form_factor=form_factor
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_view.clear",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"form_factor": form_factor},
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )

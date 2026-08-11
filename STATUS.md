@@ -2917,6 +2917,30 @@ Four mutations, all red. **921 API tests** (was 914), 95 browser. Still API-only
 **A link rule asks a different question at each end.** From the side that holds the join property: which object to point at (`target`). From the other side: which object to link (`object`), with the value coming from this object. Changing the link type clears both, because the answer to the old question is refused for a reason no longer on screen. The mutation that always shows the near-side field is red.
 
 Four mutations, all red. **921 API tests**, **100 browser tests** (was 95).
+
+---
+
+### 144. Configured Object Views (this session)
+
+`docs/parity/README.md` calls Object Views "the highest value per unit of work in the whole parity set", and the reason is in Foundry's own sentence: configured views are "fully customizable representations of an object **built using Workshop**" (`object-views` p.2). We have that engine, so the work was not building a view - it was deciding what a view *is*.
+
+**A view is a pointer, not a document.** `object_type_views` (migration 0046) stores which module stands in for which object type, in which form factor, and which of the module's variables receives the object. Everything else a view needs - layout, variables, events, versions, publishing, revert, the changelog - is the module's, and a configured view that re-declared any of it would have been a second Workshop with one feature. Version management for configured views is ✅ in §4.2 for that reason and not because anything was built for it.
+
+**The binding is one variable, and it is checked at save time.** A standard view is generated from the object type and takes no input; a configured one is a module, and a module takes input through its variables. `subject_variable` names the `single_object` variable that receives the object, validated against that module's own document - the same place and for the same reason an action rule's property is checked against its object type.
+
+**Four refusals, each a screen somebody would otherwise reach before finding out**: an unknown form factor, a module this workspace cannot see, an **unpublished** module, and a subject variable that is not a `single_object` one. The unpublished refusal is the interesting one: an object view is read by whoever can read the object, and an unpublished module is readable only inside its own project - allowing it would configure a view that renders for its author and 404s for everybody else, which nobody reports as a permission problem.
+
+**Nothing stored can hide the standard view.** p.2: standard views "remain accessible even after a configured Object View is built". That is a rule about the reader, so it is enforced by there being nothing that could express the opposite - no replace flag, no delete of the generated view - and by a control on the view itself that goes both ways.
+
+**Reading the module reuses the published path.** A configured view renders through `published-canvas-apps`, the same workspace-wide, permission-checked read a published app uses. No new access path: an object view's audience is exactly the audience publishing already describes, and a second way to reach the same document would be a second thing to get wrong. A view that will not load falls back to the standard one with a sentence rather than showing an error where an object should be.
+
+**The panel form factor is stored, not rendered.** p.4's Panel exists to be embedded and there is nothing here to embed it in yet; it is a separately addressable row so the two never collide, which the test asserts by setting both and clearing one.
+
+Five mutations, all red - including the browser one that matters: seeding the subject variable with the primary key rather than the whole object. The fixture module reads `region` through an `object_property` derivation, so a view that renders without the object goes red rather than drawing an empty card, which a text widget with the answer typed into it would not have caught.
+
+**One locator was ambiguous and Playwright said so rather than guessing.** The Ontology Manager mentions an object type in two tables - the types and the dataset mappings under them - so matching a row by name alone resolved to two. Filtered by the button the types table has instead, which is the same "match on what makes this row the one you mean" lesson §137 recorded about matching actions by `api_name`.
+
+**934 API tests** (was 921), **106 browser tests** (was 100).
 ---
 
 ## What's not started

@@ -39,7 +39,7 @@ Ours has `json`, which Foundry does not — Foundry's equivalent is Struct, whic
 | Feature | Status | Source |
 |---|---|---|
 | Display name, description, API name | ✅ | |
-| **Visibility** — normal, prominent, hidden | ✅ | (`object-link-types` p.111); drives standard Object View layout (`object-views` p.10) — **the view itself is still ○, see §4.1** |
+| **Visibility** — normal, prominent, hidden | ✅ | (`object-link-types` p.111); drives standard Object View layout (`object-views` p.10) |
 | **Value formatting** | ○ | `object-link-types` TOC §11 |
 | **Conditional formatting** | ✅ | §83 |
 | **Required properties** | ○ | TOC §15 |
@@ -91,7 +91,7 @@ Per-side display names and self-links are both small and both currently impossib
 | Search across object types | ✅ | §63 |
 | Filter by property | ✅ | |
 | Link traversal | ✅ | §18 |
-| Open an instance into its Object View | ○ | §4 |
+| Open an instance into its Object View | ✅ | §122, §144 — the generated view, or a configured module if the type has one |
 | **Favourite an individual object** — star next to its title, added to the sidebar | ○ | `getting-started` p.34 |
 | Direct object edit from the Explorer | ○ | `ontology-manager` p.32 lists it as a write source |
 | Save and share a search | ○ | |
@@ -121,16 +121,18 @@ Per-side display names and self-links are both small and both currently impossib
 
 | Feature | Status | Notes |
 |---|---|---|
-| Built in Workshop, becomes the default view once created | ○ | (p.2) |
-| **Users can always switch back to the standard view** | ○ | standard views "remain accessible even after a configured Object View is built" (p.2) |
-| **Full** form factor — comprehensive | ○ | (p.3) |
-| **Panel** form factor — for embedding in other applications, focused on critical data | ○ | (p.4) |
-| Version management for configured views | ○ | TOC §4 |
+| Built in Workshop, becomes the default view once created | ✅ | §144 — a published module is nominated in the Ontology Manager and stands in for the generated view. The object arrives in the module's `single_object` variable, which is the whole binding |
+| **Users can always switch back to the standard view** | ✅ | §144 — a control on the view itself, and there is no setting that could express the opposite: nothing is stored that hides the generated view |
+| **Full** form factor — comprehensive | ✅ | (p.3) |
+| **Panel** form factor — for embedding in other applications, focused on critical data | ◑ | (p.4) — stored and separately addressable (db 0046), so the two never collide; nothing embeds one yet, which is the half that is missing |
+| Version management for configured views | ✅ | the module's own — a view is a *pointer* at a module, so publishing, versions, revert and the changelog are all the ones §120 and §71 built |
 | Branching object views | ○ | TOC §6 — out of scope, tracks Global Branching |
 | Generate Object View URLs | ○ | TOC §20 |
 | Comment on objects | ○ | TOC §21 |
 
 **Build order.** Standard views first — they are generated, they need no builder UI, and they immediately make every object type navigable. Configured views second, reusing the Workshop runtime bound to a single object. The panel form factor last, since it exists to be embedded and there is nothing to embed it in yet.
+
+**Configured views are built (§144), and the reason they were cheap is that they are a pointer.** `object_type_views` stores which module stands in for which type and which of its variables receives the object; everything a view needs beyond that — layout, variables, events, versions, publishing, changelog — is the module's, already built. Four refusals at save time keep a view from being configured that nobody could open: an unknown form factor, a module this workspace cannot see, an **unpublished** module (an object view is read by whoever can read the object), and a `subject_variable` that is not a `single_object` variable of that module.
 
 ---
 
@@ -232,7 +234,7 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 3. ~~**Link type per-side display names and self-links**~~ — **done (`STATUS.md` §123)**, less the one test named above. Self-links turned out to already work; only the naming was missing.
 4. **Action parameters and rules.** The structural change everything in §5 depends on. **Designed — decision 0007 — and next to build.**
 5. **Time series and media reference property types.** Both unlock Workshop widgets; both need a storage decision first.
-6. **Configured Object Views**, reusing the Workshop runtime.
+6. ~~**Configured Object Views**, reusing the Workshop runtime~~ — **done (`STATUS.md` §144)**. A pointer at a published module plus the one variable that receives the object; the panel form factor is stored and separately addressable, and waits for something to embed it in.
 7. **Struct property type**, then Workshop struct variables.
 8. **Ontology Manager search, filters, and the indexing-issue column.**
 9. Shared properties, value types, interfaces, derived properties.
@@ -245,7 +247,7 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 - **Property visibility** — a hidden property is absent from the standard Object View and from the Object Explorer's columns. Mutation: mark it normal, and both change. **Note on the original wording**: this said "the Object Table column picker", and there is no picker — the Workshop Object Table takes a typed `columns` string. The Explorer's derived columns are the equivalent surface and are what the test drives.
 - **Standard Object Views** — an object type with a prominent time series property renders a chart, not a table cell; with a prominent geopoint, a map. Remove the prominent flag and it falls back to the table.
 - **Linked objects** — an instance with two link types shows two groups; expanding one previews properties without navigation.
-- **Configured views** — creating one makes it the default; the standard view is still reachable.
+- **Configured views** — creating one makes it the default; the standard view is still reachable. **Met (§144)**, in `e2e/test_configured_object_view.py`: the module renders in place of the generated view, the object reaches it through `object_property` on the subject variable (so a module that renders without the object goes red), and the switch works both ways.
 - **Link sides** — a self-link between Employee and Employee renders both directions with distinct names.
 - **Action parameters** — an action with a parameter whose submission criteria fail is **refused**, and the refusal names the criterion. Mutation: remove the criterion check, and the test goes red.
 - **Action transactions** — an action editing two objects where the second edit fails leaves **neither** applied.
