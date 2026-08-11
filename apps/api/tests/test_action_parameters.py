@@ -291,24 +291,28 @@ def test_a_hidden_parameter_is_marked_hidden_and_still_applied(
     assert r.json()["instance"]["properties"]["status"] == "escalated"
 
 
-def test_a_rule_kind_this_build_cannot_apply_is_refused_not_ignored(
+def test_a_rule_the_executor_cannot_place_is_refused_not_ignored(
     client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str
 ) -> None:
-    """The schema admits five rule kinds and the executor implements one.
+    """**All five rule kinds execute now (§138), so the thing that can still be
+    unplaceable is a target rather than a kind**: a `create_object` naming an
+    object type with no dataset mapped in this project has nowhere to put the
+    row.
 
     A skipped rule would report success for an action that did half of what it
-    says - the failure mode worth refusing loudly, since the day `create_object`
-    lands is the day somebody saves one against this executor.
+    says, which is the failure mode this refusal exists for - and the reason
+    this test outlived the restriction it was written against.
     """
     action = make_action(client, fx, ticket_type_id, ["status"])
-    _add_rule(action["id"], "create_object", '{"object_type": "whatever"}')
+    _add_rule(action["id"], "create_object",
+              '{"object_type": "whatever", "primary_key": "status"}')
     r = client.post(
         f"{abase(fx)}/{action['id']}/execute",
         headers=hdr(fx.editor_sub),
         json={"instance_id": instance_id, "values": {"status": "closed"}},
     )
     assert r.status_code == 422
-    assert "create_object" in r.text
+    assert "no dataset mapped in this project" in r.text
 
 
 def test_a_rule_writing_an_unmapped_property_is_still_refused(
@@ -682,12 +686,11 @@ def test_the_created_object_is_findable_immediately(
     assert created[0]["properties"]["status"] == "queued"
 
 
-def test_a_create_rule_naming_another_object_type_is_refused_at_save(
+def test_a_create_rule_naming_an_object_type_the_workspace_lacks_is_refused(
     client: TestClient, fx: Fixture, ticket_type_id: str
 ) -> None:
-    """Storable in the schema, unbuildable here: creating an object of another
-    type needs that type's source resolved in this project. Named at save time
-    rather than accepted and silently ignored at execute time."""
+    """Creating *another* type's object is allowed (§139); creating a type
+    nobody has is not, and the two are told apart at save time."""
     action = make_action(client, fx, ticket_type_id, ["status"])
     r = client.put(
         f"{wbase(fx)}/action-types/{action['id']}/definition",
@@ -703,7 +706,32 @@ def test_a_create_rule_naming_another_object_type_is_refused_at_save(
         },
     )
     assert r.status_code == 422
-    assert "own object type" in r.text
+    assert "does not have" in r.text
+
+
+def test_a_create_rule_is_checked_against_the_type_it_creates(
+    client: TestClient, fx: Fixture, ticket_type_id: str, linked: dict
+) -> None:
+    """`status` is a Ticket property and not a Team one. A validator that
+    checked against the action's own type would accept this and produce a row
+    with a column the Team dataset has never heard of."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+            ],
+            "rules": [{"kind": "create_object",
+                       "config": {"object_type": linked["team_type_id"],
+                                  "primary_key": "status",
+                                  "properties": {"status": "status"}}}],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 422
+    assert "the object type it creates" in r.text
 
 
 def test_a_create_rule_setting_something_that_is_not_a_property_is_refused(
@@ -1089,3 +1117,152 @@ def test_deleting_somebody_elses_object_is_refused_at_save(
     )
     assert r.status_code == 422
     assert "run against" in r.text
+
+
+# ---- creating another type's object (§139) ------------------------------------
+@pytest.fixture(scope="module")
+def team_dataset(client: TestClient, fx: Fixture, linked: dict) -> str:
+    """A dataset behind the Team type, so a Ticket action can create Teams.
+
+    This is the lookup §135 and §136 kept refusing for: a type with a source in
+    *this project* is a type an action can write into.
+    """
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub),
+        data={"name": f"ParamTeams {fx.tag}"},
+        files={"file": ("teams.csv", io.BytesIO(b"team_id,code\nT1,alpha\n"), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.editor_sub),
+        json={
+            "object_type_id": linked["team_type_id"],
+            "dataset_id": dataset_id,
+            "primary_key_column": "team_id",
+            "column_mappings": {"code": "code"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources/{r.json()['id']}/sync",
+        headers=hdr(fx.editor_sub),
+    )
+    return dataset_id
+
+
+def test_an_action_can_create_another_types_object(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, team_dataset: str, dataset_of: str,
+) -> None:
+    """**Two datasets in one action**, which is what decision 0008's
+    `commit_versions` was built for and nothing had exercised: the Ticket is
+    modified and a Team is created, each in its own dataset, both committed
+    together."""
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "team_id", "display_name": "Team id", "data_type": "string"},
+                {"api_name": "team_code", "display_name": "Team code", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "create_object",
+                 "config": {"object_type": linked["team_type_id"], "primary_key": "team_id",
+                            "properties": {"code": "team_code"}}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    tickets_before = _versions(client, fx, dataset_of)
+    teams_before = _versions(client, fx, team_dataset)
+    team_id = f"T{uuid.uuid4().hex[:6]}"
+
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "assigned", "team_id": team_id, "team_code": "gamma"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True, r.json()["error"]
+
+    # One new version of each dataset - not two of one and none of the other.
+    assert _versions(client, fx, dataset_of) == tickets_before + 1
+    assert _versions(client, fx, team_dataset) == teams_before + 1
+
+    # And the Team exists as an object, in its own type.
+    teams = client.get(
+        f"{wbase(fx)}/object-types/{linked['team_type_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    ).json()["items"]
+    created = [t for t in teams if t["primary_key"] == team_id]
+    assert len(created) == 1, [t["primary_key"] for t in teams]
+    assert created[0]["properties"]["code"] == "gamma"
+
+
+def test_a_failure_in_the_second_dataset_leaves_the_first_alone(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str,
+    linked: dict, team_dataset: str, dataset_of: str,
+) -> None:
+    """**Decision 0008's acceptance test, across two datasets** - the case
+    `commit_versions` exists for and that nothing could reach until an action
+    could write twice.
+
+    The Team key already exists, so the second write refuses. The Ticket's
+    dataset must be untouched: not one version applied and an error returned.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "status", "display_name": "Status", "data_type": "string"},
+                {"api_name": "team_id", "display_name": "Team id", "data_type": "string"},
+                {"api_name": "team_code", "display_name": "Team code", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+                {"kind": "create_object",
+                 "config": {"object_type": linked["team_type_id"], "primary_key": "team_id",
+                            "properties": {"code": "team_code"}}},
+            ],
+            "criteria": [],
+        },
+    )
+    tickets_before = _versions(client, fx, dataset_of)
+    teams_before = _versions(client, fx, team_dataset)
+    status_before = client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances/{instance_id}",
+        headers=hdr(fx.viewer_sub),
+    ).json()["properties"]["status"]
+
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              # T1 is the row the Team dataset was seeded with.
+              "values": {"status": "should-not-land", "team_id": "T1", "team_code": "x"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
+    assert "already exists" in r.json()["error"]
+
+    assert _versions(client, fx, dataset_of) == tickets_before
+    assert _versions(client, fx, team_dataset) == teams_before
+    after = client.get(
+        f"{wbase(fx)}/object-types/{ticket_type_id}/instances/{instance_id}",
+        headers=hdr(fx.viewer_sub),
+    ).json()["properties"]["status"]
+    assert after == status_before
