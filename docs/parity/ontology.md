@@ -145,8 +145,8 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Feature | Status | Notes |
 |---|---|---|
 | Edit property values on one object | ✅ | |
-| Edit **multiple objects in one transaction** | ◑ | §134–§140 — an action can change one object and delete another, across two datasets, in one transaction; *modifying* a second object is the remaining shape |
-| **Create and delete objects** | ✅ | §135, §138, §139 — create any type with a dataset in this project, delete the object the action ran on, all in one transaction (decision 0008) |
+| Edit **multiple objects in one transaction** | ✅ | §134–§141 — an action can change, create and delete several objects of several types, across as many datasets, in one transaction (decision 0008) |
+| **Create and delete objects** | ✅ | §135, §138–§141 — create any type with a dataset in this project, delete or change the object the action ran on *or* one a parameter names, all in one transaction (decision 0008) |
 | **Create and delete links** | ◑ | §136 — a link here *is* the join property (migration 0027), so a link rule writes or clears it. Many-to-many, and setting a link from the far side, are refused with a sentence |
 | **Parameters** — typed user inputs with their own form | ✅ | §127, §129, §130 — the model executes, is editable through the API, and the form renders one input per *visible* parameter (p.25) |
 | Parameter default values | ✅ | §127, §129 — applied on execute (p.27) and settable through the definition endpoint |
@@ -197,7 +197,9 @@ Executing an action is now two steps: bind the parameters (defaults, required, u
 
 **The lookup is built (§139).** A `create_object` rule can name any object type with a dataset mapped in this project; the row goes into *that* dataset, and both datasets commit together or not at all — which is the case decision 0008's `commit_versions` was written for and nothing had exercised until now.
 
-**Naming a second object is built (§140)** — a parameter of type `object` holds an instance, and a `delete_object` rule can name one. What is left is the other two shapes of the same idea: *modifying* a named object, and linking two named objects from the far side. Both are refused at save time with a sentence rather than half-applied. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
+**Naming a second object is built (§140, §141)** — a parameter of type `object` holds an instance, and a `delete_object` or `modify_object` rule can name one. A named modify is checked against *the type it changes* and written into *the source that instance came from*, because two instances of one type can come from two sources with different column mappings; changing an object and deleting the same one is refused at save time, and changing one and deleting another is not.
+
+What is left of §5 is linking two named objects from the far side, refused at save time with a sentence rather than half-applied, and the editor UI for naming objects at all: §139–§141 are API-only, so the dialog still offers the subject-only shapes. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 
