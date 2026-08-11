@@ -130,6 +130,172 @@ def apply_rules(
     return writes
 
 
+class CriteriaRefusal(ValueError):
+    """An action that may not be submitted, and the message saying why.
+
+    Its own type because the caller has to tell it apart from a bad request:
+    p.56's failure message "informs the user about why they are blocked", and
+    surfacing "'status' is not a parameter of this action" in its place would
+    be telling them about our schema instead of their situation.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+# p.54 and p.55's operator names, unchanged. A builder reading Foundry's table
+# should find the same words here.
+_SINGLE_VALUE_OPERATORS = frozenset(
+    {"is", "is_not", "matches", "is_less_than", "is_greater_than_or_equals"}
+)
+_LIST_OPERATORS = frozenset({"includes", "is_included_in"})
+CRITERION_OPERATORS = _SINGLE_VALUE_OPERATORS | _LIST_OPERATORS
+
+
+def _side(spec: Any, *, bound: dict[str, Any], user: dict[str, Any]) -> Any:
+    """One side of a comparison: a parameter, the current user, or a constant.
+
+    p.50's two condition templates ("based on current user", "based on
+    parameter") plus p.55's static value, which is the right-hand side of most
+    real conditions.
+    """
+    spec = _json(spec) or {}
+    kind = str(spec.get("kind", ""))
+    if kind == "parameter":
+        return bound.get(str(spec.get("parameter", "")))
+    if kind == "current_user":
+        # p.140: "Simple submission criteria can require a specific user ID or
+        # group ID". Those are the two attributes we actually hold; a criterion
+        # asking for any other one is unevaluable, and unevaluable fails.
+        attribute = str(spec.get("attribute", "id"))
+        if attribute not in ("id", "group_ids"):
+            raise _Unevaluable(f"unknown current-user attribute {attribute!r}")
+        return user.get(attribute)
+    if kind == "value":
+        return spec.get("value")
+    if kind == "none":
+        return None
+    raise _Unevaluable(f"unknown condition side {kind!r}")
+
+
+class _Unevaluable(Exception):
+    """A condition that cannot be decided - a missing operator, a comparison
+    between things that do not compare. Never a pass: see `_passes`."""
+
+
+def _passes(condition: dict[str, Any], *, bound: dict[str, Any], user: dict[str, Any]) -> bool:
+    left = _side(condition.get("left"), bound=bound, user=user)
+    right_spec = _json(condition.get("right")) or {}
+    operator = str(condition.get("operator", ""))
+
+    # p.55: "No value checks whether the first value is empty (or null)." It is
+    # a property of the *right* side rather than an operator of its own, which
+    # is why `is` against no value reads as "is empty" and `is_not` as "is not
+    # empty".
+    if str(right_spec.get("kind", "")) == "none":
+        empty = left is None or left == "" or left == [] or left == {}
+        if operator == "is":
+            return empty
+        if operator == "is_not":
+            return not empty
+        raise _Unevaluable(f"{operator!r} cannot be used against no value")
+
+    right = _side(right_spec, bound=bound, user=user)
+    if operator not in CRITERION_OPERATORS:
+        raise _Unevaluable(f"unknown operator {operator!r}")
+
+    if operator == "is":
+        return left == right
+    if operator == "is_not":
+        return left != right
+    if operator == "matches":
+        # p.54's regex operator. A pattern that does not compile is a
+        # misconfiguration, and a misconfiguration must not grant access.
+        import re as _re
+
+        if not isinstance(left, str) or not isinstance(right, str):
+            raise _Unevaluable("`matches` compares a string against a pattern")
+        try:
+            return _re.search(right, left) is not None
+        except _re.error as exc:
+            raise _Unevaluable(f"invalid pattern: {exc}") from exc
+    if operator in ("is_less_than", "is_greater_than_or_equals"):
+        # Numbers only, deliberately. Dates arrive as ISO-8601 text whose
+        # ordering is lexicographic *only* when the offsets match, and a
+        # comparison that is right in London and wrong in New York is worse
+        # than one that refuses - especially in a check whose whole job is to
+        # decide whether somebody may write.
+        if isinstance(left, bool) or isinstance(right, bool):
+            raise _Unevaluable("a boolean has no ordering")
+        if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+            raise _Unevaluable("only numbers can be ordered by this build")
+        return left < right if operator == "is_less_than" else left >= right
+    if operator == "includes":
+        # p.55: "At least one of the left values exactly matches the right
+        # value." The left side is the list.
+        if not isinstance(left, (list, tuple)):
+            raise _Unevaluable("`includes` needs a list on the left")
+        return right in left
+    # is_included_in - p.55, the same check with the sides swapped.
+    if not isinstance(right, (list, tuple)):
+        raise _Unevaluable("`is_included_in` needs a list on the right")
+    return left in right
+
+
+def check_criteria(
+    bound: dict[str, Any],
+    *,
+    criteria: list[dict[str, Any]],
+    user: dict[str, Any],
+) -> None:
+    """Refuse the action unless every criterion holds (p.49-50).
+
+    > "Actions can only be submitted if all the submission criteria are met."
+
+    **Every row must pass, and an unevaluable criterion fails.** A condition
+    the executor cannot decide - an operator it does not know, a comparison
+    between things that do not compare - is a misconfiguration, and a
+    misconfiguration in a check that governs *who may write* has exactly one
+    safe direction. p.52 makes the same argument about NOT conditions against
+    group membership: a condition that passes because an attribute is missing
+    "grant[s] more access than intended".
+
+    Raises `CriteriaRefusal` carrying the criterion's own failure message
+    (p.56), which is the whole point of storing one.
+    """
+    for criterion in sorted(criteria, key=lambda c: (c.get("sort_order") or 0)):
+        condition = _json(criterion.get("config")) or {}
+        message = str(criterion.get("message") or "this action cannot be submitted")
+        try:
+            ok = _passes(condition, bound=bound, user=user)
+        except _Unevaluable as exc:
+            raise CriteriaRefusal(f"{message} (this criterion could not be checked: {exc})")
+        if not ok:
+            raise CriteriaRefusal(message)
+
+
+async def criteria_user(conn: AsyncConnection, user_id: UUID) -> dict[str, Any]:
+    """The submitting user, as a criterion can ask about them (p.140).
+
+    Two attributes, because two are what Foundry's "simple submission criteria"
+    need and two are what we can answer honestly: the user's id, and the ids of
+    the groups they belong to. Foundry's other multipass attributes
+    (organisation, arbitrary markings) have no equivalent here, and
+    `_side` refuses one rather than returning an empty list - a criterion that
+    passed because we could not check it is p.52's exact warning.
+
+    Group membership is read here rather than taken from the request, so a
+    criterion cannot be satisfied by a client claiming a group.
+    """
+    rows = await fetch_all(
+        conn,
+        "SELECT group_id FROM group_members WHERE user_id = :uid",
+        {"uid": str(user_id)},
+    )
+    return {"id": str(user_id), "group_ids": [str(r["group_id"]) for r in rows]}
+
+
 def _json(value: Any) -> Any:
     """psycopg hands jsonb back as a decoded object; some fetch paths hand back
     the text. Both shapes reach here."""
@@ -200,19 +366,43 @@ async def _rules_for(
     return grouped
 
 
+async def _criteria_for(
+    conn: AsyncConnection, action_type_ids: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    if not action_type_ids:
+        return {}
+    rows = await fetch_all(
+        conn,
+        "SELECT id, action_type_id, message, config, sort_order FROM action_criteria "
+        "WHERE action_type_id = ANY(CAST(:ids AS uuid[])) ORDER BY sort_order",
+        {"ids": action_type_ids},
+    )
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["action_type_id"]), []).append(dict(row))
+    return grouped
+
+
 async def _with_definition(
     conn: AsyncConnection, rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """An action type is not usable without its parameters and rules, so they
-    are never a separate fetch a caller could forget to make."""
+    """An action type is not usable without its parameters, rules and criteria,
+    so they are never a separate fetch a caller could forget to make.
+
+    Criteria especially: a caller that forgot the parameters would get an
+    action that refuses everything, and one that forgot the criteria would get
+    an action that permits everything.
+    """
     ids = [str(r["id"]) for r in rows]
     parameters = await _parameters_for(conn, ids)
     rules = await _rules_for(conn, ids)
+    criteria = await _criteria_for(conn, ids)
     return [
         {
             **row,
             "parameters": parameters.get(str(row["id"]), []),
             "rules": rules.get(str(row["id"]), []),
+            "criteria": criteria.get(str(row["id"]), []),
         }
         for row in rows
     ]

@@ -1,6 +1,6 @@
 # 0007 — Action parameters and rules
 
-**Status:** decided; the model is **built** in migration 0044 (`STATUS.md` §127). Submission criteria, the parameter editor and the parameter-driven form are not.
+**Status:** decided; the model is **built** in migration 0044 (`STATUS.md` §127) and submission criteria in 0045 (§128). The editors and the parameter-driven form are not.
 **Parity item:** `docs/parity/ontology.md` §5, and the one it says to do first.
 **Source:** `docs/pal/foundry_action-types.pdf` (174 pp). Citations are `(p.25)`.
 
@@ -57,6 +57,8 @@ action_rules            id, action_type_id, kind, config, sort_order
 
 Criteria are conditions over parameter values, evaluated server-side before the first rule runs. **A criterion that fails refuses the whole action** — p.13's example is precisely that: an action that "should not be possible to run" when the ticket is not open. The refusal names the criterion, because a form that greys out with no reason is worse than one that refuses with one.
 
+*Built in 0045, with two things this section did not anticipate.* The conditions are over parameters **and the current user**: p.140 is explicit that criteria are how Foundry does per-action permissions ("simple submission criteria can require a specific user ID or group ID"), so leaving the user out would have meant building the mechanism and omitting its main use. And the failure message is p.56's, stored per criterion and required — "the failure message informs the user about why they are blocked from submitting an Action".
+
 ## What this costs, honestly
 
 **A migration with a real conversion, not a default.** Every existing action type has `editable_properties: ["status", "priority"]` and no parameters. The conversion is mechanical and total: each name becomes one parameter of the property's own type, plus one `modify_object` rule writing that parameter to that property. That is exactly what the current model means, spelled out — so no action changes behaviour, and the JSON column can be dropped in the migration after it.
@@ -78,8 +80,8 @@ Per the repo standard, each of these must be made to fail by removing the thing 
 
 - ✅ **The conversion changes nothing.** Take an existing action type, run the migration, execute it with the same payload, and assert the same property values land. Mutation: convert to the wrong property, and it goes red. — `tests/test_action_conversion.py` builds a database at 0043, seeds a legacy action type and migrates the rest of the way; five mutations of the migration's own SQL were checked.
 - ◑ **A hidden parameter is not in the form and is still applied.** Both halves, one test — a hidden parameter that silently did nothing would pass a form check. — the *applied* half is checked; the form half arrives with the form.
-- ○ **A failed criterion refuses the action and names the criterion.** Mutation: skip the check, and the write goes through.
-- ○ **A criterion is checked before the first rule runs.** Assert no dataset version is created by a refused action — "refused" and "refused after writing half of it" look the same from the caller.
+- ✅ **A failed criterion refuses the action and names the criterion.** Mutation: skip the check, and the write goes through. — `tests/test_action_criteria.py`; eleven mutations checked, two of which found tests that could not fail (the `is_less_than` boundary, and emptiness written as falsiness).
+- ✅ **A criterion is checked before the first rule runs.** Assert no dataset version is created by a refused action — "refused" and "refused after writing half of it" look the same from the caller. — and no `action_runs` row either, since the check precedes opening one.
 - ○ **Renaming a parameter a Workshop module calls is refused**, naming the module. — needs the editor; nothing can rename one yet.
 
 ## The alternative that was rejected

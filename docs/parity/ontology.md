@@ -153,8 +153,8 @@ Ours: **parameters and rules** (§127), run from a Workshop `run_action` effect.
 | Filter the results of a parameter dropdown | ○ | TOC §8 |
 | Parameter configuration overrides | ○ | TOC §10 |
 | **Rules** — the logic mapping parameters to edits | ◑ | §127 — `modify_object` executes; the other four kinds are storable and refused loudly (TOC §5) |
-| **Submission criteria** — conditions that must hold for submission | ○ | TOC §12 |
-| **Validation** — e.g. only HR may perform this action | ○ | |
+| **Submission criteria** — conditions that must hold for submission | ◑ | §128 — conditions over parameters and the current user, all of them checked before the first write (p.49–56); no nesting, no editor |
+| **Validation** — e.g. only HR may perform this action | ◑ | §128 — this *is* submission criteria (p.140: "simple submission criteria can require a specific user ID or group ID"); a criterion can require a group |
 | Configure sections in the action form | ○ | TOC §24 |
 | Actions on interfaces / on structs | ○ | TOC §13–14 |
 
@@ -185,7 +185,9 @@ The parameter-and-rules model is the big one. Ours conflates "what the user type
 
 Executing an action is now two steps: bind the parameters (defaults, required, unknown names refused), then apply the rules. `hidden` and `default_value` are honoured; the other four rule kinds are storable and refused loudly rather than skipped.
 
-**Still to build, in order:** submission criteria (p.9, p.13 — a condition over inputs, checked before the first write); the parameter editor, which must refuse renaming a parameter a Workshop module calls; the action form rendering one input per *visible* parameter; then the rule kinds that write no property at all.
+**Submission criteria are built (§128).** Migration 0045 stores one condition per row with its own failure message (p.56); every row must pass (p.50), and the check runs before the run is even opened, so a refused action leaves no dataset version and no history. The operator names are Foundry's own (p.54–55), including "no value" for emptiness. A condition the executor cannot decide **fails** — p.52's warning about NOT conditions is that a check which passes for want of an attribute grants more access than intended.
+
+**Still to build, in order:** the parameter and criteria editors, which must refuse renaming a parameter a Workshop module calls; the action form, rendering one input per *visible* parameter and greying out submission against the criteria it can now read; then the rule kinds that write no property at all. Nesting criteria (p.56's all / any / none) is a `config` shape and waits for something that asks for it.
 
 ---
 
