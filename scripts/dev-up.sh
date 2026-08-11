@@ -42,7 +42,21 @@ mkdir -p "$STORAGE_ROOT"
 # server is already in a background subshell whose parent exits, and nohup
 # detaches it from the terminal. Resolved once, here, rather than at each of
 # the two call sites.
-if command -v setsid >/dev/null 2>&1; then DETACH=(setsid nohup); else DETACH=(nohup); fi
+#
+# **`--fork` is what makes it actually detach**, and its absence cost real
+# time. A script has job control off, so a backgrounded command stays in the
+# shell's process group and is therefore *not* a group leader - and `setsid`
+# only forks when its caller is one. Without the fork it `exec`s in place, so
+# the server keeps the pid of the script's own child and the script sits in
+# `wait` until the server exits, which for a dev server is never.
+#
+# Interactively nobody notices: the shell is a tty, the prompt comes back.
+# Piped, it is minutes of nothing - `dev-up.sh | tail` prints not one line
+# until the pipe closes, and the pipe cannot close while a child holds it. A
+# 20-hour-old `dev-up.sh` was still parked in `do_wait` when this was found.
+# Anything driving the repo without a terminal - CI, an agent, a Makefile -
+# hits it on every run that has to start a server.
+if command -v setsid >/dev/null 2>&1; then DETACH=(setsid --fork nohup); else DETACH=(nohup); fi
 
 wait_for() {  # url, seconds, what, logfile
   for _ in $(seq "$2"); do
@@ -128,7 +142,7 @@ if ! curl -s -o /dev/null "http://localhost:$API_PORT/api/health"; then
   # from a plain subshell looked fine and left a dead server behind.
   ( cd "$ROOT/apps/api" && "${DETACH[@]}" "$PYTHON" dev_server.py \
       --port "$API_PORT" --tokens-file "$TOKENS_FILE" "${EXTRA[@]+"${EXTRA[@]}"}" \
-      > "$LOG_DIR/api.log" 2>&1 & )
+      < /dev/null > "$LOG_DIR/api.log" 2>&1 & )
   wait_for "http://localhost:$API_PORT/api/health" 40 "the API" "$LOG_DIR/api.log"
 fi
 echo "api:      http://localhost:$API_PORT/api/health -> $(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$API_PORT/api/health")"
@@ -140,7 +154,7 @@ fi
 # ---- web --------------------------------------------------------------------
 if ! curl -s -o /dev/null "http://localhost:$WEB_PORT/login"; then
   ( cd "$ROOT/apps/web" && "${DETACH[@]}" npx next dev -p "$WEB_PORT" \
-      > "$LOG_DIR/web.log" 2>&1 & )
+      < /dev/null > "$LOG_DIR/web.log" 2>&1 & )
   wait_for "http://localhost:$WEB_PORT/login" 90 "the web app" "$LOG_DIR/web.log"
 fi
 echo "web:      http://localhost:$WEB_PORT/login -> $(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$WEB_PORT/login")"
