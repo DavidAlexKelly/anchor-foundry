@@ -23,7 +23,14 @@ import { useState } from "react";
 import { Dialog } from "@/components/dialog";
 import { objects as objApi } from "@/lib/api";
 import { ObjectView } from "@/components/object-view";
-import { PRIMARY_KEY_REF, type LinkedInstances, type ObjectInstance } from "@/lib/types";
+import { PropertyValue } from "@/components/property-value";
+import { summarise, visibleProperties } from "@/components/object-properties";
+import {
+  PRIMARY_KEY_REF,
+  type LinkedInstances,
+  type ObjectInstance,
+  type ObjectTypeProperty,
+} from "@/lib/types";
 
 export type LinkStop = {
   typeId: string;
@@ -35,24 +42,86 @@ function propertyLabel(name: string): string {
   return name === PRIMARY_KEY_REF ? "key" : name;
 }
 
-/** A short, human summary of an instance for a row you might click. */
-function summarise(instance: ObjectInstance): string {
-  const values = Object.entries(instance.properties)
-    .filter(([, v]) => v !== null && v !== undefined && String(v) !== "")
-    .slice(0, 3)
-    .map(([k, v]) => `${k}: ${String(v)}`);
-  return values.join(" · ");
+/** One linked object's properties, without leaving the object you came from
+ * (Foundry `object-views` p.11).
+ *
+ * The Linked objects component's point is that a relationship is answerable in
+ * place: "which team owns this ticket, and what is that team's region" should
+ * not cost a hop you then have to come back from. Traversing is still one
+ * click - this is the *other* click, and they are deliberately separate
+ * controls rather than one that guesses.
+ *
+ * Typed rendering through `PropertyValue`, the same component the standard
+ * view uses, so a geopoint reads as a geopoint here too.
+ */
+function LinkedPreview({
+  workspaceId,
+  properties,
+  instance,
+}: {
+  workspaceId: string;
+  properties: ObjectTypeProperty[];
+  instance: ObjectInstance;
+}) {
+  const { prominent, normal } = visibleProperties(properties);
+  const shown = [...prominent, ...normal];
+  if (shown.length === 0) {
+    return (
+      <p className="login-note" style={{ margin: "2px 0 0 12px" }}>
+        This object type has no properties a reader may see.
+      </p>
+    );
+  }
+  return (
+    <table
+      className="ds-table sov-table"
+      style={{ margin: "4px 0 0 12px" }}
+      data-testid={`link-preview-${instance.id}`}
+    >
+      <tbody>
+        {shown.map((property) => (
+          <tr key={property.api_name} data-property={property.api_name}>
+            <th scope="row">{property.display_name || property.api_name}</th>
+            <td>
+              <PropertyValue
+                workspaceId={workspaceId}
+                dataType={property.data_type}
+                value={instance.properties[property.api_name]}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
 function LinkGroup({
+  workspaceId,
   group,
   browseHref,
   onOpen,
 }: {
+  workspaceId: string;
   group: LinkedInstances;
   browseHref: string | null;
   onOpen: (stop: LinkStop) => void;
 }) {
+  // Which rows are open. A set rather than one id: two linked objects are
+  // routinely compared, and a preview that closed the last one would make
+  // that impossible without navigating - which is the thing this exists to
+  // avoid.
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  // **The far type's declaration, not the instance's keys.** It says which
+  // properties may be shown at all (p.111) and which identify one of these
+  // (p.10). One query per group, shared with everything else keyed the same
+  // way, and the rows render without it - a summary that waited for a fetch
+  // would blank every link row on open.
+  const farType = useQuery({
+    queryKey: ["object-type", group.far_type_id],
+    queryFn: () => objApi.getType(workspaceId, group.far_type_id),
+  });
+  const properties = farType.data?.properties ?? [];
   const arrow = group.direction === "outbound" ? "→" : "←";
   // The name of the side being traversed *to* (Foundry `object-link-types`
   // p.192). Already resolved by the server against the link's own name, so an
@@ -89,25 +158,54 @@ function LinkGroup({
         <ul className="link-list">
           {group.items.map((i) => (
             <li key={i.id}>
-              <button
-                type="button"
-                className="btn quiet"
-                style={{ padding: "4px 10px", fontSize: 12.5, textAlign: "left" }}
-                onClick={() =>
-                  onOpen({
-                    typeId: group.far_type_id,
-                    typeName: group.far_type_display_name,
-                    instance: i,
-                  })
-                }
-              >
-                <strong>{i.primary_key}</strong>
-                {summarise(i) && (
-                  <span className="slug" style={{ marginLeft: 8 }}>
-                    {summarise(i)}
-                  </span>
-                )}
-              </button>
+              <div className="row-actions" style={{ gap: 4 }}>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  style={{ padding: "4px 10px", fontSize: 12.5, textAlign: "left" }}
+                  onClick={() =>
+                    onOpen({
+                      typeId: group.far_type_id,
+                      typeName: group.far_type_display_name,
+                      instance: i,
+                    })
+                  }
+                >
+                  <strong>{i.primary_key}</strong>
+                  {summarise(i, properties) && (
+                    <span className="slug" style={{ marginLeft: 8 }}>
+                      {summarise(i, properties)}
+                    </span>
+                  )}
+                </button>
+                {/* Separate from the row, because they are different
+                    intentions: one goes there, the other looks without
+                    going. A row that did both on one click would make the
+                    cheaper one impossible. */}
+                <button
+                  type="button"
+                  className="btn quiet"
+                  style={{ padding: "4px 8px", fontSize: 12 }}
+                  aria-expanded={open.has(i.id)}
+                  aria-label={`Preview ${i.primary_key}`}
+                  onClick={() =>
+                    setOpen((was) => {
+                      const next = new Set(was);
+                      if (!next.delete(i.id)) next.add(i.id);
+                      return next;
+                    })
+                  }
+                >
+                  {open.has(i.id) ? "Hide" : "Preview"}
+                </button>
+              </div>
+              {open.has(i.id) && (
+                <LinkedPreview
+                  workspaceId={workspaceId}
+                  properties={properties}
+                  instance={i}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -204,6 +302,7 @@ export function LinkExplorerDialog({
       {links.data?.map((group) => (
         <LinkGroup
           key={`${group.link_type_id}:${group.direction}`}
+          workspaceId={workspaceId}
           group={group}
           browseHref={browseHref(group.far_type_id)}
           onOpen={(stop) => setTrail([...trail, stop])}
