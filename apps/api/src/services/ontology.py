@@ -38,6 +38,11 @@ from .property_values import (  # noqa: F401
 PROPERTY_TYPES = {
     "string", "integer", "float", "boolean", "date", "timestamp", "geopoint",
     "json", "attachment",
+    # A **series id**, not a history (decision 0009, migration 0047). The value
+    # stored on the instance is a small scalar - usually the instance's own
+    # primary key - and `object_type_series` says which dataset, key column,
+    # timestamp column and value column hold the points behind it.
+    "time_series",
 }
 
 # How prominently an application should show a property (Foundry

@@ -35,6 +35,8 @@ from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
 from ..services import datasets as dataset_service
+from ..services import dataset_engine as engine
+from ..services import time_series as time_series_service
 from ..lib.errors import NotFoundError
 from ..services import instance_store
 from ..services import object_sets
@@ -65,8 +67,13 @@ def _dataset_storage():
 class PropertyIn(BaseModel):
     api_name: str = Field(min_length=1, max_length=100)
     display_name: str | None = Field(default=None, max_length=200)
+    # **Built from `ontology.PROPERTY_TYPES`, not typed out again.** This was a
+    # second copy of the list, and adding `time_series` to the service left it
+    # behind - the type existed everywhere except the one place a client could
+    # declare it, and the refusal named a pattern rather than a missing
+    # feature. One list, one place.
     data_type: str = Field(
-        pattern="^(string|integer|float|boolean|date|timestamp|geopoint|json|attachment)$"
+        pattern="^(" + "|".join(sorted(ontology_service.PROPERTY_TYPES)) + ")$"
     )
     required: bool = False
     description: str = Field(default="", max_length=1000)
@@ -1436,6 +1443,192 @@ class SourceScheduleOut(BaseModel):
     id: UUID
     sync_schedule: str | None
     sync_next_run_at: datetime | None
+
+
+# ---- time series (decision 0009 part 1; db 0047) -----------------------------
+class SeriesOut(BaseModel):
+    """Where one `time_series` property's points live."""
+
+    id: UUID
+    object_type_source_id: UUID
+    property_api_name: str
+    dataset_id: UUID
+    dataset_name: str
+    key_column: str
+    timestamp_column: str
+    value_column: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SeriesIn(BaseModel):
+    property_api_name: str = Field(min_length=1, max_length=100)
+    dataset_id: UUID
+    key_column: str = Field(min_length=1, max_length=200)
+    timestamp_column: str = Field(min_length=1, max_length=200)
+    value_column: str = Field(min_length=1, max_length=200)
+
+
+class SeriesPoint(BaseModel):
+    at: Any
+    value: Any
+
+
+class SeriesPoints(BaseModel):
+    property_api_name: str
+    series_id: str
+    interval: str
+    aggregate: str
+    points: list[SeriesPoint]
+    truncated: bool
+
+
+@project_router.get("/{source_id}/series", response_model=list[SeriesOut])
+async def list_series(
+    source_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[SeriesOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_source(conn, access.project_id, source_id)
+        rows = await time_series_service.list_series(conn, source_id)
+    return [SeriesOut(**r) for r in rows]
+
+
+@project_router.put("/{source_id}/series", response_model=SeriesOut)
+async def set_series(
+    source_id: UUID,
+    body: SeriesIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> SeriesOut:
+    """Point a `time_series` property at the dataset holding its points.
+
+    **The dataset's own schema is what the columns are checked against**, read
+    here and handed to the service: the service does not touch Parquet, and a
+    check against anything else - a remembered schema, the caller's word -
+    would let a chart be configured that could never draw.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        source = await ontology_service.get_source(conn, access.project_id, source_id)
+        dataset = await dataset_service.get(conn, access.project_id, body.dataset_id)
+        properties = await ontology_service.list_properties(
+            conn, UUID(str(source["object_type_id"]))
+        )
+        columns = {
+            str(c["name"]) for c in (_jsonb(dataset["table_schema"]) or [])
+            if isinstance(c, dict) and c.get("name")
+        }
+        row = await time_series_service.set_series(
+            conn, source_id,
+            property_api_name=body.property_api_name,
+            dataset_id=body.dataset_id,
+            key_column=body.key_column,
+            timestamp_column=body.timestamp_column,
+            value_column=body.value_column,
+            columns=columns,
+            property_types={p["api_name"]: p["data_type"] for p in properties},
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_series.set",
+            resource_type="object_type_source",
+            resource_id=source_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"property": body.property_api_name,
+                      "dataset_id": str(body.dataset_id)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        return SeriesOut(**{**row, "dataset_name": dataset["name"]})
+
+
+@project_router.delete(
+    "/{source_id}/series/{property_api_name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def clear_series(
+    source_id: UUID,
+    property_api_name: str,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_source(conn, access.project_id, source_id)
+        await time_series_service.clear_series(conn, source_id, property_api_name)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_series.clear",
+            resource_type="object_type_source",
+            resource_id=source_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"property": property_api_name},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+
+@project_router.get(
+    "/{source_id}/series/{property_api_name}/points", response_model=SeriesPoints
+)
+async def read_series_points(
+    source_id: UUID,
+    property_api_name: str,
+    series_id: str = Query(..., max_length=500),
+    interval: str = Query(default="none", max_length=16),
+    aggregate: str = Query(default="avg", max_length=16),
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    limit: int = Query(default=time_series_service.MAX_POINTS, ge=1),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> SeriesPoints:
+    """The points behind one instance's `time_series` property.
+
+    **Read from the dataset, every time, and never copied** (decision 0009).
+    The cost of that is stated in the decision and worth repeating where
+    somebody is reading the endpoint: points are as fresh as the dataset, so a
+    live feed is a sync away from the chart rather than a stream.
+    """
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_source(conn, access.project_id, source_id)
+        series = await time_series_service.get_series(conn, source_id, property_api_name)
+        if series is None:
+            raise NotFoundError("time series")
+        dataset = await dataset_service.get(
+            conn, access.project_id, UUID(str(series["dataset_id"]))
+        )
+
+    sql = time_series_service.points_sql(
+        key_column=str(series["key_column"]),
+        timestamp_column=str(series["timestamp_column"]),
+        value_column=str(series["value_column"]),
+        series_id=series_id,
+        interval=interval,
+        aggregate=aggregate,
+        start=start,
+        end=end,
+        limit=limit,
+    )
+    local_path = await anyio.to_thread.run_sync(
+        storage.local_path, str(dataset["s3_location"])
+    )
+    result = await anyio.to_thread.run_sync(engine.query, local_path, sql)
+    return SeriesPoints(
+        property_api_name=property_api_name,
+        series_id=series_id,
+        interval=interval,
+        aggregate=aggregate,
+        points=[SeriesPoint(at=row[0], value=row[1]) for row in result.rows],
+        truncated=result.truncated,
+    )
 
 
 @project_router.get("/{source_id}/schedule", response_model=SourceScheduleOut)

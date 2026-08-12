@@ -24,7 +24,7 @@ Ours: `string`, `integer`, `float`, `boolean`, `date`, `timestamp`, `geopoint`, 
 | **Geopoint** | ✅ | §20 |
 | **Attachment** — files on objects, for use with functions | ◑ | we have the type; no file storage behind it |
 | **Geoshape** | ○ | polygons and lines, not just points |
-| **Time series** | ○ | "stores a history of timestamped values"; consumed by Chart XY, Map, Metric Card, Object Table. **Storage settled (decision 0009)**: the property holds a series *id*, points live in the dataset they arrive in, read through the dataset engine — not copied into Postgres and not inlined into the instance document |
+| **Time series** | ◑ | §148 — the type exists, a series is declared on the object type source (db 0047), and points are read from the backing dataset with bucketing and aggregation. The **chart** on the standard Object View and Workshop's time series set variables are the remaining halves; geotemporal series is the same mechanism with a geopoint value column and is ○ |
 | **Geotemporal series** | ○ | position over time; renders on a Map in standard Object Views |
 | **Media reference** | ○ | points at an item in a media set: `mimeType` plus a reference triple of media-set / view / item RIDs (p.128). **Decision 0009 declines to add the type**: a shape promising a media set with none behind it is a contract nobody honours. Media that is already stored renders (§147); a media *set* waits for a consumer that needs a collection |
 | **Struct** — schema-based properties with multiple fields | ○ | also needed for Workshop struct variables |
@@ -233,7 +233,7 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 2. **Standard Object Views.** Generated from the object type; no builder UI needed. Biggest visible gain in this file, and now unblocked — visibility is the input it was waiting for.
 3. ~~**Link type per-side display names and self-links**~~ — **done (`STATUS.md` §123)**, less the one test named above. Self-links turned out to already work; only the naming was missing.
 4. **Action parameters and rules.** The structural change everything in §5 depends on. **Designed — decision 0007 — and next to build.**
-5. **Time series and media reference property types.** ~~Both need a storage decision first~~ — **made (decision 0009)**. Media needed no type at all, only a renderer, and that is built (§147). Time series has its shape settled and is next to build: an `object_type_series` mapping on the object type source, points read from the backing dataset.
+5. ~~**Time series and media reference property types.**~~ — decision 0009 made, and both built as far as this platform can honour them. Media needed no type at all, only a renderer (§147). Time series is the type, the `object_type_series` mapping and the points read (§148); what is left is the *chart* that draws them, which belongs with §4.1's standard Object View rather than with the storage.
 6. ~~**Configured Object Views**, reusing the Workshop runtime~~ — **done (`STATUS.md` §144)**. A pointer at a published module plus the one variable that receives the object; the panel form factor is stored and separately addressable, and waits for something to embed it in.
 7. **Struct property type**, then Workshop struct variables.
 8. **Ontology Manager search** — done (`STATUS.md` §146), across the four kinds that exist. **Filters and the indexing-issue column** are still open: filtering wants a development status we do not have (§1.3), and the issue column wants indexing state the sync path does not record.
