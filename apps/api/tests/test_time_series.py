@@ -350,3 +350,101 @@ def test_a_series_id_nothing_matches_is_an_empty_list_not_an_error(
     r = points(client, fx, ontology, series_id="NOPE")
     assert r.status_code == 200
     assert r.json()["points"] == []
+
+
+# ---- reading one object's points, workspace-scoped -----------------------------
+@pytest.fixture(scope="module")
+def instance(client: TestClient, fx: Fixture, ontology: dict) -> str:
+    """A synced sensor whose `readings` value is its own key.
+
+    The source maps `sensor_id` to *both* the primary key and the series
+    property, which is decision 0009's ordinary case: the series id is the
+    instance's own key.
+    """
+    assert declare(client, fx, ontology).status_code == 200
+    r = client.post(
+        f"{pbase(fx)}/object-type-sources/{ontology['source_id']}/sync",
+        headers=hdr(fx.editor_sub), json={},
+    )
+    assert r.status_code == 200, r.text
+    r = client.get(
+        f"{wbase(fx)}/object-types/{ontology['type_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    return next(i["id"] for i in r.json()["items"] if i["primary_key"] == "S1")
+
+
+def instance_points(client: TestClient, fx: Fixture, ontology: dict, iid: str, **params) -> object:
+    return client.get(
+        f"{wbase(fx)}/object-types/{ontology['type_id']}/instances/{iid}"
+        f"/series/readings/points",
+        headers=hdr(fx.viewer_sub), params=params,
+    )
+
+
+def test_an_objects_points_are_readable_at_the_workspace_floor(
+    client: TestClient, fx: Fixture, ontology: dict, instance: str
+) -> None:
+    """**The same floor every other read of an instance sits at.** The ontology
+    is shared across a workspace and instance properties are already visible
+    here; a time series property's points are the value of one of those
+    properties, so putting them behind project membership would make one
+    property readable and another not, on the same screen."""
+    r = instance_points(client, fx, ontology, instance)
+    assert r.status_code == 200, r.text
+    assert [p["value"] for p in r.json()["points"]] == [10, 20, 30]
+    assert r.json()["series_id"] == "S1"
+
+
+def test_the_series_id_comes_from_the_instance_not_the_caller(
+    client: TestClient, fx: Fixture, ontology: dict, instance: str
+) -> None:
+    """A caller supplying one could ask for somebody else's series through an
+    instance they can see. The question this endpoint answers is "this object's
+    readings", so a `series_id` parameter is ignored rather than honoured."""
+    r = instance_points(client, fx, ontology, instance, series_id="S2")
+    assert r.json()["series_id"] == "S1"
+    assert 99 not in [p["value"] for p in r.json()["points"]]
+
+
+def test_each_object_gets_its_own_readings(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """The other half of "the series id comes from the instance": S2's chart is
+    S2's, drawn from the same dataset and the same mapping.
+
+    Written this way after a first version claimed to cover the *no series id*
+    case and could not - every synced instance here has one, so the assertion
+    was true for the wrong reason. What is checked is what the fixture can
+    actually distinguish.
+    """
+    r = client.get(
+        f"{wbase(fx)}/object-types/{ontology['type_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    iid = next(i["id"] for i in r.json()["items"] if i["primary_key"] == "S2")
+    body = instance_points(client, fx, ontology, iid).json()
+    assert body["series_id"] == "S2"
+    assert [p["value"] for p in body["points"]] == [99]
+
+
+def test_an_outsider_cannot_read_an_objects_points(
+    client: TestClient, fx: Fixture, ontology: dict, instance: str
+) -> None:
+    r = client.get(
+        f"{wbase(fx)}/object-types/{ontology['type_id']}/instances/{instance}"
+        f"/series/readings/points",
+        headers=hdr(fx.outsider_sub),
+    )
+    assert r.status_code in (403, 404)
+
+
+def test_a_property_with_no_series_mapped_is_a_404(
+    client: TestClient, fx: Fixture, ontology: dict, instance: str
+) -> None:
+    r = client.get(
+        f"{wbase(fx)}/object-types/{ontology['type_id']}/instances/{instance}"
+        f"/series/site/points",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 404

@@ -181,6 +181,30 @@ async def clear_series(
         raise NotFoundError("time series")
 
 
+async def series_for_source(
+    conn: AsyncConnection, object_type_source_id: UUID, property_api_name: str
+) -> dict[str, Any] | None:
+    """One series, resolved all the way to the bytes that hold its points.
+
+    Carries the points dataset's `s3_location` and its `project_id` so a
+    **workspace-scoped** reader - the Object Explorer and the standard Object
+    View are both workspace-wide - can get to the file without first knowing
+    which project the dataset lives in. The project is the dataset's own, read
+    here, rather than anything the caller supplied.
+    """
+    row = await fetch_one(
+        conn,
+        f"""
+        SELECT {_S_COLUMNS}, d.name AS dataset_name, d.s3_location, d.project_id
+          FROM object_type_series s
+          JOIN datasets d ON d.id = s.dataset_id
+         WHERE s.object_type_source_id = :sid AND s.property_api_name = :prop
+        """,
+        {"sid": str(object_type_source_id), "prop": property_api_name},
+    )
+    return dict(row) if row else None
+
+
 def _quote(name: str) -> str:
     """A column name as a SQL identifier.
 

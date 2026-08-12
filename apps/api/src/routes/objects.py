@@ -1631,6 +1631,82 @@ async def read_series_points(
     )
 
 
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/series/{property_api_name}/points",
+    response_model=SeriesPoints,
+)
+async def instance_series_points(
+    type_id: UUID,
+    instance_id: UUID,
+    property_api_name: str,
+    interval: str = Query(default="none", max_length=16),
+    aggregate: str = Query(default="avg", max_length=16),
+    limit: int = Query(default=time_series_service.MAX_POINTS, ge=1),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> SeriesPoints:
+    """One object's points, asked for the way somebody looking at the object asks.
+
+    **Workspace-scoped, like every other read of an instance.** The Object
+    Explorer and the standard Object View are both workspace-wide (§17, §122) -
+    the ontology is shared across a workspace, and instance *properties* are
+    already visible at this floor. A time series property's points are the
+    value of one of those properties, so putting them behind project
+    membership would make one property readable and another not, on the same
+    screen, for no reason a reader could see.
+
+    **The series id is not a parameter.** It is the instance's own value for
+    that property, read here - a caller passing one could ask for somebody
+    else's series through an instance they can see, and the question this
+    endpoint answers is "this object's readings" rather than "these readings".
+    """
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
+        )
+        if instance is None:
+            raise NotFoundError("object instance")
+        series = await time_series_service.series_for_source(
+            conn, UUID(str(instance["source_id"])), property_api_name
+        )
+        if series is None:
+            raise NotFoundError("time series")
+
+    properties = _jsonb(instance["properties"]) or {}
+    series_id = properties.get(property_api_name)
+    if series_id is None or str(series_id).strip() == "":
+        # The property is declared and the series is mapped; this object simply
+        # has no series id. An empty chart is the honest answer - a 404 would
+        # say the *configuration* is missing, which it is not.
+        return SeriesPoints(
+            property_api_name=property_api_name, series_id="",
+            interval=interval, aggregate=aggregate, points=[], truncated=False,
+        )
+
+    sql = time_series_service.points_sql(
+        key_column=str(series["key_column"]),
+        timestamp_column=str(series["timestamp_column"]),
+        value_column=str(series["value_column"]),
+        series_id=str(series_id),
+        interval=interval,
+        aggregate=aggregate,
+        limit=limit,
+    )
+    local_path = await anyio.to_thread.run_sync(
+        storage.local_path, str(series["s3_location"])
+    )
+    result = await anyio.to_thread.run_sync(engine.query, local_path, sql)
+    return SeriesPoints(
+        property_api_name=property_api_name,
+        series_id=str(series_id),
+        interval=interval,
+        aggregate=aggregate,
+        points=[SeriesPoint(at=row[0], value=row[1]) for row in result.rows],
+        truncated=result.truncated,
+    )
+
+
 @project_router.get("/{source_id}/schedule", response_model=SourceScheduleOut)
 async def get_source_schedule(
     source_id: UUID,

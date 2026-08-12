@@ -1016,6 +1016,20 @@ export interface ObjectTypeDetail {
  * to disagree with the one that put the row in the list — and the
  * disagreement would look like a highlight landing on the wrong word.
  */
+/** Points behind one `time_series` property (decision 0009, db 0047).
+ *
+ * Read from the dataset they arrived in, every time — never copied. `at` is
+ * whatever the timestamp column held, as JSON; `value` likewise. */
+export interface SeriesPoints {
+  property_api_name: string;
+  series_id: string;
+  interval: string;
+  aggregate: string;
+  points: { at: unknown; value: unknown }[];
+  /** True when the point cap cut the answer short. */
+  truncated: boolean;
+}
+
 export interface OntologySearchHit {
   kind: "object_type" | "property" | "link_type" | "action_type";
   id: string;
