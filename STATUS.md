@@ -3039,6 +3039,28 @@ p.11 gives the standard Object View four type-aware renderings. Geospatial and "
 **The browser fixture needed the one thing `Module.object_type` cannot say**: the primary key column mapped to the series property *as well* as being the key. That is decision 0009's ordinary case - the series id is the instance's own key - and a mapping of `{column: same-named property}` has nowhere to express it. Built directly rather than by growing a parameter only one file needs.
 
 Four mutations, all red. **976 API tests** (was 971), **111 unit tests** (was 102), **124 browser tests** (was 121).
+
+---
+
+### 150. Reading a value back out of a filter (this session)
+
+`workshop.md` §3.2 calls object set filter variables "the single most load-bearing missing variable type", and p.444 says what one is for in two halves: filter state "can be **applied to object set variables**" *or* "**reused in widget configurations**". The first half has worked since `narrow_set` - a Filter List writes clauses, a derived set reads them. The second half had nothing, and it is the half that makes a filtered app readable: a heading that says which region you are looking at, a chart title that names it, an action whose default comes from what you already picked.
+
+`filter_value` is that half. One input (the variable holding the clauses), one configured property, and the answer is what the viewer chose for it.
+
+**A property nobody filtered on is `None`, not an error.** An untouched filter is the ordinary state of an app somebody has just opened, so a derivation that raised there would make the *first* render the broken one - the state every viewer sees before they have done anything. This is `filter_set`'s existing rule about unset values, one layer up, and the two now agree.
+
+**A multi-select comes back whole.** An `in` clause holds several values because the viewer picked several, and returning `value[0]` would quietly answer a different question - "north" where the truth is "north and south". `is_empty` and `concat` both already handle a list, so a caller has what it needs without this function deciding for it. The mutation that collapses to the first value is red.
+
+**Only the first clause for a property is read, deliberately.** Two clauses on one property is a Filter List expressing a range or a several-of - one filter with two halves, not two answers - and picking a half here would be this function inventing which half matters.
+
+**Default filters needed nothing built, so nothing was built.** An `array` variable with a `default` *is* filter state applied on load: the default clauses are there before any widget writes, and `narrow_set` reads them like any others. The right response to a spec line that is already satisfied is a test that would go red if it stopped being satisfied, not a second mechanism - `test_a_filter_can_start_with_a_default_applied` is that test, and it asserts through the derivation rather than through the default it sets.
+
+**The save-time check is the usual pair**, because a derivation that is wrong in the document should be refused where it is written rather than surfacing as an empty heading at render: exactly one input, and a property to read. The mutation that drops it is red.
+
+Four mutations, all red. **984 API tests** (was 976), 111 unit, 124 browser.
+
+What is still open in §3.2's row is the dedicated `object_set_filter` variable *kind*: filter state travels as an `array` of clauses rather than as its own type, so the panel cannot tell a filter apart from any other list and a widget cannot ask for "a filter" specifically. That is a typing improvement, not a capability - both of p.444's behaviours now work without it - so it waits for a widget that actually needs the distinction.
 ---
 ---
 ---

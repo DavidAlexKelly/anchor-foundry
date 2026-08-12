@@ -60,6 +60,7 @@ TRANSFORMS = (
     "filter_set",   # narrow an object set by a value another variable holds
     "narrow_set",   # narrow an object set by a list of clauses a widget writes
     "object_property",  # one property of the object a viewer picked
+    "filter_value",  # one property's chosen value, out of a filter's clauses
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -482,6 +483,17 @@ def _check_arity(vid: str, d: Derivation) -> None:
         prop = d.config.get("property")
         if not prop or not isinstance(prop, str):
             raise VariableError(f"variable {vid!r}: object_property needs a property to read")
+    elif d.transform == "filter_value":
+        if len(d.inputs) != 1:
+            raise VariableError(
+                f"variable {vid!r}: filter_value needs exactly one input "
+                "(the variable holding the filter clauses)"
+            )
+        prop = d.config.get("property")
+        if not prop or not isinstance(prop, str):
+            raise VariableError(
+                f"variable {vid!r}: filter_value needs a property to read"
+            )
     elif d.transform == "narrow_set":
         # No property or operator here on purpose: which properties a Filter
         # List narrows on is what the *viewer* chooses, so it is part of the
@@ -638,6 +650,8 @@ def _apply(variable: Variable, inputs: list[Any]) -> Any:
         return _narrow_set(variable, inputs[0], inputs[1])
     if d.transform == "object_property":
         return _object_property(variable, inputs[0], str(d.config["property"]))
+    if d.transform == "filter_value":
+        return _filter_value(variable, inputs[0], str(d.config["property"]))
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
 
 
@@ -714,6 +728,42 @@ def _object_property(variable: Variable, obj: Any, property_name: str) -> Any:
         # an app cannot show.
         return obj.get("primary_key")
     return properties.get(property_name)
+
+
+def _filter_value(variable: Variable, clauses: Any, property_name: str) -> Any:
+    """What the viewer chose for one property, out of a filter's clauses.
+
+    p.444's other half. `narrow_set` *applies* the filter state to a set; this
+    reads a value back out of it, which is what "reused in widget
+    configurations" means - a heading that says "Showing: north", a chart title
+    that names the region, an action whose default comes from the filter.
+
+    **A property nobody filtered on is `None`, not an error.** A filter that
+    has not been touched is the ordinary state of an app somebody just opened,
+    and a derivation that raised would make the first render the broken one.
+    That is `filter_set`'s rule about unset values, one layer up.
+
+    **The clause's value is returned as it is, list and all.** An `in` clause
+    holds several values because the viewer picked several, and collapsing that
+    to the first would silently answer a different question - `is_empty` and
+    `concat` both already handle a list, so a caller has what it needs.
+
+    Only the *first* matching clause is read. Two clauses on one property is a
+    Filter List expressing a range or a several-of, which is one filter with
+    two halves rather than two answers - and picking a half here would be this
+    function inventing which half matters.
+    """
+    if clauses is None or clauses == "" or clauses == []:
+        return None
+    if not isinstance(clauses, list):
+        raise VariableError(
+            f"{variable.label!r} expects a list of filter clauses, "
+            f"not {type(clauses).__name__}"
+        )
+    for clause in clauses:
+        if isinstance(clause, dict) and clause.get("property") == property_name:
+            return clause.get("value")
+    return None
 
 
 def _narrow_set(variable: Variable, base: Any, clauses: Any) -> dict[str, Any]:

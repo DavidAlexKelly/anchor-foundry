@@ -128,7 +128,7 @@ Applied through one `<Editor onRender>` wrapper rather than in each of the twent
 
 ## 3. Variables
 
-Ours: 8 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`) and 9 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `object_property`, plus `object_set_aggregation` served by the store).
+Ours: 8 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`) and 10 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `object_property`, `filter_value`, plus `object_set_aggregation` served by the store).
 
 ### 3.1 Definition types (p.73)
 
@@ -145,7 +145,7 @@ Ours: 8 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `sin
 
 | Type | Status | Notes |
 |---|---|---|
-| **Object set filter variables** | ○ | the output of every filtering widget; "captures the current filter state and can be applied to object set variables or reused in widget configurations" (p.444). Supports **default filters** and **filter value extraction**. This is the single most load-bearing missing variable type — most of the filtering widget category depends on it. |
+| **Object set filter variables** | ◑ | the output of every filtering widget; "captures the current filter state and can be applied to object set variables or reused in widget configurations" (p.444). Both halves of p.444 now work: **applied to object set variables** is `narrow_set`, and **reused in widget configurations** is `filter_value`, a transform that reads one property's chosen value back out of a filter's clauses (a property nobody filtered on is `None`, not an error; a multi-select is returned whole). **Default filters** need nothing new — an `array` variable's `default` is filter state that is applied on load, and `test_a_filter_can_start_with_a_default_applied` holds that. What is still missing is a dedicated `object_set_filter` variable *kind*: filter state travels as an `array` of clauses rather than as its own type, so the panel cannot tell a filter apart from any other list, and a widget cannot ask for "a filter" specifically. |
 | **Struct variables** | ○ | (p. §22 of TOC) |
 | **Time series set variables** | ○ | consumed by Chart XY, Map, Metric Card, Object Table (Time series properties section) |
 | Variable-backed layouts | ○ | a variable drives which page/tab/section state is active |
@@ -412,7 +412,7 @@ Our generic parameter control is a defensible design, but it is *our* design, an
 ### Build order for the library
 
 1. **Text, Date, Numeric Input, String Selector, Checkbox** — split out of the parameter control; makes a filter bar feel complete
-2. **Object set filter variables** (§3.2) — unblocks the rest of the filtering category
+2. ~~**Object set filter variables** (§3.2) — unblocks the rest of the filtering category~~ — done as far as behaviour goes (§3.2); only the dedicated variable *kind* is outstanding, and no widget is waiting on it
 3. **Markdown** — trivially cheap, disproportionately useful
 4. **Object Table depth** — sorting, sizing, formatting, inline edit, row actions
 5. **Object View widget, Property List, Links, Object Set Title** — depend on ontology work
@@ -448,6 +448,6 @@ A widget is not done because it renders. Per the repo standard, each of these mu
 - **Interface refusals** — four saves, four refusals, each naming its reason.
 - **Versions** — publishing version N while N+1 is saved leaves viewers on N; `/dev/` shows N+1; the non-published banner appears on N+1 and not on N.
 - **Changelog** — moving a widget between sections produces a *move*, not a delete plus an add.
-- **Object set filter variables** — a Filter List's output applied to a second object set narrows it; a default filter applies on load.
+- **Object set filter variables** ✅ — a Filter List's output applied to a second object set narrows it (`e2e/test_narrowing_widgets.py`); a default filter applies on load (`test_a_filter_can_start_with_a_default_applied`).
 - **Object Table** — every documented configuration option has a test that drives it; inline edit writes back and an unpermitted edit is refused.
 - **Auto-refresh** — an out-of-band ontology edit updates a rendered table without user interaction.

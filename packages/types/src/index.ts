@@ -187,7 +187,13 @@ export type WorkshopTransform =
   /** One property of the object a viewer picked. Input is `[objectVariable]`;
    * config carries the property name. Pure, because a `single_object` variable
    * holds the object rather than a key to fetch (`STATUS.md` §84). */
-  | "object_property";
+  | "object_property"
+  /** What the viewer chose for one property, read back out of a filter's
+   * clauses (p.444's "reused in widget configurations"). Input is
+   * `[clausesVariable]`; config carries the property. `narrow_set` applies
+   * filter state to a set — this reads a value out of it, for a heading, a
+   * chart title, or an action's default. */
+  | "filter_value";
 
 export interface WorkshopDerivation {
   transform: WorkshopTransform;
