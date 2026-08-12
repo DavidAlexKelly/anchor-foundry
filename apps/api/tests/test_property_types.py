@@ -320,6 +320,101 @@ def test_an_attachment_uploads_and_downloads(client: TestClient, fx: Fixture) ->
     assert r.headers["content-disposition"].startswith("attachment;")
 
 
+def _upload(client: TestClient, fx: Fixture, name: str, data: bytes, ctype: str) -> dict:
+    r = client.post(
+        f"{wbase(fx)}/attachments", headers=hdr(fx.editor_sub),
+        files={"file": (name, io.BytesIO(data), ctype)},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _download(client: TestClient, fx: Fixture, key: str, **params) -> object:
+    return client.get(
+        f"{wbase(fx)}/attachments/download",
+        params={"key": key, **params},
+        headers=hdr(fx.viewer_sub),
+    )
+
+
+def test_an_image_can_be_asked_for_inline(client: TestClient, fx: Fixture) -> None:
+    """Decision 0009, part 2. The default stays a download - the test above
+    guards that - and inline is *earned*: asked for explicitly, and only for a
+    type on the route's own allowlist."""
+    a = _upload(client, fx, "dot.png", b"\x89PNG\r\n\x1a\n", "image/png")
+    r = _download(client, fx, a["key"], disposition="inline", content_type="image/png")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.headers["content-disposition"].startswith("inline;")
+    # So a file that is really HTML fails to decode as an image rather than
+    # being run as a document.
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_an_image_is_still_a_download_unless_asked_for_inline(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The default is the safe one, for the types that could go either way.**
+
+    `test_an_attachment_uploads_and_downloads` above guards the default with a
+    PDF - which is off the allowlist, so it could never have gone inline and
+    the test cannot tell "not asked" from "not allowed" apart. An image can go
+    either way, and this is what says which happens when nobody asked. Written
+    because the mutation that drops the `disposition` check passed everything
+    else.
+    """
+    a = _upload(client, fx, "dot.png", b"\x89PNG\r\n\x1a\n", "image/png")
+    r = _download(client, fx, a["key"])
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment;")
+    # And naming the type without asking for inline is still a download: the
+    # two conditions are separate and both are required.
+    r = _download(client, fx, a["key"], content_type="image/png")
+    assert r.headers["content-disposition"].startswith("attachment;")
+
+
+def test_a_type_off_the_allowlist_stays_a_download(client: TestClient, fx: Fixture) -> None:
+    """**The refusal that makes the feature safe**, and it falls back rather
+    than erroring: a mislabelled file is a link, not a broken page."""
+    a = _upload(client, fx, "notes.html", b"<script>alert(1)</script>", "text/html")
+    r = _download(client, fx, a["key"], disposition="inline", content_type="text/html")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment;")
+
+
+def test_svg_is_never_inline(client: TestClient, fx: Fixture) -> None:
+    """An image the browser will execute script inside, served same-origin.
+    Absent from the allowlist on purpose, and `components/media-kind.ts` makes
+    the same call on the other side so the two cannot disagree."""
+    a = _upload(client, fx, "x.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>",
+                "image/svg+xml")
+    r = _download(client, fx, a["key"], disposition="inline", content_type="image/svg+xml")
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment;")
+
+
+def test_a_caller_cannot_widen_the_type_by_asking(client: TestClient, fx: Fixture) -> None:
+    """`content_type` is a request, not an instruction. A caller naming a type
+    the route does not serve inline gets a download - so the allowlist is the
+    server's, not the uploader's and not the page's."""
+    a = _upload(client, fx, "thing.bin", b"\x00\x01", "application/octet-stream")
+    for claimed in ["text/html", "application/javascript", "image/svg+xml", ""]:
+        r = _download(client, fx, a["key"], disposition="inline", content_type=claimed)
+        assert r.headers["content-type"] == "application/octet-stream", claimed
+
+
+def test_asking_inline_for_a_key_outside_the_workspace_is_still_a_404(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The isolation check runs before any of this. Worth its own line because
+    a new query parameter is exactly the sort of thing that gets added in front
+    of a boundary rather than behind it."""
+    r = _download(client, fx, "other-workspace-/attachments/x/a.png",
+                  disposition="inline", content_type="image/png")
+    assert r.status_code == 404
+
+
 def test_a_key_outside_this_workspace_is_a_404(client: TestClient, fx: Fixture) -> None:
     """The stored value is a plain string a caller controls, so the download
     route treats the key as untrusted input rather than a capability."""

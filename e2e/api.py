@@ -56,6 +56,41 @@ class Api:
         except urllib.error.HTTPError as exc:
             raise ApiError(f"{method} {path} -> {exc.code} {exc.read().decode()[:500]}") from exc
 
+    def upload_file(
+        self, path: str, data: bytes, *, filename: str, content_type: str
+    ) -> dict[str, Any]:
+        """A single-file multipart POST, for the endpoints that take one.
+
+        Separate from `upload_csv` because that one also sends a `name` field
+        and hard-codes `text/csv`: the attachment endpoint takes neither, and
+        the content type is the *point* of the call rather than a constant -
+        decision 0009 renders by it.
+        """
+        boundary = "----anchor" + uuid.uuid4().hex
+        parts = [
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+                f'filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'
+            ).encode(),
+            data,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode(),
+        ]
+        request = urllib.request.Request(
+            f"{self.base}{path}",
+            method="POST",
+            data=b"".join(parts),
+            headers={
+                **self._headers(),
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            raise ApiError(f"upload {path} -> {exc.code} {exc.read().decode()[:500]}") from exc
+
     def upload_csv(self, path: str, name: str, csv: bytes) -> dict[str, Any]:
         boundary = "----anchor" + uuid.uuid4().hex
         parts = [

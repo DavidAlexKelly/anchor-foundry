@@ -898,6 +898,26 @@ export const objects = {
   },
   attachmentUrl: (wid: string, key: string) =>
     `/api/workspaces/${wid}/attachments/download?key=${encodeURIComponent(key)}`,
+  /** The same bytes as a **Blob**, asked for inline (decision 0009, part 2).
+   *
+   * **Fetched rather than pointed at, and that is not a style choice.** Cookie
+   * authentication here requires the `X-Anchor-Session` header - the CSRF
+   * defence that makes a cookie safe to accept at all - and an `<img src>`
+   * cannot set headers, so a plain URL in an element attribute is an
+   * unauthenticated request and a 401. Exempting this one route would put the
+   * hole back on the route that reads private bytes.
+   *
+   * The Blob keeps the server's own content type, so the allowlist on the
+   * server is still what decides whether anything renders; this can only ask. */
+  attachmentBlob: async (wid: string, key: string, contentType: string) => {
+    const res = await fetch(
+      `/api/workspaces/${wid}/attachments/download?key=${encodeURIComponent(key)}` +
+        `&disposition=inline&content_type=${encodeURIComponent(contentType)}`,
+      { credentials: "same-origin", headers: SESSION_HEADERS },
+    );
+    if (!res.ok) throw new ApiError(res.status, res.statusText);
+    return res.blob();
+  },
   instanceLinks: (wid: string, typeId: string, instanceId: string) =>
     request<import("./types").LinkedInstances[]>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/links`,

@@ -1839,6 +1839,19 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   text-transform: uppercase; color: var(--ink-soft); font-weight: 600;
 }
 
+/* ---- media shown rather than offered (decision 0009, part 2) --------------
+   An attachment holding an image, video or audio *is* the media reference
+   this platform can honour, and the only thing missing was the renderer. The
+   caption stays under it: a picture with no name is not a file anybody can go
+   and find again. `max-width: 100%` because a property value lives in a table
+   cell and a 4000px photo must not decide the column width. */
+.media-value { display: inline-flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.media-image {
+  max-width: 100%; max-height: 260px; width: auto; height: auto;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+}
+.media-player { max-width: 100%; }
+
 /* ---- the Changelog panel (Foundry p.193) ---------------------------------
    Five kinds of change, five readings. Colour is not the only signal - each
    chip carries its word - because "added" and "deleted" as two shades of the

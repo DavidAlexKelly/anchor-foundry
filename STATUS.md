@@ -2978,6 +2978,29 @@ Four mutations, all red. **89 unit tests** (was 80), 934 API, **111 browser test
 
 Four mutations, all red. **96 unit tests** (was 89), **945 API tests** (was 934), **117 browser tests** (was 111).
 
+---
+
+### 147. Where time series and media live, and the media half built (this session)
+
+`ontology.md` §7's build order item 5 says the two remaining property types "both need a storage decision first". **Decision 0009** makes both. They turned out not to be the same kind of problem.
+
+**Time series: settled, not built.** A time series property is not a value, it is a table - one instance carries thousands of `(timestamp, value)` pairs. Everything this platform stores about an instance is *one document*, so putting points there means every list read pays for every point and every sync rewrites the whole history. The decision rejects a `time_series_points` table in Postgres too, and not for performance: it would be a second copy of data the dataset subsystem already versions, retains and traces, with its own retention policy, its own lineage story and its own answer to "what did this look like last Tuesday". So the property holds a series **id**, an `object_type_series` mapping on the object type source says which dataset and which key/timestamp/value columns, and points are read through the dataset engine on demand. The cost is named rather than discovered: freshness is sync-shaped, not streaming.
+
+**Media: there is no media reference type, and that is the decision.** Foundry's points into a *media set* - `mimeType` plus a triple of media-set/view/item RIDs. We have no media sets, and building one is a product the size of Datasets that nothing in the five in-scope applications asks for. Adding the *shape* without the thing was rejected in stronger terms: two of the three RIDs would be permanently null, and the first person to branch on them would be writing dead code against a contract nobody honours.
+
+What was actually missing was the **renderer**. An attachment holding a PNG already is a media reference in every sense this platform can honour - bytes, a MIME type, a URL that enforces the workspace boundary - and it drew a download link. So: no type, no table, no migration, and images, video and audio now render in place.
+
+**Two collisions found on the way, both worth the time.**
+
+*The download route refuses to serve anything inline*, and its docstring says why: the content type is the uploader's claim, and serving a claimed type inline is how a stored XSS happens. That refusal is right and was not weakened. Inline is now **earned** - asked for explicitly, only for a type on the route's *own* allowlist (never `image/svg+xml`, which is an image the browser executes script inside), always with `nosniff` so a file that is really HTML fails to decode as an image rather than running as a document. A caller naming a type off the list gets a download rather than an error, so a mislabelled file is a link and not a broken page.
+
+*An `<img src>` cannot authenticate here.* Cookie auth requires the `X-Anchor-Session` header - the CSRF defence that makes accepting a cookie safe at all - and an element attribute cannot set headers, so the first version 401'd on every image. Exempting this one route would have put the hole back on the route that reads private bytes. Instead the bytes are fetched through the authenticated client and handed to the element as an object URL, revoked on unmount. Every existing rule stays intact and nothing new is trusted.
+
+**A surviving mutation found a real gap.** Dropping the `disposition == "inline"` check passed everything: the only test guarding the default used a **PDF**, which is off the allowlist and so could never have gone inline either way - it could not tell "not asked" from "not allowed" apart. An image can go both ways, and the test that says which happens when nobody asked is the one that was missing. Fixed in the test.
+
+Four mutations, all red. **102 unit tests** (was 96), **951 API tests** (was 945), **121 browser tests** (was 117).
+---
+
 **The sandbox rewound the checkout twice more this session** - HEAD back at a commit from PR #50, `docs/parity/` gone, Postgres down, `node_modules` pruned, the database missing six migrations. Nothing was lost either time because every unit was already pushed and merged. The recovery is mechanical and worth having written down: `git fetch origin main && git checkout -B <branch> origin/main`, then `scripts/dev-up.sh`, then `npm ci` **at the repo root** (§132's lesson - never in `apps/web`), then `packages/db/migrate.py`, then a full API run to prove the restore before touching anything.
 ---
 
