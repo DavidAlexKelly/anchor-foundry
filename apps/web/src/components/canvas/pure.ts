@@ -60,6 +60,42 @@ export function seriesLabel(iso: string, interval: string): string {
   return interval === "week" ? `w/c ${formatted}` : formatted;
 }
 
+/** A *reading's* label, for a time series set variable (p.76, p.582).
+ *
+ * `seriesLabel` above is for object counts, whose narrowest bucket is a day.
+ * A series can be asked for by the hour or unbucketed altogether
+ * (`time_series.INTERVALS`), and a day-only label would then stack a
+ * fortnight of readings onto fourteen labels — which a chart keyed on labels
+ * draws as fourteen points, silently losing the rest. So the finer buckets
+ * carry a time, and only those.
+ *
+ * **Anything that is not a timestamp comes back as itself.** `at` arrives as
+ * JSON from whatever column the dataset mapped, so a string that is not a
+ * date is a mapping worth seeing on the axis rather than an `Invalid Date`
+ * thrown from inside a chart.
+ */
+export function seriesPointLabel(at: unknown, interval: string): string {
+  const raw = at instanceof Date ? at.toISOString() : String(at ?? "");
+  const when = new Date(raw);
+  if (Number.isNaN(when.getTime())) return raw;
+  if (interval === "none" || interval === "hour") {
+    const date = new Intl.DateTimeFormat(undefined, {
+      day: "numeric", month: "short", timeZone: "UTC",
+    }).format(when);
+    const time = new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      // Seconds only where they can differ. An hourly bucket always ends
+      // `:00:00`, and printing that would be three characters of noise on
+      // every label of a crowded axis.
+      ...(interval === "hour" ? {} : { minute: "2-digit", second: "2-digit" }),
+      hour12: false,
+      timeZone: "UTC",
+    }).format(when);
+    return `${date} ${time}`;
+  }
+  return seriesLabel(raw, interval);
+}
+
 // ---- section proportions (roadmap 1.4) -------------------------------------
 
 /** The least of a section a part may be dragged to, as a fraction of the pair

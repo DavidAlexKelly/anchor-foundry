@@ -1466,3 +1466,134 @@ def test_a_filter_can_start_with_a_default_applied() -> None:
         }
     )
     assert wv.evaluate(variables, {})["v_region"] == "north"
+
+
+# ---- time series set variables (p.76, p.582) ---------------------------------
+SENSOR = {
+    "id": "11111111-2222-3333-4444-555555555555",
+    "object_type_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "primary_key": "S1",
+    "properties": {"name": "North sensor", "readings": "S1"},
+}
+
+
+def series_module(**config) -> dict:
+    """A picked object, and the series one of its properties holds."""
+    return wv.parse(
+        {
+            "v_object": var("v_object", kind="single_object", label="Picked sensor"),
+            "v_series": var(
+                "v_series", kind="time_series_set", label="Readings",
+                derivation={
+                    "transform": "object_series", "inputs": ["v_object"],
+                    "config": {"property": "readings", **config},
+                },
+            ),
+        }
+    )
+
+
+def test_a_time_series_set_is_a_reference_to_one_objects_property() -> None:
+    """p.76: "Stores a time series property of a single object." What comes
+    out is the whole question a reader can ask - which object, which property,
+    which bucket, which summariser - and `seriesPoints` takes exactly that."""
+    resolved = wv.evaluate(series_module(), {"v_object": SENSOR})
+    assert resolved["v_series"] == {
+        "object_type_id": SENSOR["object_type_id"],
+        "instance_id": SENSOR["id"],
+        "property": "readings",
+        "interval": "day",
+        "aggregate": "avg",
+    }
+
+
+def test_a_time_series_set_holds_no_points() -> None:
+    """Decision 0009 keeps points in the dataset they arrived in. A variable
+    holding points would be the copy that decision refuses, made per viewing
+    and per widget - so the resolved value carries a question, never data."""
+    resolved = wv.evaluate(series_module(), {"v_object": SENSOR})
+    assert "points" not in resolved["v_series"]
+    assert set(resolved["v_series"]) == {
+        "object_type_id", "instance_id", "property", "interval", "aggregate",
+    }
+
+
+def test_the_bucket_and_summariser_live_on_the_variable() -> None:
+    """p.76's "optionally allowing the application of time series transforms
+    to it". Two widgets reading one series variable then agree about what a
+    point means, which is the difference between a variable and a shortcut."""
+    resolved = wv.evaluate(
+        series_module(interval="hour", aggregate="max"), {"v_object": SENSOR}
+    )
+    assert resolved["v_series"]["interval"] == "hour"
+    assert resolved["v_series"]["aggregate"] == "max"
+
+
+def test_nothing_picked_yet_is_an_empty_series_not_an_error() -> None:
+    """A detail panel before the first click is an ordinary state, not a
+    fault - the same rule `object_property` follows."""
+    for empty in ({}, {"v_object": None}, {"v_object": ""}):
+        assert wv.evaluate(series_module(), empty)["v_series"] is None, empty
+
+
+def test_a_series_read_from_a_non_object_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="not an object"):
+        wv.evaluate(series_module(), {"v_object": "S1"})
+
+
+def test_an_object_with_no_id_or_type_cannot_be_asked_for_a_series() -> None:
+    """Not a state a viewer can be in: every path that writes a single_object
+    writes both. Returning None would render as "no readings yet", a sentence
+    about the data when the truth is about the wiring."""
+    for broken in (
+        {**SENSOR, "id": None},
+        {**SENSOR, "object_type_id": None},
+        {"properties": {}},
+    ):
+        with pytest.raises(wv.VariableError, match="no type or no id"):
+            wv.evaluate(series_module(), {"v_object": broken})
+
+
+def test_object_series_needs_one_input_and_a_property() -> None:
+    with pytest.raises(wv.VariableError, match="exactly one input"):
+        wv.parse({
+            "v_a": var("v_a", kind="single_object"),
+            "v_b": var("v_b", kind="single_object"),
+            "v_x": var("v_x", kind="time_series_set", derivation={
+                "transform": "object_series", "inputs": ["v_a", "v_b"],
+                "config": {"property": "readings"}}),
+        })
+    with pytest.raises(wv.VariableError, match="needs a time series property"):
+        wv.parse({
+            "v_a": var("v_a", kind="single_object"),
+            "v_x": var("v_x", kind="time_series_set", derivation={
+                "transform": "object_series", "inputs": ["v_a"], "config": {}}),
+        })
+
+
+def test_an_unknown_bucket_or_summariser_is_refused_at_save() -> None:
+    """Checked here rather than at read time, because the read is a
+    `points_sql` build: an unknown aggregate would surface as a DuckDB parse
+    error in front of a viewer, naming a function nobody typed."""
+    with pytest.raises(wv.VariableError, match="interval 'fortnight'"):
+        series_module(interval="fortnight")
+    with pytest.raises(wv.VariableError, match="aggregate 'median'"):
+        series_module(aggregate="median")
+
+
+def test_the_vocabulary_is_the_time_series_services_own() -> None:
+    """One list, not two. A bucket this module accepted and `points_sql` did
+    not would be refused at read time by the layer with no way to say so."""
+    from src.services import time_series
+
+    for interval in time_series.INTERVALS:
+        assert series_module(interval=interval) is not None
+    for aggregate in time_series.AGGREGATES:
+        assert series_module(aggregate=aggregate) is not None
+
+
+def test_a_time_series_set_that_is_not_derived_is_refused() -> None:
+    """There is no static form of a series. One that named no object would
+    resolve to whatever `default` held, which for this kind is always a typo."""
+    with pytest.raises(wv.VariableError, match="not derived from an object"):
+        wv.parse({"v_x": var("v_x", kind="time_series_set", default="S1")})

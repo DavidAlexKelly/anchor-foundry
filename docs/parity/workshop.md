@@ -128,7 +128,7 @@ Applied through one `<Editor onRender>` wrapper rather than in each of the twent
 
 ## 3. Variables
 
-Ours: 8 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`) and 10 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `object_property`, `filter_value`, plus `object_set_aggregation` served by the store).
+Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`, `time_series_set`) and 11 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `object_property`, `filter_value`, `object_series`, plus `object_set_aggregation` served by the store).
 
 ### 3.1 Definition types (p.73)
 
@@ -147,7 +147,7 @@ Ours: 8 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `sin
 |---|---|---|
 | **Object set filter variables** | ◑ | the output of every filtering widget; "captures the current filter state and can be applied to object set variables or reused in widget configurations" (p.444). Both halves of p.444 now work: **applied to object set variables** is `narrow_set`, and **reused in widget configurations** is `filter_value`, a transform that reads one property's chosen value back out of a filter's clauses (a property nobody filtered on is `None`, not an error; a multi-select is returned whole). **Default filters** need nothing new — an `array` variable's `default` is filter state that is applied on load, and `test_a_filter_can_start_with_a_default_applied` holds that. What is still missing is a dedicated `object_set_filter` variable *kind*: filter state travels as an `array` of clauses rather than as its own type, so the panel cannot tell a filter apart from any other list, and a widget cannot ask for "a filter" specifically. |
 | **Struct variables** | ○ | (p. §22 of TOC) |
-| **Time series set variables** | ○ | consumed by Chart XY, Map, Metric Card, Object Table (Time series properties section) |
+| **Time series set variables** | ◑ | "Stores a time series property of a single object, optionally allowing the application of time series transforms to it" (p.76). Built: the `time_series_set` kind, always derived by an `object_series` transform naming a `single_object` variable and a `time_series` property, with the bucket and summariser on the *variable* rather than on each widget — so two widgets reading one series agree about what a point means. It resolves to a **reference**, never to points (decision 0009), the same way an `object_set` variable holds a definition rather than rows. Consumed by **Chart XY** (p.280's third Data input, forced to a line per p.281). The other three consumers p.582 names — Map, Metric Card, Object Table — are ○, and so are the p.583–584 **time series transforms** (cumulative/periodic/rolling aggregates), which are a computation over points rather than a variable |
 | Variable-backed layouts | ○ | a variable drives which page/tab/section state is active |
 
 ### 3.3 Variables panel (p.72)
@@ -364,7 +364,7 @@ Our generic parameter control is a defensible design, but it is *our* design, an
 
 | Foundry | Ours |
 |---|---|
-| Chart XY — bar, line, scatter; multi-series; aggregation; segmentation; **function-backed layers** `[fn]`; axes, legends, numeric formatting; selection and downstream filtering | ◑ `CanvasChart` |
+| Chart XY — bar, line, scatter; multi-series; aggregation; segmentation; **function-backed layers** `[fn]`; axes, legends, numeric formatting; selection and downstream filtering | ◑ `CanvasChart` — two of p.280's three Data inputs now: an object set and a **time series set** (§151, drawn as a line per p.281). Function aggregation is ○ with `[fn]`. There are still no *layers*: one input per chart, so multi-series and segmentation are ○ |
 | Metric Card | ◑ `CanvasMetricCard` — Foundry's has an **Interactive metric** setting that fires commands/actions/events (p.480) |
 | Pivot Table | ✅ `CanvasPivotTable` |
 | Map | ◑ `CanvasMap` |

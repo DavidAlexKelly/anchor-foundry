@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MIN_SHARE, formatWeights, parseWeights, pivotClauses, resizeWeights, roundWeight,
-  seedFromQuery, seriesLabel,
+  seedFromQuery, seriesLabel, seriesPointLabel,
 } from "./pure";
 
 describe("pivotClauses", () => {
@@ -88,6 +88,56 @@ describe("seriesLabel", () => {
     // local time and every bucket is off by one for half the world.
     expect(seriesLabel(midnightUtc, "day")).toContain("4");
     expect(seriesLabel("2024-03-04T23:59:59Z", "day")).toContain("4");
+  });
+});
+
+describe("seriesPointLabel", () => {
+  // A time series set (p.76) can be asked for by the hour or not bucketed at
+  // all, which `seriesLabel`'s day-or-wider vocabulary cannot express.
+  const morning = "2024-03-04T09:15:30Z";
+  const evening = "2024-03-04T21:45:00Z";
+
+  it("separates two readings on the same day, which a day label cannot", () => {
+    // The failure this exists to prevent: a chart keyed on labels draws one
+    // point per *distinct* label, so a day-only label over an unbucketed
+    // series silently collapses a fortnight of readings into fourteen points.
+    expect(seriesPointLabel(morning, "none")).not.toBe(
+      seriesPointLabel(evening, "none"),
+    );
+    expect(seriesPointLabel(morning, "hour")).not.toBe(
+      seriesPointLabel(evening, "hour"),
+    );
+    expect(seriesLabel(morning, "day")).toBe(seriesLabel(evening, "day"));
+  });
+
+  it("carries seconds only where two readings can differ by them", () => {
+    // An hourly bucket always ends :00:00; printing that is noise on every
+    // label of a crowded axis.
+    expect(seriesPointLabel(morning, "none")).toContain("30");
+    expect(seriesPointLabel(morning, "hour")).not.toContain("15");
+  });
+
+  it("reads the hour in UTC, not the machine's zone", () => {
+    const offset = new Date(morning).getTimezoneOffset();
+    expect(offset, "the test process must not be running in UTC").toBeGreaterThan(0);
+    expect(seriesPointLabel(morning, "hour")).toContain("09");
+    // And the date has not slipped back a day with it.
+    expect(seriesPointLabel("2024-03-04T00:30:00Z", "none")).toContain("4");
+  });
+
+  it("hands the wider buckets to seriesLabel rather than relabelling them", () => {
+    // One vocabulary for "which day is this", not two that can drift apart.
+    for (const interval of ["day", "week", "month"]) {
+      expect(seriesPointLabel(morning, interval)).toBe(seriesLabel(morning, interval));
+    }
+  });
+
+  it("returns anything that is not a timestamp as itself", () => {
+    // `at` is JSON from whatever column the dataset mapped. A mapping pointed
+    // at the wrong column should show on the axis, not throw `Invalid Date`
+    // from inside a chart.
+    expect(seriesPointLabel("north", "none")).toBe("north");
+    expect(seriesPointLabel(null, "day")).toBe("");
   });
 });
 

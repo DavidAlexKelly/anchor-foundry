@@ -46,6 +46,15 @@ KINDS = (
     "array",
     "single_object",
     "object_set",
+    # > "Time series set: Stores a time series property of a single object,
+    # > optionally allowing the application of time series transforms to it."
+    # > (`foundry_workshop` p.76; the feature page is p.582)
+    #
+    # **Of a single object** - not of a set. That is the spec's own wording and
+    # it is what makes this cheap here: the object is already in hand as a
+    # `single_object` value, so a series variable is a *reference* built from
+    # it rather than a fan-out over rows.
+    "time_series_set",
 )
 
 # Foundry's transformation vocabulary, less the ones that need a widget or a
@@ -61,6 +70,7 @@ TRANSFORMS = (
     "narrow_set",   # narrow an object set by a list of clauses a widget writes
     "object_property",  # one property of the object a viewer picked
     "filter_value",  # one property's chosen value, out of a filter's clauses
+    "object_series",  # the time series a property holds, on the object picked
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -137,6 +147,7 @@ REFERENCE_PROPS = (
     "visibleWhen",
     "subjectVariable",
     "drilldownVariable",
+    "seriesVariable",
 )
 
 
@@ -233,6 +244,17 @@ def parse(raw: Any) -> dict[str, Variable]:
         if not label:
             raise VariableError(f"variable {key!r} needs a label")
         derivation = _parse_derivation(vid, value.get("derivation"))
+        if kind == "time_series_set" and derivation is None:
+            # There is no static form of a time series set. A series is read
+            # *through* an object (p.76: "a time series property of a single
+            # object"), so one that named no object would be a variable with
+            # nowhere to read from - and it would resolve to whatever
+            # `default` held, which for this kind is always a typo.
+            raise VariableError(
+                f"variable {label!r} is a time series set but is not derived from an "
+                "object - a series is a property of an object, so it needs an "
+                "object_series derivation naming which object and which property"
+            )
         external_id, interface = _parse_interface(
             label, value.get("external_id"), value.get("interface")
         )
@@ -494,6 +516,35 @@ def _check_arity(vid: str, d: Derivation) -> None:
             raise VariableError(
                 f"variable {vid!r}: filter_value needs a property to read"
             )
+    elif d.transform == "object_series":
+        from . import time_series
+
+        if len(d.inputs) != 1:
+            raise VariableError(
+                f"variable {vid!r}: object_series needs exactly one input "
+                "(the variable holding the object)"
+            )
+        prop = d.config.get("property")
+        if not prop or not isinstance(prop, str):
+            raise VariableError(
+                f"variable {vid!r}: object_series needs a time series property to read"
+            )
+        # The bucket and the summariser are checked here rather than at read
+        # time, because the read is a `points_sql` build: an unknown aggregate
+        # would surface as a DuckDB parse error in front of a viewer, naming a
+        # function nobody typed.
+        interval = d.config.get("interval", "day")
+        if interval not in time_series.INTERVALS:
+            raise VariableError(
+                f"variable {vid!r}: interval {interval!r}; expected one of "
+                f"{', '.join(time_series.INTERVALS)}"
+            )
+        aggregate = d.config.get("aggregate", "avg")
+        if aggregate not in time_series.AGGREGATES:
+            raise VariableError(
+                f"variable {vid!r}: aggregate {aggregate!r}; expected one of "
+                f"{', '.join(time_series.AGGREGATES)}"
+            )
     elif d.transform == "narrow_set":
         # No property or operator here on purpose: which properties a Filter
         # List narrows on is what the *viewer* chooses, so it is part of the
@@ -652,6 +703,8 @@ def _apply(variable: Variable, inputs: list[Any]) -> Any:
         return _object_property(variable, inputs[0], str(d.config["property"]))
     if d.transform == "filter_value":
         return _filter_value(variable, inputs[0], str(d.config["property"]))
+    if d.transform == "object_series":
+        return _object_series(variable, inputs[0], d.config)
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
 
 
@@ -764,6 +817,66 @@ def _filter_value(variable: Variable, clauses: Any, property_name: str) -> Any:
         if isinstance(clause, dict) and clause.get("property") == property_name:
             return clause.get("value")
     return None
+
+
+def _object_series(
+    variable: Variable, obj: Any, config: dict[str, Any]
+) -> dict[str, Any] | None:
+    """A time series set: one object's `time_series` property, as a reference.
+
+    > "Time series set: Stores a time series property of a single object."
+    > (`foundry_workshop` p.76)
+
+    **It resolves to a reference, not to points**, and that is the same rule
+    object-set variables follow: `object_set` holds a definition rather than
+    rows, so one set can feed a table, a chart and a count without three
+    notions of what the set is. A series is the sharper case - decision 0009
+    keeps points in the dataset they arrived in, so a variable holding points
+    would be the copy that decision exists to refuse, made per viewing and per
+    widget.
+
+    What comes out is the whole question a reader can ask: which object, which
+    property, which bucket, which summariser. `objApi.seriesPoints` takes
+    exactly that, so a widget consuming this variable adds no interpretation.
+
+    **The bucket and the summariser live on the variable, not on the widget**
+    (p.76's "optionally allowing the application of time series transforms to
+    it"). Two charts reading one series variable then agree about what a point
+    means, which is the difference between a variable and a shortcut for
+    typing the same configuration twice.
+
+    **Nothing picked yet is `None`**, the same as `object_property`: a detail
+    panel before the first click is an ordinary state, not a fault.
+
+    **An object with no id or no type is refused.** Unlike a missing property
+    value, this is not a state a viewer can be in - every path that writes a
+    `single_object` writes both (`canvas/object-set.ts`, and the Object View's
+    seed) - so it means the value came from somewhere that is not an object
+    selection. Returning `None` would render as "no readings yet", which is a
+    sentence about the data when the truth is about the wiring.
+    """
+    if obj is None or obj == "":
+        return None
+    if not isinstance(obj, dict):
+        raise VariableError(
+            f"{variable.label!r} reads a time series from something that is not an "
+            "object - point it at a variable a row selection writes"
+        )
+    type_id = obj.get("object_type_id")
+    instance_id = obj.get("id")
+    if not type_id or not instance_id:
+        raise VariableError(
+            f"{variable.label!r} reads a time series from an object with no "
+            "type or no id - a series is read through the object it belongs to, "
+            "so both are needed to ask for one"
+        )
+    return {
+        "object_type_id": str(type_id),
+        "instance_id": str(instance_id),
+        "property": str(config["property"]),
+        "interval": str(config.get("interval", "day")),
+        "aggregate": str(config.get("aggregate", "avg")),
+    }
 
 
 def _narrow_set(variable: Variable, base: Any, clauses: Any) -> dict[str, Any]:

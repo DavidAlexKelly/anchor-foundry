@@ -95,6 +95,7 @@ export const REFERENCE_PROPS = [
   "visibleWhen",
   "subjectVariable",
   "drilldownVariable",
+  "seriesVariable",
 ] as const;
 
 export interface Usage {
