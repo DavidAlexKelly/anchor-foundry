@@ -2999,6 +2999,27 @@ What was actually missing was the **renderer**. An attachment holding a PNG alre
 **A surviving mutation found a real gap.** Dropping the `disposition == "inline"` check passed everything: the only test guarding the default used a **PDF**, which is off the allowlist and so could never have gone inline either way - it could not tell "not asked" from "not allowed" apart. An image can go both ways, and the test that says which happens when nobody asked is the one that was missing. Fixed in the test.
 
 Four mutations, all red. **102 unit tests** (was 96), **951 API tests** (was 945), **121 browser tests** (was 117).
+
+---
+
+### 148. Time series properties, built on the decision (this session)
+
+Decision 0009 settled where the points live; this is that, built. A `time_series` property type, an `object_type_series` mapping (migration 0047) saying which dataset and which key/timestamp/value columns hold one property's points, and a read endpoint that queries them through the dataset engine.
+
+**Nothing copies points anywhere**, which is the whole decision and is stated at the top of the module that would be the place to break it. The acceptance test is the plainest one in the file: readings uploaded as an ordinary CSV come back out of that dataset, filtered to one series, without ever having been written to Postgres.
+
+**Declared on the *source*, not on the object type.** An object type is workspace-scoped; a dataset lives in a project. "Where are this type's rows in this project" is exactly what `object_type_sources` answers, and where its series live is the same question about the same project. A type mapped in two projects can point its series at two different datasets - which is already true of its properties, and would be surprising to lose here.
+
+**Three refusals at declaration, each a chart somebody would otherwise open to find empty**: a property that is not declared `time_series` (points behind a string property are points nothing would ever draw), a column the points dataset does not have - checked against *the dataset's own schema*, read by the route and handed to the service, because the service does not touch Parquet - and three columns that are not distinct, since a series whose timestamp and value are the same column is a straight line.
+
+**The SQL is a separate pure function and is tested without a Parquet file.** A wrong bucket, an unfiltered key or a missing cap all live in the shape of the query, and none of them need a dataset to see. The mutation that drops the series filter is red on five tests, three of which never open a file.
+
+**The interval and aggregate vocabulary is now decided.** Decision 0009 deliberately left it open - "against a real widget rather than in advance" - and the widget is §4.1's chart. `INTERVALS` reuses `object_sets.TIME_INTERVALS`' names and adds `hour`, because a sensor reading every minute is unreadable at daily resolution. `AGGREGATES` includes `last`, because a series of readings is often a *level* rather than a rate and averaging a level across a day answers a question nobody asked.
+
+**Two duplicated lists bit, exactly where duplicated lists do.** `PropertyIn.data_type` carried its own regex copy of the property types, so adding `time_series` to `ontology.PROPERTY_TYPES` left the one place a client could *declare* it behind - and the refusal named a pattern rather than a missing feature. Then `test_every_property_type_can_be_an_action_parameter` went red: `action_parameter_type` is a second enum overlapping `property_data_type`, and that test exists to catch precisely this drift. **Fixed in the code, not the test** - a time series property's value is a series id, an ordinary scalar, so re-pointing an instance at a different series is a normal edit and refusing it would be arbitrary. Both lists are now derived from `PROPERTY_TYPES` rather than retyped, and the enum is widened in the same migration that introduces the type.
+
+Four mutations, all red. **971 API tests** (was 951), 102 unit, 121 browser.
+---
 ---
 
 **The sandbox rewound the checkout twice more this session** - HEAD back at a commit from PR #50, `docs/parity/` gone, Postgres down, `node_modules` pruned, the database missing six migrations. Nothing was lost either time because every unit was already pushed and merged. The recovery is mechanical and worth having written down: `git fetch origin main && git checkout -B <branch> origin/main`, then `scripts/dev-up.sh`, then `npm ci` **at the repo root** (§132's lesson - never in `apps/web`), then `packages/db/migrate.py`, then a full API run to prove the restore before touching anything.

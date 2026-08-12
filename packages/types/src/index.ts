@@ -923,7 +923,12 @@ export type PropertyVisibility = "normal" | "prominent" | "hidden";
 
 export type PropertyDataType =
   | "string" | "integer" | "float" | "boolean" | "date" | "timestamp" | "geopoint"
-  | "json" | "attachment";
+  | "json" | "attachment"
+  /** A **series id**, not a history (decision 0009, db 0047). The value on the
+   * instance is a small scalar — usually its own primary key — and
+   * `object_type_series` on the object type source says which dataset, key,
+   * timestamp and value columns hold the points behind it. */
+  | "time_series";
 
 /** A geopoint property's stored value (db 0029). Always lat,lon - see
  * property_values.py for why that order and not GeoJSON's lon,lat. */

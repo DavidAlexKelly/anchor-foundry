@@ -37,6 +37,11 @@ from ..lib.errors import ConflictError, NotFoundError
 
 _API_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
+# Imported at module level rather than inside a function: this is a
+# constant, and the lazy `from . import ontology` elsewhere in this file
+# exists to break an import cycle that the type *set* is not part of.
+from .ontology import PROPERTY_TYPES as _ONTOLOGY_PROPERTY_TYPES  # noqa: E402
+
 
 def bind_parameters(
     values: dict[str, Any], *, parameters: list[dict[str, Any]]
@@ -1026,10 +1031,13 @@ async def list_runs(conn: AsyncConnection, action_type_id: UUID) -> list[dict[st
 
 
 # ---- editing the definition ---------------------------------------------------
-_PARAMETER_TYPES = frozenset(
-    {"string", "integer", "float", "boolean", "date", "timestamp",
-     "geopoint", "json", "attachment", "object"}
-)
+# **`ontology.PROPERTY_TYPES` plus `object`**, built rather than typed out.
+# The two enums overlapping is what `test_every_property_type_can_be_an_action
+# _parameter` guards, and it caught exactly this drift when `time_series`
+# arrived: a property type no parameter can hold is a property no action could
+# ever write. `object` is the one word p.25 needs that the ontology has no use
+# for - a parameter that takes a whole instance.
+_PARAMETER_TYPES = frozenset(_ONTOLOGY_PROPERTY_TYPES | {"object"})
 _RULE_KINDS = frozenset(
     {"modify_object", "create_object", "delete_object", "create_link", "delete_link"}
 )
