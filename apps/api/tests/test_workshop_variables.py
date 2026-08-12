@@ -1356,3 +1356,113 @@ def test_a_valid_mapping_passes_the_save_path() -> None:
         "variables": {"v_a": var("v_a", label="Status")},
     }
     assert "v_a" in wv.validate_module(document)
+
+
+# ---- filter_value: reading the filter state back (p.444) ----------------------
+def reading_module() -> dict[str, wv.Variable]:
+    """A Filter List's clauses, and a label that names what was chosen."""
+    return wv.parse(
+        {
+            "v_clauses": var("v_clauses", kind="array", label="Chosen filters"),
+            "v_region": var(
+                "v_region", label="Chosen region",
+                derivation={"transform": "filter_value", "inputs": ["v_clauses"],
+                            "config": {"property": "region"}},
+            ),
+        }
+    )
+
+
+def test_filter_value_reads_what_the_viewer_chose() -> None:
+    """p.444's other half. `narrow_set` *applies* the filter state to a set;
+    this reads a value back out of it, which is what "reused in widget
+    configurations" means - a heading, a chart title, an action's default."""
+    resolved = wv.evaluate(reading_module(), {"v_clauses": [
+        {"property": "status", "op": "eq", "value": "open"},
+        {"property": "region", "op": "eq", "value": "north"},
+    ]})
+    assert resolved["v_region"] == "north"
+
+
+def test_filter_value_on_an_untouched_filter_is_none_not_an_error() -> None:
+    """The ordinary state of an app somebody just opened. A derivation that
+    raised here would make the first render the broken one - `filter_set`'s
+    rule about unset values, one layer up."""
+    for empty in ({}, {"v_clauses": None}, {"v_clauses": []}):
+        assert wv.evaluate(reading_module(), empty)["v_region"] is None, empty
+
+
+def test_filter_value_for_a_property_nobody_filtered_on_is_none() -> None:
+    resolved = wv.evaluate(reading_module(), {"v_clauses": [
+        {"property": "status", "op": "eq", "value": "open"},
+    ]})
+    assert resolved["v_region"] is None
+
+
+def test_filter_value_keeps_a_multi_select_whole() -> None:
+    """An `in` clause holds several values because the viewer picked several.
+    Collapsing that to the first would silently answer a different question."""
+    resolved = wv.evaluate(reading_module(), {"v_clauses": [
+        {"property": "region", "op": "in", "value": ["north", "south"]},
+    ]})
+    assert resolved["v_region"] == ["north", "south"]
+
+
+def test_filter_value_reads_the_first_clause_for_a_property() -> None:
+    """Two clauses on one property is a Filter List expressing a range or a
+    several-of - one filter with two halves rather than two answers, and
+    picking a half here would be this function inventing which one matters."""
+    resolved = wv.evaluate(reading_module(), {"v_clauses": [
+        {"property": "region", "op": "eq", "value": "north"},
+        {"property": "region", "op": "eq", "value": "south"},
+    ]})
+    assert resolved["v_region"] == "north"
+
+
+def test_filter_value_refuses_something_that_is_not_a_clause_list() -> None:
+    with pytest.raises(wv.VariableError, match="filter clauses"):
+        wv.evaluate(reading_module(), {"v_clauses": "north"})
+
+
+def test_filter_value_needs_one_input_and_a_property() -> None:
+    """Refused at *save*, where somebody can still fix it, rather than at view
+    time in front of a reader who did not write it."""
+    with pytest.raises(wv.VariableError, match="exactly one input"):
+        wv.parse({
+            "v_a": var("v_a", kind="array"),
+            "v_b": var("v_b", kind="array"),
+            "v_x": var("v_x", derivation={
+                "transform": "filter_value", "inputs": ["v_a", "v_b"],
+                "config": {"property": "region"}}),
+        })
+    with pytest.raises(wv.VariableError, match="needs a property"):
+        wv.parse({
+            "v_a": var("v_a", kind="array"),
+            "v_x": var("v_x", derivation={
+                "transform": "filter_value", "inputs": ["v_a"], "config": {}}),
+        })
+
+
+def test_a_filter_can_start_with_a_default_applied() -> None:
+    """p.444's **default filters**, and they need nothing new: a variable's
+    `default` is where a plain variable starts for every viewer (decision
+    0002 §3), and the clause list is a plain variable.
+
+    Worth a test rather than an assumption - "it already works" is exactly the
+    claim that turns out to be false, and this is the one line that says it
+    does.
+    """
+    variables = wv.parse(
+        {
+            "v_clauses": var(
+                "v_clauses", kind="array", label="Chosen filters",
+                default=[{"property": "region", "op": "eq", "value": "north"}],
+            ),
+            "v_region": var(
+                "v_region", label="Chosen region",
+                derivation={"transform": "filter_value", "inputs": ["v_clauses"],
+                            "config": {"property": "region"}},
+            ),
+        }
+    )
+    assert wv.evaluate(variables, {})["v_region"] == "north"

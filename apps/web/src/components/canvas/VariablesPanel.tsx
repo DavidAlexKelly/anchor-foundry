@@ -55,6 +55,10 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   { value: "is_empty", label: "Is empty", arity: "one" },
   { value: "is_not_empty", label: "Is not empty", arity: "one" },
   { value: "object_property", label: "A property of an object", arity: "one" },
+  // p.444's "reused in widget configurations": `narrow_set` applies filter
+  // state to a set, this reads a value back out of it for a heading, a
+  // chart title, or an action's default.
+  { value: "filter_value", label: "A value chosen in a filter", arity: "one" },
 ];
 
 /** Offered on `object_set` variables, and the only things offered there -
@@ -79,6 +83,7 @@ function slotLabels(transform: WorkshopTransform): string[] {
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
   if (transform === "object_property") return ["Object"];
+  if (transform === "filter_value") return ["Filter clauses"];
   return ["Value"];
 }
 
@@ -545,7 +550,8 @@ function DerivationEditor({
         </label>
       )}
 
-      {derivation.transform === "object_property" && (
+      {(derivation.transform === "object_property" ||
+        derivation.transform === "filter_value") && (
         <label>
           Property
           <input
@@ -559,9 +565,15 @@ function DerivationEditor({
               })
             }
           />
-          {/* Readable by name because it is not one of the properties: a row's
-              key is its own field (`STATUS.md` §84). */}
-          <span className="field-hint">primary_key reads the object&apos;s key</span>
+          {derivation.transform === "object_property" ? (
+            /* Readable by name because it is not one of the properties: a
+               row's key is its own field (`STATUS.md` §84). */
+            <span className="field-hint">primary_key reads the object&apos;s key</span>
+          ) : (
+            <span className="field-hint">
+              empty until the viewer filters on it
+            </span>
+          )}
         </label>
       )}
 
