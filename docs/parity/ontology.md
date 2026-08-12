@@ -24,7 +24,7 @@ Ours: `string`, `integer`, `float`, `boolean`, `date`, `timestamp`, `geopoint`, 
 | **Geopoint** | ✅ | §20 |
 | **Attachment** — files on objects, for use with functions | ◑ | we have the type; no file storage behind it |
 | **Geoshape** | ○ | polygons and lines, not just points |
-| **Time series** | ◑ | §148 — the type exists, a series is declared on the object type source (db 0047), and points are read from the backing dataset with bucketing and aggregation. The **chart** on the standard Object View and Workshop's time series set variables are the remaining halves; geotemporal series is the same mechanism with a geopoint value column and is ○ |
+| **Time series** | ◑ | §148, §149 — the type, the `object_type_series` mapping (db 0047), the points read, and the chart on the standard Object View. What is left is **Workshop**'s time series set variables (`workshop.md` §3.2) and the widgets that consume them; geotemporal series is the same mechanism with a geopoint value column and is ○ |
 | **Geotemporal series** | ○ | position over time; renders on a Map in standard Object Views |
 | **Media reference** | ○ | points at an item in a media set: `mimeType` plus a reference triple of media-set / view / item RIDs (p.128). **Decision 0009 declines to add the type**: a shape promising a media set with none behind it is a contract nobody honours. Media that is already stored renders (§147); a media *set* waits for a consumer that needs a collection |
 | **Struct** — schema-based properties with multiple fields | ○ | also needed for Workshop struct variables |
@@ -113,7 +113,7 @@ Per-side display names and self-links are both small and both currently impossib
 | — geohash / geoshape / geotemporal → rendered on a Map | ✅ | ours is geopoint; one point is still a map |
 | — everything else prominent → large card above a table of the rest | ✅ | |
 | — media reference → dedicated media viewer | ◑ | §147 — an attachment holding an image, video or audio renders inline; the *media set* Foundry references is genuinely absent (decision 0009 declines to build one), so the property type stays ○ |
-| — time series → interactive chart | ○ | same |
+| — time series → interactive chart | ✅ | §149 — a prominent `time_series` property draws its line from the points in the dataset behind it (decision 0009); bucketed by day, because a card is not an analysis surface |
 | Normal properties in a regular table; hidden properties not shown | ✅ | |
 | **Linked objects component** — grouped by link type | ◑ | the groups are there (§18), sit *inside* the view rather than beside it (p.11), and a linked object's properties preview inline without navigating (§145) — typed, prominent first, hidden absent. Open-a-subset-in-a-tab and the side-panel preview are ○ |
 

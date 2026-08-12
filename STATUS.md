@@ -3019,6 +3019,27 @@ Decision 0009 settled where the points live; this is that, built. A `time_series
 **Two duplicated lists bit, exactly where duplicated lists do.** `PropertyIn.data_type` carried its own regex copy of the property types, so adding `time_series` to `ontology.PROPERTY_TYPES` left the one place a client could *declare* it behind - and the refusal named a pattern rather than a missing feature. Then `test_every_property_type_can_be_an_action_parameter` went red: `action_parameter_type` is a second enum overlapping `property_data_type`, and that test exists to catch precisely this drift. **Fixed in the code, not the test** - a time series property's value is a series id, an ordinary scalar, so re-pointing an instance at a different series is a normal edit and refusing it would be arbitrary. Both lists are now derived from `PROPERTY_TYPES` rather than retyped, and the enum is widened in the same migration that introduces the type.
 
 Four mutations, all red. **971 API tests** (was 951), 102 unit, 121 browser.
+
+---
+
+### 149. The chart, and the last of §4.1's four renderings (this session)
+
+p.11 gives the standard Object View four type-aware renderings. Geospatial and "everything else" landed with the view itself (§122); media landed once decision 0009 established there was nothing to store (§147); this is the fourth. A prominent `time_series` property now draws its line from the points in the dataset behind it - nothing copied, which is the decision, demonstrated on screen.
+
+**A workspace-scoped read, keyed on the instance.** The project-scoped points endpoint from §148 is the one a *builder* uses; a *reader* is on the Object Explorer or the standard Object View, both of which are workspace-wide. Putting a series behind project membership would make one property readable and another not, on the same card, for no reason a reader could see - instance properties are already visible at this floor and a series is the value of one of them.
+
+**The series id is not a parameter.** It is the instance's own value for that property, read server-side. A caller supplying one could ask for somebody else's series through an instance they can see, and the question this endpoint answers is "this object's readings" rather than "these readings". The mutation that reads the wrong property's value is red on three tests.
+
+**The geometry is pure and its own module.** Where a point lands is a rule, and two of them are the kind that only show up in production: a **flat series** is `0/0` for every point - a sensor reading the same number all week is the most ordinary series there is - and a **single reading** is a fact that an empty chart would deny. Both sit in the middle rather than dividing by zero or being skipped.
+
+**A test caught a real bug in its first run.** `Number(null)` is `0`, and so is `Number("")` - both finite, so a `Number.isFinite` guard alone plots a *missing* reading as a real zero. A gap in a line is honest; a zero is a reading that never happened. The emptiness check now comes first, and the comment says why.
+
+**And a test of mine could not fail for its stated reason.** One claimed to cover "an object with no series id charts nothing" - but every synced instance in that fixture has one, so the assertion was true for the wrong reason. Replaced with what the fixture can actually distinguish: S2's chart is S2's, from the same dataset and the same mapping.
+
+**The browser fixture needed the one thing `Module.object_type` cannot say**: the primary key column mapped to the series property *as well* as being the key. That is decision 0009's ordinary case - the series id is the instance's own key - and a mapping of `{column: same-named property}` has nowhere to express it. Built directly rather than by growing a parameter only one file needs.
+
+Four mutations, all red. **976 API tests** (was 971), **111 unit tests** (was 102), **124 browser tests** (was 121).
+---
 ---
 ---
 

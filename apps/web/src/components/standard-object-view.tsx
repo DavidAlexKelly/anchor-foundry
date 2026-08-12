@@ -39,7 +39,80 @@ import { MapCanvas } from "@/components/canvas/map";
 import { toLatLon } from "@/components/canvas/map";
 import { PropertyValue } from "@/components/property-value";
 import { visibleProperties } from "@/components/object-properties";
+import { plot } from "@/components/series-plot";
 import type { ObjectInstance, ObjectTypeProperty } from "@/lib/types";
+
+/** A prominent `time_series` property, drawn (p.11).
+ *
+ * The counterpart to the map above it, and the same argument: the property
+ * type says what this *is*, so the view draws it rather than printing the
+ * series id. Points come from the dataset they arrived in (decision 0009) -
+ * nothing was copied to make this chart possible.
+ *
+ * **Bucketed by day and averaged.** A raw series can be tens of thousands of
+ * readings and this is a card, not an analysis surface; the Workshop time
+ * series widget is where a viewer chooses. Named here rather than left to be
+ * inferred from a curve that looks smoother than the data.
+ */
+function SeriesCard({
+  workspaceId,
+  typeId,
+  instanceId,
+  property,
+}: {
+  workspaceId: string;
+  typeId: string;
+  instanceId: string;
+  property: ObjectTypeProperty;
+}) {
+  const series = useQuery({
+    queryKey: ["instance-series", workspaceId, typeId, instanceId, property.api_name],
+    queryFn: () =>
+      objApi.seriesPoints(workspaceId, typeId, instanceId, property.api_name, {
+        interval: "day",
+        aggregate: "avg",
+      }),
+  });
+  const laid = plot(series.data?.points ?? [], { width: 260, height: 90 });
+
+  return (
+    <article className="sov-card" data-property={property.api_name}>
+      <h3 className="sov-card-label">{property.display_name || property.api_name}</h3>
+      {series.isPending && <p className="canvas-widget-empty">Loading readings…</p>}
+      {series.isError && (
+        <p className="state error" style={{ margin: 0 }}>
+          Couldn&apos;t read this series.
+        </p>
+      )}
+      {series.data && !laid && (
+        // Declared, mapped, and empty. Saying so beats an axis with nothing
+        // on it, which reads as a chart that failed to draw.
+        <p className="canvas-widget-empty">No readings for this object yet.</p>
+      )}
+      {laid && (
+        <div className="sov-card-series" data-testid={`sov-series-${property.api_name}`}>
+          <svg viewBox="0 0 260 90" role="img" aria-label={
+            `${property.display_name || property.api_name}: ${laid.points.length} readings, ` +
+            `${laid.min} to ${laid.max}`
+          }>
+            <path d={laid.path} fill="none" stroke="currentColor" strokeWidth={1.5} />
+            {/* The last reading marked, because "where is it now" is the
+                question a card-sized chart is usually asked. */}
+            <circle
+              cx={laid.points[laid.points.length - 1]!.x}
+              cy={laid.points[laid.points.length - 1]!.y}
+              r={2.5}
+              fill="currentColor"
+            />
+          </svg>
+          <p className="slug" style={{ margin: 0 }}>
+            {laid.points.length} readings · {laid.min} to {laid.max}
+          </p>
+        </div>
+      )}
+    </article>
+  );
+}
 
 function ProminentCard({
   workspaceId,
@@ -121,14 +194,26 @@ export function StandardObjectView({
 
       {prominent.length > 0 && (
         <div className="sov-cards" data-testid="sov-prominent">
-          {prominent.map((p) => (
-            <ProminentCard
-              key={p.api_name}
-              workspaceId={workspaceId}
-              property={p}
-              value={instance.properties[p.api_name]}
-            />
-          ))}
+          {prominent.map((p) =>
+            // A time series is not a value to print - it is a chart, and it
+            // needs a fetch the other card kinds do not.
+            p.data_type === "time_series" ? (
+              <SeriesCard
+                key={p.api_name}
+                workspaceId={workspaceId}
+                typeId={typeId}
+                instanceId={instance.id}
+                property={p}
+              />
+            ) : (
+              <ProminentCard
+                key={p.api_name}
+                workspaceId={workspaceId}
+                property={p}
+                value={instance.properties[p.api_name]}
+              />
+            ),
+          )}
         </div>
       )}
 

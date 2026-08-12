@@ -1833,6 +1833,10 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .sov-card-value { font-size: 17px; font-family: var(--font-display); word-break: break-word; }
 .sov-card-map { height: 150px; }
+/* A prominent time series, drawn (decision 0009, §4.1). `currentColor` so the
+   line inherits the card's ink in both themes rather than pinning a colour. */
+.sov-card-series { display: flex; flex-direction: column; gap: 4px; }
+.sov-card-series svg { width: 100%; height: 90px; color: var(--accent, currentColor); }
 .sov-table th[scope="row"] { font-weight: 500; color: var(--ink-soft); width: 40%; }
 .sov-section {
   margin: 4px 0 8px; font-size: 10.5px; letter-spacing: 0.08em;

@@ -819,6 +819,20 @@ export const objects = {
       `/workspaces/${wid}/object-types/${typeId}/view?form_factor=${formFactor}`,
       { method: "DELETE" },
     ),
+  /** The points behind one object's `time_series` property (decision 0009).
+   * Workspace-scoped, like every other read of an instance: the ontology is
+   * shared across a workspace, and these points are the value of a property
+   * already visible at that floor. The series id is the instance's own and is
+   * not a parameter. */
+  seriesPoints: (
+    wid: string, typeId: string, instanceId: string, property: string,
+    opts: { interval?: string; aggregate?: string } = {},
+  ) =>
+    request<import("./types").SeriesPoints>(
+      `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}` +
+        `/series/${encodeURIComponent(property)}/points` +
+        `?interval=${opts.interval ?? "none"}&aggregate=${opts.aggregate ?? "avg"}`,
+    ),
   /** One search across object types, properties, link types and action types
    * (`ontology-manager` p.28). Each hit says which field matched. */
   searchOntology: (wid: string, q: string) =>
