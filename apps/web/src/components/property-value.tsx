@@ -11,8 +11,9 @@
  * type mean something" that a user can actually see.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
+import { mediaKind } from "@/components/media-kind";
 import type { AttachmentRef, GeoPoint, PropertyDataType } from "@/lib/types";
 
 function isGeoPoint(value: unknown): value is GeoPoint {
@@ -35,6 +36,55 @@ function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The bytes, fetched through the authenticated client and handed to the
+ * element as an object URL.
+ *
+ * The fetch is what carries the session header; the `blob:` URL that comes
+ * out is same-origin, needs no credentials, and is revoked when this unmounts
+ * so a table of fifty rows does not leak fifty blobs.
+ *
+ * A failure renders nothing rather than a broken-image glyph: the download
+ * link underneath is unaffected and is a better answer than a grey box.
+ */
+function Media({
+  workspaceId,
+  kind,
+  attachment,
+}: {
+  workspaceId: string;
+  kind: "image" | "video" | "audio";
+  attachment: AttachmentRef;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let revoked = false;
+    let objectUrl: string | null = null;
+    objApi
+      .attachmentBlob(workspaceId, attachment.key, attachment.content_type)
+      .then((blob) => {
+        if (revoked) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => setUrl(null));
+    return () => {
+      revoked = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [workspaceId, attachment.key, attachment.content_type]);
+
+  if (!url) return null;
+  // `alt` is the filename because it is the only description this platform
+  // has; an empty alt would tell a screen reader the image is decorative,
+  // which it is not - it is the value of a property.
+  if (kind === "image") {
+    return <img src={url} alt={attachment.filename} className="media-image" />;
+  }
+  if (kind === "video") return <video src={url} controls className="media-player" />;
+  return <audio src={url} controls className="media-player" />;
 }
 
 export function PropertyValue({
@@ -61,11 +111,35 @@ export function PropertyValue({
     );
   }
   if (dataType === "attachment" && isAttachment(value)) {
-    return (
-      <a href={objApi.attachmentUrl(workspaceId, value.key)} download={value.filename}>
-        {value.filename}{" "}
-        <span className="slug">({humanSize(value.size)})</span>
+    // **Shown, not just offered** (decision 0009, part 2). An attachment
+    // holding an image *is* the media reference this platform can honour -
+    // bytes, a MIME type, and a URL that enforces the workspace boundary - and
+    // the only thing missing was that a PNG drew a download link. The filename
+    // and size stay under it either way: a picture with no name is not a file
+    // anybody can go and find.
+    const href = objApi.attachmentUrl(workspaceId, value.key);
+    const kind = mediaKind(value.content_type);
+    const caption = (
+      <a href={href} download={value.filename} className="slug">
+        {value.filename} ({humanSize(value.size)})
       </a>
+    );
+    if (kind === "file") {
+      return (
+        <a href={href} download={value.filename}>
+          {value.filename} <span className="slug">({humanSize(value.size)})</span>
+        </a>
+      );
+    }
+    return (
+      <span className="media-value" data-media-kind={kind}>
+        <Media
+          workspaceId={workspaceId}
+          kind={kind}
+          attachment={value}
+        />
+        {caption}
+      </span>
     );
   }
   if ((dataType === "date" || dataType === "timestamp") && typeof value === "string") {

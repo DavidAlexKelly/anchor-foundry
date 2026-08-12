@@ -970,9 +970,32 @@ async def upload_attachment(
     )
 
 
+#: The only content types this route will ever serve **inline** (decision
+#: 0009, part 2). Not a convenience list - it is the security boundary.
+#:
+#: The type recorded at upload is what the uploader *claimed*; nothing has
+#: sniffed the bytes. Serving a claimed type inline is how a stored XSS
+#: happens, so the claim is only honoured when it is one of these, and the
+#: response carries `X-Content-Type-Options: nosniff` so a file that is
+#: really HTML fails to decode as an image rather than being run as a
+#: document.
+#:
+#: **`image/svg+xml` is deliberately absent.** An SVG is an image the browser
+#: will execute script inside, and this route is same-origin. It downloads,
+#: like it always did, and `components/media-kind.ts` makes the same call on
+#: the other side so the two never disagree about what is showable.
+INLINE_CONTENT_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp",
+    "video/mp4", "video/webm", "video/ogg",
+    "audio/mpeg", "audio/ogg", "audio/wav", "audio/webm", "audio/aac", "audio/flac",
+})
+
+
 @router.get("/attachments/download", response_class=Response)
 async def download_attachment(
     key: str = Query(..., max_length=1024),
+    disposition: str = Query(default="attachment", max_length=16),
+    content_type: str = Query(default="", max_length=128),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> Response:
     """Exchange a storage key for its bytes, having checked the caller may.
@@ -985,10 +1008,22 @@ async def download_attachment(
     prefix comparison is the isolation boundary here, exactly as the index
     name is for OpenSearch (§35).
 
-    Content-Disposition is always `attachment` and the content type is always
-    a generic octet-stream: the type recorded at upload is what the uploader
-    *claimed*, nothing has sniffed the bytes, and serving user-supplied
-    content inline with a user-supplied type is how a stored XSS happens.
+    **Downloading is still the default and still the safe one.** The original
+    version of this route had no other mode, for a reason worth restating: the
+    content type is the uploader's claim, so serving it inline is how a stored
+    XSS happens. Decision 0009 needed an image to be *shown* rather than
+    offered, and the way that is earned rather than assumed is:
+
+      * inline only when the caller asks for it - a link that wants a file
+        keeps getting a file;
+      * only for a type on `INLINE_CONTENT_TYPES`, which this route decides,
+        not the uploader - anything else falls back to a download rather than
+        refusing, so a mislabelled file is a link and not an error;
+      * with `nosniff`, so a file that is really HTML fails to decode as an
+        image instead of being run as a document.
+
+    A caller cannot widen this by asking: `content_type` is checked against
+    the allowlist and ignored otherwise.
     """
     storage = _dataset_storage()
     async with user_connection(access.auth.user_id) as conn:
@@ -1000,10 +1035,21 @@ async def download_attachment(
     except Exception as exc:  # StorageKeyError and friends
         raise NotFoundError("attachment") from exc
     filename = key.rsplit("/", 1)[-1]
+
+    wanted = content_type.split(";")[0].strip().lower()
+    inline = disposition == "inline" and wanted in INLINE_CONTENT_TYPES
     return Response(
         content=data,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        media_type=wanted if inline else "application/octet-stream",
+        headers={
+            "Content-Disposition": (
+                f'{"inline" if inline else "attachment"}; filename="{filename}"'
+            ),
+            # On every response, not just the inline ones: the download path
+            # serves octet-stream and should not be sniffed into anything
+            # either.
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
