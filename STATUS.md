@@ -2941,6 +2941,22 @@ Five mutations, all red - including the browser one that matters: seeding the su
 **One locator was ambiguous and Playwright said so rather than guessing.** The Ontology Manager mentions an object type in two tables - the types and the dataset mappings under them - so matching a row by name alone resolved to two. Filtered by the button the types table has instead, which is the same "match on what makes this row the one you mean" lesson §137 recorded about matching actions by `api_name`.
 
 **934 API tests** (was 921), **106 browser tests** (was 100).
+
+---
+
+### 145. Previewing a linked object, and the visibility rule that had two copies (this session)
+
+p.11's Linked objects component exists so a relationship is answerable **in place**: "which team owns this ticket, and what region is that team in" should not cost a hop you then have to come back from. Traversing was the only thing a link row did. Previewing is the other click, and they are deliberately separate controls rather than one that guesses.
+
+**The unit found a leak, which is the more useful half.** The row summary read straight off `instance.properties` - no visibility rule anywhere near it - so a property somebody marked **hidden** (p.111) appeared next to every linked object that had one. The standard Object View honoured visibility from the day it existed and the Explorer honours it in its columns; this was the third surface, and having the rule written twice is exactly how a third copy ends up not existing at all.
+
+So there is one copy now, in `components/object-properties.ts`, pure and unit-tested, and the standard view was repointed at it rather than keeping its own `partition`. Three mutations on it are red: keeping hidden properties, not leading with prominent, and reading the instance's keys instead of the type's declaration.
+
+**The summary reads the type, not the instance.** Two consequences, both deliberate. Prominent leads, because prominent is the object type saying "this is what identifies one of these" (p.10) - which is exactly the question a one-line summary asks, and the old version answered with whichever three properties happened to be declared first. And a stored key the type no longer declares is ignored: an instance can carry one (§38 makes that possible, and the orphaned-keys note above says why they are left alone), and a summary that read the instance would show a property the ontology has never heard of.
+
+**The trail is what proves nothing navigated.** A hop pushes a stop onto the breadcrumb trail, so the browser test asserts the properties arrived *and* the trail is still absent - which is the difference between an inline preview and a very fast round trip.
+
+Four mutations, all red. **89 unit tests** (was 80), 934 API, **111 browser tests** (was 106).
 ---
 
 ## What's not started

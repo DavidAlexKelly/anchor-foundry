@@ -38,16 +38,8 @@ import { objects as objApi } from "@/lib/api";
 import { MapCanvas } from "@/components/canvas/map";
 import { toLatLon } from "@/components/canvas/map";
 import { PropertyValue } from "@/components/property-value";
+import { visibleProperties } from "@/components/object-properties";
 import type { ObjectInstance, ObjectTypeProperty } from "@/lib/types";
-
-/** A property worth drawing, in the order the object type declares. */
-function partition(properties: ObjectTypeProperty[]) {
-  const visible = properties.filter((p) => p.visibility !== "hidden");
-  return {
-    prominent: visible.filter((p) => p.visibility === "prominent"),
-    normal: visible.filter((p) => p.visibility !== "prominent"),
-  };
-}
 
 function ProminentCard({
   workspaceId,
@@ -114,7 +106,7 @@ export function StandardObjectView({
   }
 
   const properties = type.data.properties;
-  const { prominent, normal } = partition(properties);
+  const { prominent, normal } = visibleProperties(properties);
   const titleProperty = properties.find((p) => p.id === type.data.title_property_id);
   const title = titleProperty
     ? String(instance.properties[titleProperty.api_name] ?? instance.primary_key)

@@ -39,7 +39,7 @@ Ours has `json`, which Foundry does not — Foundry's equivalent is Struct, whic
 | Feature | Status | Source |
 |---|---|---|
 | Display name, description, API name | ✅ | |
-| **Visibility** — normal, prominent, hidden | ✅ | (`object-link-types` p.111); drives standard Object View layout (`object-views` p.10) |
+| **Visibility** — normal, prominent, hidden | ✅ | (`object-link-types` p.111); drives standard Object View layout (`object-views` p.10), Explorer columns, and the Linked objects rows (§145 — one shared rule, because the third surface is where a second copy of it leaked) |
 | **Value formatting** | ○ | `object-link-types` TOC §11 |
 | **Conditional formatting** | ✅ | §83 |
 | **Required properties** | ○ | TOC §15 |
@@ -115,7 +115,7 @@ Per-side display names and self-links are both small and both currently impossib
 | — media reference → dedicated media viewer | ○ | **blocked on the property type**, §1.1 — not on this view |
 | — time series → interactive chart | ○ | same |
 | Normal properties in a regular table; hidden properties not shown | ✅ | |
-| **Linked objects component** — grouped by link type | ◑ | the groups are there (§18) and now sit *inside* the view rather than beside it (p.11). Inline property preview, open-a-subset-in-a-tab and the side-panel preview are ○ |
+| **Linked objects component** — grouped by link type | ◑ | the groups are there (§18), sit *inside* the view rather than beside it (p.11), and a linked object's properties preview inline without navigating (§145) — typed, prominent first, hidden absent. Open-a-subset-in-a-tab and the side-panel preview are ○ |
 
 ### 4.2 Configured Object Views
 
@@ -246,7 +246,7 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 
 - **Property visibility** — a hidden property is absent from the standard Object View and from the Object Explorer's columns. Mutation: mark it normal, and both change. **Note on the original wording**: this said "the Object Table column picker", and there is no picker — the Workshop Object Table takes a typed `columns` string. The Explorer's derived columns are the equivalent surface and are what the test drives.
 - **Standard Object Views** — an object type with a prominent time series property renders a chart, not a table cell; with a prominent geopoint, a map. Remove the prominent flag and it falls back to the table.
-- **Linked objects** — an instance with two link types shows two groups; expanding one previews properties without navigation.
+- **Linked objects** — an instance with two link types shows two groups; expanding one previews properties without navigation. **Met (§145)**, in `e2e/test_linked_object_preview.py`: the trail is the evidence nothing navigated, and the mutation that draws every declared property regardless of visibility is red.
 - **Configured views** — creating one makes it the default; the standard view is still reachable. **Met (§144)**, in `e2e/test_configured_object_view.py`: the module renders in place of the generated view, the object reaches it through `object_property` on the subject variable (so a module that renders without the object goes red), and the switch works both ways.
 - **Link sides** — a self-link between Employee and Employee renders both directions with distinct names.
 - **Action parameters** — an action with a parameter whose submission criteria fail is **refused**, and the refusal names the criterion. Mutation: remove the criterion check, and the test goes red.
