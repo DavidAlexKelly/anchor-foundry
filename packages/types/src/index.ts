@@ -1002,6 +1002,28 @@ export interface ObjectTypeDetail {
  * the whole binding — the `single_object` variable that receives the object
  * being looked at.
  */
+/**
+ * One thing the ontology search found, and **which field found it**
+ * (`ontology-manager` p.28).
+ *
+ * `matched_field` comes from the server because the matcher is the only thing
+ * that knows it. A browser deriving it again would be a second matcher, free
+ * to disagree with the one that put the row in the list — and the
+ * disagreement would look like a highlight landing on the wrong word.
+ */
+export interface OntologySearchHit {
+  kind: "object_type" | "property" | "link_type" | "action_type";
+  id: string;
+  api_name: string;
+  display_name: string;
+  /** Where it lives. A property called "status" is not somewhere anybody can
+   * navigate to; "status on Ticket" is. */
+  object_type_id: string;
+  object_type_name: string;
+  matched_field: string;
+  matched_value: string;
+}
+
 export interface ObjectView {
   id: string;
   object_type_id: string;

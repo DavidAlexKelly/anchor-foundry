@@ -42,6 +42,7 @@ from ..services import object_views as object_views_service
 from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
+from ..services import ontology_search
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["objects"])
@@ -256,6 +257,41 @@ async def _type_detail(conn, workspace_id: UUID, type_id: UUID) -> ObjectTypeDet
     row = await ontology_service.get_type(conn, workspace_id, type_id)
     props = await ontology_service.list_properties(conn, type_id)
     return ObjectTypeDetail(**row, properties=[PropertyOut(**p) for p in props])
+
+
+# ---- searching the ontology (`ontology-manager` p.28) ------------------------
+class OntologySearchHit(BaseModel):
+    """One thing found, and **which field found it**.
+
+    p.28: "the search results highlight the specific field that matched your
+    query". That is a fact the matcher knows and the browser would otherwise
+    have to re-derive - which would be a second matcher, free to disagree with
+    the one that put the row in the list.
+    """
+
+    kind: str  # "object_type" | "property" | "link_type" | "action_type"
+    id: UUID
+    api_name: str
+    display_name: str
+    # Where it lives. A property called "status" is not somewhere anybody can
+    # navigate to; "status on Ticket" is.
+    object_type_id: UUID
+    object_type_name: str
+    matched_field: str
+    matched_value: str
+
+
+@router.get("/ontology-search", response_model=list[OntologySearchHit])
+async def search_ontology(
+    q: str = Query(default="", max_length=200),
+    limit: int = Query(default=50, ge=1, le=200),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[OntologySearchHit]:
+    """One search across object types, their properties, link types and action
+    types (p.28). Viewer, like everything else that only reads the ontology."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await ontology_search.search(conn, access.workspace_id, q, limit=limit)
+    return [OntologySearchHit(**r) for r in rows]
 
 
 # ---- object types (workspace-scoped) ----------------------------------------

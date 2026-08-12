@@ -2957,6 +2957,28 @@ So there is one copy now, in `components/object-properties.ts`, pure and unit-te
 **The trail is what proves nothing navigated.** A hop pushes a stop onto the breadcrumb trail, so the browser test asserts the properties arrived *and* the trail is still absent - which is the difference between an inline preview and a very fast round trip.
 
 Four mutations, all red. **89 unit tests** (was 80), 934 API, **111 browser tests** (was 106).
+
+---
+
+### 146. Searching the ontology (this session)
+
+`ontology-manager` p.28 puts a search bar in the header "to search across object types, properties, link types, action types, shared properties, interfaces, and functions". Four of those seven exist here; the other three are ○ in §1.2/§1.3, so there is nothing to search - named in the module docstring rather than silently skipped, because "found nothing" and "does not look there" read identically to whoever typed the query.
+
+**Matched in Python, not in SQL, and the reason is p.28's own sentence**: "the search results highlight the specific field that matched your query". A database `LIKE` that returns rows tells you a row matched, not *why* - and four `ILIKE` clauses would each need their own opinion about case folding while still not answering the question. The tables are small; an ontology is tens of types.
+
+**Which field matched is part of the answer, not something the browser re-derives.** A browser that re-derived it would be a second matcher, free to disagree with the one that decided the row belonged in the list - and the disagreement would surface as a highlight landing on the wrong word, or on none, which reads as the search being broken. The mutation that reports the first field for every hit is red on three tests.
+
+**Ranked by how well the match reads, not by which table answered first**: exact api_name, then prefix, then substring, then description - the weakest signal last. A description mentioning the word is a hint; a name containing it is the thing.
+
+**A link matches on its *side* names, not on its ends' type names.** `from_display_name` in the link row is the object type's name at that end, which is already findable as an object type - searching it here would report the same word twice under two kinds. What is worth searching is `from_side_name`/`to_side_name`, because that is what the relationship is *called* from each end (§123). I wired the wrong pair first and the test caught it, which is the argument for asserting the kind *and* the field rather than just that something came back.
+
+**Two things the pure/vitest boundary decided.** `highlight` lives in its own `.ts` module rather than in the `.tsx` component, because vitest here runs pure functions only - the boundary `canvas/pure.ts` draws. And the mark is sliced out of the *value*, not out of the typed query: a highlight that rewrote "Status" as "status" would be editing the answer.
+
+**A test asserted the wrong field and was right to fail.** The fixture's api_name and display_name both carried the search word, and `api_name` is searched first - so the reported field is `api_name`. Fixed in the test with the reason written down, because the ordering rule is precisely what decides what a reader sees highlighted.
+
+Four mutations, all red. **96 unit tests** (was 89), **945 API tests** (was 934), **117 browser tests** (was 111).
+
+**The sandbox rewound the checkout twice more this session** - HEAD back at a commit from PR #50, `docs/parity/` gone, Postgres down, `node_modules` pruned, the database missing six migrations. Nothing was lost either time because every unit was already pushed and merged. The recovery is mechanical and worth having written down: `git fetch origin main && git checkout -B <branch> origin/main`, then `scripts/dev-up.sh`, then `npm ci` **at the repo root** (§132's lesson - never in `apps/web`), then `packages/db/migrate.py`, then a full API run to prove the restore before touching anything.
 ---
 
 ## What's not started

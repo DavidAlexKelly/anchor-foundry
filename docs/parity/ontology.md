@@ -214,8 +214,8 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 | Feature | Status | Notes |
 |---|---|---|
 | Object type editor | ✅ | §57 |
-| **Header search bar, `Cmd+K`** — across object types, properties, link types, action types, shared properties, interfaces, functions | ○ | (p.28) |
-| Search results highlight **which field matched**; arrow-key navigation with previews | ○ | (p.28) |
+| **Header search bar, `Cmd+K`** — across object types, properties, link types, action types, shared properties, interfaces, functions | ◑ | §146 — one query across the four kinds that exist here, with `Cmd+K` on the window. Shared properties, interfaces and functions are ○ in §1.2/§1.3, so there is nothing to search |
+| Search results highlight **which field matched**; arrow-key navigation with previews | ◑ | §146 — the matcher reports the field and the mark lands inside its value, because the browser re-deriving it would be a second matcher free to disagree. Arrow-key navigation and previews are ○ |
 | Home page sections: Object types, Link types, Action Types, Shared Properties, Interfaces, Functions | ◑ | (p.29) |
 | Filter by **visibility, development status, indexing issues** | ○ | (p.29) |
 | **Red error messages in an issue column** for object types that failed to index | ○ | (p.29) — exactly the kind of thing that saves a support ticket |
@@ -236,7 +236,7 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 5. **Time series and media reference property types.** Both unlock Workshop widgets; both need a storage decision first.
 6. ~~**Configured Object Views**, reusing the Workshop runtime~~ — **done (`STATUS.md` §144)**. A pointer at a published module plus the one variable that receives the object; the panel form factor is stored and separately addressable, and waits for something to embed it in.
 7. **Struct property type**, then Workshop struct variables.
-8. **Ontology Manager search, filters, and the indexing-issue column.**
+8. **Ontology Manager search** — done (`STATUS.md` §146), across the four kinds that exist. **Filters and the indexing-issue column** are still open: filtering wants a development status we do not have (§1.3), and the issue column wants indexing state the sync path does not record.
 9. Shared properties, value types, interfaces, derived properties.
 10. Side effects — notifications, then webhooks.
 
