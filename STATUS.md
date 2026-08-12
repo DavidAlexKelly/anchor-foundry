@@ -3061,6 +3061,34 @@ Four mutations, all red. **976 API tests** (was 971), **111 unit tests** (was 10
 Four mutations, all red. **984 API tests** (was 976), 111 unit, 124 browser.
 
 What is still open in §3.2's row is the dedicated `object_set_filter` variable *kind*: filter state travels as an `array` of clauses rather than as its own type, so the panel cannot tell a filter apart from any other list and a widget cannot ask for "a filter" specifically. That is a typing improvement, not a capability - both of p.444's behaviours now work without it - so it waits for a widget that actually needs the distinction.
+
+---
+
+### 151. Time series set variables, and the chart that reads one (this session)
+
+`ontology.md` named this as the last thing left after §148 and §149: the storage, the mapping and the points read exist, and Workshop could not ask for any of it. p.76 says what a time series set variable is, and the sentence is the whole design:
+
+> "Time series set: Stores a time series property of **a single object**, optionally allowing the application of time series transforms to it."
+
+**Of a single object - not of a set.** That is what makes this cheap rather than a fan-out: the object is already in hand as a `single_object` value, so a series variable is a *reference* built from it. `object_series` takes one object variable and a property, and resolves to `{object_type_id, instance_id, property, interval, aggregate}` - which is exactly what `seriesPoints` takes, so a widget consuming one adds no interpretation.
+
+**It resolves to a question, never to points**, and that is the same rule object-set variables follow. `object_set` holds a definition rather than rows so one set can feed a table, a chart and a count without three notions of what the set is; a series is the sharper case, because decision 0009 keeps points in the dataset they arrived in and a variable holding points would be that copy - made once per viewing, per widget.
+
+**The bucket and the summariser live on the variable, not on each widget** (p.76's "time series transforms"). Two charts reading one series then agree about what a point means, which is the difference between a variable and a shortcut for typing the same configuration twice. They are validated at *save*, against `time_series.INTERVALS` and `AGGREGATES` rather than a second copy of the list - an unknown aggregate would otherwise surface as a DuckDB parse error in front of a viewer, naming a function nobody typed.
+
+**Two refusals worth the words.** A `time_series_set` with no derivation is refused: there is no static form of a series, so one would resolve to whatever `default` held, which for this kind is always a typo. And an object with no `id` or no `object_type_id` is refused rather than resolved to `None` - unlike a missing property value, that is not a state a viewer can be in, since every path that writes a `single_object` writes both. `None` would render as "no readings yet", a sentence about the data when the truth is about the wiring.
+
+**The consumer is p.280's third Data input**, on the widget the spec puts it on rather than a new one - and forced to a line, because p.281 says "only the Line Chart option is supported" and because it is right: a bar per reading is a comb and a pie of readings answers nothing. The browser fixture asks for a **bar** chart on purpose; a fixture that agreed with the widget could not tell whether the rule was applied.
+
+**`Number(null)` is `0`, again, one layer up.** §149 caught this inside `plot`; the same trap is here, because a reading that is missing arrives as `null` and `Number` makes it a finite zero - a measurement that never happened. Dropped rather than zeroed, and *said*, because a gap removed in silence is a chart that looks complete. **The first mutation of that filter survived**: no sensor in the fixture had a gap, so removing the guard changed nothing. A third sensor with one missing reading is what made the test able to fail.
+
+**A second surviving mutation, same shape.** Deleting the "nothing picked yet" message left every assertion green, because the caption's absence before a click is guaranteed by the query being disabled rather than by the message. The test now asserts the sentence, not just the silence.
+
+**Labels needed their own function.** `seriesLabel`'s narrowest bucket is a day, which is right for object counts; a series can be asked for by the hour or not bucketed at all, and a day-only label stacks a fortnight of readings onto fourteen labels - which a chart keyed on labels draws as fourteen points, silently losing the rest. `seriesPointLabel` is pure, carries seconds only where two readings can differ by them, and returns anything that is not a timestamp as itself rather than throwing `Invalid Date` from inside a chart.
+
+Sixteen mutations, all red - six on the variable, four on the label, six on the widget. **994 API tests** (was 984), **116 unit tests** (was 111), **129 browser tests** (was 124).
+
+Still open on §3.2's row: the other three consumers p.582 names (Map, Metric Card, Object Table) and p.583-584's time series *transforms* - cumulative, periodic and rolling aggregates, which are a computation over points rather than a variable, and belong with the points read rather than here.
 ---
 ---
 ---

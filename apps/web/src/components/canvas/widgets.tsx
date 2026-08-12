@@ -33,7 +33,7 @@ import { invalidateCanvasReads } from "./refresh";
 import { describeSet, selectionOf, useSetPage } from "./object-set";
 import {
   MIN_SHARE, formatWeights, inputTypeFor, parseWeights, pivotClauses, resizeWeights,
-  roundWeight, seedActionForm, seriesLabel, type PivotPick,
+  roundWeight, seedActionForm, seriesLabel, seriesPointLabel, type PivotPick,
 } from "./pure";
 import {
   chartQuery,
@@ -3485,6 +3485,7 @@ export function CanvasChart({
   filterParameter = null,
   filterOperator = "equals",
   objectSetVariable = null,
+  seriesVariable = null,
   drilldownVariable = null,
 }: {
   datasetId?: string | null;
@@ -3501,6 +3502,21 @@ export function CanvasChart({
    * a plain sum does, so the two stores would disagree about the bar heights.
    * See `services/object_sets.py`. */
   objectSetVariable?: string | null;
+  /** A `time_series_set` variable to plot instead of either (p.280's third
+   * "Data input" option: "The Time series set option allows a Workshop time
+   * series set variable to be used as input. This configures a time series
+   * chart, with the time range on the X axis, and the time series values of
+   * the variable on the Y axis").
+   *
+   * **Forced to a line**, because p.281 says so — "If the data input is a time
+   * series set, only the Line Chart option is supported" — and because it is
+   * right: a bar per reading over an unbucketed series is a comb, and a pie of
+   * readings answers nothing.
+   *
+   * **No drill-down**, for the reason the time series widget has none: a point
+   * on a series is an *instant*, and narrowing on one would need range
+   * operators the untyped-property decision holds (§87). */
+  seriesVariable?: string | null;
   /** Where a click on a bar or a slice writes its clause (roadmap 1.5,
    * drill-down). Clauses rather than a set, for the reason the Filter List
    * writes clauses: object sets resolve on the server, and a widget that wrote
@@ -3522,7 +3538,15 @@ export function CanvasChart({
   const { pending: variablesPending } = useCanvasVariables();
   const { set: setParameter } = useCanvasParameters();
   const drilled = useCanvasParameter(drilldownVariable);
-  const usingSet = !!objectSetVariable;
+  // A time series set beats an object set beats a dataset. One order, stated
+  // once, rather than three sources that can all be half-configured and a
+  // reader left to guess which won.
+  const seriesRef = useCanvasVariable(seriesVariable) as {
+    object_type_id: string; instance_id: string;
+    property: string; interval: string; aggregate: string;
+  } | null;
+  const usingSeries = !!seriesVariable;
+  const usingSet = !usingSeries && !!objectSetVariable;
 
   // Drill-down needs a set to narrow and a property to narrow it on, so it is
   // offered only where both exist. A dataset-backed chart has no set: there is
@@ -3548,7 +3572,7 @@ export function CanvasChart({
   const datasetResult = useQuery({
     queryKey: ["canvas-chart", datasetId, sql],
     queryFn: () => dsApi.query(workspaceId, projectId, datasetId!, sql!),
-    enabled: !usingSet && !!datasetId && sql !== null,
+    enabled: !usingSet && !usingSeries && !!datasetId && sql !== null,
   });
   const setResult = useQuery({
     queryKey: [
@@ -3559,14 +3583,44 @@ export function CanvasChart({
     enabled: usingSet && !!setDefinition && !!dimension,
   });
 
-  const result = usingSet ? setResult : datasetResult;
-  const points = usingSet
+  // The variable resolves to a *question* (decision 0009: points stay in the
+  // dataset they arrived in), so the widget asks it - nothing was copied into
+  // the document to make this chart possible.
+  const seriesResult = useQuery({
+    queryKey: ["canvas-chart-series", JSON.stringify(seriesRef ?? null)],
+    queryFn: () =>
+      objApi.seriesPoints(
+        workspaceId, seriesRef!.object_type_id, seriesRef!.instance_id,
+        seriesRef!.property,
+        { interval: seriesRef!.interval, aggregate: seriesRef!.aggregate },
+      ),
+    enabled: usingSeries && !!seriesRef,
+  });
+
+  // A reading with no value is a *gap*, and `Number(null)` is 0 - a finite
+  // number that plots as a real measurement of zero (the bug §149 caught in
+  // `plot`). Dropped rather than zeroed, and the count is said below.
+  const readings = (seriesResult.data?.points ?? []).filter(
+    (p) => p.value !== null && p.value !== "" && Number.isFinite(Number(p.value)),
+  );
+
+  const result = usingSeries ? seriesResult : usingSet ? setResult : datasetResult;
+  const points = usingSeries
+    ? seriesResult.data
+      ? readings.map((p) => ({
+          label: seriesPointLabel(p.at, seriesRef!.interval),
+          value: Number(p.value),
+        }))
+      : null
+    : usingSet
     ? (setResult.data?.groups ?? []).map((g) => ({ label: g.value, value: g.count }))
     : datasetResult.data
       ? toPoints(datasetResult.data.rows)
       : null;
 
-  const needs = usingSet
+  const needs = usingSeries
+    ? (!seriesRef ? "nothing picked yet" : null)
+    : usingSet
     ? (!dimension ? "pick a property to group by" : null)
     : !datasetId ? "pick a dataset in Settings"
     : !dimension ? (kind === "scatter" ? "pick an X column" : "pick a category column")
@@ -3578,7 +3632,7 @@ export function CanvasChart({
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
       {needs && <p className="canvas-widget-empty">Chart - {needs}</p>}
-      {!needs && (result.isPending || (usingSet && variablesPending)) && (
+      {!needs && (result.isPending || ((usingSet || usingSeries) && variablesPending)) && (
         <p className="canvas-widget-empty">Loading…</p>
       )}
       {result.isError && (
@@ -3589,9 +3643,18 @@ export function CanvasChart({
           {result.error instanceof ApiError ? result.error.message : "Couldn't run this chart."}
         </p>
       )}
-      {points && (
+      {usingSeries && seriesResult.data && points?.length === 0 && (
+        // Declared, mapped, and empty. Saying so beats an axis with nothing on
+        // it, which reads as a chart that failed to draw.
+        <p className="canvas-widget-empty">No readings for this object yet.</p>
+      )}
+      {/* Only the series path swaps an empty chart for a sentence; the other
+          two are left exactly as they were. */}
+      {points && !(usingSeries && points.length === 0) && (
         <Chart
-          kind={kind}
+          /* p.281: "If the data input is a time series set, only the Line
+             Chart option is supported." */
+          kind={usingSeries ? "line" : kind}
           points={points}
           drill={
             canDrill
@@ -3626,6 +3689,19 @@ export function CanvasChart({
           </button>
         </p>
       )}
+      {usingSeries && seriesResult.data && points && points.length > 0 && (
+        <p className="canvas-widget-empty" data-testid="chart-series-caption">
+          {seriesRef!.property}, {seriesRef!.interval === "none"
+            ? "every reading"
+            : `by ${seriesRef!.interval} (${seriesRef!.aggregate})`}
+          , in UTC. {points.length} point{points.length === 1 ? "" : "s"}
+          {/* Said, not hidden - the same rule as the truncation notice below.
+              A gap dropped in silence is a chart that looks complete. */}
+          {seriesResult.data.points.length > points.length &&
+            `, ${seriesResult.data.points.length - points.length} with no reading skipped`}
+          {seriesResult.data.truncated && `, cut short at the point cap`}.
+        </p>
+      )}
       {/* Said, not hidden: a chart drawing the top 20 of 300 without a word is
           the same trap as a preview that sampled and did not mention it. */}
       {usingSet && setResult.data?.truncated && (
@@ -3648,7 +3724,8 @@ function ChartSettings() {
   const { declared, resolved } = useCanvasVariables();
   const {
     datasetId, kind, dimension, measure, aggregate, title,
-    filterColumn, filterParameter, filterOperator, objectSetVariable, drilldownVariable,
+    filterColumn, filterParameter, filterOperator, objectSetVariable, seriesVariable,
+    drilldownVariable,
     actions: { setProp },
   } = useNode((node) => ({
     datasetId: node.data.props.datasetId,
@@ -3661,6 +3738,7 @@ function ChartSettings() {
     filterParameter: node.data.props.filterParameter,
     filterOperator: node.data.props.filterOperator,
     objectSetVariable: node.data.props.objectSetVariable,
+    seriesVariable: node.data.props.seriesVariable,
     drilldownVariable: node.data.props.drilldownVariable,
   }));
   const list = useQuery({
@@ -3668,6 +3746,9 @@ function ChartSettings() {
     queryFn: () => dsApi.list(workspaceId, projectId),
   });
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const seriesVariables = Object.values(declared).filter(
+    (v) => v.kind === "time_series_set",
+  );
   // Where a drill-down writes its clause: an `array` variable, the same kind
   // the Filter List writes its clauses into, so one `narrow_set` derivation
   // reads either - or both, if a chart and a filter list narrow the same set.
@@ -3711,13 +3792,38 @@ function ChartSettings() {
           <option value="scatter">Scatter</option>
         </select>
       </label>
-      {/* An object set replaces the dataset, so it is offered first and
-          disables what it replaces - rather than letting both be configured
-          and leaving whoever reads the app to guess which won. */}
+      {/* p.280's three "Data input" options, offered in the order they take
+          precedence, each disabling what it replaces - rather than letting
+          several be configured and leaving whoever reads the app to guess
+          which won. */}
+      <label className="field">
+        <span className="field-label">Time series set variable</span>
+        <select
+          value={seriesVariable || ""}
+          onChange={(e) =>
+            setProp((p: Record<string, unknown>) => {
+              p.seriesVariable = e.target.value || null;
+            })
+          }
+        >
+          <option value="">Not bound — plot a set or a dataset</option>
+          {seriesVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {seriesVariables.length === 0
+            ? "No time series set variables yet — add one in the Variables tab"
+            : /* p.281, and it is not a limitation worth hiding: a bar per
+                 reading is a comb, and a pie of readings answers nothing. */
+              "Drawn as a line; the bucket and summariser are on the variable"}
+        </span>
+      </label>
       <label className="field">
         <span className="field-label">Object set variable</span>
         <select
           value={objectSetVariable || ""}
+          disabled={!!seriesVariable}
           onChange={(e) =>
             setProp((p: Record<string, unknown>) => {
               p.objectSetVariable = e.target.value || null;
@@ -3861,7 +3967,7 @@ CanvasChart.craft = {
     datasetId: null, kind: "bar", dimension: null, measure: null,
     aggregate: "count", title: "", filterColumn: null,
     filterParameter: null, filterOperator: "equals",
-    objectSetVariable: null, drilldownVariable: null,
+    objectSetVariable: null, seriesVariable: null, drilldownVariable: null,
   },
   related: { settings: ChartSettings },
 };

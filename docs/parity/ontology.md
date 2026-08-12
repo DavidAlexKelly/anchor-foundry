@@ -24,7 +24,7 @@ Ours: `string`, `integer`, `float`, `boolean`, `date`, `timestamp`, `geopoint`, 
 | **Geopoint** | ✅ | §20 |
 | **Attachment** — files on objects, for use with functions | ◑ | we have the type; no file storage behind it |
 | **Geoshape** | ○ | polygons and lines, not just points |
-| **Time series** | ◑ | §148, §149 — the type, the `object_type_series` mapping (db 0047), the points read, and the chart on the standard Object View. What is left is **Workshop**'s time series set variables (`workshop.md` §3.2) and the widgets that consume them; geotemporal series is the same mechanism with a geopoint value column and is ○ |
+| **Time series** | ◑ | §148, §149 — the type, the `object_type_series` mapping (db 0047), the points read, and the chart on the standard Object View. §151 added **Workshop**'s time series set variables (`workshop.md` §3.2) and the Chart XY input that reads one. What is left is the other three widgets p.582 names — Map, Metric Card, Object Table — and p.583's time series *transforms*; geotemporal series is the same mechanism with a geopoint value column and is ○ |
 | **Geotemporal series** | ○ | position over time; renders on a Map in standard Object Views |
 | **Media reference** | ○ | points at an item in a media set: `mimeType` plus a reference triple of media-set / view / item RIDs (p.128). **Decision 0009 declines to add the type**: a shape promising a media set with none behind it is a contract nobody honours. Media that is already stored renders (§147); a media *set* waits for a consumer that needs a collection |
 | **Struct** — schema-based properties with multiple fields | ○ | also needed for Workshop struct variables |

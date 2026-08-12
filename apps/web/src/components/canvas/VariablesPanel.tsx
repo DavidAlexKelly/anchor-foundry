@@ -40,6 +40,7 @@ const KINDS: WorkshopVariableKind[] = [
   "array",
   "single_object",
   "object_set",
+  "time_series_set",
 ];
 
 /** Matches `TRANSFORMS` in the service. `object_set_aggregation` is
@@ -60,6 +61,18 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   // chart title, or an action's default.
   { value: "filter_value", label: "A value chosen in a filter", arity: "one" },
 ];
+
+/** Offered on `time_series_set` variables, and the only thing offered there -
+ * a series is read *through* an object (p.76), so there is nothing else a
+ * series variable could be derived from. */
+const SERIES_TRANSFORM: WorkshopTransform = "object_series";
+
+/** The service's `time_series.INTERVALS` and `AGGREGATES`, in the order they
+ * are declared there. Retyped rather than fetched because they are a closed
+ * vocabulary in a builder panel; the server refuses anything outside them, so
+ * a copy that drifted would show as a save that fails and names the list. */
+const SERIES_INTERVALS = ["none", "hour", "day", "week", "month"] as const;
+const SERIES_AGGREGATES = ["avg", "min", "max", "sum", "count", "last"] as const;
 
 /** Offered on `object_set` variables, and the only things offered there -
  * narrowing a set is what a derived object set *is*. Two ways to narrow one:
@@ -84,6 +97,7 @@ function slotLabels(transform: WorkshopTransform): string[] {
   if (transform === "cast") return ["Value"];
   if (transform === "object_property") return ["Object"];
   if (transform === "filter_value") return ["Filter clauses"];
+  if (transform === "object_series") return ["Object"];
   return ["Value"];
 }
 
@@ -243,6 +257,20 @@ export function VariablesPanel({
                             kind,
                             ...(kind === "object_set"
                               ? { object_set: { object_type_id: "", filters: [] } }
+                              : {}),
+                            // Same reason, the other way round: a series
+                            // variable with no derivation is a document the
+                            // server refuses ("not derived from an object"),
+                            // so the shape follows the kind here rather than
+                            // being discovered at save.
+                            ...(kind === "time_series_set"
+                              ? {
+                                  derivation: {
+                                    transform: SERIES_TRANSFORM,
+                                    inputs: [],
+                                    config: { interval: "day", aggregate: "avg" },
+                                  },
+                                }
                               : {}),
                           } as Partial<WorkshopVariable>);
                         }}
@@ -457,9 +485,20 @@ function DerivationEditor({
 }) {
   const derivation = variable.derivation!;
   const arity = arityOf(derivation.transform);
+  // A series variable has exactly one way to be computed and no undrived
+  // form, so its transform is fixed and "Stop deriving" is not offered - both
+  // would lead to a document the server refuses (p.76: a series is a property
+  // of an object).
+  const series = variable.kind === "time_series_set";
   // A variable may not read itself, and the server refuses it. Leaving it out
   // of the picker means the refusal is one somebody cannot walk into.
-  const candidates = Object.values(variables).filter((v) => v.id !== variable.id);
+  const candidates = Object.values(variables).filter(
+    (v) =>
+      v.id !== variable.id &&
+      // A series is read through the object somebody picked, so only those are
+      // offerable - any other kind would save and then resolve to a refusal.
+      (!series || v.kind === "single_object"),
+  );
 
   function setInput(index: number, value: string) {
     const inputs = [...derivation.inputs];
@@ -478,7 +517,7 @@ function DerivationEditor({
         Computed by
         <select
           value={derivation.transform}
-          disabled={readOnly}
+          disabled={readOnly || series}
           onChange={(e) =>
             onChange({
               transform: e.target.value as WorkshopTransform,
@@ -491,7 +530,10 @@ function DerivationEditor({
             })
           }
         >
-          {TRANSFORMS.map((t) => (
+          {(series
+            ? [{ value: SERIES_TRANSFORM, label: "A time series on an object" }]
+            : TRANSFORMS
+          ).map((t) => (
             <option key={t.value} value={t.value}>
               {t.label}
             </option>
@@ -577,7 +619,70 @@ function DerivationEditor({
         </label>
       )}
 
-      {!readOnly && (
+      {derivation.transform === "object_series" && (
+        <>
+          <label>
+            Time series property
+            <input
+              value={String(derivation.config?.property ?? "")}
+              readOnly={readOnly}
+              placeholder="e.g. readings"
+              onChange={(e) =>
+                onChange({
+                  ...derivation,
+                  config: { ...derivation.config, property: e.target.value },
+                })
+              }
+            />
+            <span className="field-hint">
+              a property declared <code>time_series</code> on the object&apos;s type
+            </span>
+          </label>
+          {/* The bucket and the summariser live on the *variable*, not on each
+              widget (p.76's "time series transforms"): two charts reading one
+              series then agree about what a point means. */}
+          <label>
+            Bucket
+            <select
+              value={String(derivation.config?.interval ?? "day")}
+              disabled={readOnly}
+              onChange={(e) =>
+                onChange({
+                  ...derivation,
+                  config: { ...derivation.config, interval: e.target.value },
+                })
+              }
+            >
+              {SERIES_INTERVALS.map((i) => (
+                <option key={i} value={i}>
+                  {i === "none" ? "every reading" : `by ${i}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Summarise with
+            <select
+              value={String(derivation.config?.aggregate ?? "avg")}
+              disabled={readOnly}
+              onChange={(e) =>
+                onChange({
+                  ...derivation,
+                  config: { ...derivation.config, aggregate: e.target.value },
+                })
+              }
+            >
+              {SERIES_AGGREGATES.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
+
+      {!readOnly && !series && (
         <button type="button" className="btn quiet" onClick={onClear}>
           Stop deriving
         </button>

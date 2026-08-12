@@ -163,7 +163,13 @@ export type WorkshopVariableKind =
   | "timestamp"
   | "array"
   | "single_object"
-  | "object_set";
+  | "object_set"
+  /** "Stores a time series property of a single object, optionally allowing
+   * the application of time series transforms to it" (`foundry_workshop`
+   * p.76). Always derived, by `object_series`: a series is read *through* an
+   * object, so there is no static form of one. Resolves to a
+   * {@link TimeSeriesSetRef} — a question, never points. */
+  | "time_series_set";
 
 /** Foundry's transformation vocabulary, less the two that read the ontology
  * (`object_property`, `object_set_aggregation`) — those need the instance
@@ -193,7 +199,25 @@ export type WorkshopTransform =
    * `[clausesVariable]`; config carries the property. `narrow_set` applies
    * filter state to a set — this reads a value out of it, for a heading, a
    * chart title, or an action's default. */
-  | "filter_value";
+  | "filter_value"
+  /** The time series one property holds, on the object a viewer picked
+   * (p.76, p.582). Input is `[objectVariable]`; config carries the property
+   * and, optionally, `interval` and `aggregate`. Resolves to a
+   * {@link TimeSeriesSetRef}. */
+  | "object_series";
+
+/** What a `time_series_set` variable resolves to: the whole question, and no
+ * data. Decision 0009 keeps points in the dataset they arrived in, so a
+ * variable holding points would be the copy that decision refuses — made once
+ * per viewing, per widget. `objApi.seriesPoints` takes exactly these fields,
+ * so a widget consuming one adds no interpretation of its own. */
+export interface TimeSeriesSetRef {
+  object_type_id: string;
+  instance_id: string;
+  property: string;
+  interval: string;
+  aggregate: string;
+}
 
 export interface WorkshopDerivation {
   transform: WorkshopTransform;
