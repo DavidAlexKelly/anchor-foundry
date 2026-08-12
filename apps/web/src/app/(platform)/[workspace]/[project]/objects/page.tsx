@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
+import { OntologySearch } from "@/components/ontology-search";
 import { Dialog, Field } from "@/components/dialog";
 import {
   EditObjectTypeDialog,
@@ -962,6 +963,16 @@ export default function ObjectsPage() {
           </div>
         )}
       </div>
+
+      {/* The header search (`ontology-manager` p.28). Above the lists because
+          it is how you find a thing when you already know its name, and the
+          lists are how you find one when you do not. */}
+      {workspace && (
+        <OntologySearch
+          workspaceId={workspace.id}
+          onOpenType={(typeId) => setEditingType(typeId)}
+        />
+      )}
 
       {types.isPending && <div className="state">Loading the ontology…</div>}
       {types.isError && <div className="state error">Couldn&apos;t load object types. Refresh to try again.</div>}

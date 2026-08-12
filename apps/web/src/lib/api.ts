@@ -819,6 +819,12 @@ export const objects = {
       `/workspaces/${wid}/object-types/${typeId}/view?form_factor=${formFactor}`,
       { method: "DELETE" },
     ),
+  /** One search across object types, properties, link types and action types
+   * (`ontology-manager` p.28). Each hit says which field matched. */
+  searchOntology: (wid: string, q: string) =>
+    request<import("./types").OntologySearchHit[]>(
+      `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
+    ),
   listLinkTypes: (wid: string) =>
     request<import("./types").LinkType[]>(`/workspaces/${wid}/link-types`),
   createLinkType: (wid: string, input: LinkTypeCreateInput) =>
