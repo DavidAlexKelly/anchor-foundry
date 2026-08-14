@@ -28,6 +28,7 @@ from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_pro
 from ..services import actions as actions_service
 from ..services import audit
 from ..services import canvas as canvas_service
+from ..services import module_states as states_service
 from ..services import workshop_format
 from ..services import workshop_variables as variables_service
 from ..services.workshop_variables import MAX_EMBED_DEPTH
@@ -751,3 +752,214 @@ async def evaluate_published_variables(
     return EvaluateVariablesOut(
         values=resolved, order=variables_service.evaluation_order(variables)
     )
+
+
+# ---- saved module states (p.200-206; db 0048) --------------------------------
+class StateIn(BaseModel):
+    """A state as the viewer's browser has it: values keyed by **variable id**.
+
+    Translated to external IDs on the way in (`module_states.savable_values`)
+    rather than by the browser, so the one rule about what a state contains has
+    one implementation - the same argument that keeps variable evaluation on
+    the server.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    values: dict[str, Any] = Field(default_factory=dict)
+    page_id: str | None = Field(default=None, max_length=200)
+
+
+class StateOut(BaseModel):
+    id: UUID
+    name: str
+    page_id: str | None
+    created_by_name: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class StateDetail(StateOut):
+    """One state, opened: values keyed back to **variable id** for the module.
+
+    `missing` names the external IDs the state carries that this module no
+    longer has a savable variable for. p.203 warns that changing an external ID
+    "may cause previously configured states to reload unsuccessfully" - saying
+    *which* part failed is the difference between a known gap and a view that
+    is quietly wrong.
+    """
+
+    values: dict[str, Any]
+    missing: list[str]
+
+
+def _state_summary(row: dict[str, Any]) -> StateOut:
+    return StateOut(
+        id=row["id"], name=row["name"], page_id=row["page_id"],
+        created_by_name=row.get("created_by_name"),
+        created_at=row["created_at"], updated_at=row["updated_at"],
+    )
+
+
+def _module_variables(row: dict[str, Any]) -> dict[str, Any]:
+    """This module's variables, and a refusal if it does not save state.
+
+    Checked on every path rather than only on the write: a state saved while
+    the feature was on, and opened after it was turned off, is a view the
+    module no longer offers - and restoring it silently would be the module
+    disagreeing with its own settings.
+    """
+    document = _parse_json(row["definition"])
+    try:
+        variables = variables_service.validate_module(document)
+        settings = variables_service.state_saving(document)
+    except variables_service.VariableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if not settings.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this module does not save state - turn it on in the module's "
+                   "settings first",
+        )
+    return variables
+
+
+async def _save(conn, row, body: StateIn, user_id: UUID) -> StateOut:
+    variables = _module_variables(row)
+    saved = await states_service.save_state(
+        conn,
+        canvas_app_id=row["id"],
+        name=body.name,
+        values=states_service.savable_values(variables, body.values),
+        # p.200: "optionally, the current page". Honoured only when the module
+        # asked for it, so turning the option off stops states carrying a page
+        # rather than merely stopping them writing one.
+        page_id=body.page_id
+        if variables_service.state_saving(_parse_json(row["definition"])).include_page
+        else None,
+        user_id=user_id,
+    )
+    return _state_summary(saved)
+
+
+async def _open(conn, row, state_id: UUID) -> StateDetail:
+    variables = _module_variables(row)
+    state = await states_service.get_state(conn, state_id)
+    if str(state["canvas_app_id"]) != str(row["id"]):
+        # A state id from another module would otherwise open here and restore
+        # values that mean nothing - keyed by external ID, some of them might
+        # even match.
+        raise NotFoundError("module state")
+    values, missing = states_service.restore(variables, state["values"])
+    return StateDetail(**_state_summary(state).model_dump(), values=values, missing=missing)
+
+
+@router.get("/{app_id}/states", response_model=list[StateOut])
+async def list_states(
+    app_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[StateOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        await canvas_service.get(conn, access.project_id, app_id)
+        rows = await states_service.list_states(conn, app_id)
+    return [_state_summary(r) for r in rows]
+
+
+@router.post("/{app_id}/states", response_model=StateOut, status_code=status.HTTP_201_CREATED)
+async def save_state(
+    app_id: UUID,
+    body: StateIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> StateOut:
+    """Saving a state is a **viewer** action, not an editor one.
+
+    p.200 calls this a feature for "module consumers", and it writes nothing
+    about the module: a state is a note about how somebody was looking at it.
+    Requiring the editor role would put it behind exactly the permission its
+    audience does not have.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get(conn, access.project_id, app_id)
+        return await _save(conn, row, body, access.auth.user_id)
+
+
+@router.get("/{app_id}/states/{state_id}", response_model=StateDetail)
+async def open_state(
+    app_id: UUID,
+    state_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> StateDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get(conn, access.project_id, app_id)
+        return await _open(conn, row, state_id)
+
+
+@router.delete(
+    "/{app_id}/states/{state_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def delete_state(
+    app_id: UUID,
+    state_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await canvas_service.get(conn, access.project_id, app_id)
+        await states_service.delete_state(conn, state_id, access.auth.user_id)
+
+
+# The same four, reached the way a published app is reached - the audience
+# state saving exists for is precisely the workspace member who is not in the
+# app's project (`STATUS.md` §15, and the note on the published evaluate).
+@published_router.get("/published-canvas-apps/{app_id}/states", response_model=list[StateOut])
+async def list_published_states(
+    app_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[StateOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        await canvas_service.get_published(conn, access.workspace_id, app_id)
+        rows = await states_service.list_states(conn, app_id)
+    return [_state_summary(r) for r in rows]
+
+
+@published_router.post(
+    "/published-canvas-apps/{app_id}/states",
+    response_model=StateOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def save_published_state(
+    app_id: UUID,
+    body: StateIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> StateOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get_published(conn, access.workspace_id, app_id)
+        return await _save(conn, row, body, access.auth.user_id)
+
+
+@published_router.get(
+    "/published-canvas-apps/{app_id}/states/{state_id}", response_model=StateDetail
+)
+async def open_published_state(
+    app_id: UUID,
+    state_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> StateDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await canvas_service.get_published(conn, access.workspace_id, app_id)
+        return await _open(conn, row, state_id)
+
+
+@published_router.delete(
+    "/published-canvas-apps/{app_id}/states/{state_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def delete_published_state(
+    app_id: UUID,
+    state_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await canvas_service.get_published(conn, access.workspace_id, app_id)
+        await states_service.delete_state(conn, state_id, access.auth.user_id)

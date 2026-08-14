@@ -1719,3 +1719,135 @@ def test_a_filter_control_bound_to_nothing_is_a_dangling_reference() -> None:
         wv.parse({}),
     )
     assert broken == [{"node": "ctl", "prop": "name", "variable": "v_gone"}]
+
+
+# ---- state saving (p.200-206) ------------------------------------------------
+def savable(vid: str = "v_a", **extra) -> dict:
+    return var(
+        vid, external_id=extra.pop("external_id", "region"),
+        save_state=extra.pop("save_state", True), **extra,
+    )
+
+
+def test_a_variable_says_whether_a_saved_state_keeps_it() -> None:
+    assert wv.parse({"v_a": savable()})["v_a"].save_state is True
+    assert wv.parse({"v_a": var("v_a")})["v_a"].save_state is False
+
+
+def test_saving_needs_an_external_id_because_that_is_the_key() -> None:
+    """p.203: "Variable values are stored within a saved state via their
+    external ID." Foundry's own step 2 is "select a variable and then … add an
+    external ID" - the ID is the storage key, not decoration."""
+    with pytest.raises(wv.VariableError, match="no key to be stored under"):
+        wv.parse({"v_a": var("v_a", save_state=True)})
+
+
+def test_saving_does_not_need_interface_membership_the_way_routing_does() -> None:
+    """The asymmetry worth stating: routing needs the interface because the
+    URL is read back by `seedFromQuery`, which only reads interface variables.
+    A state is read back by this module, by name - so a stable name is the
+    whole requirement."""
+    parsed = wv.parse({"v_a": var("v_a", external_id="region", save_state=True)})
+    assert parsed["v_a"].save_state is True
+    assert parsed["v_a"].interface is None
+
+
+def test_a_derived_variable_cannot_be_saved_in_a_state() -> None:
+    """It is a function of its inputs, so a state holding its value would
+    restore an *answer* while the inputs restore the *question* - and the two
+    disagree the moment the data behind them moves."""
+    with pytest.raises(wv.VariableError, match="derived and cannot be saved"):
+        wv.parse({
+            "v_in": var("v_in"),
+            "v_a": savable(derivation={"transform": "cast", "inputs": ["v_in"],
+                                       "config": {"to": "string"}}),
+        })
+
+
+def test_the_kinds_a_state_can_keep_are_p205s_list() -> None:
+    """p.205 names Array, Boolean, Date, Object Set, Object Set Filter,
+    Numeric, String and Timestamp. **Wider than the URL's list on purpose**: a
+    state is a jsonb document, so it can hold a clause list or a set definition
+    verbatim where a query string cannot."""
+    for kind in wv.SAVABLE_KINDS:
+        assert kind in wv.KINDS, kind
+    # The two the URL refuses and a state keeps - the difference is the point.
+    assert "array" in wv.SAVABLE_KINDS and "array" not in wv.ROUTABLE_KINDS
+    assert "object_set" in wv.SAVABLE_KINDS and "object_set" not in wv.ROUTABLE_KINDS
+    assert wv.parse({
+        "v_a": savable(kind="object_set", object_set={
+            "object_type_id": "11111111-2222-3333-4444-555555555555", "filters": []}),
+    })["v_a"].save_state is True
+
+
+def test_a_kind_no_state_can_keep_is_refused() -> None:
+    """`time_series_set` is the only unsavable kind, and it is *also* always
+    derived - so the kind check has to come first or it can never fire. A
+    mutation deleting it survived until the order was fixed, which is the
+    clearest possible statement that the branch was dead."""
+    with pytest.raises(wv.VariableError, match="is a time_series_set and cannot be saved"):
+        wv.parse({
+            "v_o": var("v_o", kind="single_object"),
+            "v_a": savable(kind="time_series_set", derivation={
+                "transform": "object_series", "inputs": ["v_o"],
+                "config": {"property": "readings"}}),
+        })
+
+
+def test_savable_variables_are_keyed_by_external_id() -> None:
+    """Keyed that way because that is how a state is stored (p.203); reading
+    one back has to use the same key or the two halves disagree."""
+    variables = wv.parse({
+        "v_a": savable("v_a", external_id="region"),
+        "v_b": var("v_b", external_id="status"),  # named, not saved
+        "v_c": var("v_c"),
+    })
+    assert set(wv.savable_variables(variables)) == {"region"}
+    assert wv.savable_variables(variables)["region"].id == "v_a"
+
+
+def test_a_module_says_whether_it_saves_state_at_all() -> None:
+    assert wv.state_saving(module({}, {})).enabled is False
+    assert wv.state_saving({**module({}, {}), "state_saving": True}).enabled is True
+    assert wv.state_saving(
+        {**module({}, {}), "state_saving": {"enabled": True}}
+    ).enabled is True
+
+
+def test_a_module_can_rename_what_it_calls_a_saved_state() -> None:
+    """p.204's "State display name": "If set to a value of `inbox`, module
+    consumers will see on-screen references to a saved inbox". Wording only -
+    nothing downstream reads these for meaning."""
+    settings = wv.state_saving({
+        **module({}, {}),
+        "state_saving": {"enabled": True, "display_name": "inbox",
+                         "display_name_plural": "inboxes"},
+    })
+    assert (settings.display_name, settings.display_name_plural) == ("inbox", "inboxes")
+    # And the defaults are Foundry's own words.
+    plain = wv.state_saving({**module({}, {}), "state_saving": True})
+    assert (plain.display_name, plain.display_name_plural) == (
+        "module state", "module states"
+    )
+
+
+def test_the_page_is_kept_unless_the_module_says_otherwise() -> None:
+    """p.200 calls the page "optional"; p.204 makes it a toggle. On by default,
+    because a saved view that reopens on a different page is not the view."""
+    # Through the *block* path, not the bare `true` shorthand: the shorthand
+    # takes the dataclass default and would stay green with the block's own
+    # default flipped, which a mutation proved.
+    assert wv.state_saving({
+        **module({}, {}), "state_saving": {"enabled": True},
+    }).include_page is True
+    assert wv.state_saving({**module({}, {}), "state_saving": True}).include_page is True
+    assert wv.state_saving({
+        **module({}, {}), "state_saving": {"enabled": True, "include_page": False},
+    }).include_page is False
+
+
+def test_a_state_saving_block_nothing_can_read_is_refused_at_save() -> None:
+    with pytest.raises(wv.VariableError, match="`state_saving` must be"):
+        wv.validate_module({**module({}, {}), "state_saving": "yes please"})
+    with pytest.raises(wv.VariableError, match="display_name must be a string"):
+        wv.state_saving({**module({}, {}), "state_saving": {"display_name": 7}})
