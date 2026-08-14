@@ -193,6 +193,15 @@ ROUTABLE_KINDS = ("string", "number", "boolean", "date", "timestamp")
 # refused nor reported. Adding it can make an already-saved app fail to open,
 # and that is the intended answer - such an app is already a form pointed at
 # nothing, and saying so beats a form that edits whatever it finds.
+#
+# `name` is the same story and was found the same way. It is the Filter
+# control's *declaring* prop (`workshop_format.DECLARING_PROP`), and after the
+# format-2 conversion it holds a variable id like every other entry here - so a
+# Filter bound to a deleted variable was neither refused nor reported either.
+# Only `CanvasParameterControl` has a `name` prop, so the generic-looking word
+# is not as broad as it reads. Routing found it: `when_visible` asks which
+# variables a page's widgets bind, and could not see the one widget whose whole
+# purpose is to bind one.
 REFERENCE_PROPS = (
     "filterParameter",
     "searchParameter",
@@ -203,6 +212,7 @@ REFERENCE_PROPS = (
     "subjectVariable",
     "drilldownVariable",
     "seriesVariable",
+    "name",
 )
 
 

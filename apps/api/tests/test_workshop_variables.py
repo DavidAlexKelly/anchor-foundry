@@ -1691,3 +1691,31 @@ def test_a_module_says_whether_it_routes_at_all() -> None:
 def test_a_routing_block_nothing_can_read_is_refused_at_save() -> None:
     with pytest.raises(wv.VariableError, match="`routing` must be"):
         wv.validate_module({**module({}, {}), "routing": "yes please"})
+
+
+def test_a_filter_control_counts_as_a_usage() -> None:
+    """The Filter control declares its variable through `name`
+    (`workshop_format.DECLARING_PROP`), which after the format-2 conversion
+    holds a variable id like every other reference prop - so it belongs in the
+    list that decides what may be deleted.
+
+    Missing until routing needed it: `when_visible` asks which variables a
+    page's widgets bind, and could not see the one widget whose whole purpose
+    is to bind one. The same gap `subjectVariable` had, found the same way.
+    """
+    variables = wv.parse({"v_a": var("v_a")})
+    layout = {"ctl": {"type": {"resolvedName": "CanvasParameterControl"},
+                      "props": {"name": "v_a", "label": "Region"}}}
+    assert wv.usages(layout, variables)["v_a"] == [{"node": "ctl", "prop": "name"}]
+
+
+def test_a_filter_control_bound_to_nothing_is_a_dangling_reference() -> None:
+    """The failure decision 0002 exists to remove, on the widget that used to
+    be exempt from it: a Filter pointed at a variable nothing declares reads as
+    no filter at all, so every table it feeds quietly shows everything."""
+    broken = wv.dangling_references(
+        {"ctl": {"type": {"resolvedName": "CanvasParameterControl"},
+                 "props": {"name": "v_gone"}}},
+        wv.parse({}),
+    )
+    assert broken == [{"node": "ctl", "prop": "name", "variable": "v_gone"}]

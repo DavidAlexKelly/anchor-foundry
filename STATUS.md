@@ -3090,6 +3090,25 @@ Sixteen mutations, all red - six on the variable, four on the label, six on the 
 
 Still open on §3.2's row: the other three consumers p.582 names (Map, Metric Card, Object Table) and p.583-584's time series *transforms* - cumulative, periodic and rolling aggregates, which are a computation over points rather than a variable, and belong with the points read rather than here.
 ---
+
+### 152. Routing: the module's say in what a link carries (this session)
+
+`workshop.md` §7 was ○ across the board, and it is the section that decides whether an app is *shareable*. p.195-199, built end to end.
+
+**Two directions, two rules, two files - and that is the design.** p.198 ends with a sentence pointing the opposite way to everything above it: a query parameter matching an external ID seeds the variable "regardless of URL inclusion behavior configured". So inbound stays `seedFromQuery` (§116), ungated, and outbound is the new `routingParams`. Expressing them as one setting would have made a link somebody types by hand stop working against a module whose author never turned routing on.
+
+**The routable kinds are stated positively, and the list is the *reading* end's vocabulary.** A kind may be in the URL exactly when `coerce` can parse it back: string, number, boolean, date, timestamp. Everything else is refused at save, because a builder who ticks "Always in URL" and gets nothing has no way to tell which end was wrong. That is wider than p.199 in one place and narrower in another, both named in the parity doc: `array` is refused (p.199 excludes filter variables, and our filter clauses are arrays - but so is an ordinary multi-select, and a list needs repeated parameters the reader does not handle), and `object_set`/`single_object` are refused outright where p.199 allows them by RID, because there is no by-RID rehydration to write a key against.
+
+**Page IDs are author-set, not node ids.** A Craft.js node id is generated and changes when a page is recreated, so a link built from one would expire for a reason nobody could see. p.197's three "no page" cases - absent, never named, named but since deleted - all resolve to the default page, and the default page is read off the layout using `CanvasPage`'s own first-page rule rather than assumed, so the URL and the render cannot disagree about which page the reader is looking at.
+
+**Routing found a real gap somewhere else, and it is the interesting part of this unit.** `when_visible` asks which variables a page's widgets bind - and `REFERENCE_PROPS` could not see the one widget whose entire purpose is to bind one. The Filter control declares its variable through `name` (`workshop_format.DECLARING_PROP`), which after the format-2 conversion holds a variable id like every other entry in that list, and it was never added. So a Filter bound to a deleted variable was neither refused nor reported - decision 0002's exact failure, on the widget the decision was written about. Fixed in both copies, with tests for the usage and the dangling reference. This is `subjectVariable` (§116) again, found the same way: by building something that had to enumerate bindings and noticing one missing.
+
+**A test problem worth writing down.** `page.url` is Playwright's cached view of the main frame, refreshed by navigation events - and `router.replace` is a `history.replaceState`, which fires none. So an identical assertion passed whenever some other locator call happened to refresh the cache and failed when it did not. The query string is now read out of the browser with `page.evaluate("location.search")`. A test that is green for reasons unrelated to what it claims is the failure this repo keeps finding, and this is a new shape of it.
+
+Twenty-two mutations, all red: eleven on the pure rules, five on the wiring, one on the reference-prop fix, and five on the server's refusals. **1005 API tests** (was 994), **137 unit tests** (was 116), **136 browser tests** (was 129).
+
+Still ○ in §7: state saving (p.200-202), which is the third consumer of an external ID and belongs in §3.4's mechanism rather than beside this one.
+---
 ---
 ---
 
