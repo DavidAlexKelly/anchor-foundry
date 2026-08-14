@@ -125,6 +125,61 @@ MAX_CONCAT_PARTS = 20
 EXTERNAL_ID_RE = r"[A-Za-z][A-Za-z0-9_]{0,63}"
 MAX_INTERFACE_TEXT = 200
 
+# When a variable's value is written to the URL (routing, p.198).
+#
+# > "In URL when used by visible widget or layout: The URL will only contain
+# > the variable's value if … the value is not the variable's default value
+# > [and] the variable is used in a widget or layout that appears in the
+# > current view."
+# > "Always in URL: The URL will always contain the variable's value if the
+# > value is not the variable's default value."
+# > "Never in URL"
+#
+# `never` is the default, and that is Foundry's shape rather than a caution of
+# ours: routing is opt-in per variable, so an existing module cannot start
+# publishing state into the address bar because this was added.
+#
+# **This governs writing only.** p.198's last line is a separate rule in the
+# other direction: "If a query parameter key matches the external ID of a
+# module interface variable, the value of the query parameter will be used as
+# the variable's initial value, **regardless of URL inclusion behavior
+# configured**." Inbound is `seedFromQuery` (§116) and is not gated on any of
+# this - which is why the two are kept apart rather than expressed as one
+# setting that would have to mean both. A link somebody types by hand should
+# work against a module whose author never turned routing on.
+URL_BEHAVIOURS = ("never", "when_visible", "always")
+
+# Kinds a value can travel in the URL as (p.199, "Unsupported variables types
+# in the URL").
+#
+# **A positive list, and it is exactly `seedFromQuery`'s vocabulary.** A kind
+# is routable when the URL can be read back into it: `coerce` in
+# `canvas/pure.ts` returns `undefined` for everything not on this list, so
+# writing one of those out would produce a link that restores everything except
+# the thing it was shared for - worse than a link that admits it carries
+# nothing. Stated positively so that a *new* kind is unroutable until somebody
+# teaches both ends about it, which is the safe direction for a default.
+#
+# What that leaves out, and why:
+#
+# - `object_set` - p.199 allows this "limited to single objects, specified by
+#   their RID", and `single_object` with it. We have no by-RID rehydration, so
+#   either would be a key in a link with no lookup behind it.
+# - `time_series_set` - the same one layer down: a reference to an instance and
+#   a property, derived rather than chosen, so there is no viewer selection in
+#   it to share.
+# - `array` - the shape filter clauses travel in (`workshop.md` §3.2), which is
+#   p.199's other named exclusion. A list needs a URL vocabulary (repeated
+#   parameters) that `seedFromQuery` does not read, and half of it - writing
+#   without reading - is the failure this list exists to avoid. p.199's own
+#   workaround still applies: route a **string** and use it in the filter's
+#   default.
+#
+# Refused at save rather than dropped at write time, because a builder who
+# ticked "Always in URL" and got nothing would have no way to know which of the
+# two ends was wrong.
+ROUTABLE_KINDS = ("string", "number", "boolean", "date", "timestamp")
+
 # Props whose value is a variable id. The vocabulary grows widget by widget in
 # item 1.5; what matters here is that it is a *list*, so usage scanning has one
 # definition rather than each caller guessing.
@@ -208,6 +263,9 @@ class Variable:
     # naming every one of them would be a tax on building anything.
     external_id: str | None = None
     interface: Interface | None = None
+    #: When this variable's value is written to the URL (p.198). One of
+    #: `URL_BEHAVIOURS`; `never` for everything that has not asked otherwise.
+    url_behavior: str = "never"
 
     @property
     def derived(self) -> bool:
@@ -258,6 +316,9 @@ def parse(raw: Any) -> dict[str, Variable]:
         external_id, interface = _parse_interface(
             label, value.get("external_id"), value.get("interface")
         )
+        url_behavior = _parse_url_behavior(
+            label, str(kind), value.get("url_behavior"), external_id, interface
+        )
         variables[vid] = Variable(
             id=vid,
             kind=str(kind),
@@ -267,6 +328,7 @@ def parse(raw: Any) -> dict[str, Variable]:
             object_set=_parse_object_set(vid, kind, label, value.get("object_set"), derivation),
             external_id=external_id,
             interface=interface,
+            url_behavior=url_behavior,
         )
 
     _refuse_duplicate_external_ids(variables)
@@ -347,6 +409,73 @@ def _parse_interface(
         description=text("description"),
         required=required,
     )
+
+
+def _parse_url_behavior(
+    label: str, kind: str, raw: Any, external_id: str | None, interface: Interface | None
+) -> str:
+    """When this variable's value is written to the URL (p.198).
+
+    Three refusals, each of which would otherwise be a toggle that appears to
+    work and does nothing:
+
+    **Routing needs the module interface.** p.197 shares "variable values that
+    are configured for use with the module interface", and p.198 reads the URL
+    back only for "the external ID of a module interface variable". A routed
+    variable with no external ID would have no name to appear under; one with a
+    name but no interface membership would be written out and never read back,
+    so a shared link would restore everything except the thing it was shared
+    for.
+
+    **Some kinds cannot be in the URL at all** (p.199), and the refusal is at
+    save time rather than a silent skip at write time - a builder who ticked
+    "Always in URL" and got nothing has no way to tell which end was wrong.
+    """
+    if raw is None:
+        return "never"
+    if raw not in URL_BEHAVIOURS:
+        raise VariableError(
+            f"variable {label!r}: url_behavior {raw!r}; expected one of "
+            f"{', '.join(URL_BEHAVIOURS)}"
+        )
+    behavior = str(raw)
+    if behavior == "never":
+        return behavior
+    if kind not in ROUTABLE_KINDS:
+        raise VariableError(
+            f"variable {label!r} is a {kind} and cannot be in the URL - nothing would "
+            f"read the value back, so the link would restore everything but this. "
+            f"Routable kinds are {', '.join(ROUTABLE_KINDS)}; route one of those and "
+            "use it in this variable's definition instead"
+        )
+    if external_id is None or interface is None:
+        raise VariableError(
+            f"variable {label!r} is configured for the URL but is not on the module "
+            "interface - the URL addresses a variable by its external ID, so one "
+            "without a name would be written out and never read back"
+        )
+    return behavior
+
+
+def routing(document: Any) -> bool:
+    """Whether this module writes its state to the URL (p.195).
+
+    One toggle for the whole module, and it lives **in the document** rather
+    than on the app row beside the version settings (p.192). Routing is
+    configured per variable, and those live in the document; splitting the pair
+    would mean reverting to an old version restored its per-variable behaviours
+    and not the switch that makes them mean anything.
+    """
+    if not isinstance(document, dict):
+        return False
+    block = document.get("routing")
+    if block is None or block is False:
+        return False
+    if block is True:
+        return True
+    if not isinstance(block, dict):
+        raise VariableError("`routing` must be true, false, or an object")
+    return bool(block.get("enabled", False))
 
 
 def _refuse_duplicate_external_ids(variables: dict[str, Variable]) -> None:
@@ -1166,6 +1295,7 @@ def validate_module(
     if not isinstance(document, dict) or document.get("format") != 2:
         return {}
     variables = parse(document.get("variables"))
+    routing(document)  # shape only; raises on a `routing` block nothing can read
     # Events are validated against the layout and the variables, because every
     # refusal there is about a reference resolving.
     from . import workshop_events
