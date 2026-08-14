@@ -55,7 +55,17 @@ function detailOf(displayName: string, props: Record<string, unknown>): string {
   return first("title", "label", "text", "name", "objectSetVariable", "datasetId").slice(0, 28);
 }
 
-export function LayoutPanel() {
+export function LayoutPanel({
+  routing,
+  onRoutingChange,
+}: {
+  /** Whether this module writes its state to the URL (p.195). Here because
+   * Foundry puts it in "the Pages section of the Settings panel" and the
+   * layout tree is where our pages live — a routing switch on a panel that
+   * never mentions pages would be a switch nobody finds. */
+  routing?: boolean;
+  onRoutingChange?: (next: boolean) => void;
+} = {}) {
   const { rows, selectedId } = useEditor((state) => {
     const walk = (id: string, depth: number, out: Row[]): Row[] => {
       const node = state.nodes[id];
@@ -119,6 +129,25 @@ export function LayoutPanel() {
           {row.detail && <span className="canvas-tree-detail">{row.detail}</span>}
         </button>
       ))}
+      {onRoutingChange && (
+        <label className="vars-toggle">
+          <input
+            type="checkbox"
+            checked={!!routing}
+            data-testid="routing-toggle"
+            onChange={(e) => onRoutingChange(e.target.checked)}
+          />
+          Write state to the URL
+        </label>
+      )}
+      {onRoutingChange && routing && (
+        <p className="canvas-widget-empty">
+          {/* Two halves and both are needed, so the panel says so rather than
+              leaving an author with a switch that appears to do nothing. */}
+          Pages with an ID, and interface variables set to appear in the URL,
+          are shared by the link.
+        </p>
+      )}
     </div>
   );
 }

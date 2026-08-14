@@ -70,16 +70,27 @@ export function moduleFrom(
     layout?: LayoutNodes;
     variables?: Record<string, WorkshopVariable>;
     events?: Record<string, WorkshopEvent>;
+    routing?: { enabled: boolean };
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
+  const routing = parts.routing ?? current?.routing;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
     variables: parts.variables ?? current?.variables ?? {},
     events: parts.events ?? current?.events ?? {},
     ...(current?.broken_bindings ? { broken_bindings: current.broken_bindings } : {}),
+    // Carried rather than defaulted: a save that omitted it would turn routing
+    // off for every module built before this existed, which is the same class
+    // of quiet loss `broken_bindings` is carried to avoid.
+    ...(routing ? { routing } : {}),
   };
+}
+
+/** Whether a module writes its state to the URL (p.195). */
+export function routingOf(definition: unknown): boolean {
+  return isV2(definition) ? Boolean(definition.routing?.enabled) : false;
 }
 
 /** Props whose value is a variable id. Mirrors `REFERENCE_PROPS` in

@@ -48,7 +48,9 @@ import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
-import { eventsOf, hasLayout, layoutOf, moduleFrom, variablesOf } from "@/lib/workshop-module";
+import {
+  eventsOf, hasLayout, layoutOf, moduleFrom, routingOf, variablesOf,
+} from "@/lib/workshop-module";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import type {
   CanvasAppDetail,
@@ -450,6 +452,7 @@ function ActionBar({
   canPublish,
   variables,
   events,
+  routing,
   onView,
   onReverted,
 }: {
@@ -460,6 +463,7 @@ function ActionBar({
   canPublish: boolean;
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEvent>;
+  routing: boolean;
   onView: (version: number) => void;
   onReverted: () => void;
 }) {
@@ -482,6 +486,7 @@ function ActionBar({
           layout: query.getSerializedNodes(),
           variables,
           events,
+          routing: { enabled: routing },
         }),
         description,
       ),
@@ -575,6 +580,8 @@ function CanvasEnvBridge({
   variables,
   events,
   seed,
+  routing = false,
+  layout,
   children,
 }: {
   workspaceId: string;
@@ -583,6 +590,14 @@ function CanvasEnvBridge({
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEventDef>;
   seed?: Record<string, unknown>;
+  /** Whether this module writes its state to the URL (p.195). */
+  routing?: boolean;
+  /** The **saved** layout, which is what routing reads page IDs and per-page
+   * bindings from. An unsaved page ID therefore does not appear in the URL
+   * until it is saved — the same rule the Variables panel follows for usage
+   * counts, and for the same reason: a link is a thing you hand to somebody
+   * else, and it should describe the module they will open. */
+  layout?: unknown;
   children: React.ReactNode;
 }) {
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
@@ -604,6 +619,11 @@ function CanvasEnvBridge({
           appId={appId}
           declared={variables}
           events={events}
+          // Preview is run mode inside the builder, and is where a routed
+          // module should behave like one. Edit mode is not: every page is on
+          // screen at once, so "the current page" has no answer.
+          routing={routing && !enabled}
+          layout={layout}
         >
           {children}
         </VariableBridge>
@@ -620,10 +640,16 @@ function CanvasEnvBridge({
  * document in front of you, and an author dropping a widget wants to see
  * where it landed. Hiding either behind a tab would trade a scroll for a
  * click on every single edit. */
-function Toolbox() {
+function Toolbox({
+  routing,
+  onRoutingChange,
+}: {
+  routing: boolean;
+  onRoutingChange: (next: boolean) => void;
+}) {
   return (
     <div className="canvas-toolbox">
-      <LayoutPanel />
+      <LayoutPanel routing={routing} onRoutingChange={onRoutingChange} />
       <p className="field-label canvas-toolbox-heading">Widgets</p>
       {PALETTE.map((p) => (
         <PaletteItem key={p.key} componentKey={p.key} label={p.label} hint={p.hint} />
@@ -689,11 +715,16 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // somebody has made but not saved.
   const [variables, setVariables] = useState<Record<string, WorkshopVariable>>({});
   const [events, setEvents] = useState<Record<string, WorkshopEvent>>({});
+  // Routing is one switch for the whole module (p.195) and rides along with
+  // the same save, for the same reason: it is part of the document, not a
+  // setting on the row beside it.
+  const [routing, setRouting] = useState(false);
   const savedVersion = appQuery.data?.current_version;
   useEffect(() => {
     if (!appQuery.data) return;
     setVariables(variablesOf(appQuery.data.definition));
     setEvents(eventsOf(appQuery.data.definition));
+    setRouting(routingOf(appQuery.data.definition));
   }, [savedVersion, appQuery.data?.id]);
 
   // A module always lives in a project. A resolved `canvas_app` without one is
@@ -741,6 +772,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         variables={variables}
         events={eventsOf(app.definition)}
         seed={seedFromQuery(variables, search)}
+        routing={routing}
+        layout={layoutOf(app.definition)}
       >
         <ActionBar
           app={app}
@@ -750,6 +783,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           canPublish={canPublish}
           variables={variables}
           events={events}
+          routing={routing}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
         />
@@ -764,6 +798,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onVariablesChange={setVariables}
           events={events}
           onEventsChange={setEvents}
+          routing={routing}
+          onRoutingChange={setRouting}
           actions={actionCandidates}
         />
       </CanvasEnvBridge>
@@ -782,6 +818,8 @@ function CanvasBody({
   onVariablesChange,
   events,
   onEventsChange,
+  routing,
+  onRoutingChange,
   actions,
 }: {
   hasSavedLayout: boolean;
@@ -794,6 +832,8 @@ function CanvasBody({
   onVariablesChange: (next: Record<string, WorkshopVariable>) => void;
   events: Record<string, WorkshopEvent>;
   onEventsChange: (next: Record<string, WorkshopEvent>) => void;
+  routing: boolean;
+  onRoutingChange: (next: boolean) => void;
   actions: ActionCandidate[];
 }) {
   const { enabled, triggerNodes, pageNodes } = useEditor((state) => {
@@ -827,7 +867,7 @@ function CanvasBody({
   const [tab, setTab] = useState<"widget" | "variables" | "events">("widget");
   return (
     <div className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}>
-      {showChrome && <Toolbox />}
+      {showChrome && <Toolbox routing={routing} onRoutingChange={onRoutingChange} />}
       <div className="canvas-frame-area">
         {hasSavedLayout ? (
           <Frame data={JSON.stringify(layoutOf(definition))} />
