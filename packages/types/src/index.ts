@@ -159,6 +159,22 @@ export interface WorkshopModule {
    * to an old version restored the behaviours and not the switch that makes
    * them mean anything. */
   routing?: { enabled: boolean };
+  /** State saving (p.200–206). Beside `routing` and for the same reason: the
+   * per-variable enablement lives on the variables, so the switch that makes
+   * it mean anything has to be reverted with them.
+   *
+   * Foundry's location settings (p.204: Compass folders, shortcuts, user home)
+   * are absent — a state belongs to its module, which is the only location
+   * this platform has. */
+  state_saving?: {
+    enabled: boolean;
+    /** p.204's "State display name": what a saved state is called on screen,
+     * so an application whose readers say "inbox" can say "inbox". */
+    display_name?: string;
+    display_name_plural?: string;
+    /** p.200: "optionally, the current page that a user is viewing". */
+    include_page?: boolean;
+  };
 }
 
 /** Reserved now, built in roadmap item 1.2. `object_set` is the one that
@@ -273,6 +289,11 @@ export interface WorkshopVariable {
    * variable "regardless of URL inclusion behavior configured", which is
    * `seedFromQuery`'s rule and is not gated on this. */
   url_behavior?: WorkshopUrlBehavior;
+  /** Whether a saved state preserves this variable's value (p.201–202).
+   * Requires an external ID — that is the key a state is stored under
+   * (p.203) — but *not* interface membership, unlike routing: a state is read
+   * back by this module, by name, so a stable name is the whole requirement. */
+  save_state?: boolean;
   /** What this was called when it was a string-keyed parameter, so a converted
    * app can still be read against the v1 document it came from. */
   legacy_name?: string;
@@ -1076,6 +1097,26 @@ export interface SeriesPoints {
   points: { at: unknown; value: unknown }[];
   /** True when the point cap cut the answer short. */
   truncated: boolean;
+}
+
+/** A saved module state (p.200). Values are not in the summary: a list of
+ * states is a list of names, and fetching everyone's values to draw it would
+ * be a page of data nobody asked to see. */
+export interface ModuleState {
+  id: string;
+  name: string;
+  page_id: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One state, opened. `values` is keyed back to **variable id**, because that
+ * is what a running module holds; `missing` names the external IDs the state
+ * carries that the module no longer has a savable variable for (p.203). */
+export interface ModuleStateDetail extends ModuleState {
+  values: Record<string, unknown>;
+  missing: string[];
 }
 
 export interface OntologySearchHit {

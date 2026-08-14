@@ -1054,6 +1054,40 @@ export const canvas = {
       `/workspaces/${wid}/published-canvas-apps/${appId}/variables/evaluate`,
       { method: "POST", body: JSON.stringify({ values, bound: bound ?? [] }) },
     ),
+  /** Saved states (p.200–206).
+   *
+   * **One base, two routes.** A module is reached project-scoped in the
+   * builder and workspace-scoped once published, and state saving matters most
+   * on the second — a published module is opened by somebody who may not be in
+   * its project at all. `published` picks the prefix rather than there being
+   * two sets of functions to keep in step. */
+  statesBase: (wid: string, pid: string, appId: string, published: boolean) =>
+    published
+      ? `/workspaces/${wid}/published-canvas-apps/${appId}/states`
+      : `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/states`,
+  listStates: (wid: string, pid: string, appId: string, published = false) =>
+    request<import("./types").ModuleState[]>(
+      canvas.statesBase(wid, pid, appId, published),
+    ),
+  saveState: (
+    wid: string,
+    pid: string,
+    appId: string,
+    input: { name: string; values: Record<string, unknown>; page_id?: string | null },
+    published = false,
+  ) =>
+    request<import("./types").ModuleState>(canvas.statesBase(wid, pid, appId, published), {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  openState: (wid: string, pid: string, appId: string, stateId: string, published = false) =>
+    request<import("./types").ModuleStateDetail>(
+      `${canvas.statesBase(wid, pid, appId, published)}/${stateId}`,
+    ),
+  deleteState: (wid: string, pid: string, appId: string, stateId: string, published = false) =>
+    request<void>(`${canvas.statesBase(wid, pid, appId, published)}/${stateId}`, {
+      method: "DELETE",
+    }),
   listVersions: (wid: string, pid: string, appId: string) =>
     request<import("./types").CanvasAppVersion[]>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions`,

@@ -1870,3 +1870,19 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .chip-deleted { background: var(--danger-wash); color: var(--danger); }
 .chip-moved,
 .chip-unused { background: var(--paper); color: var(--ink-soft); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* Saved module states (Foundry p.200-206). Below the module rather than in it:
+   p.206 ties state saving to the module header, and this is the nearest thing
+   we have to chrome that every viewer route already renders. */
+.canvas-state-bar {
+  border-top: 1px solid var(--rule);
+  margin-top: 16px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.canvas-state-bar form { display: flex; align-items: flex-end; gap: 8px; }
+.canvas-state-bar form .field { max-width: 280px; margin: 0; }
+.canvas-state-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.canvas-state-list li { display: flex; align-items: center; gap: 8px; }

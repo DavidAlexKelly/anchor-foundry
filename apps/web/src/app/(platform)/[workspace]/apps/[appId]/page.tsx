@@ -33,7 +33,9 @@ import { CanvasNode } from "@/components/canvas/SettingsPanel";
 import { seedFromQuery } from "@/components/canvas/pure";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
-import { eventsOf, layoutOf, routingOf, variablesOf } from "@/lib/workshop-module";
+import {
+  eventsOf, layoutOf, routingOf, stateSavingOf, variablesOf,
+} from "@/lib/workshop-module";
 
 /** Craft.js's `enabled` option is what makes a node draggable, selectable and
  * editable. `<Editor enabled={false}>` is the documented way to render a
@@ -136,6 +138,7 @@ export default function PublishedAppPage() {
                 published
                 routing={routingOf(app.data.definition)}
                 layout={definition}
+                stateSaving={stateSavingOf(app.data.definition)}
               >
                 <ReadOnlyFrame definition={definition} />
               </VariableBridge>
