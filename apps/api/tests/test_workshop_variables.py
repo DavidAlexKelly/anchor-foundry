@@ -1597,3 +1597,125 @@ def test_a_time_series_set_that_is_not_derived_is_refused() -> None:
     resolve to whatever `default` held, which for this kind is always a typo."""
     with pytest.raises(wv.VariableError, match="not derived from an object"):
         wv.parse({"v_x": var("v_x", kind="time_series_set", default="S1")})
+
+
+# ---- routing (p.195-199) -----------------------------------------------------
+def routed(vid: str = "v_a", **extra) -> dict:
+    """An interface variable configured to appear in the URL."""
+    return var(
+        vid, external_id=extra.pop("external_id", "region"), interface=True,
+        url_behavior=extra.pop("url_behavior", "always"), **extra,
+    )
+
+
+def test_a_variable_says_when_it_belongs_in_the_url() -> None:
+    parsed = wv.parse({"v_a": routed()})
+    assert parsed["v_a"].url_behavior == "always"
+
+
+def test_a_variable_that_says_nothing_stays_out_of_the_url() -> None:
+    """Foundry's own default, not a caution of ours: routing is opt-in per
+    variable, so adding it cannot make an existing module start publishing
+    state into the address bar."""
+    assert wv.parse({"v_a": var("v_a")})["v_a"].url_behavior == "never"
+
+
+def test_an_unknown_url_behavior_is_refused_and_names_the_three() -> None:
+    with pytest.raises(wv.VariableError, match="url_behavior 'sometimes'"):
+        wv.parse({"v_a": routed(url_behavior="sometimes")})
+
+
+def test_routing_a_variable_that_is_not_on_the_interface_is_refused() -> None:
+    """p.198 reads the URL back only for "the external ID of a module interface
+    variable", so a routed variable without one would be written out and never
+    read back - a shared link restoring everything except what it was shared
+    for."""
+    with pytest.raises(wv.VariableError, match="not on the module interface"):
+        wv.parse({"v_a": var("v_a", url_behavior="always")})
+    with pytest.raises(wv.VariableError, match="not on the module interface"):
+        # An external ID without the interface toggle is a stable name for
+        # state saving and nothing else - `seedFromQuery` already refuses to
+        # read one, so writing it would be one end of a link with no other.
+        wv.parse({"v_a": var("v_a", external_id="region", url_behavior="always")})
+
+
+def test_never_needs_no_interface_because_it_writes_nothing() -> None:
+    """The refusal is about a promise that cannot be kept. `never` promises
+    nothing, so requiring an external ID for it would refuse a document that
+    behaves correctly."""
+    assert wv.parse({"v_a": var("v_a", url_behavior="never")})["v_a"].url_behavior == "never"
+
+
+def test_the_kinds_that_cannot_round_trip_are_refused() -> None:
+    """p.199's "Unsupported variables types in the URL". Refused at save
+    rather than skipped at write time: a builder who ticked "Always in URL"
+    and got nothing has no way to tell which end was wrong."""
+    for kind, extra in (
+        ("single_object", {}),
+        ("object_set", {"object_set": {"object_type_id": "t1", "filters": []}}),
+        ("time_series_set", {"derivation": {
+            "transform": "object_series", "inputs": ["v_o"],
+            "config": {"property": "readings"}}}),
+        # p.199's other named exclusion. A list needs repeated parameters,
+        # which `seedFromQuery` does not read - and writing without reading is
+        # exactly what this refusal exists to prevent. The page's own
+        # workaround still applies: route a string and use it in the filter's
+        # default.
+        ("array", {}),
+    ):
+        with pytest.raises(wv.VariableError, match="cannot be in the URL"):
+            wv.parse({
+                "v_o": var("v_o", kind="single_object"),
+                "v_a": routed(kind=kind, **extra),
+            })
+
+
+def test_every_routable_kind_is_accepted() -> None:
+    """A guard on the list itself, from the other side: narrowing it by hand
+    cannot quietly stop a scalar being shareable."""
+    assert wv.ROUTABLE_KINDS, "the whole point is that some kinds route"
+    for kind in wv.ROUTABLE_KINDS:
+        assert kind in wv.KINDS, kind
+        assert wv.parse({"v_a": routed(kind=kind)})["v_a"].url_behavior == "always"
+
+
+def test_a_module_says_whether_it_routes_at_all() -> None:
+    """One toggle for the whole module (p.195), in the *document* beside the
+    per-variable behaviours - so reverting to an old version restores both."""
+    assert wv.routing(module({}, {})) is False
+    assert wv.routing({**module({}, {}), "routing": {"enabled": True}}) is True
+    assert wv.routing({**module({}, {}), "routing": {"enabled": False}}) is False
+    assert wv.routing({**module({}, {}), "routing": True}) is True
+
+
+def test_a_routing_block_nothing_can_read_is_refused_at_save() -> None:
+    with pytest.raises(wv.VariableError, match="`routing` must be"):
+        wv.validate_module({**module({}, {}), "routing": "yes please"})
+
+
+def test_a_filter_control_counts_as_a_usage() -> None:
+    """The Filter control declares its variable through `name`
+    (`workshop_format.DECLARING_PROP`), which after the format-2 conversion
+    holds a variable id like every other reference prop - so it belongs in the
+    list that decides what may be deleted.
+
+    Missing until routing needed it: `when_visible` asks which variables a
+    page's widgets bind, and could not see the one widget whose whole purpose
+    is to bind one. The same gap `subjectVariable` had, found the same way.
+    """
+    variables = wv.parse({"v_a": var("v_a")})
+    layout = {"ctl": {"type": {"resolvedName": "CanvasParameterControl"},
+                      "props": {"name": "v_a", "label": "Region"}}}
+    assert wv.usages(layout, variables)["v_a"] == [{"node": "ctl", "prop": "name"}]
+
+
+def test_a_filter_control_bound_to_nothing_is_a_dangling_reference() -> None:
+    """The failure decision 0002 exists to remove, on the widget that used to
+    be exempt from it: a Filter pointed at a variable nothing declares reads as
+    no filter at all, so every table it feeds quietly shows everything."""
+    broken = wv.dangling_references(
+        {"ctl": {"type": {"resolvedName": "CanvasParameterControl"},
+                 "props": {"name": "v_gone"}}},
+        wv.parse({}),
+    )
+    assert broken == [{"node": "ctl", "prop": "name", "variable": "v_gone"}]

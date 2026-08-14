@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState } from "react";
 import { canvas as canvasApi, objects as objectsApi } from "@/lib/api";
 import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "@/lib/types";
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
+import { ROUTABLE_KINDS } from "./routing";
 
 const KINDS: WorkshopVariableKind[] = [
   "string",
@@ -380,6 +381,7 @@ function InterfaceEditor({
 }) {
   const externalId = variable.external_id ?? "";
   const published = variable.interface != null;
+  const routable = ROUTABLE_KINDS.includes(variable.kind);
 
   return (
     <div className="vars-interface">
@@ -463,6 +465,37 @@ function InterfaceEditor({
               }
             />
             Required — refuse to save a host that leaves it unmapped
+          </label>
+          {/* Routing lives here rather than in its own section because it is
+              only offered to interface variables: p.198 reads the URL back for
+              "the external ID of a module interface variable", so a routed
+              variable that is not one would be written out and never read
+              back. The server refuses that; not offering it is the same
+              refusal without the round trip. */}
+          <label>
+            In the URL
+            <select
+              value={variable.url_behavior ?? "never"}
+              disabled={readOnly || !routable}
+              data-testid="variable-url-behavior"
+              onChange={(e) =>
+                onChange({
+                  url_behavior: e.target.value as WorkshopVariable["url_behavior"],
+                })
+              }
+            >
+              <option value="never">Never</option>
+              <option value="when_visible">When used by a visible widget</option>
+              <option value="always">Always</option>
+            </select>
+            <span className="field-hint">
+              {routable
+                ? "Only when it is not the default. Needs routing on, in Layout."
+                : /* p.199. Said here rather than left as a disabled control
+                     nobody can explain. */
+                  `A ${variable.kind} cannot be in the URL — nothing would read it ` +
+                  "back. Route a string and use it in this one's definition."}
+            </span>
           </label>
         </>
       )}

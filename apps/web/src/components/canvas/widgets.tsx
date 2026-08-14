@@ -4991,6 +4991,11 @@ export function CanvasPage({
   children,
 }: {
   title?: string;
+  /** The author-set ID this page appears under in the URL, when routing is on
+   * (p.197). Read off the layout by `pageIdOf` rather than through props,
+   * because the *viewer* needs it for a page it is not rendering; declared
+   * here so the settings form and `craft.props` agree it exists. */
+  pageId?: string;
   children?: React.ReactNode;
 }) {
   const {
@@ -5040,8 +5045,13 @@ function PageSettings() {
   const {
     title,
     icon,
+    pageId,
     actions: { setProp },
-  } = useNode((node) => ({ title: node.data.props.title, icon: node.data.props.icon }));
+  } = useNode((node) => ({
+    title: node.data.props.title,
+    icon: node.data.props.icon,
+    pageId: node.data.props.pageId,
+  }));
   return (
     <>
       <label className="field">
@@ -5068,13 +5078,31 @@ function PageSettings() {
           Shown instead of the title on a Tabs widget in a collapsed header.
         </span>
       </label>
+      {/* p.197: "For pages without a defined page ID, no page ID will be
+          written to the URL; users will be returned to the module's default
+          page on page load." Author-set rather than the node id, which is
+          generated and changes when a page is recreated - a link built from
+          one would expire for a reason nobody could see. */}
+      <label className="field">
+        <span className="field-label">Page ID</span>
+        <input
+          value={pageId ?? ""}
+          data-testid="page-id"
+          placeholder="none"
+          onChange={(e) => setProp((p: { pageId: string }) => (p.pageId = e.target.value))}
+        />
+        <span className="field-hint">
+          Appears in the URL when routing is on. A page with no ID is reached
+          by opening the module.
+        </span>
+      </label>
     </>
   );
 }
 
 CanvasPage.craft = {
   displayName: "Page",
-  props: { title: "Page", icon: "" },
+  props: { title: "Page", icon: "", pageId: "" },
   isCanvas: true,
   related: { settings: PageSettings },
 };

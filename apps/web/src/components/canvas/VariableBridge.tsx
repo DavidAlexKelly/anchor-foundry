@@ -32,6 +32,7 @@ import {
   useCanvasParameters,
 } from "./context";
 import { invalidateCanvasReads } from "./refresh";
+import { RoutingSync } from "./RoutingSync";
 
 const DEBOUNCE_MS = 250;
 
@@ -43,6 +44,8 @@ export function VariableBridge({
   events,
   published = false,
   bound,
+  routing = false,
+  layout,
   children,
 }: {
   workspaceId: string;
@@ -61,6 +64,13 @@ export function VariableBridge({
    * value — Foundry's precedence rule (p.122, p.127). Not derivable from this
    * document: only the host knows what it mapped. */
   bound?: string[];
+  /** Whether this module writes its state to the URL (p.195). Passed by the
+   * *viewer* routes only: in the builder every page is on screen at once, so
+   * "the current page" has no answer, and an author arranging widgets should
+   * not be rewriting the link they will share. */
+  routing?: boolean;
+  /** The layout, for the page walk routing needs. Only read when `routing`. */
+  layout?: unknown;
   children: React.ReactNode;
 }) {
   const enabled = Object.keys(declared).length > 0;
@@ -172,6 +182,7 @@ export function VariableBridge({
             dismiss: () => setStatus(null),
           }}
         >
+          {routing && <RoutingSync layout={layout} declared={declared} />}
           {children}
           <ActionStatus status={status} onDismiss={() => setStatus(null)} />
         </CanvasActionsProvider>

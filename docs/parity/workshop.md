@@ -128,7 +128,7 @@ Applied through one `<Editor onRender>` wrapper rather than in each of the twent
 
 ## 3. Variables
 
-Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`, `time_series_set`) and 11 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `object_property`, `filter_value`, `object_series`, plus `object_set_aggregation` served by the store).
+Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`, `time_series_set`; the first five are the ones routing can carry, §152) and 11 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `object_property`, `filter_value`, `object_series`, plus `object_set_aggregation` served by the store).
 
 ### 3.1 Definition types (p.73)
 
@@ -275,16 +275,16 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 
 | Feature | Status | Notes |
 |---|---|---|
-| Enable routing toggle, in Pages settings | ○ | (p.195) |
-| Module state written to the URL for sharing | ◑ | §99, by a different mechanism |
-| Current **page ID** written to the URL; no ID means the default page on load | ○ | (p.197) |
-| Per-variable URL behaviour: **In URL when used by visible widget or layout** | ○ | (p.198) — only when non-default *and* on screen |
-| Per-variable URL behaviour: **Always in URL** (when non-default) | ○ | (p.198) |
-| Per-variable URL behaviour: **Never in URL** | ○ | (p.198) |
-| A query parameter matching an external ID seeds the variable **regardless** of the behaviour above | ○ | (p.198) — inbound and outbound are separate rules |
-| Refuse routing on object set **filter** variables | ○ | (p.199) — documented limitation, so refuse rather than half-work |
-| Object set variables in the URL limited to a single object by RID | ○ | (p.199) |
-| Embedding does **not** inherit the child's routing config; pass through the interface instead | ○ | (p.199) — same precedence family as §3.4 |
+| Enable routing toggle, in Pages settings | ✅ | §152 — on the Layout panel, which is where our pages live; stored in the *document* beside the per-variable behaviours, so reverting a version restores both |
+| Module state written to the URL for sharing | ✅ | §152. §99's `useUrlState` is the mechanism; what was missing was the module's own say in what goes there |
+| Current **page ID** written to the URL; no ID means the default page on load | ✅ | §152 — author-set, not the Craft.js node id: a generated id changes when a page is recreated, so a link built from one would expire for a reason nobody could see. All three "no page" cases (absent, unnamed, since-deleted) open the default page |
+| Per-variable URL behaviour: **In URL when used by visible widget or layout** | ✅ | §152 — the page walk decides "on screen", so a filter on page two is not in the link |
+| Per-variable URL behaviour: **Always in URL** (when non-default) | ✅ | §152 |
+| Per-variable URL behaviour: **Never in URL** | ✅ | §152 — and the default, so adding routing cannot make an existing module start publishing state |
+| A query parameter matching an external ID seeds the variable **regardless** of the behaviour above | ✅ | §116 for the seeding, §152 for keeping it ungated — the two directions are separate rules in separate files, so a link typed by hand works against a module whose author never turned routing on |
+| Refuse routing on object set **filter** variables | ◑ | §152 refuses the whole `array` kind, which is what filter clauses travel in — but that also refuses an ordinary multi-select, because a list needs repeated query parameters that `seedFromQuery` does not read. Wider than p.199 by exactly that much, and named here rather than left to be discovered |
+| Object set variables in the URL limited to a single object by RID | ○ | (p.199) — §152 refuses `object_set` and `single_object` outright instead. Supporting them means a by-RID rehydration this platform does not have; writing a key with no lookup behind it would be a link that restores everything except the selection |
+| Embedding does **not** inherit the child's routing config; pass through the interface instead | ✅ | §152, by construction: the routing sync is mounted by the viewer routes and reads *that* module's toggle, so an embedded child never writes to the URL at all |
 | **State saving** — save, open, and share a named state | ○ | (p.200) |
 | State saving preserves enabled variables **and optionally the current page** | ○ | (p.200) |
 | Per-variable state-saving enablement via external ID | ○ | §3.4 |

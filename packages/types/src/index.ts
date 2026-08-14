@@ -151,6 +151,14 @@ export interface WorkshopModule {
    * filter" for as long as it existed, and quietly tidying it away would
    * destroy the only evidence that the app is wrong. */
   broken_bindings?: { node: string; prop: string; parameter: string }[];
+  /** Whether this module writes its state to the URL (routing, p.195).
+   *
+   * One toggle for the whole feature, and it lives in the document rather than
+   * on the app row beside the version settings — routing is configured per
+   * variable, and those live here, so splitting the pair would mean reverting
+   * to an old version restored the behaviours and not the switch that makes
+   * them mean anything. */
+  routing?: { enabled: boolean };
 }
 
 /** Reserved now, built in roadmap item 1.2. `object_set` is the one that
@@ -237,6 +245,11 @@ export interface ObjectSetFilter {
   value: unknown;
 }
 
+/** p.198's three inclusion behaviours. `never` is the default, so adding
+ * routing cannot make an existing module start publishing state into the
+ * address bar. */
+export type WorkshopUrlBehavior = "never" | "when_visible" | "always";
+
 export interface WorkshopVariable {
   /** Opaque and stable. Deliberately not derived from the label - a derived id
    * is a rename waiting to break every reference. */
@@ -255,6 +268,11 @@ export interface WorkshopVariable {
    * both: two answers to "where do these rows come from" and no rule for which
    * wins, which the API refuses. */
   object_set?: { object_type_id: string; filters?: ObjectSetFilter[] };
+  /** When this variable's value is written to the URL (p.198). Governs
+   * *writing* only: a query parameter matching an external ID seeds the
+   * variable "regardless of URL inclusion behavior configured", which is
+   * `seedFromQuery`'s rule and is not gated on this. */
+  url_behavior?: WorkshopUrlBehavior;
   /** What this was called when it was a string-keyed parameter, so a converted
    * app can still be read against the v1 document it came from. */
   legacy_name?: string;
