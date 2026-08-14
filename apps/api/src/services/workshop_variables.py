@@ -180,6 +180,34 @@ URL_BEHAVIOURS = ("never", "when_visible", "always")
 # two ends was wrong.
 ROUTABLE_KINDS = ("string", "number", "boolean", "date", "timestamp")
 
+# Kinds a *saved state* can preserve (p.205, "Supported variable types").
+#
+# > "Array, of Boolean, date, numeric, string, or timestamp values / Boolean /
+# > Date / Object Set / Object Set Filter / Numeric / String / Timestamp"
+#
+# **Wider than `ROUTABLE_KINDS`, and the difference is the point.** Routing is
+# limited by what a *query string* can carry and be read back out of; a state
+# is a jsonb document, so it can hold a list of clauses or a set definition
+# verbatim. `array` and `object_set` are on Foundry's list and are on ours for
+# exactly that reason - p.199 excludes them from the URL and p.205 includes
+# them here, in the same product.
+#
+# `single_object` is ours rather than Foundry's, and it follows from what that
+# kind holds: the object somebody clicked, key and properties together (§84),
+# which is a value and stores like one. p.200's second example - "Selecting a
+# specific object of interest and then saving that view to share with a
+# coworker" - is precisely this, and refusing it would refuse the use case the
+# page opens with.
+#
+# `time_series_set` is absent because it is always derived, and no derived
+# variable is savable at all (see `_parse_state_saving`): a state holding a
+# computed value would restore an answer rather than the question, and the two
+# disagree the moment the data behind them moves.
+SAVABLE_KINDS = (
+    "string", "number", "boolean", "date", "timestamp",
+    "array", "single_object", "object_set",
+)
+
 # Props whose value is a variable id. The vocabulary grows widget by widget in
 # item 1.5; what matters here is that it is a *list*, so usage scanning has one
 # definition rather than each caller guessing.
@@ -276,6 +304,9 @@ class Variable:
     #: When this variable's value is written to the URL (p.198). One of
     #: `URL_BEHAVIOURS`; `never` for everything that has not asked otherwise.
     url_behavior: str = "never"
+    #: Whether this variable's value is preserved in a saved state (p.201-202).
+    #: Off unless asked for, the same as routing and for the same reason.
+    save_state: bool = False
 
     @property
     def derived(self) -> bool:
@@ -329,6 +360,9 @@ def parse(raw: Any) -> dict[str, Variable]:
         url_behavior = _parse_url_behavior(
             label, str(kind), value.get("url_behavior"), external_id, interface
         )
+        save_state = _parse_state_saving(
+            label, str(kind), value.get("save_state"), external_id, derivation
+        )
         variables[vid] = Variable(
             id=vid,
             kind=str(kind),
@@ -339,6 +373,7 @@ def parse(raw: Any) -> dict[str, Variable]:
             external_id=external_id,
             interface=interface,
             url_behavior=url_behavior,
+            save_state=save_state,
         )
 
     _refuse_duplicate_external_ids(variables)
@@ -465,6 +500,139 @@ def _parse_url_behavior(
             "without a name would be written out and never read back"
         )
     return behavior
+
+
+def _parse_state_saving(
+    label: str, kind: str, raw: Any, external_id: str | None, derivation: Derivation | None
+) -> bool:
+    """Whether this variable's value is preserved in a saved state (p.202).
+
+    Three refusals:
+
+    **A saved state is keyed by external ID** (p.203: "Variable values are
+    stored within a saved state via their external ID"), so a variable without
+    one has no key to be stored under. Foundry's own step 2 is "select a
+    variable and then navigate to the settings tab and **add an external ID**
+    to the variable" - the ID is not incidental to the feature, it is the
+    storage key.
+
+    Note what is *not* required, in contrast to routing: interface membership.
+    Routing needs it because the URL is read back by `seedFromQuery`, which
+    only reads interface variables; a saved state is read back by name, by this
+    module, so a stable name is the whole requirement. That asymmetry is why
+    the two checks are separate functions rather than one.
+
+    **A derived variable cannot be saved.** It is a function of its inputs, so
+    a state holding its value would restore an *answer* while the inputs
+    restore the *question* - and the two disagree the moment the data behind
+    them moves. Saving the inputs is both sufficient and correct.
+
+    **A kind that is not on p.205's list cannot be saved**, refused at save
+    rather than dropped when a state is written, so a builder who ticked the
+    box and lost a value knows which end was wrong.
+    """
+    if raw is None or raw is False:
+        return False
+    if raw is not True:
+        raise VariableError(
+            f"variable {label!r}: save_state must be true or false, not "
+            f"{type(raw).__name__}"
+        )
+    # The kind is checked before the derivation, and the order is load-bearing:
+    # `time_series_set` is the only unsavable kind and is *also* always derived,
+    # so checking the derivation first would make this branch unreachable - a
+    # refusal that cannot fire, which mutation testing duly found.
+    if kind not in SAVABLE_KINDS:
+        raise VariableError(
+            f"variable {label!r} is a {kind} and cannot be saved in a state. "
+            f"Savable kinds are {', '.join(SAVABLE_KINDS)}"
+        )
+    if derivation is not None:
+        raise VariableError(
+            f"variable {label!r} is derived and cannot be saved in a state - its "
+            "value is computed from its inputs, so saving those restores this one. "
+            "A saved answer would disagree with its own question as soon as the "
+            "data moved"
+        )
+    if external_id is None:
+        raise VariableError(
+            f"variable {label!r} is set to be saved in a state but has no external "
+            "ID - a state stores values by external ID, so one without a name has "
+            "no key to be stored under"
+        )
+    return True
+
+
+@dataclass(frozen=True)
+class StateSaving:
+    """A module's state-saving settings (p.204).
+
+    `display_name`/`display_name_plural` are p.204's "State display name"
+    fields verbatim: they exist so an application can call a saved state an
+    *inbox* if that is what its readers call it. Wording only - nothing
+    downstream reads them for meaning.
+    """
+
+    enabled: bool = False
+    display_name: str = "module state"
+    display_name_plural: str = "module states"
+    #: p.200: "optionally, the current page that a user is viewing".
+    include_page: bool = True
+
+
+def state_saving(document: Any) -> StateSaving:
+    """A module's state-saving settings (p.201's step 1, p.204's options).
+
+    In the document beside the per-variable enablement, for routing's reason:
+    reverting to an old version must restore the switch and the variables it
+    governs together, or one half of a feature comes back without the other.
+
+    **Foundry's location settings are deliberately absent** (p.204: "Add
+    shortcut", "User home folder", "Any Compass location"). They configure
+    where in Compass a state file is written, and this platform has no Compass
+    - a state belongs to its module, which is the only location there is. A
+    setting with one possible value would be a control that teaches nothing.
+    """
+    if not isinstance(document, dict):
+        return StateSaving()
+    block = document.get("state_saving")
+    if block is None or block is False:
+        return StateSaving()
+    if block is True:
+        return StateSaving(enabled=True)
+    if not isinstance(block, dict):
+        raise VariableError("`state_saving` must be true, false, or an object")
+
+    def text(field: str, fallback: str) -> str:
+        value = block.get(field)
+        if value is None:
+            return fallback
+        if not isinstance(value, str):
+            raise VariableError(f"state_saving {field} must be a string")
+        value = value.strip()
+        if len(value) > MAX_INTERFACE_TEXT:
+            raise VariableError(
+                f"state_saving {field} is longer than {MAX_INTERFACE_TEXT} characters"
+            )
+        return value or fallback
+
+    return StateSaving(
+        enabled=bool(block.get("enabled", False)),
+        display_name=text("display_name", "module state"),
+        display_name_plural=text("display_name_plural", "module states"),
+        include_page=bool(block.get("include_page", True)),
+    )
+
+
+def savable_variables(variables: dict[str, Variable]) -> dict[str, Variable]:
+    """The variables a saved state preserves, keyed by **external ID** (p.203).
+
+    Keyed that way because that is how a state is stored, and reading it back
+    has to use the same key or the two halves disagree. `parse` has already
+    refused a savable variable without an external ID, so every value here has
+    one.
+    """
+    return {v.external_id: v for v in variables.values() if v.save_state and v.external_id}
 
 
 def routing(document: Any) -> bool:
@@ -1306,6 +1474,7 @@ def validate_module(
         return {}
     variables = parse(document.get("variables"))
     routing(document)  # shape only; raises on a `routing` block nothing can read
+    state_saving(document)  # likewise
     # Events are validated against the layout and the variables, because every
     # refusal there is about a reference resolving.
     from . import workshop_events

@@ -3109,10 +3109,40 @@ Twenty-two mutations, all red: eleven on the pure rules, five on the wiring, one
 
 Still ○ in §7: state saving (p.200-202), which is the third consumer of an external ID and belongs in §3.4's mechanism rather than beside this one.
 ---
+
+### 153. State saving: a view somebody can name, keep and hand over (this session)
+
+The last ○ block in `workshop.md` §7, and the third consumer of an external ID after embedding (p.163) and routing (p.198). `docs/parity/README.md` predicted this one: "it belongs in the existing mechanism … needing anything new would mean this was built wrong." The prediction held - no new naming mechanism - and what it did need was storage (db 0048) and one asymmetry worth writing down.
+
+**A state is keyed by external ID, and that is the feature.** p.203:
+
+> "Variable values are stored within a saved state via their external ID. As a result, modifying a variable's external ID after state saving has been configured may cause previously configured states to reload unsuccessfully."
+
+The same page gives the upside: an Object Dropdown replaced by an Object Selection keeps its states "as long as the output object set from those widgets uses the same external ID". So a state survives the module being rebuilt around it, and a test rebuilds one with a different variable id and a different label to prove it.
+
+**The asymmetry with routing.** Routing requires interface membership because the URL is read back by `seedFromQuery`, which only reads interface variables; state saving does not, because a state is read back by *this* module, by name. Two features on one key with two different requirements, which is why they are two functions rather than one - the temptation to unify them would have made a routed variable's rule apply to a saved one.
+
+**What a state can hold is wider than what a link can, and that is not an inconsistency.** p.199 excludes arrays and object sets from the URL; p.205 includes them in a state. A query string has to be parsed back into a value and a jsonb document does not, so the list follows the medium. Derived variables are refused on both: a saved answer disagrees with its own question the moment the data moves, and saving the inputs restores both halves.
+
+**Saving is a viewer's action.** p.200 calls this a feature for "module consumers", and a state writes nothing about the module - so requiring the editor role would put it behind exactly the permission its audience lacks. Saving over your own state updates it; over somebody else's it is refused, because the feature's second sentence is about sharing and a shared view replaced without a word is the failure that invites.
+
+**A state that came back short says so.** Restoring what still applies beats refusing the whole state over one stale key, but only if the reader is told - otherwise they believe they are looking at what they saved. The open response carries the external IDs that no longer resolve, and the bar prints them.
+
+**Foundry's location settings are refused rather than deferred** (p.204: "Add shortcut", "User home folder", "Any Compass location"). They configure where in Compass a state file is written; a state here belongs to its module, which is the only location this platform has, and a setting with one possible value is a control that teaches nothing.
+
+**Two mutations survived first, and both were tests true for the wrong reason.**
+
+- The unsavable-kind refusal was *unreachable*: `time_series_set` is the only kind a state cannot hold, and it is also always derived, so the derived check ran first and the kind check could never fire. Fixed by ordering, which makes both branches live - and the mutation is the only thing that could have found it, since the code read perfectly well.
+- The `include_page` default was asserted through the `state_saving: true` shorthand, which takes the *dataclass* default rather than the block's - so flipping the block's default left the test green.
+
+Nineteen mutations, all red: fourteen on the server, five on the browser. **1032 API tests** (was 1005), 137 unit, **142 browser** (was 136).
+
+**§146's recovery recipe was incomplete and cost two failed attempts this session.** Migrations do not run as `platform_app` - that role has no CREATE on `public`. The line is `PLATFORM_APP_PASSWORD=devpass DATABASE_URL="postgresql://platform:devpass@localhost:5432/platform?sslmode=disable" .venv-api/bin/python packages/db/migrate.py`: the owner role, the plain `postgresql://` form rather than SQLAlchemy's `+psycopg`, and the password variable that `0006_rls.sql` needs. `docs/local-setup.md` had it right all along; the recovery note did not point at it.
+---
 ---
 ---
 
-**The sandbox rewound the checkout twice more this session** - HEAD back at a commit from PR #50, `docs/parity/` gone, Postgres down, `node_modules` pruned, the database missing six migrations. Nothing was lost either time because every unit was already pushed and merged. The recovery is mechanical and worth having written down: `git fetch origin main && git checkout -B <branch> origin/main`, then `scripts/dev-up.sh`, then `npm ci` **at the repo root** (§132's lesson - never in `apps/web`), then `packages/db/migrate.py`, then a full API run to prove the restore before touching anything.
+**The sandbox rewound the checkout twice more this session** - HEAD back at a commit from PR #50, `docs/parity/` gone, Postgres down, `node_modules` pruned, the database missing six migrations. Nothing was lost either time because every unit was already pushed and merged. The recovery is mechanical and worth having written down: `git fetch origin main && git checkout -B <branch> origin/main`, then `scripts/dev-up.sh`, then `npm ci` **at the repo root** (§132's lesson - never in `apps/web`), then the migrations, then a full API run to prove the restore before touching anything. The migration line is the part that is easy to get wrong and is spelled out in §153: it runs as the **owner** role, not `platform_app`, with the plain `postgresql://` DSN and `PLATFORM_APP_PASSWORD` set.
 ---
 
 ## What's not started

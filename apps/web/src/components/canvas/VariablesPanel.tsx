@@ -32,6 +32,12 @@ import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
 import { ROUTABLE_KINDS } from "./routing";
 
+/** Mirrors `SAVABLE_KINDS` in `services/workshop_variables.py` (p.205). */
+const SAVABLE_KINDS = [
+  "string", "number", "boolean", "date", "timestamp",
+  "array", "single_object", "object_set",
+];
+
 const KINDS: WorkshopVariableKind[] = [
   "string",
   "number",
@@ -382,6 +388,10 @@ function InterfaceEditor({
   const externalId = variable.external_id ?? "";
   const published = variable.interface != null;
   const routable = ROUTABLE_KINDS.includes(variable.kind);
+  // p.205's list, and wider than the URL's: a state is a document, so it can
+  // hold a clause list or a set definition that a query string cannot. Mirrors
+  // `SAVABLE_KINDS` in the service, which is what refuses a save.
+  const savable = !variable.derivation && SAVABLE_KINDS.includes(variable.kind);
 
   return (
     <div className="vars-interface">
@@ -499,6 +509,34 @@ function InterfaceEditor({
           </label>
         </>
       )}
+
+      {/* Outside the interface block, unlike routing: a state is read back by
+          this module, by name, so an external ID is the whole requirement and
+          interface membership is not one (p.202-203). Offering it only to
+          interface variables would refuse a configuration the server accepts. */}
+      <label className="vars-toggle">
+        <input
+          type="checkbox"
+          checked={variable.save_state ?? false}
+          disabled={readOnly || !externalId || !savable}
+          data-testid="variable-save-state"
+          onChange={(e) =>
+            onChange({ save_state: e.target.checked || undefined } as Partial<WorkshopVariable>)
+          }
+        />
+        Kept in a saved state
+      </label>
+      {!externalId ? (
+        <p className="vars-id soft">
+          Give it an external ID first — a state stores values by external ID.
+        </p>
+      ) : !savable ? (
+        <p className="vars-id soft">
+          {variable.derivation
+            ? "Derived variables are computed from their inputs — save those instead."
+            : `A ${variable.kind} cannot be kept in a state.`}
+        </p>
+      ) : null}
     </div>
   );
 }

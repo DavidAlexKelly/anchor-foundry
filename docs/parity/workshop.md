@@ -179,7 +179,7 @@ So one concept powers **embedding, URL deep-links, and state saving**. We built 
 | Module interface toggle, with display name and description | ✅ |
 | Interface variables mapped when embedding | ✅ — the §114 deferral is closed |
 | Interface variables initialised from URL query parameters | ✅ — same external ID, same field |
-| State saving keyed on external ID | ○ — the third consumer, not built (§7) |
+| State saving keyed on external ID | ✅ §153 — the third consumer, and the one that makes the external ID a *storage key* rather than a stable label |
 
 **Refusals:** mapping a variable not in the interface ✅; a type mismatch between host and interface variable ✅; a required interface variable left unmapped ✅; renaming an external ID that saved states point at ○ (needs state saving to exist first).
 
@@ -262,6 +262,7 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 | Revert to this version, with auto-generated description | ✅ | (p.192); a new version, not a rewind |
 | Descriptions viewable, addable and **editable after the fact** | ✅ | (p.192) |
 | Setting: **Automatically publish when saving** | ✅ | (p.192) |
+| Display name / plural for a saved state (p.204) | ✅ | §153 — wording only, and it reaches the control a reader uses |
 | Setting: **Always prompt for a version description** | ✅ | (p.192); a prompt, never a validation rule — the server accepts an empty description whatever the setting says |
 | **Changelog panel** — range or single-version diff | ◑ | §132 — all five kinds ("additions, deletions, changes, moves, and newly unused elements"), single and range selection (p.193). The JSON diff view and the visual hierarchy are not built |
 | `/dev/` vs `/latest/` in the URL — last saved vs last published | ○ | (p.166); one route, and save-versus-publish becomes checkable by a human |
@@ -285,10 +286,10 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 | Refuse routing on object set **filter** variables | ◑ | §152 refuses the whole `array` kind, which is what filter clauses travel in — but that also refuses an ordinary multi-select, because a list needs repeated query parameters that `seedFromQuery` does not read. Wider than p.199 by exactly that much, and named here rather than left to be discovered |
 | Object set variables in the URL limited to a single object by RID | ○ | (p.199) — §152 refuses `object_set` and `single_object` outright instead. Supporting them means a by-RID rehydration this platform does not have; writing a key with no lookup behind it would be a link that restores everything except the selection |
 | Embedding does **not** inherit the child's routing config; pass through the interface instead | ✅ | §152, by construction: the routing sync is mounted by the viewer routes and reads *that* module's toggle, so an embedded child never writes to the URL at all |
-| **State saving** — save, open, and share a named state | ○ | (p.200) |
-| State saving preserves enabled variables **and optionally the current page** | ○ | (p.200) |
-| Per-variable state-saving enablement via external ID | ○ | §3.4 |
-| Configure allowed save locations and shortcuts | ○ | (p.202) |
+| **State saving** — save, open, and share a named state | ✅ | §153 — db 0048. A state is stored **by external ID** (p.203), so it outlives the module being rebuilt around it; whoever can open the module can open its states, because a published module is read by people outside its project |
+| State saving preserves enabled variables **and optionally the current page** | ✅ | §153 — the page is the author-set ID routing also writes, and turning the option off means *not stored* rather than merely not written |
+| Per-variable state-saving enablement via external ID | ✅ | §153 — the third consumer of an external ID, as §3.4 predicted. Unlike routing it needs **no interface membership**: a state is read back by this module, by name, so a stable name is the whole requirement |
+| Configure allowed save locations and shortcuts | ○ | (p.202, p.204) — **refused rather than pending.** These configure where in Compass a state file is written; a state here belongs to its module, which is the only location this platform has, and a setting with one possible value teaches nothing. Revisit only if projects ever gain a folder tree |
 
 ---
 

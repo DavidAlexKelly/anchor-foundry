@@ -132,9 +132,12 @@ but "the only authoring surface for transforms that are not yet files".
   a mapped variable ignores the child's own default and derivation.
   `e2e/test_module_interface.py` asks one module about two of the three
   consumers on purpose.
-- **State saving is the third consumer and is not built.** It keys on the same
-  external ID (p.202–203). It belongs in the existing mechanism and the
-  existing test file; needing anything new would mean this was built wrong.
+- **State saving is the third consumer and is now built** (§153). It keys on
+  the same external ID (p.202–203), and the prediction held: no new naming
+  mechanism was needed. What it *did* need was storage (db 0048) and one
+  asymmetry worth recording — routing requires interface membership because
+  `seedFromQuery` only reads interface variables, and state saving does not,
+  because a state is read back by the module itself.
 - **The three widget-configuration tabs** — done (`STATUS.md` §117). Widget
   setup / Metadata / Display, named as p.65–68 names them. The raw JSON editor
   is the piece worth having early: every widget option Foundry documents and we

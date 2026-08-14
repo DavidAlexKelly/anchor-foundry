@@ -2,6 +2,10 @@
 
 import { useEditor } from "@craftjs/core";
 
+import type { WorkshopModule } from "@/lib/types";
+
+type StateSavingSettings = NonNullable<WorkshopModule["state_saving"]>;
+
 /**
  * The Layout sidebar (roadmap phase 2, item 1.4).
  *
@@ -58,6 +62,8 @@ function detailOf(displayName: string, props: Record<string, unknown>): string {
 export function LayoutPanel({
   routing,
   onRoutingChange,
+  stateSaving,
+  onStateSavingChange,
 }: {
   /** Whether this module writes its state to the URL (p.195). Here because
    * Foundry puts it in "the Pages section of the Settings panel" and the
@@ -65,6 +71,11 @@ export function LayoutPanel({
    * never mentions pages would be a switch nobody finds. */
   routing?: boolean;
   onRoutingChange?: (next: boolean) => void;
+  /** State saving (p.201's step 1, p.204's options). Beside routing because
+   * Foundry puts both in the same Settings panel, and because they are the two
+   * module-wide switches an author sets once. */
+  stateSaving?: StateSavingSettings;
+  onStateSavingChange?: (next: StateSavingSettings) => void;
 } = {}) {
   const { rows, selectedId } = useEditor((state) => {
     const walk = (id: string, depth: number, out: Row[]): Row[] => {
@@ -139,6 +150,67 @@ export function LayoutPanel({
           />
           Write state to the URL
         </label>
+      )}
+      {onStateSavingChange && stateSaving && (
+        <>
+          <label className="vars-toggle">
+            <input
+              type="checkbox"
+              checked={stateSaving.enabled}
+              data-testid="state-saving-toggle"
+              onChange={(e) =>
+                onStateSavingChange({ ...stateSaving, enabled: e.target.checked })
+              }
+            />
+            Let readers save named states
+          </label>
+          {stateSaving.enabled && (
+            <>
+              {/* p.204's "State display name" — so an application whose
+                  readers say "inbox" can say "inbox". Wording only. */}
+              <label className="field">
+                <span className="field-label">Called a</span>
+                <input
+                  value={stateSaving.display_name ?? ""}
+                  placeholder="module state"
+                  data-testid="state-display-name"
+                  onChange={(e) =>
+                    onStateSavingChange({ ...stateSaving, display_name: e.target.value })
+                  }
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">Plural</span>
+                <input
+                  value={stateSaving.display_name_plural ?? ""}
+                  placeholder="module states"
+                  onChange={(e) =>
+                    onStateSavingChange({
+                      ...stateSaving, display_name_plural: e.target.value,
+                    })
+                  }
+                />
+              </label>
+              <label className="vars-toggle">
+                <input
+                  type="checkbox"
+                  checked={stateSaving.include_page ?? true}
+                  onChange={(e) =>
+                    onStateSavingChange({ ...stateSaving, include_page: e.target.checked })
+                  }
+                />
+                {/* p.200: "optionally, the current page that a user is
+                    viewing". */}
+                Keep the page the reader was on
+              </label>
+              <p className="canvas-widget-empty">
+                Variables are saved only where their Settings tab says so — and
+                each needs an external ID, which is the key a state is stored
+                under.
+              </p>
+            </>
+          )}
+        </>
       )}
       {onRoutingChange && routing && (
         <p className="canvas-widget-empty">

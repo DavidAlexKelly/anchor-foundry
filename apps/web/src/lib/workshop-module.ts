@@ -71,10 +71,12 @@ export function moduleFrom(
     variables?: Record<string, WorkshopVariable>;
     events?: Record<string, WorkshopEvent>;
     routing?: { enabled: boolean };
+    stateSaving?: WorkshopModule["state_saving"];
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
   const routing = parts.routing ?? current?.routing;
+  const stateSaving = parts.stateSaving ?? current?.state_saving;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
@@ -85,12 +87,27 @@ export function moduleFrom(
     // off for every module built before this existed, which is the same class
     // of quiet loss `broken_bindings` is carried to avoid.
     ...(routing ? { routing } : {}),
+    ...(stateSaving ? { state_saving: stateSaving } : {}),
   };
 }
 
 /** Whether a module writes its state to the URL (p.195). */
 export function routingOf(definition: unknown): boolean {
   return isV2(definition) ? Boolean(definition.routing?.enabled) : false;
+}
+
+/** A module's state-saving settings (p.201, p.204), with Foundry's own default
+ * wording so an unconfigured module still has something to call a state. */
+export function stateSavingOf(
+  definition: unknown,
+): NonNullable<WorkshopModule["state_saving"]> {
+  const stored = isV2(definition) ? definition.state_saving : undefined;
+  return {
+    enabled: Boolean(stored?.enabled),
+    display_name: stored?.display_name || "module state",
+    display_name_plural: stored?.display_name_plural || "module states",
+    include_page: stored?.include_page ?? true,
+  };
 }
 
 /** Props whose value is a variable id. Mirrors `REFERENCE_PROPS` in

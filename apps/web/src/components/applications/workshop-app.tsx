@@ -49,7 +49,7 @@ import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/compon
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
 import {
-  eventsOf, hasLayout, layoutOf, moduleFrom, routingOf, variablesOf,
+  eventsOf, hasLayout, layoutOf, moduleFrom, routingOf, stateSavingOf, variablesOf,
 } from "@/lib/workshop-module";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import type {
@@ -453,6 +453,7 @@ function ActionBar({
   variables,
   events,
   routing,
+  stateSaving,
   onView,
   onReverted,
 }: {
@@ -464,6 +465,7 @@ function ActionBar({
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEvent>;
   routing: boolean;
+  stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
   onView: (version: number) => void;
   onReverted: () => void;
 }) {
@@ -487,6 +489,7 @@ function ActionBar({
           variables,
           events,
           routing: { enabled: routing },
+          stateSaving,
         }),
         description,
       ),
@@ -582,6 +585,7 @@ function CanvasEnvBridge({
   seed,
   routing = false,
   layout,
+  stateSaving,
   children,
 }: {
   workspaceId: string;
@@ -598,6 +602,10 @@ function CanvasEnvBridge({
    * counts, and for the same reason: a link is a thing you hand to somebody
    * else, and it should describe the module they will open. */
   layout?: unknown;
+  /** State-saving settings (p.201). Offered in Preview only, for the reason
+   * routing is: p.200 calls this a feature for module *consumers*, and an
+   * author arranging widgets has no reading state worth naming. */
+  stateSaving?: import("@/lib/types").WorkshopModule["state_saving"];
   children: React.ReactNode;
 }) {
   const { enabled } = useEditor((state) => ({ enabled: state.options.enabled }));
@@ -624,6 +632,7 @@ function CanvasEnvBridge({
           // screen at once, so "the current page" has no answer.
           routing={routing && !enabled}
           layout={layout}
+          stateSaving={enabled ? undefined : stateSaving}
         >
           {children}
         </VariableBridge>
@@ -643,13 +652,24 @@ function CanvasEnvBridge({
 function Toolbox({
   routing,
   onRoutingChange,
+  stateSaving,
+  onStateSavingChange,
 }: {
   routing: boolean;
   onRoutingChange: (next: boolean) => void;
+  stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
+  onStateSavingChange: (
+    next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
+  ) => void;
 }) {
   return (
     <div className="canvas-toolbox">
-      <LayoutPanel routing={routing} onRoutingChange={onRoutingChange} />
+      <LayoutPanel
+        routing={routing}
+        onRoutingChange={onRoutingChange}
+        stateSaving={stateSaving}
+        onStateSavingChange={onStateSavingChange}
+      />
       <p className="field-label canvas-toolbox-heading">Widgets</p>
       {PALETTE.map((p) => (
         <PaletteItem key={p.key} componentKey={p.key} label={p.label} hint={p.hint} />
@@ -719,12 +739,14 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // the same save, for the same reason: it is part of the document, not a
   // setting on the row beside it.
   const [routing, setRouting] = useState(false);
+  const [stateSaving, setStateSaving] = useState(() => stateSavingOf(undefined));
   const savedVersion = appQuery.data?.current_version;
   useEffect(() => {
     if (!appQuery.data) return;
     setVariables(variablesOf(appQuery.data.definition));
     setEvents(eventsOf(appQuery.data.definition));
     setRouting(routingOf(appQuery.data.definition));
+    setStateSaving(stateSavingOf(appQuery.data.definition));
   }, [savedVersion, appQuery.data?.id]);
 
   // A module always lives in a project. A resolved `canvas_app` without one is
@@ -774,6 +796,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         seed={seedFromQuery(variables, search)}
         routing={routing}
         layout={layoutOf(app.definition)}
+        stateSaving={stateSaving}
       >
         <ActionBar
           app={app}
@@ -784,6 +807,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           variables={variables}
           events={events}
           routing={routing}
+          stateSaving={stateSaving}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
         />
@@ -800,6 +824,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onEventsChange={setEvents}
           routing={routing}
           onRoutingChange={setRouting}
+          stateSaving={stateSaving}
+          onStateSavingChange={setStateSaving}
           actions={actionCandidates}
         />
       </CanvasEnvBridge>
@@ -820,6 +846,8 @@ function CanvasBody({
   onEventsChange,
   routing,
   onRoutingChange,
+  stateSaving,
+  onStateSavingChange,
   actions,
 }: {
   hasSavedLayout: boolean;
@@ -834,6 +862,10 @@ function CanvasBody({
   onEventsChange: (next: Record<string, WorkshopEvent>) => void;
   routing: boolean;
   onRoutingChange: (next: boolean) => void;
+  stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
+  onStateSavingChange: (
+    next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
+  ) => void;
   actions: ActionCandidate[];
 }) {
   const { enabled, triggerNodes, pageNodes } = useEditor((state) => {
@@ -867,7 +899,14 @@ function CanvasBody({
   const [tab, setTab] = useState<"widget" | "variables" | "events">("widget");
   return (
     <div className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}>
-      {showChrome && <Toolbox routing={routing} onRoutingChange={onRoutingChange} />}
+      {showChrome && (
+        <Toolbox
+          routing={routing}
+          onRoutingChange={onRoutingChange}
+          stateSaving={stateSaving}
+          onStateSavingChange={onStateSavingChange}
+        />
+      )}
       <div className="canvas-frame-area">
         {hasSavedLayout ? (
           <Frame data={JSON.stringify(layoutOf(definition))} />

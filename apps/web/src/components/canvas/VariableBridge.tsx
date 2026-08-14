@@ -33,6 +33,7 @@ import {
 } from "./context";
 import { invalidateCanvasReads } from "./refresh";
 import { RoutingSync } from "./RoutingSync";
+import { StateBar } from "./StateBar";
 
 const DEBOUNCE_MS = 250;
 
@@ -46,6 +47,7 @@ export function VariableBridge({
   bound,
   routing = false,
   layout,
+  stateSaving,
   children,
 }: {
   workspaceId: string;
@@ -69,8 +71,12 @@ export function VariableBridge({
    * "the current page" has no answer, and an author arranging widgets should
    * not be rewriting the link they will share. */
   routing?: boolean;
-  /** The layout, for the page walk routing needs. Only read when `routing`. */
+  /** The layout, for the page walk routing and state saving both need. */
   layout?: unknown;
+  /** State-saving settings (p.201, p.204). Passed by the *viewer* routes only:
+   * p.200 calls this a feature for "module consumers", and an author arranging
+   * widgets has no state to save. */
+  stateSaving?: import("@/lib/types").WorkshopModule["state_saving"];
   children: React.ReactNode;
 }) {
   const enabled = Object.keys(declared).length > 0;
@@ -184,6 +190,19 @@ export function VariableBridge({
         >
           {routing && <RoutingSync layout={layout} declared={declared} />}
           {children}
+          {/* Below the module rather than in it: p.206 ties state saving to
+              the module *header*, and this is the nearest thing we have to
+              module chrome that every route already renders. */}
+          {stateSaving?.enabled && (
+            <StateBar
+              workspaceId={workspaceId}
+              projectId={projectId}
+              appId={appId}
+              published={published}
+              layout={layout}
+              settings={stateSaving}
+            />
+          )}
           <ActionStatus status={status} onDismiss={() => setStatus(null)} />
         </CanvasActionsProvider>
       </CanvasPageProvider>
