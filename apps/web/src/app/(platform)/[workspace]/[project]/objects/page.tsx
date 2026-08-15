@@ -834,6 +834,20 @@ function SourceRow({
             {result.upserted} synced{result.removed > 0 ? `, ${result.removed} removed` : ""}
           </p>
         )}
+        {/* Required properties (Foundry `object-link-types` p.116). The sync
+            indexes the rows and *reports* the ones that do not comply, because
+            the fix is upstream in the dataset and refusing to index would
+            leave an object type that will not load and no way to see why. So
+            this has to be visible: counted and not shown is the same as not
+            counted. */}
+        {result && result.ok && Object.keys(result.missing_required ?? {}).length > 0 && (
+          <p className="form-error" style={{ margin: "4px 0 0" }} data-testid="missing-required">
+            {Object.entries(result.missing_required)
+              .map(([name, count]) => `${count} row${count === 1 ? "" : "s"} with no ${name}`)
+              .join(", ")}
+            {" — required, and indexed anyway"}
+          </p>
+        )}
       </td>
       <td>
         {canEdit && (

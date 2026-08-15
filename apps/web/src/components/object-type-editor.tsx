@@ -97,9 +97,14 @@ export function PropertyRows({
               <option key={v} value={v}>{v}</option>
             ))}
           </select>
+          {/* Required (Foundry `object-link-types` p.116): "object type
+              properties that must have a value". Unlike visibility above, this
+              is not a hint - an action that would empty it is refused, and a
+              sync reports the rows that do not comply. */}
           <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>
             <input
               type="checkbox"
+              aria-label={`Property ${index + 1} required`}
               checked={!!prop.required}
               onChange={(e) => {
                 const next = [...properties];

@@ -1269,6 +1269,11 @@ export interface SourceSyncResult {
   error: string | null;
   upserted: number;
   removed: number;
+  /** How many synced rows leave each required property empty
+   * (`object-link-types` p.116). Reported rather than refused — the check
+   * belongs to indexing, and the fix is upstream in the dataset. Absent keys
+   * mean no failures, so an empty object is the all-clear. */
+  missing_required: Record<string, number>;
   source: ObjectTypeSource;
 }
 

@@ -42,7 +42,7 @@ Ours has `json`, which Foundry does not — Foundry's equivalent is Struct, whic
 | **Visibility** — normal, prominent, hidden | ✅ | (`object-link-types` p.111); drives standard Object View layout (`object-views` p.10), Explorer columns, and the Linked objects rows (§145 — one shared rule, because the third surface is where a second copy of it leaked) |
 | **Value formatting** | ○ | `object-link-types` TOC §11 |
 | **Conditional formatting** | ✅ | §83 |
-| **Required properties** | ○ | TOC §15 |
+| **Required properties** | ✅ | §154 — p.116. The flag has existed since migration 0003 and meant nothing; now **actions refuse** a write that empties one and **sync reports** the rows that do not comply rather than refusing to index them, which is p.116's own split |
 | **Edit-only properties** | ○ | TOC §14 |
 | Mandatory control properties | ○ | TOC §16 |
 | **Property reducers** | ○ | TOC §18 |
