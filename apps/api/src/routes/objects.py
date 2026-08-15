@@ -2092,6 +2092,78 @@ async def time_series_object_set(
     )
 
 
+
+async def _resolve_traversal(
+    conn: Any,
+    store: Any,
+    prefix: str,
+    workspace_id: UUID,
+    definition: "object_sets.ObjectSet",
+) -> tuple[tuple[Any, ...], bool]:
+    """Turn a set's `via` hop into the filters that express it.
+
+    Returns `(filters, empty)`. **`empty` is not "no filters"** - it means the
+    set below linked to nothing, so this set has no members and the caller must
+    stop rather than read the type unfiltered.
+
+    **The link decides which end is near**, read from the base set's own type
+    (`links_for_type` returns a link once per end it occupies), so a definition
+    cannot name the wrong direction - it does not name one at all. A link that
+    does not join these two types is refused here rather than quietly
+    returning nothing, because "your definition is wrong" and "there are no
+    matches" look identical in an empty table.
+
+    Recursive, bounded by `MAX_TRAVERSALS` at parse time.
+    """
+    if definition.via is None:
+        return definition.filters, False
+
+    base = definition.via.base
+    await ontology_service.get_type(conn, workspace_id, base.object_type_id)
+    base_filters, base_empty = await _resolve_traversal(
+        conn, store, prefix, workspace_id, base
+    )
+    if base_empty:
+        return definition.filters, True
+
+    links = await ontology_service.links_for_type(conn, workspace_id, base.object_type_id)
+    link = next(
+        (row for row in links if str(row["id"]) == str(definition.via.link_type_id)), None
+    )
+    if link is None:
+        raise ValueError(
+            "that link type does not connect the set being traversed from - a link "
+            "joins two named object types, and this one does not touch that type"
+        )
+    if str(link["far_type_id"]) != str(definition.object_type_id):
+        raise ValueError(
+            "this traversal lands on a different object type than the set declares - "
+            f"following that link from there reaches {link['far_type_display_name']!r}"
+        )
+
+    # The near side's join values. Read at the cap plus one, so "too many" is a
+    # refusal with a number rather than a page silently missing its tail.
+    members, _ = await store.evaluate_object_set(
+        search_prefix=prefix,
+        object_type_id=base.object_type_id,
+        filters=base_filters,
+        limit=object_sets.MAX_JOIN_VALUES + 1,
+        offset=0,
+        sort="key_asc",
+    )
+    near = str(link["near_property"])
+    values = [
+        row["primary_key"]
+        if near == ontology_service.PRIMARY_KEY_REF
+        else _jsonb(row["properties"]).get(near)
+        for row in members
+    ]
+    joined = object_sets.join_filter(far_property=str(link["far_property"]), values=values)
+    if joined is None:
+        return definition.filters, True
+    return (joined, *definition.filters), False
+
+
 @router.post("/object-sets/evaluate", response_model=ObjectSetOut)
 async def evaluate_object_set(
     body: ObjectSetIn,
@@ -2111,10 +2183,21 @@ async def evaluate_object_set(
         # - an id from a request body is never trusted to be in scope (§10).
         await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
-        rows, total = await instance_store.store_for(conn).evaluate_object_set(
+        store = instance_store.store_for(conn)
+        filters, empty = await _resolve_traversal(
+            conn, store, prefix, access.workspace_id, definition
+        )
+        if empty:
+            # The set below linked to nothing, so this set has no members. An
+            # unfiltered read here would be the silent widening decision 0002
+            # exists to remove - see `object_sets.join_filter`.
+            return ObjectSetOut(
+                instances=[], total=0, limit=body.limit, offset=body.offset
+            )
+        rows, total = await store.evaluate_object_set(
             search_prefix=prefix,
             object_type_id=definition.object_type_id,
-            filters=definition.filters,
+            filters=filters,
             limit=body.limit,
             offset=body.offset,
             sort=sort,

@@ -51,6 +51,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid5
 
 from ..lib.db import fetch_all
+# Stdlib-only, so importing it does not undo this module's care about staying
+# usable on the OpenSearch-only path.
+from . import object_sets
 
 if TYPE_CHECKING:  # avoids importing SQLAlchemy for the OpenSearch-only path
     from sqlalchemy.ext.asyncio import AsyncConnection
@@ -584,7 +587,15 @@ class OpenSearchInstanceStore:
         must: list[dict[str, Any]] = []
         must_not: list[dict[str, Any]] = []
         for f in filters:
-            field = f"properties.{f.property}"
+            # The primary key is its own keyword field, not a property - and a
+            # traversal landing on the far side's key filters on it
+            # (`object_sets.PRIMARY_KEY_FILTER`). `keyword` already, so no
+            # `.keyword` subfield and no analyser in the way.
+            field = (
+                "primary_key"
+                if f.property == object_sets.PRIMARY_KEY_FILTER
+                else f"properties.{f.property}"
+            )
             if f.op == "eq":
                 must.append({"term": {field: _text_value(f.value)}})
             elif f.op == "neq":
