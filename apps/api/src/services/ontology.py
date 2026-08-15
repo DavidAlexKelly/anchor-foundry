@@ -148,6 +148,38 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
     return [dict(r) for r in rows]
 
 
+def required_properties(properties: list[dict[str, Any]]) -> set[str]:
+    """The api names a value is compulsory for (`object-link-types` p.116)."""
+    return {str(p["api_name"]) for p in properties if p.get("required")}
+
+
+def is_missing(value: Any) -> bool:
+    """Whether a value fails a required property (p.116).
+
+    > "You can use this object type property to validate that there are no
+    > objects that have a null value for this property, **or an empty array if
+    > it is an array property**." … "Array properties cannot be empty: Setting
+    > an array property to required ensures the presence of at least one item."
+
+    Three things count as absent and the third is ours: `None`, an empty list,
+    and the **empty string**. A form posts `""` for a box somebody cleared, and
+    treating that as a value would let the one path a person actually uses walk
+    straight past the rule - which would make the whole feature a decoration on
+    everything except a hand-written API call.
+
+    `0` and `false` are values. They are the classic false-negative in a check
+    written with `if not value`, and a required numeric property whose only
+    legal reading is zero is an ordinary thing.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, tuple, dict)):
+        return len(value) == 0
+    return False
+
+
 def _validate_properties(properties: list[dict[str, Any]]) -> None:
     seen: set[str] = set()
     for prop in properties:

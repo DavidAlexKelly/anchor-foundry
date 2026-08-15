@@ -400,6 +400,51 @@ def object_modifications(
     ]
 
 
+def check_required(
+    writes: dict[str, Any],
+    *,
+    required: set[str],
+    creating: bool = False,
+) -> None:
+    """Refuse a write that empties a required property (p.116).
+
+    > "Changes via actions are validated at apply time: If you attempt to write
+    > a null or empty value to a property via an action, the action will fail
+    > to execute."
+
+    **Only what this action writes is checked, and that is the spec's own
+    line.** A required property that was already empty and that this action
+    does not touch is not this action's fault - p.116 puts that check on
+    indexing instead, where it *reports* rather than refuses, because "the
+    ontology modification itself will succeed if the column backing a required
+    property contains null values". Refusing here too would make an object that
+    predates the rule uneditable, so the one action that could fix it would be
+    the one action that could not run.
+
+    **A create is the exception**, because there is no "already": every
+    required property has to arrive with the object or the row is born
+    non-compliant. Absent and empty are the same thing on that path.
+
+    Raised before anything is written, like `check_criteria`: refused and
+    refused-after-writing-half-of-it look the same to the caller and are very
+    different in the dataset.
+    """
+    from . import ontology as ontology_service
+
+    for api_name in sorted(required):
+        if creating:
+            if ontology_service.is_missing(writes.get(api_name)):
+                raise ValueError(
+                    f"{api_name!r} is required and this action would create an object "
+                    "without one"
+                )
+            continue
+        if api_name in writes and ontology_service.is_missing(writes[api_name]):
+            raise ValueError(
+                f"{api_name!r} is required and this action would clear it"
+            )
+
+
 def changes_the_subject(rules: list[dict[str, Any]]) -> bool:
     """Whether any rule writes a property of the object the action ran on.
 

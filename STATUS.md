@@ -3139,6 +3139,29 @@ Nineteen mutations, all red: fourteen on the server, five on the browser. **1032
 
 **§146's recovery recipe was incomplete and cost two failed attempts this session.** Migrations do not run as `platform_app` - that role has no CREATE on `public`. The line is `PLATFORM_APP_PASSWORD=devpass DATABASE_URL="postgresql://platform:devpass@localhost:5432/platform?sslmode=disable" .venv-api/bin/python packages/db/migrate.py`: the owner role, the plain `postgresql://` form rather than SQLAlchemy's `+psycopg`, and the password variable that `0006_rls.sql` needs. `docs/local-setup.md` had it right all along; the recovery note did not point at it.
 ---
+
+### 154. Required properties, and a flag that meant nothing (this session)
+
+`ontology.md` §1.2's TOC §15, and the first stage-3 item after the Workshop run. p.116:
+
+> "Required properties are object type properties that must have a value. … This validation applies to data from the backing datasource and edits via actions."
+
+**The column has existed since migration 0003.** The API accepted it, the Ontology Manager displayed it in two tables, and *no write path read it*. That is the shape of gap this repo's standard is written against: a flag that looks configured and enforces nothing is worse than an absent feature, because somebody will set it and believe it. Nothing here is new storage - the whole unit is making an existing switch do what its name says.
+
+**Two enforcement points that behave differently, which is p.116's arrangement rather than a compromise.**
+
+*Actions refuse.* "If you attempt to write a null or empty value to a property via an action, the action will fail to execute." Checked before anything is written, beside `check_criteria`, for that check's own reason: refused and refused-after-writing-half-of-it look the same to the caller and are very different in the dataset. **Only what the action writes is checked on an existing object** - a required property that was already empty is not this action's fault, and refusing there too would make an object that predates the rule uneditable by the one action that could fix it. A create is the exception, because there is no "already": every required property has to arrive with the object. Subject, created objects and named objects are each checked against their own type's list.
+
+*Sync reports.* "The check for null values happens as backing datasources are indexed … the ontology modification itself will succeed if the column backing a required property contains null values." So the sync counts and returns; it does not refuse. Data that is already wrong is a fact about the data, and a sync that refused would leave an object type that will not load, no way to see why, and the fix out of reach upstream in the dataset. The counts reach the screen and the audit log - counted and not shown is the same as not counted.
+
+**One predicate for "missing", shared by both ends.** Null, empty list, and the empty string. The third is ours and is the one that matters in practice: a form posts `""` for a box somebody cleared, so treating that as a value would let the one path a person actually uses walk straight past the rule. `0` and `false` are values - the classic false negative in a check written `if not value`, and a required numeric property whose only legal reading is zero is ordinary. A test asserts the two ends agree, because two opinions about `""` would mean a row the sync flagged and an action accepted.
+
+**I wrote a migration for a column that already existed, and the migration runner caught it.** `ALTER TABLE … ADD COLUMN required` failed with "already exists" - it has been in 0003 since the beginning. Worth recording because the recovery was not free: I had already dropped and re-added the column to get a clean apply, which discarded the values in the dev database. In a real deployment that would have been data loss from a migration whose whole purpose was redundant. **Read the table definition before adding a column to it**, not just the recent migrations.
+
+**A browser mutation that could not fail, for a reason worth writing down.** Mutating a *backend* source file and re-running the browser suite proves nothing: the API is a separate long-running process and does not reload. The mutation looked green and the rule was fine - the probe was inert. Confirmed by restarting the API with the mutation applied, where two tests went red immediately. Any backend mutation checked through `e2e/` needs `dev-up.sh` between the edit and the run; frontend ones are fine, because Next hot-reloads.
+
+Nine mutations, all red: six on the rules, three on what reaches a person. **1056 API tests** (was 1032), 137 unit, **146 browser** (was 142).
+---
 ---
 ---
 

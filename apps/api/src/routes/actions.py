@@ -516,6 +516,35 @@ async def execute_action(
             mapped_properties=set(column_mappings.values()),
             link_types=link_types,
         )
+        # p.116, at apply time and before anything is written. Only what this
+        # action *writes* is checked on the subject: a required property that
+        # was already empty is indexing's business (it reports), and refusing
+        # here as well would make an object that predates the rule uneditable
+        # by the one action that could fix it.
+        required_by_type = {
+            str(object_type_id): ontology_service.required_properties(properties)
+        }
+
+        async def _required_for(type_id: str) -> set[str]:
+            """Cached per object type: an action can touch several, and each
+            has its own list."""
+            if type_id not in required_by_type:
+                required_by_type[type_id] = ontology_service.required_properties(
+                    await ontology_service.list_properties(conn, UUID(type_id))
+                )
+            return required_by_type[type_id]
+
+        actions_service.check_required(values, required=required_by_type[str(object_type_id)])
+        # **A create is checked whole.** There is no "already" for a new
+        # object, so a required property absent from the rule is a row born
+        # non-compliant - which is the one case where absence and emptiness
+        # are the same failure.
+        for creation in creations:
+            actions_service.check_required(
+                creation["properties"],
+                required=await _required_for(creation["object_type_id"]),
+                creating=True,
+            )
         modifications = actions_service.object_modifications(
             bound,
             rules=action_type["rules"],
@@ -534,6 +563,14 @@ async def execute_action(
                 "properties": {**_parse_json(instance["properties"]), **values},
             },
         )
+        # A named object is checked like the subject: only what this action
+        # writes to it. After `object_modifications`, because that is where the
+        # writes exist.
+        for modification in modifications:
+            actions_service.check_required(
+                modification["properties"],
+                required=await _required_for(modification["object_type_id"]),
+            )
         run_id = await actions_service.open_run(
             conn,
             action_type_id=action_type_id,
