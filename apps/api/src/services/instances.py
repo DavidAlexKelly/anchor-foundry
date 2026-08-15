@@ -433,7 +433,15 @@ def _set_predicate(
         prop = f"p{index}"
         val = f"v{index}"
         params[prop] = f.property
-        extract = f"jsonb_extract_path_text(i.properties, :{prop})"
+        # The primary key is a column, not a property - and a traversal that
+        # lands on the far side's key needs to filter on it (`object_sets`
+        # PRIMARY_KEY_FILTER). Addressed by name rather than by adding a second
+        # filter kind, so every operator keeps working on it.
+        extract = (
+            "i.primary_key"
+            if f.property == object_sets.PRIMARY_KEY_FILTER
+            else f"jsonb_extract_path_text(i.properties, :{prop})"
+        )
         if f.op == "eq":
             where.append(f"{extract} = :{val}")
             params[val] = _filter_text(f.value)

@@ -255,7 +255,23 @@ export interface WorkshopDerivation {
 /** One clause of an object set. The operator list is deliberately short: every
  * one means the same thing on Postgres and OpenSearch, and an operator that did
  * not would make an app's results depend on which store the deployment runs. */
+/** A set of one object type, narrowed by filters and optionally reached by
+ * following a link from another set ("the orders belonging to these
+ * customers"). Recursive, and the server caps the depth at three — each hop
+ * evaluates the set below it, so depth costs a query rather than a clause. */
+export interface ObjectSetDefinition {
+  object_type_id: string;
+  filters?: ObjectSetFilter[];
+  /** One hop. The link type names both ends, so this does not restate them —
+   * and which end is *near* follows from the base set's own type, so a
+   * definition cannot name the wrong direction. */
+  via?: { link_type_id: string; base: ObjectSetDefinition };
+}
+
 export interface ObjectSetFilter {
+  /** A property api name, or `"$primary_key"` for the instance's own key —
+   * which half of every link traversal lands on (migration 0027: the *from*
+   * side holds the foreign key). */
   property: string;
   op: "eq" | "neq" | "in" | "starts_with";
   value: unknown;
@@ -283,7 +299,7 @@ export interface WorkshopVariable {
    * a saved app a saved session. A variable has this **or** a derivation, never
    * both: two answers to "where do these rows come from" and no rule for which
    * wins, which the API refuses. */
-  object_set?: { object_type_id: string; filters?: ObjectSetFilter[] };
+  object_set?: ObjectSetDefinition;
   /** When this variable's value is written to the URL (p.198). Governs
    * *writing* only: a query parameter matching an external ID seeds the
    * variable "regardless of URL inclusion behavior configured", which is

@@ -136,7 +136,7 @@ Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `sin
 |---|---|
 | Static | ✅ |
 | Variable transformation | ✅ |
-| Object set definition — object types, filters, link traversals | ◑ — filters and types yes; **link traversal in a set definition** ○ |
+| Object set definition — object types, filters, link traversals | ◑ — all three work on the server (§155: `via` follows a link in either direction). What is left is the *builder*: the object-set editor offers a type and filters, so a traversal has to be written into the document by hand |
 | Object set aggregation | ✅ via `/object-sets/aggregate` |
 | Object property | ✅ |
 | **Function** `[fn]` | ○ |

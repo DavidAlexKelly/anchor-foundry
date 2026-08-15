@@ -75,7 +75,7 @@ Ours has `json`, which Foundry does not — Foundry's equivalent is Struct, whic
 | **Per-side display names** | ✅ | stored, resolved and rendered (`STATUS.md` §123); `side_name` comes back already resolved against the link's own name, so a caller never has to know which end it is on |
 | **Self-links** — a link type between an object type and itself | ✅ | **§2 was wrong to call this absent.** `link_types_for_type` already returned a self-link twice, once per direction, deliberately. What was missing was two *names*, so the directions could be told apart — which is the row above |
 | Independent traversal of each side | ◑ | |
-| Link traversal inside an object set definition | ○ | needed by Workshop §3.1 |
+| Link traversal inside an object set definition | ✅ | §155 — a set can be the far side of a link (`via`), in either direction, capped at three hops and 1000 join values. A hop compiles to an `in` filter, so it needed no new store capability; the primary key became filterable on both stores, which is what makes the second direction possible |
 
 Per-side display names and self-links are both small and both currently impossible to express. They should go together.
 
