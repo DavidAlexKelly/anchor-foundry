@@ -235,6 +235,11 @@ class SyncResult(BaseModel):
     error: str | None
     upserted: int
     removed: int
+    #: How many synced rows leave each required property empty
+    #: (`object-link-types` p.116). Reported rather than refused: the check
+    #: belongs to indexing, and a sync that refused would leave an object type
+    #: that will not load and no way to see why. Absent keys mean no failures.
+    missing_required: dict[str, int]
     source: SourceOut
 
 
@@ -1371,6 +1376,7 @@ async def sync_source(
     synced_at = datetime.now(timezone.utc)
     ok, error = True, None
     upserted = removed = 0
+    missing: dict[str, int] = {}
     rows: list[tuple[str, dict[str, Any]]] = []
     try:
         local_path = await anyio.to_thread.run_sync(
@@ -1411,6 +1417,14 @@ async def sync_source(
             removed = await store.delete_stale_instances(
                 search_prefix=prefix, source_id=source_id, synced_before=synced_at
             )
+            missing = instances_service.missing_required(
+                rows,
+                ontology_service.required_properties(
+                    await ontology_service.list_properties(
+                        conn, UUID(str(source["object_type_id"]))
+                    )
+                ),
+            )
 
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.mark_source_synced(conn, source_id, ok=ok, error=error)
@@ -1424,13 +1438,19 @@ async def sync_source(
             resource_id=source_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            metadata={"ok": ok, "upserted": upserted, "removed": removed},
+            metadata={
+                "ok": ok, "upserted": upserted, "removed": removed,
+                # In the audit log too: "when did this type start failing its
+                # own rule" is a question about history, and the sync result is
+                # gone the moment the response is read.
+                **({"missing_required": missing} if missing else {}),
+            },
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
     return SyncResult(
         ok=ok, error=error, upserted=upserted, removed=removed,
-        source=_source_out(updated_source),
+        missing_required=missing, source=_source_out(updated_source),
     )
 
 

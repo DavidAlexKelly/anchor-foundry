@@ -99,6 +99,40 @@ def extract_rows(
     return out
 
 
+def missing_required(
+    rows: list[tuple[str, dict[str, Any]]], required: set[str]
+) -> dict[str, int]:
+    """How many synced rows leave a required property empty (p.116).
+
+    > "Validation happens when data is being indexed into the object: The check
+    > for null values happens as backing datasources are indexed into Object
+    > Storage. This means that the ontology modification itself will succeed if
+    > the column backing a required property contains null values."
+
+    **Counted, not refused**, and that is the sentence above rather than a
+    softening of it. Data that is already wrong is a fact about the data; a
+    sync that refused to index it would leave somebody with an object type that
+    will not load and no way to see why - and no way to fix it either, since
+    the fix is upstream in the dataset.
+
+    A property that is required and **not mapped at all** counts every row:
+    it is absent from all of them, which is the most complete failure there is
+    and the easiest one to miss, because nothing about the rows looks wrong.
+
+    Properties with no failures are absent from the result rather than present
+    as zero, so a caller can ask "is anything wrong" by asking whether the
+    answer is empty.
+    """
+    from . import ontology as ontology_service
+
+    counts: dict[str, int] = {}
+    for _, properties in rows:
+        for api_name in required:
+            if ontology_service.is_missing(properties.get(api_name)):
+                counts[api_name] = counts.get(api_name, 0) + 1
+    return counts
+
+
 async def upsert_instances(
     conn: AsyncConnection,
     *,
