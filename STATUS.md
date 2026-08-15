@@ -3162,6 +3162,29 @@ Nineteen mutations, all red: fourteen on the server, five on the browser. **1032
 
 Nine mutations, all red: six on the rules, three on what reaches a person. **1056 API tests** (was 1032), 137 unit, **146 browser** (was 142).
 ---
+
+### 155. Link traversal inside an object set definition (this session)
+
+`ontology.md` §3's last ○, and the one `workshop.md` §3.1 names as the reason its "Object set definition" row is only partial. A set can now be the far side of a link: *"the orders belonging to these customers"*.
+
+**A hop compiles to an `in` filter** over the near side's join values. That is the whole implementation, and it is why no store gained a new capability: `in` already means the same thing on Postgres and OpenSearch - which is precisely why it is in `OPERATORS` while the ordered operators are refused (§52's cross-store argument). A traversal that had invented its own join would have walked straight into the disagreement that list exists to avoid.
+
+**The half that did need work is the primary key.** Migration 0027's join is "the *from* side holds the foreign key", so traversing towards the *to* side matches against that side's key rather than against a property - and a filter vocabulary that addressed only `properties.*` would have supported link traversal in one direction and refused the other. That is not a feature; it is half of one. Both stores now accept `$primary_key` as a filter target: a column on Postgres, a keyword field on OpenSearch, one sentinel shared with `ontology.PRIMARY_KEY_REF`, and a test that the two spellings agree. A second test checks an ordinary property still reaches `properties.*` on both, because a sentinel that swallowed every filter would make every set read the key.
+
+**Three refusals, each of which would otherwise be an empty table somebody has to debug.**
+
+*An empty base set is the empty answer, not an unfiltered read.* `join_filter` returns `None` rather than "no filter", and the caller stops. Returning an unfiltered set there would show **every** object of the far type - decision 0002's silent widening, in the one place where it would look most like a working feature.
+
+*A link that does not touch the base type, and a traversal claiming to land where the link does not reach.* "Your definition is wrong" and "there are no matches" look identical in an empty table, so both are refused with a sentence naming what the link actually connects.
+
+*Depth beyond three, and more than a thousand distinct join values.* Each hop is a full evaluation of the set below it, so depth costs a query rather than a clause; and a base set of a hundred thousand objects becomes a hundred thousand `in` terms on either store. Refused with the number rather than truncated - a set quietly missing its tail is the failure that looks like working software.
+
+**The link decides which end is near**, read from the base set's own type (`links_for_type` returns a link once per end it occupies). So a definition cannot name the wrong direction: it does not name one at all. The same reasoning as `Traversal` holding a link type rather than a property pair - restating the join would be a second copy of it, free to disagree with the ontology the moment somebody edits a link.
+
+Eleven mutations, all red. **1077 API tests** (was 1056), 137 unit, 146 browser.
+
+**What is left is the builder.** The object-set editor offers a type and filters, so a traversal has to be written into the document by hand today. That is `workshop.md` §3.1's row, now ◑ for that reason rather than for the server one.
+---
 ---
 ---
 
