@@ -71,6 +71,7 @@ TRANSFORMS = (
     "object_property",  # one property of the object a viewer picked
     "filter_value",  # one property's chosen value, out of a filter's clauses
     "object_series",  # the time series a property holds, on the object picked
+    "traverse_set",   # follow a link from one object set to another
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -852,6 +853,22 @@ def _check_arity(vid: str, d: Derivation) -> None:
                 f"variable {vid!r}: aggregate {aggregate!r}; expected one of "
                 f"{', '.join(time_series.AGGREGATES)}"
             )
+    elif d.transform == "traverse_set":
+        if len(d.inputs) != 1:
+            raise VariableError(
+                f"variable {vid!r}: traverse_set needs exactly one input "
+                "(the set to follow the link from)"
+            )
+        for field in ("link_type_id", "object_type_id"):
+            value = d.config.get(field)
+            if not value or not isinstance(value, str):
+                raise VariableError(
+                    f"variable {vid!r}: traverse_set needs a {field}"
+                )
+        # Whether the link actually joins those two types is checked where the
+        # link types are - at evaluation, by the route (`_resolve_traversal`).
+        # A document does not carry the ontology, and a check here would be
+        # this module guessing at it.
     elif d.transform == "narrow_set":
         # No property or operator here on purpose: which properties a Filter
         # List narrows on is what the *viewer* chooses, so it is part of the
@@ -1012,6 +1029,8 @@ def _apply(variable: Variable, inputs: list[Any]) -> Any:
         return _filter_value(variable, inputs[0], str(d.config["property"]))
     if d.transform == "object_series":
         return _object_series(variable, inputs[0], d.config)
+    if d.transform == "traverse_set":
+        return _traverse_set(variable, inputs[0], d.config)
     raise VariableError(f"unknown transform {d.transform!r}")  # pragma: no cover
 
 
@@ -1221,6 +1240,39 @@ def _narrow_set(variable: Variable, base: Any, clauses: Any) -> dict[str, Any]:
     except ValueError as exc:
         raise VariableError(f"{variable.label!r}: {exc}") from exc
     return combined
+
+
+def _traverse_set(
+    variable: Variable, base: Any, config: dict[str, Any]
+) -> dict[str, Any]:
+    """A set that is the far side of a link from another set (§155).
+
+    "The orders belonging to these customers", as a derivation rather than as
+    something typed into a definition - which is what lets the base stay a
+    *reference*. A builder that inlined the base's definition would freeze a
+    copy of it, and narrowing the customers afterwards would leave the orders
+    reading the set as it was when somebody drew the arrow.
+
+    **It composes with the other two set transforms** because they all speak
+    the same currency: a set variable resolves to a *definition*, so a
+    traversal can start from a narrowed set and be narrowed again afterwards,
+    with no special case anywhere.
+
+    The link's own ends are not restated (migration 0027 holds them) and
+    neither is the direction - the route reads which end is near from the base
+    set's type. What *is* named here is the type this lands on, so the
+    definition is complete on its own; the route refuses one that disagrees
+    with the link rather than quietly following it somewhere else.
+    """
+    if not isinstance(base, dict) or "object_type_id" not in base:
+        raise VariableError(
+            f"{variable.label!r} follows a link from something that is not an object set"
+        )
+    return {
+        "object_type_id": str(config["object_type_id"]),
+        "filters": [],
+        "via": {"link_type_id": str(config["link_type_id"]), "base": dict(base)},
+    }
 
 
 def _text(value: Any) -> str:

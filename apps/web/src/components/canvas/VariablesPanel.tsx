@@ -87,6 +87,12 @@ const SERIES_AGGREGATES = ["avg", "min", "max", "sum", "count", "last"] as const
  * clauses a Filter List writes. */
 const SET_TRANSFORMS: WorkshopTransform[] = ["filter_set", "narrow_set"];
 
+/** The third thing a derived object set can be: the far side of a link from
+ * another set (§155). Not in `SET_TRANSFORMS` because it is chosen a level up -
+ * "narrowed" and "followed" are different questions, and folding it into the
+ * "Narrowed by" list would put "follow a link" among two ways of filtering. */
+const TRAVERSE: WorkshopTransform = "traverse_set";
+
 const CAST_TARGETS = ["string", "number", "boolean"] as const;
 
 /** How many inputs each transform takes, so the editor can render the right
@@ -807,6 +813,37 @@ function ObjectSetEditor({
 
   const transform = variable.derivation?.transform ?? SET_TRANSFORMS[0]!;
   const byClauses = transform === "narrow_set";
+  const traversing = transform === TRAVERSE;
+  // Link types are workspace-wide, and which ones apply depends on the *base*
+  // set's type - which is a variable reference, so the answer is only known
+  // once one is chosen. Fetched whole and filtered here rather than asked for
+  // per type: the list is small and the alternative is a request per keystroke
+  // in a dropdown.
+  const linkTypes = useQuery({
+    queryKey: ["link-types", workspaceId],
+    queryFn: () => objectsApi.listLinkTypes(workspaceId),
+  });
+  const baseVariable = variables[variable.derivation?.inputs?.[0] ?? ""];
+  const baseTypeId = baseVariable?.object_set?.object_type_id ?? "";
+  // A link is offered once per end it touches this type from, because a link
+  // between two types can be followed either way and the two land somewhere
+  // different. Self-links appear twice on purpose.
+  const hops = (linkTypes.data ?? []).flatMap((link) => {
+    const out: { key: string; id: string; label: string; toType: string }[] = [];
+    if (link.from_object_type_id === baseTypeId) {
+      out.push({
+        key: `${link.id}:to`, id: link.id, toType: link.to_object_type_id,
+        label: `${link.to_side_name || link.display_name} → ${link.to_display_name}`,
+      });
+    }
+    if (link.to_object_type_id === baseTypeId) {
+      out.push({
+        key: `${link.id}:from`, id: link.id, toType: link.from_object_type_id,
+        label: `${link.from_side_name || link.display_name} → ${link.from_display_name}`,
+      });
+    }
+    return out;
+  });
   const arrays = Object.values(variables).filter((v) => v.kind === "array");
 
   function setDerivation(patch: Record<string, unknown>) {
@@ -819,14 +856,21 @@ function ObjectSetEditor({
       <label>
         This set
         <select
-          value={derived ? "narrowed" : "type"}
+          value={derived ? (traversing ? "followed" : "narrowed") : "type"}
           disabled={readOnly}
+          data-testid="set-source"
           onChange={(e) => {
             if (e.target.value === "narrowed") {
               const { object_set: _dropped, ...rest } = variable;
               onChange({
                 ...rest,
                 derivation: { transform: SET_TRANSFORMS[0]!, inputs: [], config: { op: "eq" } },
+              });
+            } else if (e.target.value === "followed") {
+              const { object_set: _dropped, ...rest } = variable;
+              onChange({
+                ...rest,
+                derivation: { transform: TRAVERSE, inputs: [], config: {} },
               });
             } else {
               const { derivation: _dropped, ...rest } = variable;
@@ -836,6 +880,7 @@ function ObjectSetEditor({
         >
           <option value="type">Draws from an object type</option>
           <option value="narrowed">Is another set, narrowed</option>
+          <option value="followed">Follows a link from another set</option>
         </select>
       </label>
 
@@ -860,6 +905,70 @@ function ObjectSetEditor({
             ))}
           </select>
         </label>
+      ) : traversing ? (
+        <>
+          <label>
+            Starting from
+            <select
+              value={variable.derivation?.inputs?.[0] ?? ""}
+              disabled={readOnly}
+              data-testid="traversal-base"
+              onChange={(e) =>
+                // The link is cleared with the base, because which links apply
+                // depends on the base's type - keeping one would leave a hop
+                // the server refuses, saved by a control that looked fine.
+                setDerivation({ inputs: [e.target.value].filter(Boolean), config: {} })
+              }
+            >
+              <option value="">Choose a set…</option>
+              {otherSets.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Following
+            <select
+              value={
+                variable.derivation?.config?.link_type_id
+                  ? `${variable.derivation.config.link_type_id}:${
+                      variable.derivation.config.object_type_id ?? ""
+                    }`
+                  : ""
+              }
+              disabled={readOnly || !baseTypeId}
+              data-testid="traversal-link"
+              onChange={(e) => {
+                const hop = hops.find(
+                  (h) => `${h.id}:${h.toType}` === e.target.value,
+                );
+                setDerivation({
+                  // Both, together: the link says which ends exist and the
+                  // landing type says which of them this hop took. The server
+                  // refuses a pair that disagrees rather than following the
+                  // link somewhere the definition did not say.
+                  config: hop
+                    ? { link_type_id: hop.id, object_type_id: hop.toType }
+                    : {},
+                });
+              }}
+            >
+              <option value="">Choose a link…</option>
+              {hops.map((hop) => (
+                <option key={hop.key} value={`${hop.id}:${hop.toType}`}>
+                  {hop.label}
+                </option>
+              ))}
+            </select>
+            <span className="field-hint">
+              {!baseTypeId
+                ? "Pick a set that draws from an object type first — which links apply depends on it."
+                : hops.length === 0
+                  ? "That type has no link types yet."
+                  : "The link decides where this lands."}
+            </span>
+          </label>
+        </>
       ) : (
         <>
           <label>

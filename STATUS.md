@@ -3184,6 +3184,32 @@ Nine mutations, all red: six on the rules, three on what reaches a person. **105
 Eleven mutations, all red. **1077 API tests** (was 1056), 137 unit, 146 browser.
 
 **What is left is the builder.** The object-set editor offers a type and filters, so a traversal has to be written into the document by hand today. That is `workshop.md` §3.1's row, now ◑ for that reason rather than for the server one.
+
+### 156. Drawing a link traversal (this session)
+
+§155's other half, and the sentence that closed it: *"the object-set editor offers a type and filters, so a traversal has to be written into the document by hand today."* Now it does not have to be. `workshop.md` §3.1's row is ✅.
+
+**A traversal is a set *transform*, not a third kind of set.** The panel's "This set" control already offered "Draws from an object type" and "Is another set, narrowed"; the hop is a third answer to the same question, "Follows a link from another set", and it lands on the machinery that was already there - `traverse_set` joins the transform list beside `narrow_set`, taking one input (the set to start from) and a config naming the link and where the hop lands. Nothing about cycles, usages or dangling references needed a special case, because a traversal *is* a derivation and those checks are about derivations.
+
+**Both ends of the link are offered, named for the end you arrive at.** A link between two types can be followed either way and the two land somewhere different, so a link appears in the picker once per end it touches the base type from - twice for a self-link, on purpose. The label reads `<side name> → <far type>` and takes the side name of the end being travelled *to*, which is the reading `links_for_type` already established (p.192's own example: from a manager you follow "Direct reports"; from a report, "Manager"). Getting this backwards is a picker that is confidently wrong rather than broken, so a mutation checks it.
+
+**The picker refuses to offer hops before it can know which exist.** Which links apply depends on the base set's *type*, and the base set is a variable reference - so until one is chosen there is no honest list, and the control is disabled with a sentence saying why rather than showing an empty dropdown. Changing the base clears the link for the same reason: keeping one would leave a hop the server refuses, saved by a control that looked fine.
+
+**The saved config names both the link and the landing type**, which reads redundant and is not. The link says which ends exist; the landing type says which of them this hop took. §155's server refuses a pair that disagrees instead of following the link somewhere the definition did not say - and a builder that sent only the link would make that refusal unreachable from the one path people actually use.
+
+**`from_side_name`/`to_side_name` were missing from the browser's `LinkType`.** The API has returned them since §146; the TypeScript type had not been told, so any UI reading a side name was reading `undefined` and silently falling back. Added, which is the sort of gap a shared types package exists to prevent and only closes when something tries to use the field.
+
+**A fixture with the side names inverted, caught by the assertion rather than by the code.** My first draft named the sides from the wrong end and the test asserted the wrong string; both were wrong in the same direction, which is exactly the pair that passes. What actually decided it was `ontology.links_for_type` - there was already one reading in the codebase, and a second one invented in a test would have been a fork in the meaning of a stored field.
+
+**And a browser test that was true only by luck.** Reading the picker's options the moment a base set is chosen counts an empty dropdown: the link types arrive from a request. The neighbouring test passed because `to_be_enabled()` waits, and mine did not - the same "the probe was inert" class as §154's backend mutation, from the other direction. Now it waits for the count, which also asserts the thing worth asserting: exactly one hop applies from a customer.
+
+**One limit, named rather than hidden.** The picker can only offer hops when the base set's type is written down - so a base that is itself *narrowed* or *followed* shows the hint rather than a list, even though the server composes those fine (§155's `via` nests). Resolving the type through a chain of derivations is a walk the panel does not do yet; the hint says which kind of set to pick instead of showing an empty dropdown, which is the same rule as waiting for a base set at all.
+
+**One survivor, and the claim it was hiding.** Copying the base set's filters onto the far side left every test green: my traversal test asserted what reached `via.base` and never looked at the hop's own `filters`. A customer's `region` filter applied to *orders* is a filter on a property they do not have - no rows, from a rule nobody wrote. The filters stay on the near side, and now something says so.
+
+Twelve mutations, all red: six on the panel, six on the transform. **1082 API tests**, 137 unit, **149 browser** (was 146).
+
+---
 ---
 ---
 ---

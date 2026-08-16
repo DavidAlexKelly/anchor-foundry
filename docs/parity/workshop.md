@@ -128,7 +128,7 @@ Applied through one `<Editor onRender>` wrapper rather than in each of the twent
 
 ## 3. Variables
 
-Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`, `time_series_set`; the first five are the ones routing can carry, §152) and 11 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `object_property`, `filter_value`, `object_series`, plus `object_set_aggregation` served by the store).
+Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `single_object`, `object_set`, `time_series_set`; the first five are the ones routing can carry, §152) and 12 transforms (`concat`, `if_else`, `cast`, `is_empty`, `is_not_empty`, `filter_set`, `narrow_set`, `traverse_set`, `object_property`, `filter_value`, `object_series`, plus `object_set_aggregation` served by the store).
 
 ### 3.1 Definition types (p.73)
 
@@ -136,7 +136,7 @@ Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `sin
 |---|---|
 | Static | ✅ |
 | Variable transformation | ✅ |
-| Object set definition — object types, filters, link traversals | ◑ — all three work on the server (§155: `via` follows a link in either direction). What is left is the *builder*: the object-set editor offers a type and filters, so a traversal has to be written into the document by hand |
+| Object set definition — object types, filters, link traversals | ✅ — server (§155: `via` follows a link in either direction) and builder (§156: a traversal is the `traverse_set` transform, drawn by picking a base set and one end of a link) |
 | Object set aggregation | ✅ via `/object-sets/aggregate` |
 | Object property | ✅ |
 | **Function** `[fn]` | ○ |
