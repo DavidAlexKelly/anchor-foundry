@@ -1851,3 +1851,118 @@ def test_a_state_saving_block_nothing_can_read_is_refused_at_save() -> None:
         wv.validate_module({**module({}, {}), "state_saving": "yes please"})
     with pytest.raises(wv.VariableError, match="display_name must be a string"):
         wv.state_saving({**module({}, {}), "state_saving": {"display_name": 7}})
+
+
+# ---- traversing a link between sets (§155's builder half) --------------------
+CUSTOMERS = "11111111-1111-1111-1111-111111111111"
+ORDERS = "22222222-2222-2222-2222-222222222222"
+PLACED_BY = "33333333-3333-3333-3333-333333333333"
+
+
+def traversing(**config) -> dict:
+    return {
+        "v_customers": var("v_customers", kind="object_set", label="Customers",
+                           object_set={"object_type_id": CUSTOMERS, "filters": []}),
+        "v_orders": var(
+            "v_orders", kind="object_set", label="Their orders",
+            derivation={
+                "transform": "traverse_set", "inputs": ["v_customers"],
+                "config": {"link_type_id": PLACED_BY, "object_type_id": ORDERS, **config},
+            },
+        ),
+    }
+
+
+def test_a_set_can_follow_a_link_from_another_set() -> None:
+    resolved = wv.evaluate(wv.parse(traversing()), {})
+    assert resolved["v_orders"] == {
+        "object_type_id": ORDERS,
+        "filters": [],
+        "via": {"link_type_id": PLACED_BY,
+                "base": {"object_type_id": CUSTOMERS, "filters": []}},
+    }
+
+
+def test_the_base_stays_a_reference_rather_than_a_copy() -> None:
+    """The whole reason this is a derivation. A builder that inlined the base's
+    definition would freeze it, and narrowing the customers afterwards would
+    leave the orders reading the set as it was when somebody drew the arrow -
+    so the base is followed *after* it has been filtered, not before."""
+    variables = wv.parse({
+        "v_customers": var("v_customers", kind="object_set", label="Customers",
+                           object_set={"object_type_id": CUSTOMERS, "filters": []}),
+        "v_region": var("v_region", label="Region"),
+        "v_northern": var(
+            "v_northern", kind="object_set", label="Northern customers",
+            derivation={"transform": "filter_set", "inputs": ["v_customers", "v_region"],
+                        "config": {"property": "region", "op": "eq"}},
+        ),
+        "v_orders": var(
+            "v_orders", kind="object_set", label="Their orders",
+            derivation={"transform": "traverse_set", "inputs": ["v_northern"],
+                        "config": {"link_type_id": PLACED_BY, "object_type_id": ORDERS}},
+        ),
+    })
+    resolved = wv.evaluate(variables, {"v_region": "north"})
+    base = resolved["v_orders"]["via"]["base"]
+    assert base["object_type_id"] == CUSTOMERS
+    assert base["filters"] == [{"property": "region", "op": "eq", "value": "north"}]
+    # And they stay on the near side. Copying them across would filter *orders*
+    # on `region` - a property they do not have, so the honest answer would be
+    # no rows, arrived at by a rule nobody wrote.
+    assert resolved["v_orders"]["filters"] == []
+
+
+def test_a_traversal_can_be_narrowed_afterwards() -> None:
+    """All three set transforms speak the same currency - a definition - so a
+    traversal composes with narrowing in both directions with no special
+    case."""
+    variables = wv.parse({
+        **traversing(),
+        "v_clauses": var("v_clauses", kind="array", label="Filters"),
+        "v_narrowed": var(
+            "v_narrowed", kind="object_set", label="Narrowed orders",
+            derivation={"transform": "narrow_set", "inputs": ["v_orders", "v_clauses"]},
+        ),
+    })
+    resolved = wv.evaluate(variables, {
+        "v_clauses": [{"property": "total", "op": "eq", "value": "20"}],
+    })
+    assert resolved["v_narrowed"]["via"]["link_type_id"] == PLACED_BY
+    assert resolved["v_narrowed"]["filters"] == [
+        {"property": "total", "op": "eq", "value": "20"}
+    ]
+
+
+def test_a_traversal_needs_one_input_a_link_and_a_landing_type() -> None:
+    with pytest.raises(wv.VariableError, match="exactly one input"):
+        wv.parse({
+            "v_a": var("v_a", kind="object_set",
+                       object_set={"object_type_id": CUSTOMERS, "filters": []}),
+            "v_b": var("v_b", kind="object_set",
+                       object_set={"object_type_id": CUSTOMERS, "filters": []}),
+            "v_x": var("v_x", kind="object_set", derivation={
+                "transform": "traverse_set", "inputs": ["v_a", "v_b"],
+                "config": {"link_type_id": PLACED_BY, "object_type_id": ORDERS}}),
+        })
+    for missing in ("link_type_id", "object_type_id"):
+        config = {"link_type_id": PLACED_BY, "object_type_id": ORDERS}
+        del config[missing]
+        with pytest.raises(wv.VariableError, match=f"needs a {missing}"):
+            wv.parse({
+                "v_a": var("v_a", kind="object_set",
+                           object_set={"object_type_id": CUSTOMERS, "filters": []}),
+                "v_x": var("v_x", kind="object_set", derivation={
+                    "transform": "traverse_set", "inputs": ["v_a"], "config": config}),
+            })
+
+
+def test_following_a_link_from_something_that_is_not_a_set_is_refused() -> None:
+    variables = wv.parse({
+        "v_text": var("v_text", label="Just text"),
+        "v_x": var("v_x", kind="object_set", derivation={
+            "transform": "traverse_set", "inputs": ["v_text"],
+            "config": {"link_type_id": PLACED_BY, "object_type_id": ORDERS}}),
+    })
+    with pytest.raises(wv.VariableError, match="not an object set"):
+        wv.evaluate(variables, {"v_text": "north"})

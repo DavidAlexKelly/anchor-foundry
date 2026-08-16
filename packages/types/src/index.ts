@@ -224,6 +224,13 @@ export type WorkshopTransform =
    * filter state to a set — this reads a value out of it, for a heading, a
    * chart title, or an action's default. */
   | "filter_value"
+  /** A set that is the far side of a link from another set (§155). Input is
+   * `[baseSetVariable]`; config carries the `link_type_id` and the
+   * `object_type_id` this lands on. A derivation rather than something typed
+   * into a definition, so the base stays a *reference* — inlining it would
+   * freeze a copy, and narrowing the base afterwards would leave this set
+   * reading it as it was. */
+  | "traverse_set"
   /** The time series one property holds, on the object a viewer picked
    * (p.76, p.582). Input is `[objectVariable]`; config carries the property
    * and, optionally, `interval` and `aggregate`. Resolves to a
@@ -1213,6 +1220,13 @@ export interface LinkType {
    */
   from_property: string | null;
   to_property: string | null;
+  /** Per-side labels (`object-link-types` p.192) — what this link is called
+   * when read from each end ("placed by" one way, "orders" the other). Null
+   * falls back to `display_name`, which is what every link had before sides
+   * could be named separately. Returned by the API since §146 and missing
+   * here until a traversal picker needed to say which way it was going. */
+  from_side_name: string | null;
+  to_side_name: string | null;
 }
 
 /** Reserved join reference: the instance's primary key, not a property. */
