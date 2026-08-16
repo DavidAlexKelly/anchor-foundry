@@ -815,3 +815,133 @@ def test_a_self_link_renders_both_directions_with_distinct_names(client: TestCli
     # this fixture does not build. So the *storage* of two distinct side names
     # is covered here and the *resolution* is not covered anywhere yet; it is
     # recorded as the open half in `ontology.md` §2 rather than implied.
+
+
+# ---- value formatting (parity ontology.md §1.2; object-link-types p.94-101) --
+# The shape rules are tested in `test_value_format.py`. What is checked here is
+# the round trip: a formatter survives a save, comes back on read, and a bad one
+# is refused by the *route* rather than only by the service that never sees it.
+def test_a_property_has_no_value_format_until_one_is_asked_for(
+    client: TestClient, fx: Fixture
+) -> None:
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"fmt_none_{fx.tag}", "display_name": "No format",
+            "properties": [{"api_name": "id", "data_type": "string"}],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["properties"][0]["value_format"] is None
+
+
+def test_a_value_format_survives_the_round_trip(client: TestClient, fx: Fixture) -> None:
+    """p.94's own example: a weight in kilograms and a value as compact
+    currency. Read back rather than only asserted on the create response,
+    because the create response could be echoing the request."""
+    created = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"fmt_ok_{fx.tag}", "display_name": "Formatted",
+            "properties": [
+                {"api_name": "id", "data_type": "string"},
+                {"api_name": "weight", "data_type": "float",
+                 "value_format": {"kind": "number", "style": "unit",
+                                  "unit": "kilogram", "maximum_fraction_digits": 1}},
+                {"api_name": "value", "data_type": "float",
+                 "value_format": {"kind": "number", "style": "currency",
+                                  "currency": "usd", "notation": "compact"}},
+                {"api_name": "seen_at", "data_type": "timestamp",
+                 "value_format": {"kind": "datetime", "style": "relative"}},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert created.status_code == 201, created.text
+    type_id = created.json()["id"]
+
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    by_name = {p["api_name"]: p["value_format"] for p in r.json()["properties"]}
+    assert by_name["id"] is None
+    assert by_name["weight"] == {
+        "kind": "number", "style": "unit", "unit": "kilogram",
+        "maximum_fraction_digits": 1,
+    }
+    # Normalised on the way in, so what comes back is what was checked.
+    assert by_name["value"]["currency"] == "USD"
+    assert by_name["seen_at"] == {"kind": "datetime", "style": "relative"}
+
+
+def test_a_formatter_that_does_not_match_the_base_type_is_refused_by_the_route(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Unlike visibility, this refusal is the service's** - `PropertyIn`
+    cannot carry a pattern for it, because whether a formatter is legal depends
+    on the property's `data_type` rather than on the formatter alone. So this
+    test does reach `services/value_format` and does go red if it is removed."""
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"fmt_bad_{fx.tag}", "display_name": "Bad format",
+            "properties": [
+                {"api_name": "id", "data_type": "string",
+                 "value_format": {"kind": "number", "style": "plain"}},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "needs a numeric property" in r.json()["detail"]
+    assert "id:" in r.json()["detail"]
+
+
+def test_a_value_format_can_be_changed_and_cleared(client: TestClient, fx: Fixture) -> None:
+    """Clearing matters as much as setting: a formatter nobody can remove is a
+    decision somebody has to live with."""
+    created = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"fmt_edit_{fx.tag}", "display_name": "Edit format",
+            "properties": [
+                {"api_name": "id", "data_type": "string"},
+                {"api_name": "weight", "data_type": "float",
+                 "value_format": {"kind": "number", "style": "unit", "unit": "kilogram"}},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert created.status_code == 201, created.text
+    type_id = created.json()["id"]
+
+    def patch(value_format):
+        return client.patch(
+            f"{wbase(fx)}/object-types/{type_id}",
+            headers=hdr(fx.editor_sub),
+            json={
+                "display_name": "Edit format",
+                "properties": [
+                    {"api_name": "id", "data_type": "string"},
+                    {"api_name": "weight", "data_type": "float",
+                     "value_format": value_format},
+                ],
+                "title_property": "id",
+            },
+        )
+
+    changed = patch({"kind": "number", "style": "percent", "grouping": False})
+    assert changed.status_code == 200, changed.text
+    weight = [p for p in changed.json()["properties"] if p["api_name"] == "weight"][0]
+    assert weight["value_format"] == {
+        "kind": "number", "style": "percent", "grouping": False,
+    }
+
+    cleared = patch(None)
+    assert cleared.status_code == 200, cleared.text
+    weight = [p for p in cleared.json()["properties"] if p["api_name"] == "weight"][0]
+    assert weight["value_format"] is None

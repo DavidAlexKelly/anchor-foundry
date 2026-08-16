@@ -81,6 +81,11 @@ class PropertyIn(BaseModel):
     # `object-link-types` p.111). Defaults to `normal`, so a client written
     # before this existed keeps saying exactly what it used to.
     visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
+    # How a reader should see the value (Foundry `object-link-types` p.94-101).
+    # Typed as a free-form object here and checked in `services/value_format`,
+    # because the rules that matter are about the property's *base type* -
+    # which a per-field pydantic model cannot see. Null means unformatted.
+    value_format: dict[str, Any] | None = None
 
 
 class PropertyOut(BaseModel):
@@ -92,6 +97,7 @@ class PropertyOut(BaseModel):
     description: str
     sort_order: int
     visibility: str = "normal"
+    value_format: dict[str, Any] | None = None
 
 
 class ObjectTypeSummary(BaseModel):

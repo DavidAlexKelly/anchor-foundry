@@ -15,6 +15,7 @@ with Canvas.
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 from uuid import UUID
@@ -27,6 +28,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # Re-exported so callers keep saying ontology.coerce_property_value; the
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
+from . import value_format
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
     PropertyValueError,
@@ -139,7 +141,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         conn,
         """
         SELECT id, api_name, display_name, data_type, required, description, sort_order,
-               visibility
+               visibility, value_format
           FROM object_type_properties
          WHERE object_type_id = :tid ORDER BY sort_order, api_name
         """,
@@ -197,6 +199,14 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
                 f"invalid visibility {visibility!r} for {api!r}; expected one of "
                 + ", ".join(PROPERTY_VISIBILITIES)
             )
+        # Normalised in place, so what is stored is what was checked. A
+        # formatter validated and then written from the untouched input would
+        # be two things that only look like one.
+        prop["value_format"] = value_format.parse(
+            prop.get("value_format"),
+            data_type=str(prop["data_type"]),
+            property_name=api,
+        )
 
 
 async def create_type(
@@ -272,9 +282,10 @@ async def _write_property_rows(
             """
             INSERT INTO object_type_properties (object_type_id, api_name, display_name,
                                                 data_type, required, description, sort_order,
-                                                visibility)
+                                                visibility, value_format)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
-                    :required, :descr, :sort, CAST(:vis AS property_visibility))
+                    :required, :descr, :sort, CAST(:vis AS property_visibility),
+                    CAST(:vfmt AS jsonb))
             RETURNING id
             """,
             {
@@ -286,6 +297,11 @@ async def _write_property_rows(
                 "descr": str(prop.get("description", "")),
                 "sort": index,
                 "vis": str(prop.get("visibility") or "normal"),
+                "vfmt": (
+                    json.dumps(prop["value_format"])
+                    if prop.get("value_format") is not None
+                    else None
+                ),
             },
         )
         assert prow is not None
