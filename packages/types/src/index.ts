@@ -1051,7 +1051,57 @@ export interface ObjectTypeProperty {
   sort_order: number;
   /** Defaults to "normal" on a property saved before visibility existed. */
   visibility: PropertyVisibility;
+  /** How a reader should see the value (Foundry `object-link-types`
+   * p.94–101). Null means unformatted, which is every property nobody has
+   * configured. Applied in the browser (`lib/value-format.ts`) — the stored
+   * value stays raw, so filters and actions are unaffected. */
+  value_format: ValueFormat | null;
 }
+
+/** A property's value formatter (Foundry `object-link-types` p.94–101).
+ *
+ * Two families that share nothing: `currency` means nothing to a timestamp and
+ * `timezone` means nothing to a number, so they are separate members rather
+ * than one bag of optional fields. Which family may be attached to a property
+ * depends on its base type (p.95) and is enforced on the server, because a
+ * formatter that silently does nothing is worse than a rejected save.
+ *
+ * Foundry ID, resource RID and artifact GID formatting (p.95) are not here:
+ * each is a *lookup* — an ID becomes a name only by asking something — rather
+ * than a transformation of the value in hand. */
+export type ValueFormat =
+  | {
+      kind: "number";
+      /** p.97's "Base type" dropdown. `plain` is the digit options on their
+       * own; `affix` is p.97's "Prefix/Suffix". Fixed Values is not built. */
+      style: "plain" | "currency" | "unit" | "percent" | "affix";
+      /** ISO 4217, uppercased on the way in. Present iff style is currency. */
+      currency?: string;
+      /** An `Intl` unit identifier, e.g. `kilogram`. Present iff style is unit. */
+      unit?: string;
+      /** Present iff style is affix; at least one of the two is non-empty. */
+      prefix?: string;
+      suffix?: string;
+      /** p.97's "Use grouping" — the locale-aware comma separator. */
+      grouping?: boolean;
+      /** p.98's "Notation". `compact` is what turns 123456 into 123K. */
+      notation?: "standard" | "compact" | "scientific" | "engineering";
+      minimum_integer_digits?: number;
+      minimum_fraction_digits?: number;
+      maximum_fraction_digits?: number;
+      minimum_significant_digits?: number;
+      maximum_significant_digits?: number;
+    }
+  | {
+      kind: "datetime";
+      /** p.99's table, one style per row. */
+      style: "date" | "datetime_long" | "datetime_short" | "iso" | "relative" | "time";
+      /** An IANA zone name. **Absent means the viewer's own** (p.100), which
+       * is why it is not defaulted to UTC anywhere — a stored "UTC" is an
+       * author's choice and an absent one is "wherever the reader is". Only
+       * ever set on a timestamp: a date has no instant to place in a zone. */
+      timezone?: string;
+    };
 
 export interface ObjectTypeSummary {
   id: string;

@@ -1063,6 +1063,7 @@ export function CanvasObjectTable({
                         <PropertyValue
                           workspaceId={workspaceId}
                           dataType={p.data_type}
+                          valueFormat={p.value_format}
                           value={instance.properties[p.api_name]}
                         />
                       </td>
@@ -1597,6 +1598,7 @@ export function CanvasObjectCards({
                           <PropertyValue
                             workspaceId={workspaceId}
                             dataType={p.data_type}
+                            valueFormat={p.value_format}
                             value={instance.properties[p.api_name]}
                           />
                         </dd>

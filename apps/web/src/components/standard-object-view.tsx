@@ -140,7 +140,12 @@ function ProminentCard({
         </div>
       ) : (
         <div className="sov-card-value">
-          <PropertyValue workspaceId={workspaceId} dataType={property.data_type} value={value} />
+          <PropertyValue
+            workspaceId={workspaceId}
+            dataType={property.data_type}
+            valueFormat={property.value_format}
+            value={value}
+          />
         </div>
       )}
     </article>
@@ -233,6 +238,7 @@ export function StandardObjectView({
                   <PropertyValue
                     workspaceId={workspaceId}
                     dataType={p.data_type}
+                    valueFormat={p.value_format}
                     value={instance.properties[p.api_name]}
                   />
                 </td>
