@@ -52,6 +52,21 @@ AGGREGATES = (
 #: gives a limit to.
 COLLECTORS = ("collect_list", "collect_set")
 
+#: The ones this platform cannot answer the same way on both stores, and so
+#: refuses rather than guesses at.
+#:
+#: `sum`/`avg`/`min`/`max` need to know a property is a number, and instance
+#: properties are stored untyped - the blocker §52 named for ordered filters,
+#: §74 for numeric aggregations, §83 for property sorts and §86 for map area
+#: selection. This is the fifth thing waiting behind it.
+#:
+#: `approx_cardinality` is refused for a sharper reason: OpenSearch's
+#: cardinality aggregation is approximate and Postgres' `COUNT(DISTINCT)` is
+#: exact, so "approximate" would be a promise one store keeps and the other
+#: exceeds. `exact_cardinality` is the same question with an answer both can
+#: give, so it is the one offered.
+UNSUPPORTED_AGGREGATES = ("sum", "avg", "min", "max", "approx_cardinality")
+
 #: p.146: "The default limit is 10 items."
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 1000
@@ -100,6 +115,13 @@ def parse(
     if aggregate is not None and aggregate not in AGGREGATES:
         raise DerivationError(
             f"{property_name}: aggregate must be one of {', '.join(AGGREGATES)}"
+        )
+    if aggregate in UNSUPPORTED_AGGREGATES:
+        raise DerivationError(
+            f"{property_name}: {aggregate!r} is not available - instance "
+            "properties are stored untyped, so this platform cannot promise "
+            "the same answer on both stores. Use count or exact_cardinality, "
+            "or collect the values and read them"
         )
     if many and aggregate is None:
         # p.145: "If any link in your chain has a 'many' cardinality … you must

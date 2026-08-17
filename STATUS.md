@@ -3320,6 +3320,35 @@ Eight mutations, all red. One near-miss worth recording: the mutation harness ba
 
 **1135 API tests** (was 1128), 179 unit, 163 browser.
 
+---
+
+### 161. Derived properties: the question, not yet the answer (this session)
+
+`object-link-types` p.143-148. A property "calculated at runtime based on values from linked objects" - a chain of up to three link types, an aggregation, and the property at the far end.
+
+**This unit builds the declaration and its refusals. Nothing evaluates one yet**, and it is deliberately *not* exposed in the property editor: a property somebody could switch on and then watch render nothing would be worse than one that is absent. `ontology.md` §1.2's row is ◑ with that said plainly.
+
+**A question, not a value.** Nothing is written under a derived property, and materialising one would create a second answer free to disagree with the first the moment a linked object changed.
+
+**The direction of each hop is derived, not declared** - a link touches the type a chain has reached from exactly one end, so naming the direction as well would restate migration 0027's join and be free to disagree with it.
+
+**And that is exactly where I got it wrong.** `one_to_many` is named from the `to` side: this repo puts the foreign key on the `from` side, so many `from` rows point at one `to` row - `works_in` is Person to Department with the department id on the person. The "many" is therefore reached travelling *inbound*, and I wrote it outbound. Three tests caught it, and the consequence would have been quiet: a department allowed to derive "employee salary" with no aggregation, which is one cell asked to hold every employee's salary.
+
+**A test premise of mine was wrong too**, in the other direction. "Following the same link twice does not join up" is false - a department's employees' departments is a real walk - so demonstrating a chain that genuinely does not connect needed a fourth object type. Both cases are tested now, which is the point: the check and its counterexample.
+
+**Four of p.145's nine aggregations are refused rather than answered, and the reasons are different.**
+
+*`sum`, `avg`, `min`, `max`* need to know a property is a number, and instance properties are stored untyped. That is the blocker §52 named for ordered filters, §74 for numeric aggregations, §83 for property sorts and §86 for map area selection. **This is the fifth thing waiting behind it**, and it is worth saying that the queue is no longer an argument about convenience: p.143's own opening example is "a Department object type could have a derived property for Average employee salary", and that exact declaration is refused. The spec's headline illustration is what the missing type information costs.
+
+*`approx_cardinality`* is refused for a sharper reason of its own. OpenSearch's cardinality aggregation is approximate and Postgres' `COUNT(DISTINCT)` is exact, so "approximate" would be a promise one store keeps and the other exceeds. `exact_cardinality` is the same question with an answer both can give, so that is the one offered.
+
+**Refused on create rather than validated there.** A derived property follows link types *from this object type*, and a link type can only be created against types that already exist - so at create time there are none, and no chain named there could be a legal one. Not a limitation so much as a consequence, and the message says which.
+
+Seventeen mutations, all red. **1159 API tests** (was 1135), 179 unit, 163 browser.
+
+**What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.
+
+
 
 ---
 ---

@@ -61,16 +61,27 @@ def parse(raw, *, on=DEPARTMENT, name="derived"):
 
 
 # ---- p.143's three examples -------------------------------------------------
-def test_a_departments_average_employee_salary() -> None:
-    """"A Department object type could have a derived property for 'Average
-    employee salary' that aggregates salary values from all linked Employee
-    objects." The hop is inbound - employees name their department - and the
-    direction is worked out rather than declared."""
-    got = parse({"links": [WORKS_IN], "aggregate": "avg", "property": "salary"})
+def test_a_departments_employee_count() -> None:
+    """p.143's first example is "Average employee salary", and **that exact
+    one is refused** - see `test_the_numeric_aggregations_are_refused`. This is
+    the same chain with an aggregation both stores can answer, and it is here
+    to pin the chain itself: the hop is inbound (employees name their
+    department) and the direction is worked out rather than declared."""
+    got = parse({"links": [WORKS_IN], "aggregate": "count"})
     assert got == {
         "links": [{"link_type_id": WORKS_IN, "far_type_id": EMPLOYEE}],
-        "far_type_id": EMPLOYEE, "aggregate": "avg", "property": "salary",
+        "far_type_id": EMPLOYEE, "aggregate": "count",
     }
+
+
+def test_p143s_own_first_example_is_what_the_blocker_costs() -> None:
+    """Worth its own test rather than a footnote. "A Department object type
+    could have a derived property for 'Average employee salary'" is the
+    spec's opening illustration, and it is the one shape this platform cannot
+    answer until instance properties carry their declared types into the
+    index."""
+    with pytest.raises(dp.DerivationError, match="stored untyped"):
+        parse({"links": [WORKS_IN], "aggregate": "avg", "property": "salary"})
 
 
 def test_a_projects_lead_engineer_name_needs_no_aggregation() -> None:
@@ -180,14 +191,39 @@ def test_many_to_many_reaches_many_in_both_directions() -> None:
             parse({"links": [ASSIGNED], "property": "name"}, on=start)
 
 
-def test_every_aggregation_p145_lists_is_accepted() -> None:
+def test_the_aggregations_this_platform_can_answer_are_accepted() -> None:
     for aggregate in dp.AGGREGATES:
+        if aggregate in dp.UNSUPPORTED_AGGREGATES:
+            continue
         raw = {"links": [WORKS_IN], "aggregate": aggregate}
         if aggregate != "count":
             raw["property"] = "salary"
         assert parse(raw)["aggregate"] == aggregate
     with pytest.raises(dp.DerivationError, match="aggregate must be one of"):
         parse({"links": [WORKS_IN], "aggregate": "median", "property": "salary"})
+
+
+def test_the_numeric_aggregations_are_refused_with_the_reason() -> None:
+    """**The fifth feature waiting on typed property indexing** (§52, §74, §83,
+    §86). `sum`, `avg`, `min` and `max` need to know a property is a number,
+    and instance properties are stored untyped - so the two stores would not
+    agree. Refused with a sentence naming what it would take, rather than
+    answered differently depending on which store a deployment runs."""
+    for aggregate in ("sum", "avg", "min", "max"):
+        with pytest.raises(dp.DerivationError, match="stored untyped"):
+            parse({"links": [WORKS_IN], "aggregate": aggregate, "property": "salary"})
+
+
+def test_approximate_cardinality_is_refused_for_its_own_reason() -> None:
+    """Not the untyped-property blocker: OpenSearch's cardinality aggregation
+    is approximate and Postgres' COUNT(DISTINCT) is exact, so "approximate"
+    would be a promise one store keeps and the other exceeds. The exact one is
+    the same question with an answer both can give."""
+    with pytest.raises(dp.DerivationError, match="both stores"):
+        parse({"links": [WORKS_IN], "aggregate": "approx_cardinality",
+               "property": "salary"})
+    assert parse({"links": [WORKS_IN], "aggregate": "exact_cardinality",
+                  "property": "salary"})["aggregate"] == "exact_cardinality"
 
 
 def test_count_takes_no_property_and_everything_else_needs_one() -> None:
@@ -197,7 +233,7 @@ def test_count_takes_no_property_and_everything_else_needs_one() -> None:
     with pytest.raises(dp.DerivationError, match="a count needs no property"):
         parse({"links": [WORKS_IN], "aggregate": "count", "property": "salary"})
     with pytest.raises(dp.DerivationError, match="choose which property"):
-        parse({"links": [WORKS_IN], "aggregate": "sum"})
+        parse({"links": [WORKS_IN], "aggregate": "collect_list"})
 
 
 # ---- the collection limit (p.146) ------------------------------------------
@@ -206,7 +242,8 @@ def test_a_limit_applies_only_to_the_aggregations_that_collect() -> None:
                  "property": "name", "limit": 3})
     assert got["limit"] == 3
     with pytest.raises(dp.DerivationError, match="only aggregations that collect"):
-        parse({"links": [WORKS_IN], "aggregate": "sum", "property": "salary", "limit": 3})
+        parse({"links": [WORKS_IN], "aggregate": "exact_cardinality",
+               "property": "salary", "limit": 3})
     for bad in (0, -1, 2.5, True, "3"):
         with pytest.raises(dp.DerivationError, match="limit must be"):
             parse({"links": [WORKS_IN], "aggregate": "collect_list",
