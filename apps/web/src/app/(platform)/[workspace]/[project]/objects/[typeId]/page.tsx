@@ -8,6 +8,7 @@ import { actions as actionApi, ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
+import { conditionalStyle } from "@/lib/conditional-format";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { ActionType, ObjectInstance, PropertyDataType } from "@/lib/types";
 
@@ -183,6 +184,7 @@ export default function ObjectInstancesPage() {
                           workspaceId={workspace!.id}
                           dataType={p.data_type}
                           valueFormat={p.value_format}
+                          style={conditionalStyle(p.conditional_format, instance.properties)}
                           value={instance.properties[p.api_name]}
                         />
                       </td>

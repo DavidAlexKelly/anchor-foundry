@@ -47,6 +47,7 @@ import {
 import { Chart, toPoints } from "./charts";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyValue } from "@/components/property-value";
+import { conditionalStyle } from "@/lib/conditional-format";
 
 function connectDragDrop(node: HTMLElement | null, connect: (el: HTMLElement) => HTMLElement, drag: (el: HTMLElement) => HTMLElement) {
   if (node) connect(drag(node));
@@ -1064,6 +1065,7 @@ export function CanvasObjectTable({
                           workspaceId={workspaceId}
                           dataType={p.data_type}
                           valueFormat={p.value_format}
+                          style={conditionalStyle(p.conditional_format, instance.properties)}
                           value={instance.properties[p.api_name]}
                         />
                       </td>
@@ -1599,6 +1601,7 @@ export function CanvasObjectCards({
                             workspaceId={workspaceId}
                             dataType={p.data_type}
                             valueFormat={p.value_format}
+                            style={conditionalStyle(p.conditional_format, instance.properties)}
                             value={instance.properties[p.api_name]}
                           />
                         </dd>

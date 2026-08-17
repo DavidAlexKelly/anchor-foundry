@@ -11,10 +11,12 @@
  * type mean something" that a user can actually see.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { mediaKind } from "@/components/media-kind";
-import type { AttachmentRef, GeoPoint, PropertyDataType, ValueFormat } from "@/lib/types";
+import type {
+  AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, ValueFormat,
+} from "@/lib/types";
 import { formatValue } from "@/lib/value-format";
 
 function isGeoPoint(value: unknown): value is GeoPoint {
@@ -93,6 +95,7 @@ export function PropertyValue({
   dataType,
   value,
   valueFormat,
+  style: conditional,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -101,9 +104,17 @@ export function PropertyValue({
    * Optional so a caller that has no property declaration to hand — an action
    * form preview, a value read off an instance — keeps working unchanged. */
   valueFormat?: ValueFormat | null;
+  /** What a matching conditional rule asked for (p.102–109). Already
+   * evaluated: the rule may read a *different* property, so only a caller
+   * holding the whole instance can work it out. */
+  style?: PropertyStyle | null;
 }) {
+  // Applied to the empty marker too. A rule whose whole purpose is "colour it
+  // grey when the value is null" (p.106) would otherwise be invisible on
+  // precisely the values it is about.
+  const paint = styleOf(conditional);
   if (value === null || value === undefined || value === "") {
-    return <span style={{ color: "var(--ink-soft)" }}>∅</span>;
+    return <span style={{ color: "var(--ink-soft)", ...paint }}>∅</span>;
   }
   if (valueFormat) {
     const formatted = formatValue(value, valueFormat);
@@ -112,7 +123,7 @@ export function PropertyValue({
       // that "$100K" is easier to read, and the cost of easier is that the
       // reader can no longer see 100000 — which is the number they will type
       // into a filter. Both, rather than a choice between them.
-      return <span title={String(value)}>{formatted}</span>;
+      return <span title={String(value)} style={paint}>{formatted}</span>;
     }
   }
   if (dataType === "geopoint" && isGeoPoint(value)) {
@@ -121,7 +132,7 @@ export function PropertyValue({
     // Canvas map widget this item unblocks is where that decision belongs,
     // made once, not smuggled into a table cell.
     return (
-      <span className="slug" title="latitude, longitude">
+      <span className="slug" title="latitude, longitude" style={paint}>
         {value.lat.toFixed(4)}, {value.lon.toFixed(4)}
       </span>
     );
@@ -148,7 +159,7 @@ export function PropertyValue({
       );
     }
     return (
-      <span className="media-value" data-media-kind={kind}>
+      <span className="media-value" data-media-kind={kind} style={paint}>
         <Media
           workspaceId={workspaceId}
           kind={kind}
@@ -162,16 +173,41 @@ export function PropertyValue({
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) {
       return (
-        <span title={value}>
+        <span title={value} style={paint}>
           {dataType === "date" ? parsed.toLocaleDateString() : parsed.toLocaleString()}
         </span>
       );
     }
   }
   if (dataType === "json" || (typeof value === "object" && value !== null)) {
-    return <span className="slug">{JSON.stringify(value)}</span>;
+    return <span className="slug" style={paint}>{JSON.stringify(value)}</span>;
   }
-  return <>{String(value)}</>;
+  // The bare-text case is the common one, so it gets the span only when a rule
+  // asked for something — an unstyled wrapper on every cell of every table is
+  // a lot of DOM for nothing.
+  return paint ? <span style={paint}>{String(value)}</span> : <>{String(value)}</>;
+}
+
+/** A rule's answer as inline style. Inline rather than a class because the
+ * colours are author-chosen hex (p.105's "add your own custom color"), and a
+ * stylesheet cannot enumerate those. */
+function styleOf(style: PropertyStyle | null | undefined): CSSProperties | undefined {
+  if (!style) return undefined;
+  const out: CSSProperties = {};
+  if (style.colour) out.color = style.colour;
+  if (style.background) {
+    out.background = style.background;
+    // A background needs room to read as one rather than as a smear behind
+    // the text, and p.102's screenshot is explicit about it: "colored boxes".
+    out.padding = "1px 6px";
+    out.borderRadius = "var(--radius)";
+  }
+  if (style.align) {
+    out.textAlign = style.align;
+    out.display = "inline-block";
+    out.minWidth = "100%";
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** The input for one editable property in an action form. */

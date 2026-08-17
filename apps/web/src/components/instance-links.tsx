@@ -24,6 +24,7 @@ import { Dialog } from "@/components/dialog";
 import { objects as objApi } from "@/lib/api";
 import { ObjectView } from "@/components/object-view";
 import { PropertyValue } from "@/components/property-value";
+import { conditionalStyle } from "@/lib/conditional-format";
 import { summarise, visibleProperties } from "@/components/object-properties";
 import {
   PRIMARY_KEY_REF,
@@ -87,6 +88,7 @@ function LinkedPreview({
                 workspaceId={workspaceId}
                 dataType={property.data_type}
                 valueFormat={property.value_format}
+                style={conditionalStyle(property.conditional_format, instance.properties)}
                 value={instance.properties[property.api_name]}
               />
             </td>
