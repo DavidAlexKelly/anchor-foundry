@@ -26,6 +26,7 @@ import { ObjectView } from "@/components/object-view";
 import { PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { summarise, visibleProperties } from "@/components/object-properties";
+import { linkSubsetHref } from "@/lib/link-subset";
 import {
   PRIMARY_KEY_REF,
   type LinkedInstances,
@@ -103,12 +104,20 @@ function LinkGroup({
   workspaceId,
   group,
   browseHref,
+  subsetHref,
   onOpen,
+  onSelect,
+  selectedId,
 }: {
   workspaceId: string;
   group: LinkedInstances;
   browseHref: string | null;
+  /** Where p.11's "open a subset of linked objects in a new tab" goes, or
+   * null when there is no subset to open. */
+  subsetHref: string | null;
   onOpen: (stop: LinkStop) => void;
+  onSelect: (stop: LinkStop) => void;
+  selectedId: string | null;
 }) {
   // Which rows are open. A set rather than one id: two linked objects are
   // routinely compared, and a preview that closed the last one would make
@@ -146,6 +155,22 @@ function LinkGroup({
         </h3>
         <span className="count">
           {group.total} {group.total === 1 ? "object" : "objects"}
+          {/* p.11: "Open a subset of linked objects in a new tab for further
+              exploration." A new tab because the point is *further*
+              exploration - taking the reader away from the object they are
+              standing on would make the two exclusive. */}
+          {subsetHref && (
+            <Link
+              href={subsetHref}
+              target="_blank"
+              rel="noopener"
+              className="slug"
+              style={{ marginLeft: 10, textDecoration: "underline" }}
+              data-testid={`link-subset-${group.link_type_id}`}
+            >
+              open these
+            </Link>
+          )}
         </span>
       </div>
 
@@ -201,6 +226,27 @@ function LinkGroup({
                 >
                   {open.has(i.id) ? "Hide" : "Preview"}
                 </button>
+                {/* p.11's fourth capability, and a *third* intention: the
+                    inline preview above compares several at once (which is
+                    why it is a set), traversal replaces where you are, and
+                    this holds one object beside everything while you keep
+                    reading the groups. */}
+                <button
+                  type="button"
+                  className="btn quiet"
+                  style={{ padding: "4px 8px", fontSize: 12 }}
+                  aria-pressed={selectedId === i.id}
+                  aria-label={`Show ${i.primary_key} in the side panel`}
+                  onClick={() =>
+                    onSelect({
+                      typeId: group.far_type_id,
+                      typeName: group.far_type_display_name,
+                      instance: i,
+                    })
+                  }
+                >
+                  Panel
+                </button>
               </div>
               {open.has(i.id) && (
                 <LinkedPreview
@@ -226,8 +272,71 @@ function LinkGroup({
   );
 }
 
+/** p.11: "Preview a selected linked object in the side panel of the standard
+ * Object View."
+ *
+ * The whole object rather than a few properties, which is what makes it a
+ * different answer from the inline preview: that one is a summary you open
+ * under a row to compare several, this is *the* object, held beside the view
+ * you are reading. Traversing to it is still one click, from in here.
+ *
+ * `ObjectView` rather than a table of its own, so a configured view (§144), a
+ * prominent geopoint's map and a time series chart all render here exactly as
+ * they do anywhere else — a second renderer would be a second thing to keep
+ * in step, which is the mistake `object-properties.ts` exists to record.
+ */
+function SidePanel({
+  workspaceId,
+  stop,
+  onClose,
+  onOpen,
+}: {
+  workspaceId: string;
+  stop: LinkStop;
+  onClose: () => void;
+  onOpen: (stop: LinkStop) => void;
+}) {
+  return (
+    <aside className="link-side-panel" aria-label="Linked object panel">
+      <div
+        className="row-actions"
+        style={{ justifyContent: "space-between", alignItems: "baseline" }}
+      >
+        <h3 style={{ fontSize: 13.5, margin: 0 }}>
+          {stop.typeName} <span className="slug">{stop.instance.primary_key}</span>
+        </h3>
+        <div className="row-actions" style={{ gap: 4 }}>
+          <button
+            type="button"
+            className="btn quiet"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            onClick={() => onOpen(stop)}
+          >
+            Go to
+          </button>
+          <button
+            type="button"
+            className="btn quiet"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            aria-label="Close the linked object panel"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+      <ObjectView
+        workspaceId={workspaceId}
+        typeId={stop.typeId}
+        instance={stop.instance}
+      />
+    </aside>
+  );
+}
+
 export function LinkExplorerDialog({
   workspaceId,
+  workspaceSlug,
   browseHref,
   start,
   onClose,
@@ -239,10 +348,18 @@ export function LinkExplorerDialog({
    *  and sends people to the type's own application instead. `null` means
    *  there is nowhere to send them, and the link is simply not offered. */
   browseHref: (farTypeId: string) => string | null;
+  /** The workspace slug, only so the Explorer link can be built (p.11). Passed
+   * rather than derived, for `browseHref`'s reason: this component knows about
+   * objects, not about routing. */
+  workspaceSlug: string;
   start: LinkStop;
   onClose: () => void;
 }) {
   const [trail, setTrail] = useState<LinkStop[]>([start]);
+  // p.11's side panel holds exactly one object, and it survives moving
+  // between groups - that is the difference from the inline preview, which
+  // belongs to the row it opened under.
+  const [selected, setSelected] = useState<LinkStop | null>(null);
   // The trail is never empty - it starts with one stop and only ever grows or
   // truncates to an existing index - but the type says it could be, so fall
   // back to the start rather than asserting.
@@ -252,6 +369,15 @@ export function LinkExplorerDialog({
     queryKey: ["instance-links", workspaceId, here.typeId, here.instance.id],
     queryFn: () => objApi.instanceLinks(workspaceId, here.typeId, here.instance.id),
   });
+  // Cleared when the object under it changes: a panel still showing something
+  // linked to where you *were* is the same wrong-context bug the trail exists
+  // to prevent, and it would be silent.
+  const hereId = here.instance.id;
+  const [panelFor, setPanelFor] = useState(hereId);
+  if (panelFor !== hereId) {
+    setPanelFor(hereId);
+    if (selected) setSelected(null);
+  }
 
   return (
     <Dialog open wide title={`${here.typeName} · ${here.instance.primary_key}`} onClose={onClose}>
@@ -302,15 +428,39 @@ export function LinkExplorerDialog({
           </p>
         </div>
       )}
-      {links.data?.map((group) => (
-        <LinkGroup
-          key={`${group.link_type_id}:${group.direction}`}
-          workspaceId={workspaceId}
-          group={group}
-          browseHref={browseHref(group.far_type_id)}
-          onOpen={(stop) => setTrail([...trail, stop])}
-        />
-      ))}
+      <div className={selected ? "links-with-panel" : undefined}>
+        <div>
+          {links.data?.map((group) => (
+            <LinkGroup
+              key={`${group.link_type_id}:${group.direction}`}
+              workspaceId={workspaceId}
+              group={group}
+              browseHref={browseHref(group.far_type_id)}
+              subsetHref={linkSubsetHref(workspaceSlug, group)}
+              onOpen={(stop) => setTrail([...trail, stop])}
+              onSelect={(stop) =>
+                // Clicking the selected one again puts it away, so the control
+                // is the same one both ways round.
+                setSelected((was) =>
+                  was?.instance.id === stop.instance.id ? null : stop,
+                )
+              }
+              selectedId={selected?.instance.id ?? null}
+            />
+          ))}
+        </div>
+        {selected && (
+          <SidePanel
+            workspaceId={workspaceId}
+            stop={selected}
+            onClose={() => setSelected(null)}
+            onOpen={(stop) => {
+              setSelected(null);
+              setTrail([...trail, stop]);
+            }}
+          />
+        )}
+      </div>
 
       <div className="form-actions">
         <button type="button" className="btn quiet" onClick={onClose}>

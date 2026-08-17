@@ -247,6 +247,7 @@ export default function ObjectInstancesPage() {
 
       {exploring && workspace && (
         <LinkExplorerDialog
+          workspaceSlug={params.workspace}
           workspaceId={workspace.id}
           browseHref={(typeId) => `/${params.workspace}/${params.project}/objects/${typeId}`}
           start={exploring}

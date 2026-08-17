@@ -3271,6 +3271,27 @@ The row §157 corrected. `ontology.md` §1.2 claimed this was done, citing §83 
 
 Forty-three mutations, all red: eighteen on the validator, fifteen on the evaluator, ten on the wiring and the editor. **1128 API tests** (was 1104), **174 unit** (was 155), **159 browser** (was 154).
 
+
+### 159. The Linked objects component's last two capabilities (this session)
+
+`object-views` p.11 lists four things the component is for. Two were built — the groups (§18) and the inline property preview (§145). These are the other two, and `ontology.md` §4.1's row is ✅:
+
+> "Open a subset of linked objects in a new tab for further exploration. Preview a selected linked object in the side panel of the standard Object View."
+
+**The subset needed no new query, and the reason is migration 0027.** Links are *derived*, not stored: a link type names two properties, and the linked objects are the ones whose far property equals this object's near value. So "these linked objects" is already sayable in the Object Explorer's own vocabulary — `type` + `property` + `value` — and the whole feature is a URL. Even the awkward case is already handled: when the join lands on the primary key rather than a property, the explore route maps `$primary_key` to "the instance's key, not one of its properties", the same reading `find_by_property` and §155's set filters use. Passing the sentinel through untouched was the choice; a second spelling of a reserved name is a second thing to keep in step.
+
+**A new tab, because p.11 says so and because the point is *further* exploration.** Taking the reader off the object they are standing on would make the two exclusive.
+
+**Three controls per linked row, and they are three different intentions.** Traversal replaces where you are. The inline preview opens *under* a row and several can be open at once, because comparing two linked objects is the ordinary case. The side panel holds exactly **one**, beside everything, and survives scrolling through the other groups. A single control that guessed between them would make two of the three unreachable — the same argument §145 already made for splitting the first two.
+
+**The panel clears itself on a hop.** A panel still showing something linked to where you *were* is the wrong-context bug the trail exists to prevent, and it would be silent: the object in it is real, its properties are real, and nothing on screen says it belongs to a different object now.
+
+**A guard I wrote and then deleted.** The first draft refused to build a URL when the link type had no join. It cannot happen: the instance-links endpoint returns only traversable links, which is why `far_property` is a plain `string` rather than a nullable one — and TypeScript said so when the test tried to pass `null`. A branch no test can reach is this repo's own definition of a check that is not a check, so it went, with a note where it was.
+
+**The claim the fixture carries.** One customer has two orders and the type has three. A "subset" link that opened *all* orders would be indistinguishable from a working one on any fixture where those numbers matched — so the counts are deliberately different, and the test asserts both that O1 is there and that O3 is not.
+
+Eight mutations, all red — plus one that produced no test output at all, which was a malformed edit of mine rather than a survivor: it broke the parse, so the suite never ran. Worth noting because "no output" and "all green" look similar in a mutation log and mean opposite things. **1128 API tests**, **179 unit** (was 174), **163 browser** (was 159).
+
 ---
 ---
 ---

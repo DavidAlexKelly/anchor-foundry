@@ -51,6 +51,7 @@ export default function ExplorePage() {
 
       <ObjectExplorer
         workspaceId={workspace.id}
+        workspaceSlug={params.workspace}
         canEdit={workspace.effective_role !== "viewer"}
       />
     </main>
