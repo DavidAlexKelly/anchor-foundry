@@ -18,9 +18,14 @@ input that is not literally a property being overwritten - and every
 remaining feature in `docs/parity/ontology.md` §5 needs one.
 
 Executing one (routes/actions.py orchestrates; this module holds the
-DB-only primitives) still requires the property a rule writes to appear in
-its source's column_mappings - only properties with a known dataset column
-can be written back.
+DB-only primitives) requires the property a rule writes to appear in its
+source's column_mappings - only properties with a known dataset column can
+be written back - **unless the property is edit-only** (Foundry
+`object-link-types` p.113), which has no column by design and is written
+straight to the instance. That exception is deliberately narrow: it applies
+to a `modify_object` rule on the action's own subject, and not to a link
+property (a link is a join over dataset columns) or to `create_object`
+(whose dataset row is how the object comes to exist at all).
 """
 from __future__ import annotations
 
@@ -90,6 +95,7 @@ def apply_rules(
     rules: list[dict[str, Any]],
     property_types: dict[str, str],
     mapped_properties: set[str],
+    edit_only: set[str] = frozenset(),
     link_types: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """What the rules write, given the bound parameters.
@@ -148,8 +154,18 @@ def apply_rules(
                     "or on nothing"
                 )
             if prop not in mapped_properties:
+                # Refused even when the property is edit-only, and for a
+                # reason of its own: a link is a *join* over stored data
+                # (db 0027), so a link property with no column is a link the
+                # dataset cannot express and no sync could ever re-derive.
                 raise ValueError(
                     f"{prop!r} has no dataset column mapped on this instance's source"
+                    + (
+                        " - a link joins on dataset columns, so an edit-only "
+                        "property cannot carry one"
+                        if prop in edit_only
+                        else ""
+                    )
                 )
             if kind == "delete_link":
                 writes[prop] = None
@@ -179,7 +195,11 @@ def apply_rules(
             continue
         if parameter not in bound:
             continue  # not supplied, no default - the rule has nothing to write
-        if prop not in mapped_properties:
+        # p.113: an edit-only property has no column *by design*, and is
+        # written straight to the instance. Everything else still needs one,
+        # because a value with nowhere to be written back would survive until
+        # the next sync and then vanish.
+        if prop not in mapped_properties and prop not in edit_only:
             raise ValueError(
                 f"{prop!r} has no dataset column mapped on this instance's source"
             )
@@ -563,6 +583,13 @@ def object_creations(
             if parameter not in bound:
                 continue  # not supplied, no default - the column stays empty
             if prop not in mapped_properties:
+                # **Refused for a created object even though a modify allows
+                # it** (p.113). A creation's dataset row *is* how the object
+                # comes into existence; an edit-only value has no column in
+                # that row and no instance yet to write it to, so honouring it
+                # would mean inventing an ordering the write path does not
+                # have. Named rather than silently dropped, which would be a
+                # value somebody supplied and never saw again.
                 raise ValueError(
                     f"{prop!r} has no dataset column mapped on the source for its object type"
                 )

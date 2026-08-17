@@ -594,3 +594,61 @@ def test_the_explorer_pages_and_refuses_an_outsider(
         f"/api/workspaces/{fx.workspace}/object-instances", headers=hdr(fx.outsider_sub)
     )
     assert r.status_code == 404
+
+
+# ---- edit-only properties survive a sync, on *both* stores ------------------
+# Foundry `object-link-types` p.113: an edit-only property "is not directly
+# mapped to a column in the backing dataset", so a sync's rows never carry it -
+# and the store is the only place its value exists.
+#
+# **One test over two stores, deliberately.** This is where they disagreed:
+# OpenSearch's update takes a partial `doc` and merges it, so the value
+# survived there, while the Postgres upsert wrote `properties =
+# EXCLUDED.properties` and deleted it. Neither raised. Asserting each store
+# separately would have let that stand for as long as nobody compared them,
+# which is the cross-store rule `OPERATORS` exists to keep - so the claim is
+# written once and both stores answer it.
+async def _sync_twice(store, *, first: dict, edit: dict, second: dict) -> dict:
+    """Sync a row, apply an edit the dataset knows nothing about, sync again."""
+    type_id, source_id = uuid.uuid4(), uuid.uuid4()
+    t0 = datetime.now(timezone.utc)
+    await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=[("1", first)], synced_at=t0,
+    )
+    rows, _ = await store.list_for_type(
+        search_prefix=PREFIX, object_type_id=type_id, limit=10, offset=0
+    )
+    await store.update_properties(
+        search_prefix=PREFIX, object_type_id=type_id,
+        instance_id=str(rows[0]["id"]), properties=edit,
+    )
+    await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=[("1", second)], synced_at=t0 + timedelta(minutes=1),
+    )
+    rows, _ = await store.list_for_type(
+        search_prefix=PREFIX, object_type_id=type_id, limit=10, offset=0
+    )
+    return dict(rows[0]["properties"])
+
+
+@pytest.mark.anyio
+async def test_a_sync_keeps_what_the_dataset_cannot_say_opensearch(store) -> None:
+    got = await _sync_twice(
+        store,
+        first={"rank": 1},
+        edit={"rank": 1, "triage_note": "call the owner"},
+        second={"rank": 2},
+    )
+    # The mapped property is the dataset's to say, and it changed.
+    assert got["rank"] == 2
+    # The edit-only one has no column to come back from, so the sync leaves it.
+    assert got["triage_note"] == "call the owner"
+
+
+# The Postgres half of this claim lives in `test_actions.py`, not here: an
+# insert into `object_instances` is subject to row-level security, so it needs
+# a real workspace, user and source rather than a bare engine connection - and
+# the same fixture is what makes the *action* that writes an edit-only property
+# testable. Same claim, one place it can actually run.

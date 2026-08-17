@@ -141,13 +141,24 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         conn,
         """
         SELECT id, api_name, display_name, data_type, required, description, sort_order,
-               visibility, value_format, conditional_format
+               visibility, value_format, conditional_format, edit_only
           FROM object_type_properties
          WHERE object_type_id = :tid ORDER BY sort_order, api_name
         """,
         {"tid": str(type_id)},
     )
     return [dict(r) for r in rows]
+
+
+def edit_only_properties(properties: list[dict[str, Any]]) -> set[str]:
+    """The api_names with no column in any backing dataset (p.113).
+
+    Read by three callers that would otherwise each decide it: the sync (which
+    must not overwrite them, and must not report them as missing), the action
+    write-back (which writes them to the instance and not to the dataset), and
+    the source editor (which must not offer them a column).
+    """
+    return {str(p["api_name"]) for p in properties if p.get("edit_only")}
 
 
 def required_properties(properties: list[dict[str, Any]]) -> set[str]:
@@ -294,10 +305,10 @@ async def _write_property_rows(
             INSERT INTO object_type_properties (object_type_id, api_name, display_name,
                                                 data_type, required, description, sort_order,
                                                 visibility, value_format,
-                                                conditional_format)
+                                                conditional_format, edit_only)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
-                    CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb))
+                    CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly)
             RETURNING id
             """,
             {
@@ -319,6 +330,7 @@ async def _write_property_rows(
                     if prop.get("conditional_format") is not None
                     else None
                 ),
+                "editonly": bool(prop.get("edit_only", False)),
             },
         )
         assert prow is not None
@@ -1040,7 +1052,15 @@ async def create_source(
     if isinstance(schema, str):
         schema = json.loads(schema)
     dataset_columns = {c["name"] for c in schema}
-    properties = {str(p["api_name"]) for p in await list_properties(conn, object_type_id)}
+    declared = await list_properties(conn, object_type_id)
+    properties = {str(p["api_name"]) for p in declared}
+    # p.113: an edit-only property is "not directly mapped to a column in the
+    # backing dataset". Mapping one is refused rather than silently accepted,
+    # because accepting it would make the flag a lie the sync then acts on -
+    # `upsert_instances` preserves edit-only keys, so a mapped-and-edit-only
+    # property would have its dataset value ignored on every sync with nothing
+    # anywhere saying why. p.114 gives the intended flow: untoggle first.
+    edit_only = {str(p["api_name"]) for p in declared if p.get("edit_only")}
 
     if primary_key_column not in dataset_columns:
         raise ValueError(f"primary key column {primary_key_column!r} is not in the dataset")
@@ -1051,6 +1071,11 @@ async def create_source(
             raise ValueError(f"column {column!r} is not in the dataset")
         if prop not in properties:
             raise ValueError(f"property {prop!r} is not defined on the object type")
+        if prop in edit_only:
+            raise ValueError(
+                f"property {prop!r} is edit-only, so it has no column; turn "
+                "off edit-only first to map it"
+            )
 
     existing = await fetch_one(
         conn,

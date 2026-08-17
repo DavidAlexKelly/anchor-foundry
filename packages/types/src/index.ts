@@ -1061,6 +1061,10 @@ export interface ObjectTypeProperty {
    * part of it: one decides what the value *says*, the other how it *looks*,
    * and p.102's example puts both on one property. */
   conditional_format: ConditionalRule[] | null;
+  /** No column in any backing dataset (Foundry `object-link-types` p.113).
+   * Written by an action straight to the instance and preserved across syncs,
+   * rather than re-derived from a dataset that has nothing to say about it. */
+  edit_only: boolean;
 }
 
 /** What a matching rule asks for. Every field optional, but the server

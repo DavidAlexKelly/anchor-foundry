@@ -91,6 +91,9 @@ class PropertyIn(BaseModel):
     # reason and one more: a rule may name another property, so whether it is
     # legal depends on the *other* properties in the same request.
     conditional_format: list[dict[str, Any]] | None = None
+    # No column in any backing dataset (Foundry `object-link-types` p.113).
+    # Written by actions straight to the instance and preserved across syncs.
+    edit_only: bool = False
 
 
 class PropertyOut(BaseModel):
@@ -104,6 +107,7 @@ class PropertyOut(BaseModel):
     visibility: str = "normal"
     value_format: dict[str, Any] | None = None
     conditional_format: list[dict[str, Any]] | None = None
+    edit_only: bool = False
 
 
 class ObjectTypeSummary(BaseModel):
@@ -1429,13 +1433,20 @@ async def sync_source(
             removed = await store.delete_stale_instances(
                 search_prefix=prefix, source_id=source_id, synced_before=synced_at
             )
+            declared = await ontology_service.list_properties(
+                conn, UUID(str(source["object_type_id"]))
+            )
+            # p.116's sync report, minus the properties this dataset cannot
+            # speak for. An **edit-only** property (p.113) has no column here,
+            # so `rows` never carries it and every row would be counted as
+            # missing - a report that flagged every object of the type on
+            # every sync, saying nothing about the data. Actions still refuse
+            # to empty one, which is where a required edit-only property is
+            # actually enforceable.
             missing = instances_service.missing_required(
                 rows,
-                ontology_service.required_properties(
-                    await ontology_service.list_properties(
-                        conn, UUID(str(source["object_type_id"]))
-                    )
-                ),
+                ontology_service.required_properties(declared)
+                - ontology_service.edit_only_properties(declared),
             )
 
     async with user_connection(access.auth.user_id) as conn:

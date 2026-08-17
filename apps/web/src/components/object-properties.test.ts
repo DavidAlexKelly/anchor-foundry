@@ -18,6 +18,7 @@ function prop(
     visibility,
     value_format: null,
     conditional_format: null,
+    edit_only: false,
   };
 }
 

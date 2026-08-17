@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
+from src.services import ontology as ontology_service  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import datasets as ds_routes  # noqa: E402
 from src.services.storage import LocalStorageGateway  # noqa: E402
@@ -1011,3 +1012,49 @@ def test_a_rule_naming_a_missing_property_is_refused_by_the_route(
     assert r.status_code == 422, r.text
     assert "no property named 'altitude'" in r.json()["detail"]
     assert "kind: rule 1" in r.json()["detail"]
+
+
+# ---- edit-only properties (ontology.md §1.2; object-link-types p.113-115) ----
+def test_a_property_is_not_edit_only_by_default(client: TestClient, fx: Fixture) -> None:
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"eo_default_{fx.tag}", "display_name": "Default",
+            "properties": [{"api_name": "id", "data_type": "string"}],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["properties"][0]["edit_only"] is False
+
+
+def test_an_edit_only_property_round_trips(client: TestClient, fx: Fixture) -> None:
+    created = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"eo_set_{fx.tag}", "display_name": "Edit only",
+            "properties": [
+                {"api_name": "id", "data_type": "string"},
+                {"api_name": "triage_note", "data_type": "string", "edit_only": True},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert created.status_code == 201, created.text
+    r = client.get(
+        f"{wbase(fx)}/object-types/{created.json()['id']}", headers=hdr(fx.viewer_sub)
+    )
+    by_name = {p["api_name"]: p["edit_only"] for p in r.json()["properties"]}
+    assert by_name == {"id": False, "triage_note": True}
+
+
+def test_edit_only_properties_reports_only_the_flagged_ones() -> None:
+    """The one reading, shared by the sync, the action write-back and the
+    source editor - each of which would otherwise decide it separately."""
+    assert ontology_service.edit_only_properties([
+        {"api_name": "id"},
+        {"api_name": "note", "edit_only": True},
+        {"api_name": "other", "edit_only": False},
+    ]) == {"note"}
