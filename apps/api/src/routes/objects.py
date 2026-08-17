@@ -699,8 +699,15 @@ async def get_instance(
         row = await instance_store.store_for(conn).get_instance(
             search_prefix=prefix, object_type_id=type_id, instance_id=str(instance_id)
         )
-    if row is None:
-        raise NotFoundError("object instance")
+        if row is None:
+            raise NotFoundError("object instance")
+        # p.143: derived properties are "calculated at runtime". Filled in
+        # here, on the single-object read, and nowhere else - see
+        # `_with_derived` for why a list read does not get them.
+        row = await _with_derived(
+            conn, instance_store.store_for(conn), prefix, access.workspace_id,
+            type_id, row,
+        )
     return InstanceOut(**{**row, "properties": _jsonb(row["properties"])})
 
 
@@ -2191,6 +2198,144 @@ async def _resolve_traversal(
     if joined is None:
         return definition.filters, True
     return (joined, *definition.filters), False
+
+
+def _empty_for(aggregate: str | None) -> Any:
+    """What a derivation that reached nothing answers - see `_derive_property`.
+
+    `exact_cardinality` counts, so it is 0 for `count`'s reason: "how many
+    distinct" has an honest numeric answer over nothing.
+    """
+    if aggregate in ("count", "exact_cardinality"):
+        return 0
+    if aggregate in ("collect_list", "collect_set"):
+        return []
+    return None
+
+
+async def _derive_property(
+    conn: Any,
+    store: Any,
+    prefix: str,
+    workspace_id: UUID,
+    *,
+    start_type_id: UUID,
+    instance_key: str,
+    derivation: dict[str, Any],
+) -> Any:
+    """Answer one derived property for one object (`object-link-types` p.143).
+
+    **The chain is an object set rooted at this one object.** A derived
+    property asks "follow these links from *me*, then reduce what you find",
+    and §155 already expresses exactly that: a set of the starting type
+    filtered to this instance's key, wrapped in one `Traversal` per hop. So
+    there is no traversal code here - the hops become the same nested
+    `ObjectSet` a Workshop variable would build, and `_resolve_traversal`
+    answers it. That is why filtering on `$primary_key` had to exist (§155),
+    and it is what makes a three-hop derivation cost nothing new.
+
+    **Each aggregation answers an empty chain with its own empty**: `count`
+    returns 0, a collection returns `[]`, and a single value returns `None`.
+    Written first with one shared sentinel, which made an empty *base* answer
+    `None` where an empty *far side* answered `[]` - the same question, two
+    shapes, depending on which end of the chain ran out. A reader cannot be
+    expected to know which.
+    """
+    definition = object_sets.ObjectSet(
+        object_type_id=start_type_id,
+        filters=(
+            object_sets.Filter(
+                property=object_sets.PRIMARY_KEY_FILTER, op="eq", value=instance_key
+            ),
+        ),
+    )
+    for hop in derivation["links"]:
+        definition = object_sets.ObjectSet(
+            object_type_id=UUID(str(hop["far_type_id"])),
+            via=object_sets.Traversal(
+                link_type_id=UUID(str(hop["link_type_id"])), base=definition
+            ),
+        )
+
+    filters, empty = await _resolve_traversal(conn, store, prefix, workspace_id, definition)
+    aggregate = derivation.get("aggregate")
+    if empty:
+        return _empty_for(aggregate)
+
+    if aggregate in ("count", "exact_cardinality"):
+        # `AGGREGATIONS`' two, which are the two both stores answer the same
+        # way over untyped properties. The rest were refused at save time
+        # (`derived_properties.UNSUPPORTED_AGGREGATES`), so reaching here with
+        # one would mean a row that predates that rule.
+        return await store.aggregate_object_set(
+            search_prefix=prefix,
+            object_type_id=definition.object_type_id,
+            filters=filters,
+            aggregation="count" if aggregate == "count" else "count_distinct",
+            property_name=None if aggregate == "count" else derivation.get("property"),
+        )
+
+    # Everything else reads the far objects and takes the property off them:
+    # a collection (p.146, bounded by its own limit) or the single value a
+    # one-to-one chain reaches.
+    limit = int(derivation.get("limit") or 1)
+    rows, _ = await store.evaluate_object_set(
+        search_prefix=prefix,
+        object_type_id=definition.object_type_id,
+        filters=filters,
+        limit=limit,
+        offset=0,
+        sort="key_asc",
+    )
+    name = str(derivation["property"])
+    values = [
+        row["primary_key"]
+        if name == ontology_service.PRIMARY_KEY_REF
+        else _jsonb(row["properties"]).get(name)
+        for row in rows
+    ]
+    if aggregate == "collect_set":
+        # Unordered and unique (p.145), but returned in a stable order anyway:
+        # a set that came back differently on each read would make an object
+        # view flicker for no reason a reader could name.
+        seen = {v for v in values if v is not None}
+        return sorted(seen, key=lambda v: str(v))
+    if aggregate == "collect_list":
+        return values
+    return values[0] if values else None
+
+
+async def _with_derived(
+    conn: Any,
+    store: Any,
+    prefix: str,
+    workspace_id: UUID,
+    type_id: UUID,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    """One instance, with its derived properties filled in (p.143).
+
+    **Single reads only, and that is a deliberate line.** Each derived property
+    costs a query per hop, so doing this for a page of a table would be a
+    silent N+1 on every list in the product. p.143's own examples are all
+    object-shaped - "this department's average salary", "this project's lead
+    engineer" - so the object view is where the answer is worth paying for.
+    A table showing a derived column needs the aggregation pushed into the
+    index, which is the same typed-index work §87 is blocked on.
+    """
+    properties = await ontology_service.list_properties(conn, type_id)
+    derived = [p for p in properties if p.get("derivation")]
+    if not derived:
+        return row
+    values = dict(_jsonb(row["properties"]))
+    for prop in derived:
+        values[str(prop["api_name"])] = await _derive_property(
+            conn, store, prefix, workspace_id,
+            start_type_id=type_id,
+            instance_key=str(row["primary_key"]),
+            derivation=_jsonb(prop["derivation"]),
+        )
+    return {**row, "properties": values}
 
 
 @router.post("/object-sets/evaluate", response_model=ObjectSetOut)

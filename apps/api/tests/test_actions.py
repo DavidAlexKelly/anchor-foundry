@@ -425,3 +425,210 @@ def test_an_action_still_refuses_a_property_that_is_merely_unmapped(
     )
     assert run.status_code == 422, run.text
     assert "no dataset column mapped" in run.json()["detail"]
+
+
+# ---- derived properties, evaluated (ontology.md §1.2; p.143-148) ------------
+# The declaration is unit-tested in `test_derived_properties.py`. This is the
+# other half: a derived property answered against real linked objects.
+DERIVED_ORDERS = (
+    b"order_id,customer,total\n"
+    b"O1,1,10\nO2,1,20\nO3,1,30\n"
+)
+
+
+@pytest.fixture(scope="module")
+def derived_setup(client: TestClient, fx: Fixture, customers_dataset: str) -> dict:
+    """Customers, and orders that name them.
+
+    **Deliberately lopsided**: Ada has three orders and Grace has none. The
+    first version of this fixture read the customers dataset twice, so every
+    customer had exactly one linked object - and three mutations survived
+    against it, because "count" and "count the first one", "limit 2" and "no
+    limit", and "empty" and "one" were all indistinguishable. A fixture where
+    every case looks the same cannot fail for any of them.
+    """
+    orders_dataset = client.post(
+        f"{dbase(fx)}/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"DerivedOrders {fx.tag}"},
+        files={"file": ("orders.csv", io.BytesIO(DERIVED_ORDERS), "text/csv")},
+    )
+    assert orders_dataset.status_code == 201, orders_dataset.text
+    orders_dataset_id = orders_dataset.json()["id"]
+    customer = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"DerivedCustomer{fx.tag}",
+            "display_name": f"DerivedCustomer {fx.tag}",
+            "properties": [{"api_name": "name", "data_type": "string"}],
+        },
+    )
+    assert customer.status_code == 201, customer.text
+    customer_id = customer.json()["id"]
+
+    order = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"DerivedOrder{fx.tag}", "display_name": f"DerivedOrder {fx.tag}",
+            "properties": [
+                {"api_name": "customer", "data_type": "string"},
+                {"api_name": "total", "data_type": "string"},
+            ],
+        },
+    )
+    assert order.status_code == 201, order.text
+    order_id = order.json()["id"]
+
+    for type_id, dataset_id, key, mappings in (
+        (customer_id, customers_dataset, "customer_id", {"name": "name"}),
+        (order_id, orders_dataset_id, "order_id",
+         {"customer": "customer", "total": "total"}),
+    ):
+        src = client.post(
+            sbase(fx), headers=hdr(fx.editor_sub),
+            json={"object_type_id": type_id, "dataset_id": dataset_id,
+                  "primary_key_column": key, "column_mappings": mappings},
+        )
+        assert src.status_code == 201, src.text
+        synced = client.post(f"{sbase(fx)}/{src.json()['id']}/sync", headers=hdr(fx.editor_sub))
+        assert synced.status_code == 200, synced.text
+
+    link = client.post(
+        f"{wbase(fx)}/link-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"placed_by_{fx.tag}", "display_name": "Placed by",
+            "from_type_id": order_id, "to_type_id": customer_id,
+            "cardinality": "one_to_many",
+            "from_property": "customer", "to_property": "$primary_key",
+        },
+    )
+    assert link.status_code == 201, link.text
+    return {"customer_id": customer_id, "order_id": order_id,
+            "link_id": link.json()["id"]}
+
+
+def _set_derivation(client, fx, setup, derivation) -> None:
+    r = client.patch(
+        f"{wbase(fx)}/object-types/{setup['customer_id']}",
+        headers=hdr(fx.editor_sub),
+        json={
+            "display_name": f"DerivedCustomer {fx.tag}",
+            "properties": [
+                {"api_name": "name", "data_type": "string"},
+                {"api_name": "order_info", "data_type": "json",
+                 "derivation": derivation},
+            ],
+            "title_property": "name",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+
+def _customer(client, fx, setup, name="Ada Lovelace") -> dict:
+    r = client.get(
+        f"{wbase(fx)}/object-types/{setup['customer_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    ada = next(i for i in r.json()["items"] if i["properties"]["name"] == name)
+    detail = client.get(
+        f"{wbase(fx)}/object-types/{setup['customer_id']}/instances/{ada['id']}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert detail.status_code == 200, detail.text
+    return detail.json()
+
+
+def test_a_derived_count_is_answered_on_the_single_object_read(
+    client: TestClient, fx: Fixture, derived_setup: dict
+) -> None:
+    """p.143's shape, end to end: follow the link and count what is there.
+
+    The chain is expressed as an object set rooted at this one customer, which
+    is why §155's `$primary_key` filter had to exist.
+    """
+    _set_derivation(client, fx, derived_setup,
+                    {"links": [derived_setup["link_id"]], "aggregate": "count"})
+    ada = _customer(client, fx, derived_setup)
+    assert ada["properties"]["order_info"] == 3
+    # **Zero, not None.** "Grace has no orders" and "how many orders does
+    # Grace have" are different questions, and `count` is the one aggregation
+    # whose honest answer to an empty set is a number.
+    grace = _customer(client, fx, derived_setup, "Grace Hopper")
+    assert grace["properties"]["order_info"] == 0
+
+
+def test_a_derived_value_reads_a_property_off_the_linked_object(
+    client: TestClient, fx: Fixture, derived_setup: dict
+) -> None:
+    """"A Project object type could have a derived property for 'Lead engineer
+    name' that retrieves the name from a single linked Engineer object."
+    """
+    _set_derivation(client, fx, derived_setup, {
+        "links": [derived_setup["link_id"]],
+        "aggregate": "collect_list", "property": "total", "limit": 2,
+    })
+    ada = _customer(client, fx, derived_setup)
+    # p.146's limit, doing something: Ada has three orders and asked for two.
+    assert ada["properties"]["order_info"] == ["10", "20"]
+
+    # **Each aggregation answers an empty chain with its own empty.** A
+    # collection of nothing is `[]`, and the count above is 0 - one shared
+    # sentinel would have made the same question answer differently depending
+    # on which end of the chain ran out.
+    grace = _customer(client, fx, derived_setup, "Grace Hopper")
+    assert grace["properties"]["order_info"] == []
+
+
+def test_a_derived_property_is_not_stored_on_the_instance(
+    client: TestClient, fx: Fixture, derived_setup: dict
+) -> None:
+    """**p.143's "instead of storing data directly".** The list read shows the
+    instance as it is stored, and there is no such key on it - which is also
+    the evidence that the single read *calculated* it rather than reading it
+    back."""
+    _set_derivation(client, fx, derived_setup,
+                    {"links": [derived_setup["link_id"]], "aggregate": "count"})
+    r = client.get(
+        f"{wbase(fx)}/object-types/{derived_setup['customer_id']}/instances",
+        headers=hdr(fx.viewer_sub),
+    )
+    ada = next(i for i in r.json()["items"] if i["properties"]["name"] == "Ada Lovelace")
+    assert "order_info" not in ada["properties"]
+    # And the single read does answer it, so the absence above is about
+    # storage rather than about the property not working at all.
+    assert _customer(client, fx, derived_setup)["properties"]["order_info"] == 3
+
+
+def test_a_chain_that_runs_out_partway_answers_the_aggregations_own_empty(
+    client: TestClient, fx: Fixture, derived_setup: dict
+) -> None:
+    """The multi-hop case, and the only one that reaches the short-circuit.
+
+    A single hop always has a base - the object being read - so "nothing
+    found" there is just an empty far side. It takes **two** hops for the
+    chain to run out *partway*: Grace has no orders, so the second hop has
+    nothing to start from and the walk stops. p.147's multi-hop is what makes
+    that reachable at all.
+
+    Both aggregations are checked because they take different exits: a count
+    of nothing is 0 and a collection of nothing is `[]`, and one shared
+    sentinel would have made the same question answer differently depending on
+    which end of the chain ran out.
+    """
+    two_hops = [derived_setup["link_id"], derived_setup["link_id"]]
+    _set_derivation(client, fx, derived_setup,
+                    {"links": two_hops, "aggregate": "count"})
+    # Ada's three orders all point back at Ada, so the walk lands on one
+    # customer - which is also evidence the second hop really ran.
+    assert _customer(client, fx, derived_setup)["properties"]["order_info"] == 1
+    grace = _customer(client, fx, derived_setup, "Grace Hopper")
+    assert grace["properties"]["order_info"] == 0
+
+    _set_derivation(client, fx, derived_setup, {
+        "links": two_hops, "aggregate": "collect_list", "property": "name",
+    })
+    assert _customer(client, fx, derived_setup)["properties"]["order_info"] == [
+        "Ada Lovelace"
+    ]
+    grace = _customer(client, fx, derived_setup, "Grace Hopper")
+    assert grace["properties"]["order_info"] == []
