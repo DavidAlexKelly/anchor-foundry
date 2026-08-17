@@ -573,6 +573,10 @@ export interface PropertyInput {
    * p.94–101). Null clears an existing formatter; omitted keeps nothing,
    * which is why the editor sends it explicitly on every save. */
   value_format?: import("./types").ValueFormat | null;
+  /** Ordered conditional formatting rules (Foundry `object-link-types`
+   * p.102–109). Null clears them; sent explicitly on every save for
+   * `value_format`'s reason. */
+  conditional_format?: import("./types").ConditionalRule[] | null;
 }
 
 /** What a saved search is saved *as*. Deliberately the same four parameters

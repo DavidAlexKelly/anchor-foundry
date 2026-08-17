@@ -1056,7 +1056,67 @@ export interface ObjectTypeProperty {
    * configured. Applied in the browser (`lib/value-format.ts`) — the stored
    * value stays raw, so filters and actions are unaffected. */
   value_format: ValueFormat | null;
+  /** Ordered conditional formatting rules, first match wins (Foundry
+   * `object-link-types` p.102–109). A sibling of `value_format` rather than
+   * part of it: one decides what the value *says*, the other how it *looks*,
+   * and p.102's example puts both on one property. */
+  conditional_format: ConditionalRule[] | null;
 }
+
+/** What a matching rule asks for. Every field optional, but the server
+ * refuses a rule with none of them — a rule that matches and changes nothing
+ * is the one outcome nobody can debug from a screen. */
+export interface PropertyStyle {
+  /** Hex, lowercased on the way in. */
+  colour?: string;
+  background?: string;
+  align?: "left" | "center" | "right";
+}
+
+/** One conditional formatting rule (Foundry `object-link-types` p.105's rule
+ * editor, label by label).
+ *
+ * `kind: "always"` is label A's fallback, and the server refuses one that is
+ * not last — everything after it is unreachable. "Math rule", label A's third
+ * option, is not built: arithmetic over properties is an expression language
+ * rather than a comparison.
+ *
+ * The comparison reads `property`, which **defaults to the property the rule
+ * is on but need not be it** (label B) — p.106's own example colours `Type`
+ * using the value of `Performance factor`. */
+export type ConditionalRule = PropertyStyle &
+  (
+    | { kind: "always" }
+    | ({
+        kind: "standard";
+        /** The property the comparison reads (label B). */
+        property: string;
+        /** p.105 label F: invert the whole rule. */
+        negate?: boolean;
+      } & ConditionalTest)
+  );
+
+/** Label C's comparison, and label D's sub-operator. Which of these is legal
+ * depends on the compared property's base type, and the server enforces it —
+ * a numeric range on a string is a rule whose author believes it matches. */
+export type ConditionalTest =
+  | { comparison: "is_null" }
+  | { comparison: "boolean"; value: boolean }
+  | ({ comparison: "string"; operator: "is_exactly" | "contains" | "starts_with" | "ends_with" }
+      & ConditionalComparand)
+  | ({ comparison: "numeric_exact" } & ConditionalComparand)
+  | {
+      comparison: "numeric_range";
+      /** Inclusive at both ends. At least one is present. */
+      min?: number;
+      max?: number;
+    };
+
+/** Label E: "Compare against a constant or a property reference." Exactly one
+ * of the two — the server refuses both together. */
+export type ConditionalComparand =
+  | { value: string | number; value_property?: undefined }
+  | { value_property: string; value?: undefined };
 
 /** A property's value formatter (Foundry `object-link-types` p.94–101).
  *

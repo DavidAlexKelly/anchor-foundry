@@ -22,6 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
+import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import type {
   ObjectTypeDetail,
@@ -53,6 +54,11 @@ export function PropertyRows({
   // property to keep in step.
   const [formatting, setFormatting] = useState<number | null>(null);
   const editing = formatting === null ? null : properties[formatting];
+  // Separate state from the formatter's: they are two dialogs about two
+  // different settings, and one index would make "which dialog is open" a
+  // second thing to track beside "which row".
+  const [colouring, setColouring] = useState<number | null>(null);
+  const colouringRow = colouring === null ? null : properties[colouring];
 
   return (
     <div>
@@ -66,6 +72,24 @@ export function PropertyRows({
           onSave={(next) => {
             const rows = [...properties];
             rows[formatting!] = { ...editing, value_format: next };
+            onChange(rows);
+          }}
+        />
+      )}
+      {colouringRow && (
+        <ConditionalFormatEditor
+          open
+          onClose={() => setColouring(null)}
+          propertyName={colouringRow.api_name || `property ${colouring! + 1}`}
+          // Every property, because a rule may read one this row is not on
+          // (`object-link-types` p.105 label B).
+          properties={properties
+            .filter((p) => p.api_name.trim())
+            .map((p) => ({ api_name: p.api_name, data_type: p.data_type }))}
+          value={colouringRow.conditional_format}
+          onSave={(next) => {
+            const rows = [...properties];
+            rows[colouring!] = { ...colouringRow, conditional_format: next };
             onChange(rows);
           }}
         />
@@ -150,6 +174,19 @@ export function PropertyRows({
               Format{prop.value_format ? " •" : ""}
             </button>
           )}
+          {/* Conditional formatting (`object-link-types` p.102-109). Unlike
+              the formatter above there is no base-type gate: `Is null` applies
+              to every type, so every property has at least one rule it could
+              legitimately carry. */}
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            aria-label={`Property ${index + 1} rules`}
+            onClick={() => setColouring(index)}
+          >
+            Rules{prop.conditional_format?.length ? ` (${prop.conditional_format.length})` : ""}
+          </button>
           <button
             type="button"
             className="btn danger"
@@ -363,6 +400,7 @@ export function EditObjectTypeDialog({
       // fails if it is not.
       visibility: p.visibility,
       value_format: p.value_format,
+      conditional_format: p.conditional_format,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(

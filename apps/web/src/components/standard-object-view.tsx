@@ -38,9 +38,10 @@ import { objects as objApi } from "@/lib/api";
 import { MapCanvas } from "@/components/canvas/map";
 import { toLatLon } from "@/components/canvas/map";
 import { PropertyValue } from "@/components/property-value";
+import { conditionalStyle } from "@/lib/conditional-format";
 import { visibleProperties } from "@/components/object-properties";
 import { plot } from "@/components/series-plot";
-import type { ObjectInstance, ObjectTypeProperty } from "@/lib/types";
+import type { ObjectInstance, ObjectTypeProperty, PropertyStyle } from "@/lib/types";
 
 /** A prominent `time_series` property, drawn (p.11).
  *
@@ -118,10 +119,14 @@ function ProminentCard({
   workspaceId,
   property,
   value,
+  style,
 }: {
   workspaceId: string;
   property: ObjectTypeProperty;
   value: unknown;
+  /** Evaluated by the caller, which is the one that holds the whole instance -
+   * a rule may compare against a property this card was never given. */
+  style: PropertyStyle | null;
 }) {
   // p.11: "Objects with prominent geohash, geoshape, or geotemporal series
   // reference properties will render on a Map." Ours is geopoint, and one
@@ -144,6 +149,7 @@ function ProminentCard({
             workspaceId={workspaceId}
             dataType={property.data_type}
             valueFormat={property.value_format}
+            style={style}
             value={value}
           />
         </div>
@@ -216,6 +222,7 @@ export function StandardObjectView({
                 workspaceId={workspaceId}
                 property={p}
                 value={instance.properties[p.api_name]}
+                style={conditionalStyle(p.conditional_format, instance.properties)}
               />
             ),
           )}
@@ -239,6 +246,7 @@ export function StandardObjectView({
                     workspaceId={workspaceId}
                     dataType={p.data_type}
                     valueFormat={p.value_format}
+                    style={conditionalStyle(p.conditional_format, instance.properties)}
                     value={instance.properties[p.api_name]}
                   />
                 </td>

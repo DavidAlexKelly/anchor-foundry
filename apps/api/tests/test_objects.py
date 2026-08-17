@@ -945,3 +945,69 @@ def test_a_value_format_can_be_changed_and_cleared(client: TestClient, fx: Fixtu
     assert cleared.status_code == 200, cleared.text
     weight = [p for p in cleared.json()["properties"] if p["api_name"] == "weight"][0]
     assert weight["value_format"] is None
+
+
+# ---- conditional formatting (ontology.md §1.2; object-link-types p.102-109) --
+def test_conditional_formatting_rules_survive_the_round_trip(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.103's own two rules, and p.105's fallback, in order. Read back rather
+    than asserted on the create response, and asserted as a *list* - the order
+    is the semantics, because first match wins."""
+    created = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"cfmt_ok_{fx.tag}", "display_name": "Coloured",
+            "properties": [
+                {"api_name": "id", "data_type": "string"},
+                {"api_name": "performance", "data_type": "float"},
+                {"api_name": "kind", "data_type": "string", "conditional_format": [
+                    {"comparison": "string", "operator": "is_exactly",
+                     "value": "A320", "colour": "#1A7F37"},
+                    # p.105-106: the logic reads another property; the colour
+                    # still lands on this one.
+                    {"property": "performance", "comparison": "numeric_range",
+                     "max": 0.8, "colour": "#b91c1c"},
+                    {"kind": "always", "colour": "#6b7280"},
+                ]},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert created.status_code == 201, created.text
+    type_id = created.json()["id"]
+
+    r = client.get(f"{wbase(fx)}/object-types/{type_id}", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    by_name = {p["api_name"]: p["conditional_format"] for p in r.json()["properties"]}
+    assert by_name["id"] is None
+    rules = by_name["kind"]
+    assert [rule["kind"] for rule in rules] == ["standard", "standard", "always"]
+    assert rules[0]["property"] == "kind" and rules[0]["colour"] == "#1a7f37"
+    assert rules[1]["property"] == "performance" and rules[1]["max"] == 0.8
+
+
+def test_a_rule_naming_a_missing_property_is_refused_by_the_route(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The refusal that can only happen where the whole type is visible: the
+    rule is on `kind`, and it names a property nothing declares."""
+    r = client.post(
+        f"{wbase(fx)}/object-types",
+        headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"cfmt_bad_{fx.tag}", "display_name": "Bad rule",
+            "properties": [
+                {"api_name": "id", "data_type": "string"},
+                {"api_name": "kind", "data_type": "string", "conditional_format": [
+                    {"property": "altitude", "comparison": "is_null",
+                     "colour": "#6b7280"},
+                ]},
+            ],
+            "title_property": "id",
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert "no property named 'altitude'" in r.json()["detail"]
+    assert "kind: rule 1" in r.json()["detail"]

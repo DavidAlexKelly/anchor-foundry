@@ -86,6 +86,11 @@ class PropertyIn(BaseModel):
     # because the rules that matter are about the property's *base type* -
     # which a per-field pydantic model cannot see. Null means unformatted.
     value_format: dict[str, Any] | None = None
+    # Ordered conditional formatting rules, first match wins (Foundry
+    # `object-link-types` p.102-109). Free-form here for `value_format`'s
+    # reason and one more: a rule may name another property, so whether it is
+    # legal depends on the *other* properties in the same request.
+    conditional_format: list[dict[str, Any]] | None = None
 
 
 class PropertyOut(BaseModel):
@@ -98,6 +103,7 @@ class PropertyOut(BaseModel):
     sort_order: int
     visibility: str = "normal"
     value_format: dict[str, Any] | None = None
+    conditional_format: list[dict[str, Any]] | None = None
 
 
 class ObjectTypeSummary(BaseModel):

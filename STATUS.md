@@ -3246,6 +3246,31 @@ Twelve mutations, all red: six on the panel, six on the transform. **1082 API te
 
 Thirty-six mutations, all red: thirteen on the validator, fourteen on the formatter, nine on the wiring and the editor. Two of those nine survived their first run - they are the two above, and they went red once the tests (and, in the second case, the editor) were fixed. **1104 API tests** (was 1082), **155 unit** (was 137), **154 browser** (was 149).
 
+
+### 158. Conditional formatting (this session)
+
+The row §157 corrected. `ontology.md` §1.2 claimed this was done, citing §83 — the Object Table's columns, sort and paging — and nothing of the sort existed. It exists now: `object-link-types` p.102-109, a property's values coloured by rules.
+
+**An ordered list, and the order is the semantics.** p.105 describes an "Always true" rule used "as a fallback in case your other rules don't match", which only means anything if rules are tried in sequence and the first match wins. So a rule after an always-true one is unreachable, and unreachable is refused rather than allowed — a rule that is on screen looking configured and can never fire is worse than one that is missing.
+
+**It composes with §157 rather than competing with it.** One property can carry a formatter *and* rules, and p.102's own example does. The rule compares the **raw stored value**; the formatter decides the text. Handed `"$100K"`, a threshold rule would never fire, because a string never was greater than anything. The browser test is the only place that claim can be made — it needs both settings on one property at once, which neither unit suite has — and it is the reason that test exists.
+
+**This is not the ordered-comparison rule the stores refuse, and the distinction is worth stating** because it looks like a contradiction. `OPERATORS` excludes ordered operators (§52) because instance properties are stored untyped and Postgres and OpenSearch would disagree about whether "250" sorts before "40". Nothing here touches a store: the comparison happens in a browser, on a value already fetched, against a property the object type *declares* as numeric. The declaration is what makes it safe — which is exactly why a numeric comparison is allowed on a numeric property and refused on a string one (p.105 label C).
+
+**A rule paints one property and may read another** (p.105-106: choose `Performance factor` in the logic, the colour still shows on `Type`). That is why validation needs the whole object type rather than the one property, and why the evaluator takes the whole instance rather than one value.
+
+**The refusals, each a rule that would sit in an editor looking configured while doing nothing:** a comparison that does not fit the compared property's type; a rule naming a property the type does not declare; an unbounded numeric range, which is an always-true rule wearing a comparison; a boolean comparison whose value is the *string* `"true"`, which would never match the stored boolean; and a rule with no colour, no background and no alignment — the one outcome nobody can debug from a screen.
+
+**Absence is not a match, and it is not a mismatch either.** The rule that took two attempts. "Is not exactly A320" is *true* of an object with no type at all, so an inverted rule evaluated-then-flipped would quietly colour every incomplete row — the rows it knows least about. The guard has to sit before the negation, not inside the comparison. `is_null` is the comparison for asking about absence, and it is the one that wants the empty value.
+
+**Three mutations survived because no browser test ever saved a rule.** The editor tests stopped at "Apply is enabled", so dropping the rules on save, writing them nowhere, and failing to reset a stale comparison were all invisible. One test that builds a rule, applies it, saves the type and looks at an object killed all three — and it also carries §157's lesson forward by asserting that a *different* property's rules survived an edit that was about something else.
+
+**Three more were tests too weak to tell two behaviours apart**, in the unit suite: `starts_with` and `ends_with` were indistinguishable from `contains` until a case put the substring somewhere the operator does not look, and an inclusive range was only ever asserted at one end. A fourth was a bad mutation of mine — JavaScript coerced the string back to a number, so the "compares as text" mutant was never comparing as text.
+
+**And an assertion that waited thirty seconds for something that was never coming.** An unmatched value renders as bare text, deliberately: an unstyled wrapper around every cell of every table is a lot of DOM for nothing. So `assert colour != GREEN` was asking for the colour of an element that does not exist. The absence of the span *is* the evidence, and asserting it is both faster and more precise. Worth recording beside the `to_have_count(0)` lesson from §157, because it is the same mistake mirrored: there, absence was asserted where presence had not been established; here, presence was asserted where absence was the point.
+
+Forty-three mutations, all red: eighteen on the validator, fifteen on the evaluator, ten on the wiring and the editor. **1128 API tests** (was 1104), **174 unit** (was 155), **159 browser** (was 154).
+
 ---
 ---
 ---
