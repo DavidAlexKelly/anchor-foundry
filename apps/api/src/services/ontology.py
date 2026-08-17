@@ -28,7 +28,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # Re-exported so callers keep saying ontology.coerce_property_value; the
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
-from . import conditional_format, value_format
+from . import conditional_format, derived_properties, value_format
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
     PropertyValueError,
@@ -141,13 +141,25 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         conn,
         """
         SELECT id, api_name, display_name, data_type, required, description, sort_order,
-               visibility, value_format, conditional_format, edit_only
+               visibility, value_format, conditional_format, edit_only,
+               derivation
           FROM object_type_properties
          WHERE object_type_id = :tid ORDER BY sort_order, api_name
         """,
         {"tid": str(type_id)},
     )
     return [dict(r) for r in rows]
+
+
+def derived_property_names(properties: list[dict[str, Any]]) -> set[str]:
+    """The api_names calculated from linked objects rather than stored (p.143).
+
+    Read wherever "which properties does this object actually have a value
+    for" is the question: the sync (which never produces one), the action
+    write-back (which must refuse to write one - p.143 calls them read-only),
+    and the instance read (which fills them in).
+    """
+    return {str(p["api_name"]) for p in properties if p.get("derivation")}
 
 
 def edit_only_properties(properties: list[dict[str, Any]]) -> set[str]:
@@ -229,6 +241,10 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             property_name=api,
             types_by_property=types_by_property,
         )
+        if prop.get("derivation") is not None:
+            # p.148's own list, checked here because each item is a fact about
+            # the *property* rather than about the chain.
+            derived_properties.check_compatible(prop, property_name=api)
 
 
 async def create_type(
@@ -247,6 +263,16 @@ async def create_type(
     if not _TYPE_API_RE.match(api_name):
         raise ValueError(f"invalid object type api_name {api_name!r}")
     _validate_properties(properties)
+    for prop in properties:
+        if prop.get("derivation") is not None:
+            # Not a limitation so much as a consequence: a derived property
+            # follows link types *from this object type*, and a link type can
+            # only be created against types that already exist. At create time
+            # there are none, so no chain named here could be a legal one.
+            raise ValueError(
+                f"{prop['api_name']}: add a derived property after the object "
+                "type exists - its links have to exist first"
+            )
     if title_property is not None and title_property not in {
         str(p["api_name"]) for p in properties
     }:
@@ -305,10 +331,12 @@ async def _write_property_rows(
             INSERT INTO object_type_properties (object_type_id, api_name, display_name,
                                                 data_type, required, description, sort_order,
                                                 visibility, value_format,
-                                                conditional_format, edit_only)
+                                                conditional_format, edit_only,
+                                                derivation)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
-                    CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly)
+                    CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
+                    CAST(:deriv AS jsonb))
             RETURNING id
             """,
             {
@@ -331,6 +359,11 @@ async def _write_property_rows(
                     else None
                 ),
                 "editonly": bool(prop.get("edit_only", False)),
+                "deriv": (
+                    json.dumps(prop["derivation"])
+                    if prop.get("derivation") is not None
+                    else None
+                ),
             },
         )
         assert prow is not None
@@ -631,6 +664,19 @@ async def update_type(
     """
     await get_type(conn, workspace_id, type_id)
     _validate_properties(properties)
+    # The chain is checked against the ontology rather than against itself:
+    # whether the links join up, and whether any hop can reach more than one
+    # object, are facts only the workspace's link types can answer.
+    links_by_id = {
+        str(link["id"]): link for link in await list_link_types(conn, workspace_id)
+    }
+    for prop in properties:
+        prop["derivation"] = derived_properties.parse(
+            prop.get("derivation"),
+            property_name=str(prop["api_name"]),
+            link_types=links_by_id,
+            object_type_id=str(type_id),
+        )
     if not properties:
         raise ValueError("an object type needs at least one property")
     if title_property is not None and title_property not in {

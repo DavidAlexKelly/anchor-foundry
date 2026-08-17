@@ -94,6 +94,11 @@ class PropertyIn(BaseModel):
     # No column in any backing dataset (Foundry `object-link-types` p.113).
     # Written by actions straight to the instance and preserved across syncs.
     edit_only: bool = False
+    # Where a derived property gets its value (Foundry `object-link-types`
+    # p.143). Free-form here and checked in `services/derived_properties`,
+    # because whether a chain is legal is a fact about the workspace's link
+    # types rather than about this request.
+    derivation: dict[str, Any] | None = None
 
 
 class PropertyOut(BaseModel):
@@ -108,6 +113,7 @@ class PropertyOut(BaseModel):
     value_format: dict[str, Any] | None = None
     conditional_format: list[dict[str, Any]] | None = None
     edit_only: bool = False
+    derivation: dict[str, Any] | None = None
 
 
 class ObjectTypeSummary(BaseModel):
