@@ -351,6 +351,10 @@ async def execute_action(
         )
         properties = await ontology_service.list_properties(conn, object_type_id)
         property_types = {p["api_name"]: p["data_type"] for p in properties}
+        # The subject's properties with no dataset column (p.113). Only the
+        # subject's: a rule writing another object's property is checked
+        # against *that* type's source, and edit-only there is not built.
+        edit_only = ontology_service.edit_only_properties(properties)
         column_mappings: dict[str, str] = _parse_json(source["column_mappings"])
         # Normalised, not just checked: a geopoint submitted as "51.5,-0.12"
         # is stored in the same shape as one that arrived from a sync.
@@ -514,6 +518,7 @@ async def execute_action(
             rules=action_type["rules"],
             property_types=property_types,
             mapped_properties=set(column_mappings.values()),
+            edit_only=edit_only,
             link_types=link_types,
         )
         # p.116, at apply time and before anything is written. Only what this
@@ -586,11 +591,16 @@ async def execute_action(
         reverse_map = {prop: col for col, prop in column_mappings.items()}
         # The dataset copy gets the flat form - a Parquet column is a scalar
         # and a geopoint is not (ontology.column_value).
+        # **Edit-only properties are not in this dict, by definition** (p.113):
+        # they have no column, so there is nothing to append. They are still in
+        # `values`, which is what reaches the instance store below - that split
+        # is the whole of what "edit-only" means in the write path.
         column_updates = {
             reverse_map[prop]: ontology_service.column_value(
                 property_types.get(prop, "string"), value
             )
             for prop, value in values.items()
+            if prop not in edit_only
         }
         local_path = await anyio.to_thread.run_sync(
             storage.local_path, str(source["s3_location"])

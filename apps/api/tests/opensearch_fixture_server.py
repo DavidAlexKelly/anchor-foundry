@@ -376,6 +376,31 @@ def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
     ]
 
 
+def _merge(existing: dict, doc: dict) -> dict:
+    """OpenSearch's `_update` with a partial `doc`: a **recursive** merge.
+
+    This used to be `{**existing, **doc}`, which is a *shallow* one - and the
+    difference is not academic. Every instance keeps its values under a single
+    nested `properties` object, so a shallow merge replaces the whole of it and
+    a partial update silently deletes every key it did not mention. A real
+    cluster does not do that, so the fixture was making the gateway look wrong
+    in a way no cluster would reproduce, and would equally have hidden a
+    gateway that relied on the replacement.
+
+    Found while building edit-only properties (`object-link-types` p.113),
+    which is the first feature whose correctness *depends* on the merge: an
+    edit-only value has no dataset column, so a sync's partial document is the
+    only thing standing between it and deletion.
+    """
+    out = dict(existing)
+    for key, value in doc.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -474,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                                          "error": {"type": "mapper_parsing_exception",
                                                    "reason": str(exc)}}})
                 continue
-            bucket[doc_id] = {**(existing or {}), **doc}
+            bucket[doc_id] = _merge(existing or {}, doc)
             items.append({"update": {"_id": doc_id, "status": 200,
                                      "result": "updated" if existing else "created"}})
         self._send(200, {"errors": any("error" in i["update"] for i in items), "items": items})

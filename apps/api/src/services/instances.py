@@ -141,6 +141,27 @@ async def upsert_instances(
     rows: list[tuple[str, dict[str, Any]]],
     synced_at: datetime,
 ) -> int:
+    """Write a sync's rows, **merging over the values a dataset cannot hold**.
+
+    `properties` here is what the backing dataset says: `extract_rows` builds
+    it from `column_mappings` alone, so an **edit-only** property (Foundry
+    `object-link-types` p.113) is never in it. The upsert used to be
+    ``properties = EXCLUDED.properties``, which meant every sync silently
+    deleted values that had no column to come back from - the values whose
+    whole point is that they live only here.
+
+    **The two stores disagreed about this, and neither raised.** OpenSearch's
+    update takes a partial ``doc`` and merges it, so the same sync preserved
+    those keys there and destroyed them on Postgres. That is the exact class of
+    fault ``OPERATORS`` refuses ordered comparisons to avoid - one answer per
+    store, no error - and it was already in the write path. Postgres now merges
+    too, and a test asserts both stores agree rather than asserting each
+    separately, so the next divergence fails rather than hides.
+
+    The dataset's values are layered **on top**: anything mapped is the
+    dataset's to say, which keeps a sync authoritative over exactly what it
+    owns and no more.
+    """
     for primary_key, properties in rows:
         await conn.execute(
             text(
@@ -149,7 +170,9 @@ async def upsert_instances(
                     (object_type_id, source_id, primary_key, properties, updated_at)
                 VALUES (:tid, :sid, :pk, CAST(:props AS jsonb), :ts)
                 ON CONFLICT (source_id, primary_key)
-                DO UPDATE SET properties = EXCLUDED.properties, updated_at = EXCLUDED.updated_at
+                DO UPDATE SET
+                    properties = object_instances.properties || EXCLUDED.properties,
+                    updated_at = EXCLUDED.updated_at
                 """
             ),
             {

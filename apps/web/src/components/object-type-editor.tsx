@@ -159,6 +159,24 @@ export function PropertyRows({
             />
             required
           </label>
+          {/* Edit-only (Foundry `object-link-types` p.113): this property has
+              no column in any backing dataset. Beside `required` rather than
+              in a dialog because it is one bit, and because it changes what
+              *every* other control on the row means - a mapped column, a sync,
+              an action write-back. */}
+          <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              aria-label={`Property ${index + 1} edit-only`}
+              checked={!!prop.edit_only}
+              onChange={(e) => {
+                const next = [...properties];
+                next[index] = { ...prop, edit_only: e.target.checked };
+                onChange(next);
+              }}
+            />
+            edit-only
+          </label>
           {/* Value formatting (Foundry `object-link-types` p.94-101). Offered
               only where it applies (p.95) - a Format button on a string
               property would open a dialog whose every answer the server
@@ -401,6 +419,7 @@ export function EditObjectTypeDialog({
       visibility: p.visibility,
       value_format: p.value_format,
       conditional_format: p.conditional_format,
+      edit_only: p.edit_only,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(

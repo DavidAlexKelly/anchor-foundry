@@ -3293,6 +3293,35 @@ Forty-three mutations, all red: eighteen on the validator, fifteen on the evalua
 Eight mutations, all red — plus one that produced no test output at all, which was a malformed edit of mine rather than a survivor: it broke the parse, so the suite never ran. Worth noting because "no output" and "all green" look similar in a mutation log and mean opposite things. **1128 API tests**, **179 unit** (was 174), **163 browser** (was 159).
 
 ---
+
+### 160. Edit-only properties, and a sync that was deleting them (this session)
+
+`object-link-types` p.113: a property "not directly mapped to a column in the backing dataset of the object type". Useful for exactly what p.113 says - storing something alongside an object type without changing the dataset underneath it.
+
+**The feature is one bit; the substance is what a sync must not do.** An edit-only value has no column to come back from, so the instance store is the only place it exists. The upsert was `properties = EXCLUDED.properties` - a wholesale replace - and a sync's row is built from `column_mappings` alone, so *every sync deleted every value that had no column*. Postgres now merges, with the dataset's values layered on top: a sync stays authoritative over exactly what it owns and no more.
+
+**A stored flag, not "absent from every mapping".** The two are the same state and different intentions. A property nobody mapped might be a deliberate edit-only property, or a column somebody renamed upstream - and telling those apart is precisely what schema drift detection (0018) is for. Deriving the flag would make drift undetectable for every property it happened to describe. The existing `vip_note` fixture in `test_actions.py` is the other case, and it still gets refused, which is what keeps the exception as narrow as it claims.
+
+**And the OpenSearch fixture server was lying about a merge.** Its bulk update did `{**existing, **doc}` - a *shallow* merge - while a real cluster's `_update` with a partial `doc` merges recursively. Every instance keeps its values under one nested `properties` object, so the shallow version replaced the whole thing: a partial update silently deleted every key it did not mention. That is the opposite of what a cluster does, so the fixture was making the gateway look wrong in a way no deployment would reproduce, and would equally have hidden a gateway that relied on the replacement. This is the first feature whose correctness *depends* on the merge, which is why it surfaced now and not in §16. The standing caveat still holds - the fixture cannot prove a real cluster agrees - but it now models the documented behaviour instead of contradicting it.
+
+Two stores, then, and neither was right, for the same reason. The claim is written once and both answer it.
+
+**The write-back exception is deliberately narrow, and the limits are the interesting part.** A `modify_object` rule on the action's own subject may write an edit-only property. Three things still refuse one:
+
+* a **link** property, because a link is a join over stored data (0027) - a link with no column is one no sync could ever re-derive;
+* **`create_object`**, because a creation's dataset row *is* how the object comes into existence, and an edit-only value has no column in that row and no instance yet to write to. Refused by name rather than dropped, which would be a value somebody supplied and never saw again;
+* a property that is merely unmapped, per above.
+
+**§154's sync report needed a subtraction.** p.116's missing-required count is computed from the rows a dataset produced, and an edit-only property is never in them - so a *required* edit-only property would have been counted missing on every row of every sync, for ever, saying nothing about the data. It comes out of that set. Actions still refuse to empty one, which is where the rule is actually enforceable, and that split is p.116's own.
+
+Eight mutations, all red. One near-miss worth recording: the mutation harness backed up `src/services/actions.py` and `src/routes/actions.py` to the same scratch filename, so the second clobbered the first. The run aborted on a failed pre-check rather than restoring the wrong file over a source - every mutation asserts its target text is present before writing, and that guard turned a silent corruption into a stopped run.
+
+**A flaky test of my own, found by this unit's full run and fixed here.** §156's "a traversal can be drawn" failed about one run in four with "still 3 after 20000ms" - the traversal never persisted. The test clicked Save and then called `settled`, which only proves the canvas *drew*, and it had already drawn: so the navigation that followed could start while the save was still in flight. It now waits on the definition response itself. Worth recording because the first four data points pointed at a regression in this unit - it failed twice with the change and passed once without - and only running it repeatedly showed the change had nothing to do with it. A test that fails a quarter of the time will frame whatever is in the diff.
+
+**1135 API tests** (was 1128), 179 unit, 163 browser.
+
+
+---
 ---
 ---
 ---

@@ -577,6 +577,8 @@ export interface PropertyInput {
    * p.102–109). Null clears them; sent explicitly on every save for
    * `value_format`'s reason. */
   conditional_format?: import("./types").ConditionalRule[] | null;
+  /** No dataset column, by design (Foundry `object-link-types` p.113). */
+  edit_only?: boolean;
 }
 
 /** What a saved search is saved *as*. Deliberately the same four parameters

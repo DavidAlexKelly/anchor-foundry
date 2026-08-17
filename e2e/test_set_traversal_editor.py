@@ -124,7 +124,16 @@ def test_a_traversal_can_be_drawn_and_it_narrows_the_table(page, module):
     expect(link).to_be_enabled()
     link.select_option(label=module.orders_hop)
 
-    page.get_by_role("button", name="Save", exact=True).click()
+    # **Waited on the response, not on the render.** `settled` only proves the
+    # canvas drew, which it had already done - so the navigation below could
+    # start while the save was still in flight, and about one run in four
+    # reopened the module with the traversal never persisted. The definition
+    # PUT is the thing that has to finish, so that is the thing to wait for.
+    with page.expect_response(
+        lambda r: "/definition" in r.url and r.request.method in ("PUT", "POST")
+    ) as saved:
+        page.get_by_role("button", name="Save", exact=True).click()
+    assert saved.value.ok, saved.value.status
     settled(page)
 
     open_module(page, module)
