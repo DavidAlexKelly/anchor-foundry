@@ -3424,6 +3424,22 @@ The test for it is the part worth copying: it **waits on the refetch** rather th
 
 Nine mutations, all red: five on the pure adoption rules, four on the browser claims (the globe, the two disabled controls, and the carry-through). **1187 API tests**, **200 unit** (was 193), **173 browser** (was 167).
 
+### 166. A restore that was not one (this session)
+
+**The defect §164 found, fixed.** `object_type_versions` recorded six fields per property. Every unit that added a seventh - visibility (§42), value formatting (§157), conditional formatting (§158), edit-only (§160), derived properties (§161) - added a column to `object_type_properties` and did not notice the snapshot. So rolling back to *any* earlier version erased all five, with no error and nothing in the history to say it had happened. §164's `shared_property_id` would have been the sixth; adding it is what made the pattern visible.
+
+**Why nothing caught it for five units.** The failure is a *missing key*, and there is no general test for a missing key - only one per field, which is what this unit adds: seven tests, each configuring one setting, saving it away, rolling back, and asserting it returned. A suite that only covered the fields somebody had already forgotten would be a suite that missed the next one, so `required` gets a test too even though it was never lost.
+
+The rule is now written where it can be seen: **a new column on `object_type_properties` is a new key in `_snapshot_version`**, said in that function's docstring, next to the list.
+
+**Two references can go missing between a version and its restore, and they are treated differently.** A **shared property** that has since been deleted is *dropped* - p.185 already decided that ("all object types using this shared property will revert to regular properties"), and refusing would let a delete elsewhere permanently block a rollback here over a decision the delete had made. A **derivation** whose link types have gone is *refused*: nothing documents what a derived property becomes when its chain stops joining up, dropping it silently would put back something that is not the version, and keeping it would produce a column of blanks - which is exactly what `derived_properties.parse` exists to refuse. The asymmetry is the documentation, not a compromise.
+
+**What cannot be fixed, and is recorded rather than papered over:** versions written before this change still hold six keys, so restoring one still clears the other six. The data was never captured.
+
+Nine mutations, all red - including reverting the snapshot to its original six fields, which fails eight tests across two files. **1197 API tests** (was 1187), 200 unit, 173 browser.
+
+**The sandbox rewound the checkout again mid-unit** (HEAD back at `16bed37`, `node_modules` intact, the database back at migration 0040). Third time; the recovery in the notes below worked unchanged. Nothing was lost because §164 and §165 were already merged - which is the argument for the merge-per-unit rhythm rather than a long-lived branch.
+
 
 
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.
