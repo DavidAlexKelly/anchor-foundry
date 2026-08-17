@@ -28,7 +28,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # Re-exported so callers keep saying ontology.coerce_property_value; the
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
-from . import value_format
+from . import conditional_format, value_format
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
     PropertyValueError,
@@ -141,7 +141,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         conn,
         """
         SELECT id, api_name, display_name, data_type, required, description, sort_order,
-               visibility, value_format
+               visibility, value_format, conditional_format
           FROM object_type_properties
          WHERE object_type_id = :tid ORDER BY sort_order, api_name
         """,
@@ -183,6 +183,12 @@ def is_missing(value: Any) -> bool:
 
 
 def _validate_properties(properties: list[dict[str, Any]]) -> None:
+    # Built first, because a conditional formatting rule may compare against a
+    # *different* property (`object-link-types` p.105) - so validating one
+    # property needs the base type of every property on the type.
+    types_by_property = {
+        str(p["api_name"]): str(p["data_type"]) for p in properties
+    }
     seen: set[str] = set()
     for prop in properties:
         api = str(prop["api_name"])
@@ -206,6 +212,11 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             prop.get("value_format"),
             data_type=str(prop["data_type"]),
             property_name=api,
+        )
+        prop["conditional_format"] = conditional_format.parse(
+            prop.get("conditional_format"),
+            property_name=api,
+            types_by_property=types_by_property,
         )
 
 
@@ -282,10 +293,11 @@ async def _write_property_rows(
             """
             INSERT INTO object_type_properties (object_type_id, api_name, display_name,
                                                 data_type, required, description, sort_order,
-                                                visibility, value_format)
+                                                visibility, value_format,
+                                                conditional_format)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
-                    CAST(:vfmt AS jsonb))
+                    CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb))
             RETURNING id
             """,
             {
@@ -300,6 +312,11 @@ async def _write_property_rows(
                 "vfmt": (
                     json.dumps(prop["value_format"])
                     if prop.get("value_format") is not None
+                    else None
+                ),
+                "cfmt": (
+                    json.dumps(prop["conditional_format"])
+                    if prop.get("conditional_format") is not None
                     else None
                 ),
             },
