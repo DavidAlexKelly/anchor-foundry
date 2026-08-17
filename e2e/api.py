@@ -164,6 +164,7 @@ class Module:
         visibility: dict[str, str] | None = None,
         types: dict[str, str] | None = None,
         formats: dict[str, dict | None] | None = None,
+        rules: dict[str, list[dict]] | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
         instances."""
@@ -202,6 +203,10 @@ class Module:
                         # p.94-101). Absent means unformatted, which is what
                         # every property of every other fixture is.
                         **({"value_format": (formats or {})[c]} if c in (formats or {}) else {}),
+                        # Ordered conditional formatting rules, first match
+                        # wins (`object-link-types` p.102-109).
+                        **({"conditional_format": (rules or {})[c]}
+                           if c in (rules or {}) else {}),
                     }
                     for c in columns
                 ],

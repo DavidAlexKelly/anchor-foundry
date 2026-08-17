@@ -451,6 +451,23 @@ button { font: inherit; cursor: pointer; }
   font-size: 13px;
 }
 
+/* Conditional formatting rules (`object-link-types` p.104's rule editor). */
+.cf-rule {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+.cf-rule legend {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  padding: 0 4px;
+}
+.cf-rule .row-actions { flex-wrap: wrap; gap: 6px; }
+.cf-rule input[type="text"], .cf-rule input:not([type]) { width: 110px; }
+.cf-rule input[type="number"] { width: 78px; }
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
