@@ -20,6 +20,8 @@ function prop(
     conditional_format: null,
     edit_only: false,
     derivation: null,
+    shared_property_id: null,
+    shared_property_api_name: null,
   };
 }
 

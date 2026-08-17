@@ -28,7 +28,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # Re-exported so callers keep saying ontology.coerce_property_value; the
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
-from . import conditional_format, derived_properties, value_format
+from . import conditional_format, derived_properties, shared_properties, value_format
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
     PropertyValueError,
@@ -137,18 +137,52 @@ async def get_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) -> 
 
 
 async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str, Any]]:
+    """The type's properties, with any shared metadata already applied.
+
+    The join is here rather than at the call sites because *every* reader of a
+    property wants the resolved answer: p.178's whole point is that editing a
+    shared property updates the object types using it, and a reader that saw
+    the stored row would see the value from the last time the type was saved.
+    `shared_property_api_name` comes back too, so an application can draw
+    p.178's globe without a second query.
+    """
     rows = await fetch_all(
         conn,
         """
-        SELECT id, api_name, display_name, data_type, required, description, sort_order,
-               visibility, value_format, conditional_format, edit_only,
-               derivation
-          FROM object_type_properties
-         WHERE object_type_id = :tid ORDER BY sort_order, api_name
+        SELECT p.id, p.api_name, p.display_name, p.data_type, p.required,
+               p.description, p.sort_order, p.visibility, p.value_format,
+               p.conditional_format, p.edit_only, p.derivation,
+               p.shared_property_id,
+               sp.api_name AS shared_property_api_name,
+               sp.display_name AS sp_display_name,
+               sp.description AS sp_description,
+               sp.data_type AS sp_data_type,
+               sp.visibility AS sp_visibility,
+               sp.value_format AS sp_value_format
+          FROM object_type_properties p
+          LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+         WHERE p.object_type_id = :tid ORDER BY p.sort_order, p.api_name
         """,
         {"tid": str(type_id)},
     )
-    return [dict(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        full = dict(row)
+        shared = (
+            {
+                "api_name": full["shared_property_api_name"],
+                "display_name": full["sp_display_name"],
+                "description": full["sp_description"],
+                "data_type": full["sp_data_type"],
+                "visibility": full["sp_visibility"],
+                "value_format": full["sp_value_format"],
+            }
+            if full["shared_property_id"] is not None
+            else None
+        )
+        prop = {k: v for k, v in full.items() if not k.startswith("sp_")}
+        out.append(shared_properties.resolve(prop, shared))
+    return out
 
 
 def derived_property_names(properties: list[dict[str, Any]]) -> set[str]:
@@ -247,6 +281,79 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             derived_properties.check_compatible(prop, property_name=api)
 
 
+async def _apply_shared(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    properties: list[dict[str, Any]],
+    *,
+    already_attached: dict[str, str],
+) -> None:
+    """Check every attachment to a shared property, then resolve it in place.
+
+    Runs after `_validate_properties`, which is not an ordering detail: that
+    function normalises `value_format`, and comparing a raw formatter against a
+    stored normalised one would refuse a payload that means exactly the same
+    thing.
+
+    Resolving *before* the write is what keeps `object_type_versions` (db 0028)
+    honest - a snapshot has to record what the type was, and "whatever the
+    shared property says today" is not a record of anything.
+
+    **Attaching adopts; editing an attached property refuses.** p.187 and p.188
+    are two different moments and this is the line between them. Choosing a
+    shared property *is* choosing its metadata, so a fresh attach takes the
+    inherited fields whatever the request said about them - otherwise a client
+    would have to read the shared property back and echo it just to point at
+    it. Once attached, p.188 disables those fields, and a contradicting value
+    is refused rather than discarded: silently dropping somebody's edit is the
+    failure this repo keeps having to fix (§157, §160, §163).
+
+    `already_attached` maps api_name to the shared property id the stored row
+    carries, so "already attached to *this* shared property" is the question
+    being asked - swapping one shared property for another is an attach.
+    """
+    ids = {
+        UUID(str(p["shared_property_id"]))
+        for p in properties
+        if p.get("shared_property_id")
+    }
+    known = await shared_properties.by_id(conn, workspace_id, ids)
+    for prop in properties:
+        raw = prop.get("shared_property_id")
+        if not raw:
+            prop["shared_property_id"] = None
+            continue
+        shared = known.get(str(raw))
+        if shared is None:
+            raise shared_properties.SharedPropertyError(
+                f"{prop['api_name']}: no shared property {raw} in this workspace"
+            )
+        if already_attached.get(str(prop["api_name"])) == str(raw):
+            shared_properties.check_attachment(prop, shared)
+        else:
+            # A fresh attach still has to satisfy p.181's base type rule; only
+            # the inherited-metadata refusal is what the moment excuses.
+            shared_properties.check_base_type(prop, shared)
+        prop.update(shared_properties.resolve(prop, shared))
+
+
+async def _attached_shared_ids(
+    conn: AsyncConnection, type_id: UUID
+) -> dict[str, str]:
+    """Which of the type's stored properties already point at which shared
+    property, keyed by api_name - the one identifier that survives an edit
+    (p.188, and 0028's note that property ids do not)."""
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT api_name, shared_property_id FROM object_type_properties
+         WHERE object_type_id = :tid AND shared_property_id IS NOT NULL
+        """,
+        {"tid": str(type_id)},
+    )
+    return {str(r["api_name"]): str(r["shared_property_id"]) for r in rows}
+
+
 async def create_type(
     conn: AsyncConnection,
     *,
@@ -263,6 +370,8 @@ async def create_type(
     if not _TYPE_API_RE.match(api_name):
         raise ValueError(f"invalid object type api_name {api_name!r}")
     _validate_properties(properties)
+    # Nothing is stored yet, so every attachment here is a fresh one.
+    await _apply_shared(conn, workspace_id, properties, already_attached={})
     for prop in properties:
         if prop.get("derivation") is not None:
             # Not a limitation so much as a consequence: a derived property
@@ -332,11 +441,11 @@ async def _write_property_rows(
                                                 data_type, required, description, sort_order,
                                                 visibility, value_format,
                                                 conditional_format, edit_only,
-                                                derivation)
+                                                derivation, shared_property_id)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
-                    CAST(:deriv AS jsonb))
+                    CAST(:deriv AS jsonb), :shared)
             RETURNING id
             """,
             {
@@ -362,6 +471,14 @@ async def _write_property_rows(
                 "deriv": (
                     json.dumps(prop["derivation"])
                     if prop.get("derivation") is not None
+                    else None
+                ),
+                # p.187: attaching is part of saving the object type, so the
+                # reference is written with the rest of the property rather
+                # than by a separate call somebody could forget to make.
+                "shared": (
+                    str(prop["shared_property_id"])
+                    if prop.get("shared_property_id")
                     else None
                 ),
             },
@@ -664,6 +781,12 @@ async def update_type(
     """
     await get_type(conn, workspace_id, type_id)
     _validate_properties(properties)
+    await _apply_shared(
+        conn,
+        workspace_id,
+        properties,
+        already_attached=await _attached_shared_ids(conn, type_id),
+    )
     # The chain is checked against the ontology rather than against itself:
     # whether the links join up, and whether any hop can reach more than one
     # object, are facts only the workspace's link types can answer.
