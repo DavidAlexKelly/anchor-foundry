@@ -115,7 +115,7 @@ Per-side display names and self-links are both small and both currently impossib
 | — media reference → dedicated media viewer | ◑ | §147 — an attachment holding an image, video or audio renders inline; the *media set* Foundry references is genuinely absent (decision 0009 declines to build one), so the property type stays ○ |
 | — time series → interactive chart | ✅ | §149 — a prominent `time_series` property draws its line from the points in the dataset behind it (decision 0009); bucketed by day, because a card is not an analysis surface |
 | Normal properties in a regular table; hidden properties not shown | ✅ | |
-| **Linked objects component** — grouped by link type | ◑ | the groups are there (§18), sit *inside* the view rather than beside it (p.11), and a linked object's properties preview inline without navigating (§145) — typed, prominent first, hidden absent. Open-a-subset-in-a-tab and the side-panel preview are ○ |
+| **Linked objects component** — grouped by link type | ✅ | all four of p.11's capabilities. The groups are there (§18) and sit *inside* the view rather than beside it; a linked object's properties preview inline without navigating (§145), typed, prominent first, hidden absent; **§159** adds the other two — opening a subset in a new tab, which needed no new query because a link is a derived join (db 0027) and the subset is therefore a filter the Explorer already speaks, primary-key sentinel included; and the side panel, which holds one selected object beside the view and clears itself on a hop |
 
 ### 4.2 Configured Object Views
 

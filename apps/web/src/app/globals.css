@@ -468,6 +468,33 @@ button { font: inherit; cursor: pointer; }
 .cf-rule input[type="text"], .cf-rule input:not([type]) { width: 110px; }
 .cf-rule input[type="number"] { width: 78px; }
 
+/* The Linked objects component's side panel (`object-views` p.11). The groups
+   keep their width until something is selected, so opening the panel is not a
+   reflow of everything a reader was already looking at. */
+.links-with-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+  gap: 16px;
+  align-items: start;
+}
+
+.link-side-panel {
+  position: sticky;
+  top: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--paper);
+  max-height: 70vh;
+  overflow: auto;
+}
+
+@media (max-width: 860px) {
+  /* One column below the width where two would each be too narrow to read. */
+  .links-with-panel { grid-template-columns: minmax(0, 1fr); }
+  .link-side-panel { position: static; max-height: none; }
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;

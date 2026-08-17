@@ -133,9 +133,13 @@ function describe(search: SavedSearch): string {
 
 export function ObjectExplorer({
   workspaceId,
+  workspaceSlug,
   canEdit,
 }: {
   workspaceId: string;
+  /** Only for the link-subset URL (`object-views` p.11) - this component
+   * addresses everything else by id. */
+  workspaceSlug: string;
   canEdit: boolean;
 }) {
   // The question is the URL (item 0.4). Not a copy of it kept in state and
@@ -520,6 +524,7 @@ export function ObjectExplorer({
 
       {exploring && (
         <LinkExplorerDialog
+          workspaceSlug={workspaceSlug}
           workspaceId={workspaceId}
           browseHref={(typeId) => {
             const type = byId.get(typeId);
