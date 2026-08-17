@@ -428,6 +428,29 @@ button { font: inherit; cursor: pointer; }
   color: var(--ink-soft);
 }
 
+/* Value formatting (Foundry `object-link-types` p.96): the live preview, and
+   the one checkbox that reads as a sentence rather than as a field. */
+.field-inline {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+/* --paper, not an invented token: an undefined custom property leaves this
+   transparent, the same trap the note above .repo-preview-table records. */
+.format-preview {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
