@@ -582,6 +582,28 @@ export interface PropertyInput {
   /** Where a derived property's value comes from (`object-link-types` p.143).
    * Null clears it. */
   derivation?: import("./types").Derivation | null;
+  /** The shared property this one inherits from (`object-link-types` p.187).
+   * Null is p.188's Detach, which is why it is sent explicitly rather than
+   * omitted — an absent field and a cleared one would be the same request. */
+  shared_property_id?: string | null;
+}
+
+export interface SharedPropertyInput {
+  api_name?: string;
+  display_name: string;
+  description?: string;
+  data_type: import("./types").PropertyDataType;
+  visibility?: import("./types").PropertyVisibility;
+  value_format?: import("./types").ValueFormat | null;
+}
+
+/** One row of p.191's Usage. The property's own api_name is here because
+ * p.188 lets it differ from the shared property's. */
+export interface SharedPropertyUsage {
+  object_type_id: string;
+  object_type_api_name: string;
+  object_type_display_name: string;
+  property_api_name: string;
 }
 
 /** What a saved search is saved *as*. Deliberately the same four parameters
@@ -852,6 +874,27 @@ export const objects = {
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
     ),
+  /** Shared properties (`object-link-types` p.178–191). */
+  listSharedProperties: (wid: string) =>
+    request<import("./types").SharedProperty[]>(`/workspaces/${wid}/shared-properties`),
+  createSharedProperty: (wid: string, input: SharedPropertyInput) =>
+    request<import("./types").SharedProperty>(`/workspaces/${wid}/shared-properties`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateSharedProperty: (wid: string, sharedId: string, input: SharedPropertyInput) =>
+    request<import("./types").SharedProperty>(
+      `/workspaces/${wid}/shared-properties/${sharedId}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+  sharedPropertyUsage: (wid: string, sharedId: string) =>
+    request<SharedPropertyUsage[]>(
+      `/workspaces/${wid}/shared-properties/${sharedId}/usage`,
+    ),
+  deleteSharedProperty: (wid: string, sharedId: string) =>
+    request<void>(`/workspaces/${wid}/shared-properties/${sharedId}`, {
+      method: "DELETE",
+    }),
   listLinkTypes: (wid: string) =>
     request<import("./types").LinkType[]>(`/workspaces/${wid}/link-types`),
   createLinkType: (wid: string, input: LinkTypeCreateInput) =>

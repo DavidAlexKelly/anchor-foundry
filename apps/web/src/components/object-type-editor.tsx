@@ -24,6 +24,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
+import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import type {
   ObjectTypeDetail,
@@ -32,11 +33,15 @@ import type {
   PropertyVisibility,
 } from "@/lib/types";
 
-const PROPERTY_TYPES: PropertyDataType[] = [
+// Exported so the shared property dialog offers the same list. A second copy
+// would be a base type this editor knows about and that one does not, which is
+// exactly the drift `routes/objects.py` stopped making by building its pattern
+// from `ontology.PROPERTY_TYPES` rather than typing it out again.
+export const PROPERTY_TYPES: PropertyDataType[] = [
   "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
 ];
 
-const PROPERTY_VISIBILITIES: PropertyVisibility[] = ["normal", "prominent", "hidden"];
+export const PROPERTY_VISIBILITIES: PropertyVisibility[] = ["normal", "prominent", "hidden"];
 
 export function toPropertyApiName(display: string): string {
   const words = display.match(/[A-Za-z0-9]+/g) ?? [];
@@ -70,6 +75,8 @@ export function PropertyRows({
   const colouringRow = colouring === null ? null : properties[colouring];
   const [deriving, setDeriving] = useState<number | null>(null);
   const derivingRow = deriving === null ? null : properties[deriving];
+  const [sharing, setSharing] = useState<number | null>(null);
+  const sharingRow = sharing === null ? null : properties[sharing];
 
   return (
     <div>
@@ -98,6 +105,21 @@ export function PropertyRows({
           onSave={(next) => {
             const rows = [...properties];
             rows[deriving!] = { ...derivingRow, derivation: next };
+            onChange(rows);
+          }}
+        />
+      )}
+      {sharingRow && workspaceId && (
+        <SharedPropertyPicker
+          open
+          onClose={() => setSharing(null)}
+          propertyName={sharingRow.api_name || `property ${sharing! + 1}`}
+          workspaceId={workspaceId}
+          value={sharingRow}
+          dataType={sharingRow.data_type}
+          onSave={(next) => {
+            const rows = [...properties];
+            rows[sharing!] = next;
             onChange(rows);
           }}
         />
@@ -155,9 +177,27 @@ export function PropertyRows({
               user applications for how prominently to display the property".
               A display hint, never a permission — a hidden property is still
               stored and still returned by the API. */}
+          {/* p.178: "Shared properties on objects are denoted with a globe
+              icon next to their name." Before the controls it disables, so
+              the reason they are disabled is read first. */}
+          {prop.shared_property_id && (
+            <span
+              title="Inherited from a shared property"
+              aria-label={`Property ${index + 1} is shared`}
+              style={{ fontSize: 13 }}
+            >
+              🌐
+            </span>
+          )}
           <select
             value={prop.visibility ?? "normal"}
             aria-label={`Property ${index + 1} visibility`}
+            // p.188: "direct edits to property metadata that is inherited from
+            // the shared property will be disabled". Visibility and the
+            // formatter are the two inherited fields this row can reach; the
+            // API refuses them too, and this is what stops somebody meeting
+            // that refusal by surprise.
+            disabled={!!prop.shared_property_id}
             onChange={(e) => {
               const next = [...properties];
               next[index] = { ...prop, visibility: e.target.value as PropertyVisibility };
@@ -213,9 +253,24 @@ export function PropertyRows({
               className="btn"
               style={{ padding: "3px 9px", fontSize: 12 }}
               aria-label={`Property ${index + 1} format`}
+              disabled={!!prop.shared_property_id}
               onClick={() => setFormatting(index)}
             >
               Format{prop.value_format ? " •" : ""}
+            </button>
+          )}
+          {/* Shared property (`object-link-types` p.187). Only on the edit
+              dialog: the create dialog has no workspace context, and p.187's
+              own flow starts from a property that already exists. */}
+          {workspaceId && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              aria-label={`Property ${index + 1} shared`}
+              onClick={() => setSharing(index)}
+            >
+              Shared{prop.shared_property_id ? " •" : ""}
             </button>
           )}
           {/* Conditional formatting (`object-link-types` p.102-109). Unlike
@@ -461,6 +516,7 @@ export function EditObjectTypeDialog({
       conditional_format: p.conditional_format,
       edit_only: p.edit_only,
       derivation: p.derivation,
+      shared_property_id: p.shared_property_id,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(

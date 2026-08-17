@@ -3408,6 +3408,22 @@ Thirteen mutations, all red - twelve in Python and one on the foreign key itself
 
 The row is ✅ for what Foundry documents this feature to be, with the two absences above named in `docs/parity/ontology.md` rather than hidden behind the mark. The **Ontology Manager surface** for it - p.180's shared property page, p.187's dropdown on a property, p.178's globe - is the next half.
 
+### 165. The shared property page, and a cache that hid the whole point (this session)
+
+§164's other half: p.180's page with p.181's creation modal, p.187's dropdown on a property, p.188's Detach, p.191's Usage, and p.178's globe.
+
+**The one defect this unit found is worth more than the surface it was found in.** p.178's reason to exist is that editing a shared property updates every object type using it - and it did, on the server, and the browser showed the old metadata anyway. The object type *detail* is a separate React Query key per type (`["object-type", typeId]`), `staleTime` is 15 seconds, and the panel was only invalidating the summaries. So for fifteen seconds after the edit that was the entire point of the feature, the property editor showed what the property used to be. Nothing errored, and a reload fixed it, which is the shape of bug that survives a demo.
+
+The test for it is the part worth copying: it **waits on the refetch** rather than asserting after it. Without the invalidation the dialog is served from cache and *no request is made at all*, so `expect_response` times out instead of racing - a check that fails for the right reason rather than a sleep that fails eventually.
+
+**Only shared properties whose base type matches are offered** (p.181), the rule the derived-property editor follows about links. The ones that do not match are still counted in the hint, because "there are none" and "there are four and none is a date" are different situations and only one of them is somebody's mistake.
+
+**The adoption rule is a pure module with its own tests** (`lib/shared-property.ts`), for the reason `lib/derived-property.ts` is: both ways of getting the inherited list wrong are silent. A field left out is one the server overwrites on save, so the form and the stored row simply disagree; a field added that Foundry does not share is one the server refuses on the *next* save, from a value the browser put there.
+
+**And p.188's "disabled" is enforced twice on purpose.** The API refuses an edit to inherited metadata (§164); the row disables the two controls that could make one. Neither is redundant - the refusal is what makes the rule true, and the disabling is what stops somebody meeting it after typing.
+
+Nine mutations, all red: five on the pure adoption rules, four on the browser claims (the globe, the two disabled controls, and the carry-through). **1187 API tests**, **200 unit** (was 193), **173 browser** (was 167).
+
 
 
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.

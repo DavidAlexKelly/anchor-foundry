@@ -14,6 +14,7 @@ import {
 import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { OntologySearch } from "@/components/ontology-search";
+import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
 import { Dialog, Field } from "@/components/dialog";
 import {
   EditObjectTypeDialog,
@@ -1080,6 +1081,14 @@ export default function ObjectsPage() {
             <Link href={`/${params.workspace}/explore`}>Explore</Link> — it is
             workspace-wide, so it is not filed under a project.
           </p>
+
+          {/* Shared properties (`object-link-types` p.180). Above link types
+              because it is the smaller idea and the one a property editor
+              sends people looking for. */}
+          <SharedPropertiesPanel
+            workspaceId={workspace!.id}
+            canEdit={canEditOntology}
+          />
 
           <div className="page-head" style={{ marginTop: 32 }}>
             <div><h2 style={{ fontSize: 15, margin: 0 }}>Link types</h2></div>
