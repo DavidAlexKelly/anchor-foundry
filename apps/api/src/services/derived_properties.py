@@ -71,7 +71,11 @@ UNSUPPORTED_AGGREGATES = ("sum", "avg", "min", "max", "approx_cardinality")
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 1000
 
-_FIELDS = ("links", "aggregate", "property", "limit")
+#: `far_type_id` is in this list because `parse` *returns* it: an API that
+#: cannot accept its own output back makes read-modify-write impossible, and
+#: every client would have to know which fields to strip before saving. It is
+#: still checked rather than trusted - see `parse`.
+_FIELDS = ("links", "aggregate", "property", "limit", "far_type_id")
 
 
 class DerivationError(ValueError):
@@ -131,6 +135,16 @@ def parse(
         raise DerivationError(
             f"{property_name}: this link chain can reach more than one object, "
             "so it needs an aggregation"
+        )
+
+    declared_far = raw.get("far_type_id")
+    if declared_far is not None and str(declared_far) != far_type:
+        # Accepted back, never trusted: the chain decides where it lands, and
+        # a caller saying otherwise is describing a different walk than the one
+        # it sent. Same refusal §156 makes for a traversal's link/landing pair.
+        raise DerivationError(
+            f"{property_name}: this chain lands on a different object type "
+            "than the derivation declares"
         )
 
     out: dict[str, Any] = {"links": hops, "far_type_id": far_type}

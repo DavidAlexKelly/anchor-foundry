@@ -299,3 +299,20 @@ def test_a_plain_property_passes_every_compatibility_check() -> None:
 def test_an_unknown_option_is_refused_rather_than_dropped() -> None:
     with pytest.raises(dp.DerivationError, match="unknown derivation option agregate"):
         parse({"links": [WORKS_IN], "agregate": "count"})
+
+
+def test_the_normalised_form_can_be_saved_back_unchanged() -> None:
+    """**Read-modify-write has to work.** `parse` returns `far_type_id`, so an
+    editor that reads a derivation, changes the aggregation and saves it sends
+    that field back - and an API that refused its own output would make every
+    client strip fields it did not choose to add. Found by the browser test,
+    which is exactly the round trip a person makes.
+    """
+    first = parse({"links": [WORKS_IN], "aggregate": "count"})
+    assert parse(first) == first
+
+
+def test_a_declared_landing_type_that_disagrees_with_the_chain_is_refused() -> None:
+    """Accepted back, never trusted: the chain decides where it lands."""
+    with pytest.raises(dp.DerivationError, match="lands on a different object type"):
+        parse({"links": [WORKS_IN], "aggregate": "count", "far_type_id": PROJECT})

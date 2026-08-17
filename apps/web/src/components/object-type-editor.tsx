@@ -23,6 +23,7 @@ import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
+import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import type {
   ObjectTypeDetail,
@@ -45,9 +46,17 @@ export function toPropertyApiName(display: string): string {
 export function PropertyRows({
   properties,
   onChange,
+  workspaceId,
+  objectTypeId,
 }: {
   properties: PropertyInput[];
   onChange: (next: PropertyInput[]) => void;
+  /** Both only for the derived-property chain, which needs the workspace's
+   * link types and a type to start from. Absent on the *create* dialog, where
+   * neither exists yet - which is also why the server refuses a derivation
+   * there (§161). */
+  workspaceId?: string;
+  objectTypeId?: string;
 }) {
   // Which row's formatter is open, by index. One dialog rather than one per
   // row: only one can be open, and a dialog per property is a dialog per
@@ -59,6 +68,8 @@ export function PropertyRows({
   // second thing to track beside "which row".
   const [colouring, setColouring] = useState<number | null>(null);
   const colouringRow = colouring === null ? null : properties[colouring];
+  const [deriving, setDeriving] = useState<number | null>(null);
+  const derivingRow = deriving === null ? null : properties[deriving];
 
   return (
     <div>
@@ -72,6 +83,21 @@ export function PropertyRows({
           onSave={(next) => {
             const rows = [...properties];
             rows[formatting!] = { ...editing, value_format: next };
+            onChange(rows);
+          }}
+        />
+      )}
+      {derivingRow && workspaceId && objectTypeId && (
+        <DerivedPropertyEditor
+          open
+          onClose={() => setDeriving(null)}
+          propertyName={derivingRow.api_name || `property ${deriving! + 1}`}
+          workspaceId={workspaceId}
+          objectTypeId={objectTypeId}
+          value={derivingRow.derivation}
+          onSave={(next) => {
+            const rows = [...properties];
+            rows[deriving!] = { ...derivingRow, derivation: next };
             onChange(rows);
           }}
         />
@@ -205,6 +231,20 @@ export function PropertyRows({
           >
             Rules{prop.conditional_format?.length ? ` (${prop.conditional_format.length})` : ""}
           </button>
+          {/* Derived (`object-link-types` p.143). Offered only where a chain
+              could exist: the create dialog has no type to start from, and no
+              link type can touch a type that does not exist yet. */}
+          {workspaceId && objectTypeId && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              aria-label={`Property ${index + 1} derive`}
+              onClick={() => setDeriving(index)}
+            >
+              Derive{prop.derivation ? " •" : ""}
+            </button>
+          )}
           <button
             type="button"
             className="btn danger"
@@ -420,6 +460,7 @@ export function EditObjectTypeDialog({
       value_format: p.value_format,
       conditional_format: p.conditional_format,
       edit_only: p.edit_only,
+      derivation: p.derivation,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(
@@ -489,10 +530,15 @@ export function EditObjectTypeDialog({
           />
         </Field>
         <Field label="Properties" hint="Renaming a property removes it and adds a new one">
-          <PropertyRows properties={properties} onChange={(next) => {
-            setProperties(next);
-            setAcknowledged(false);  // a changed proposal is not the one that was accepted
-          }} />
+          <PropertyRows
+            properties={properties}
+            workspaceId={workspaceId}
+            objectTypeId={type.id}
+            onChange={(next) => {
+              setProperties(next);
+              setAcknowledged(false);  // a changed proposal is not the one that was accepted
+            }}
+          />
         </Field>
         <TitlePropertyField
           properties={properties}

@@ -1065,6 +1065,31 @@ export interface ObjectTypeProperty {
    * Written by an action straight to the instance and preserved across syncs,
    * rather than re-derived from a dataset that has nothing to say about it. */
   edit_only: boolean;
+  /** Where this property's value comes from, when it is not a dataset column
+   * (Foundry `object-link-types` p.143–148). Null for an ordinary property.
+   * Evaluated on the single-object read and never stored. */
+  derivation: Derivation | null;
+}
+
+/** A derived property's question (Foundry `object-link-types` p.143–148): a
+ * chain of up to three link types, an aggregation, and the property at the far
+ * end.
+ *
+ * Four of p.145's nine aggregations are absent because the server refuses
+ * them: `sum`/`avg`/`min`/`max` need to know a property is a number and
+ * instance properties are stored untyped, and `approx_cardinality` would be
+ * approximate on OpenSearch and exact on Postgres. */
+export interface Derivation {
+  /** In order, each naming the link and where following it lands. */
+  links: { link_type_id: string; far_type_id: string }[];
+  /** Where the whole chain lands. */
+  far_type_id: string;
+  /** Absent when no hop can reach more than one object (p.145). */
+  aggregate?: "count" | "exact_cardinality" | "collect_list" | "collect_set";
+  /** Absent iff the aggregate is `count` (p.146). */
+  property?: string;
+  /** p.146's collection limit; defaulted to 10 by the server. */
+  limit?: number;
 }
 
 /** What a matching rule asks for. Every field optional, but the server
