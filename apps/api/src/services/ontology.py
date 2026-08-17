@@ -514,6 +514,25 @@ async def _snapshot_version(
     version can never record something the database does not actually hold -
     the snapshot is a statement about what the type became, not about what
     somebody asked for.
+
+    **Every configurable field of a property, because a restore is meant to be
+    a restore.** For a long time this recorded six of them, and the five that
+    were missing - `visibility`, `value_format`, `conditional_format`,
+    `edit_only`, `derivation` - were each added by a later unit that did not
+    notice the snapshot existed. The consequence was silent and one-directional:
+    rolling back to any earlier version *erased* them, with no error and
+    nothing in the history to say it had happened. Found while adding
+    `shared_property_id` (§164), which would have been the sixth.
+
+    The rule this file now follows: **a new column on `object_type_properties`
+    is a new key here**, or a restore quietly deletes it. No general test can
+    catch the omission - the failure is a missing key, and only a test that
+    names the key can see it missing - which is why `test_version_restore.py`
+    has one test per field.
+
+    Versions written before this change still hold six keys, and restoring one
+    still clears the other six. That is not fixable: the data was never
+    captured. Recorded rather than papered over.
     """
     row = await fetch_one(
         conn,
@@ -532,7 +551,13 @@ async def _snapshot_version(
                                'data_type', p.data_type,
                                'required', p.required,
                                'description', p.description,
-                               'sort_order', p.sort_order)
+                               'sort_order', p.sort_order,
+                               'visibility', p.visibility,
+                               'value_format', p.value_format,
+                               'conditional_format', p.conditional_format,
+                               'edit_only', p.edit_only,
+                               'derivation', p.derivation,
+                               'shared_property_id', p.shared_property_id)
                            ORDER BY p.sort_order, p.api_name)
                       FROM object_type_properties p WHERE p.object_type_id = ot.id),
                    '[]'::jsonb),
@@ -837,6 +862,41 @@ async def update_type(
     return await get_type(conn, workspace_id, type_id)
 
 
+async def _drop_deleted_shared_properties(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    properties: list[dict[str, Any]],
+) -> None:
+    """Forget an attachment to a shared property that no longer exists.
+
+    **The one reference a restore may drop rather than refuse**, and the
+    asymmetry is deliberate. `object-link-types` p.185 already decided it -
+    "all object types using this shared property will revert to regular
+    properties" - so a version that recorded an attachment to a since-deleted
+    one restores as a regular property. Refusing would let a delete elsewhere
+    permanently block a rollback here, over a decision the delete had made.
+
+    A **derivation** whose link types have gone is not treated this way; it is
+    left to `update_type`'s refusal. Nothing documents what a derived property
+    becomes when its chain stops joining up, and the honest answer is that the
+    version cannot be restored: dropping it silently would put back something
+    that is not the version, and keeping it would produce a column of blanks -
+    the exact outcome `derived_properties.parse` exists to refuse.
+    """
+    ids = {
+        UUID(str(p["shared_property_id"]))
+        for p in properties
+        if p.get("shared_property_id")
+    }
+    if not ids:
+        return
+    known = await shared_properties.by_id(conn, workspace_id, ids)
+    for prop in properties:
+        raw = prop.get("shared_property_id")
+        if raw and str(raw) not in known:
+            prop["shared_property_id"] = None
+
+
 async def restore_type_version(
     conn: AsyncConnection,
     *,
@@ -872,6 +932,8 @@ async def restore_type_version(
     properties = version["properties"]
     if isinstance(properties, str):
         properties = json.loads(properties)
+    properties = [dict(p) for p in properties]
+    await _drop_deleted_shared_properties(conn, workspace_id, properties)
 
     updated = await update_type(
         conn,
