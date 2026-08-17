@@ -19,6 +19,7 @@ function prop(
     value_format: null,
     conditional_format: null,
     edit_only: false,
+    derivation: null,
   };
 }
 

@@ -3368,7 +3368,28 @@ Seventeen mutations, all red. **1159 API tests** (was 1135), 179 unit, 163 brows
 
 Ten mutations, all red. **1163 API tests** (was 1159), 179 unit, 163 browser.
 
-**Still not in the property editor**, so a derivation is set through the API. That is the last piece, and it is now the only thing between this and ✅.
+**Still not in the property editor**, so a derivation is set through the API. That was §163.
+
+---
+
+### 163. Drawing a derived property, and the view that could not show one (this session)
+
+§161 declared, §162 answered, and this is somebody building one: a chain picked a hop at a time, each step offering only the links that exist from where the chain stands (p.145's own behaviour).
+
+**The walk is a second copy of a server rule, and it is worth saying why that is not duplication for its own sake.** `services/derived_properties.py` decides what is *legal*; `lib/derived-property.ts` decides what to *offer*. Without the second one the editor would list every link in the workspace and let somebody build a chain the save then rejects - the trap the value-format and conditional-format editors both avoid. The server stays authoritative: nothing in the browser can widen what a save accepts, only narrow what a form suggests. It has its own unit tests for a specific reason - the one thing the server got wrong was the *direction* of a `one_to_many` hop, and that is exactly the mistake a rendering test cannot see.
+
+**Two real defects, both found by the browser test rather than by reasoning.**
+
+*The API could not accept its own output.* `parse` returns `far_type_id`, and `_FIELDS` did not include it - so an editor that reads a derivation, changes the aggregation and saves it got a 422 for sending back a field the server had just given it. Read-modify-write is the ordinary shape of editing anything, and it was impossible. It is accepted now and still checked rather than trusted: a declared landing type that disagrees with the chain is refused, the same refusal §156 makes for a traversal's link/landing pair.
+
+*And the object view could not show a derived property at all.* §162 evaluates them on the **single-object** read, and I wrote that the object view is "where the answer is worth paying for" - but every caller of `ObjectView` hands it a row it already had, from a list. So the one surface the feature was built for rendered `∅` on every derived property. The view now fetches the instance by id **when the type has one**, with the handed-over row as the placeholder, so the ordinary object view costs exactly what it did. Worth recording because the design note was right and the wiring did not match it: "evaluated on the single-object read" and "reached by a single-object read" are different sentences, and I had only checked the first.
+
+**The carry-through failure, for the third time** (§157, §160, here). The edit dialog rebuilds every property from the type, so any setting it forgets to carry is silently reset by somebody editing a description. The drawing test could not catch it - it draws and saves in one session - and only a *second* edit exercises it. That is now a test in three files, and the pattern has not varied once.
+
+Ten mutations, all red. **1165 API tests**, **193 unit** (was 179), **167 browser** (was 163).
+
+**The row stays ◑, and honestly so.** Four of p.145's nine aggregations are still refused, and one of them is p.143's own opening example. Drawing a derived property works; deriving an average does not, and will not until instance properties carry their declared types into the index.
+
 
 
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.

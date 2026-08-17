@@ -154,6 +154,27 @@ export function ObjectView({
   });
   const [standard, setStandard] = useState(false);
 
+  // **Derived properties are only on the single-object read** (§162): a list
+  // read returns the instance as it is *stored*, and a derived property is
+  // stored nowhere. Every caller of this component hands over a row it already
+  // had - the Explorer's table, a link group - so without this the one surface
+  // the feature was built for would show `∅` on every derived property.
+  //
+  // Fetched only when the type actually has one, so the ordinary object view
+  // still costs exactly what it did. `instance` is the placeholder, so the
+  // view draws immediately and the derived values fill in.
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId),
+  });
+  const hasDerived = (type.data?.properties ?? []).some((p) => p.derivation);
+  const full = useQuery({
+    queryKey: ["instance", workspaceId, typeId, instance.id],
+    queryFn: () => objApi.getInstance(workspaceId, typeId, instance.id),
+    enabled: hasDerived,
+  });
+  const shown = hasDerived && full.data ? full.data : instance;
+
   const configured = view.data ?? null;
   return (
     <div className="object-view">
@@ -186,10 +207,10 @@ export function ObjectView({
           appId={configured.canvas_app_id}
           subjectVariable={configured.subject_variable}
           typeId={typeId}
-          instance={instance}
+          instance={shown}
         />
       ) : (
-        <StandardObjectView workspaceId={workspaceId} typeId={typeId} instance={instance} />
+        <StandardObjectView workspaceId={workspaceId} typeId={typeId} instance={shown} />
       )}
     </div>
   );

@@ -579,6 +579,9 @@ export interface PropertyInput {
   conditional_format?: import("./types").ConditionalRule[] | null;
   /** No dataset column, by design (Foundry `object-link-types` p.113). */
   edit_only?: boolean;
+  /** Where a derived property's value comes from (`object-link-types` p.143).
+   * Null clears it. */
+  derivation?: import("./types").Derivation | null;
 }
 
 /** What a saved search is saved *as*. Deliberately the same four parameters
