@@ -45,6 +45,7 @@ from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import ontology_search
+from ..services import shared_properties as shared_properties_service
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["objects"])
@@ -99,6 +100,12 @@ class PropertyIn(BaseModel):
     # because whether a chain is legal is a fact about the workspace's link
     # types rather than about this request.
     derivation: dict[str, Any] | None = None
+    # The shared property this one inherits its metadata from (Foundry
+    # `object-link-types` p.187). Null detaches it (p.188), which is why this
+    # is an explicit field rather than something only ever added: an omitted
+    # id and a cleared one have to be tellable apart, and the object type
+    # editor sends the whole definition every time.
+    shared_property_id: UUID | None = None
 
 
 class PropertyOut(BaseModel):
@@ -114,6 +121,11 @@ class PropertyOut(BaseModel):
     conditional_format: list[dict[str, Any]] | None = None
     edit_only: bool = False
     derivation: dict[str, Any] | None = None
+    shared_property_id: UUID | None = None
+    # p.178: "Shared properties on objects are denoted with a globe icon next
+    # to their name." The name comes back with the id so an application can
+    # say *which* shared property without a second request per property.
+    shared_property_api_name: str | None = None
 
 
 class ObjectTypeSummary(BaseModel):
@@ -1092,6 +1104,187 @@ async def download_attachment(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+# ---- shared properties (workspace-scoped; `object-link-types` p.178-191) ----
+class SharedPropertyOut(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    description: str
+    data_type: str
+    visibility: str
+    value_format: dict[str, Any] | None = None
+    # p.191's Usage, as a number. The list of object types is its own endpoint,
+    # because "is anyone using this" and "who exactly" are asked at different
+    # moments - the first before deleting, the second after being surprised.
+    usage_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SharedPropertyUsageOut(BaseModel):
+    object_type_id: UUID
+    object_type_api_name: str
+    object_type_display_name: str
+    # p.188 lets the object type's own property keep a different name, so the
+    # usage row has to say which property it is or it answers half the question.
+    property_api_name: str
+
+
+class SharedPropertyCreate(BaseModel):
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    data_type: str = Field(
+        pattern="^(" + "|".join(sorted(ontology_service.PROPERTY_TYPES)) + ")$"
+    )
+    visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
+    value_format: dict[str, Any] | None = None
+
+
+class SharedPropertyUpdate(BaseModel):
+    """No `api_name`: it is the stable machine name a consumer holds, for
+    `object_types.api_name`'s reason (db 0003)."""
+
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    data_type: str = Field(
+        pattern="^(" + "|".join(sorted(ontology_service.PROPERTY_TYPES)) + ")$"
+    )
+    visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
+    value_format: dict[str, Any] | None = None
+
+
+@router.get("/shared-properties", response_model=list[SharedPropertyOut])
+async def list_shared_properties(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[SharedPropertyOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await shared_properties_service.list_shared(conn, access.workspace_id)
+    return [SharedPropertyOut(**r) for r in rows]
+
+
+@router.post(
+    "/shared-properties",
+    response_model=SharedPropertyOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_shared_property(
+    body: SharedPropertyCreate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> SharedPropertyOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await shared_properties_service.create_shared(
+            conn,
+            workspace_id=access.workspace_id,
+            api_name=body.api_name,
+            display_name=body.display_name,
+            description=body.description,
+            data_type=body.data_type,
+            visibility=body.visibility,
+            value_format_raw=body.value_format,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="shared_property.create",
+            resource_type="shared_property",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            metadata={"api_name": body.api_name, "data_type": body.data_type},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SharedPropertyOut(**row)
+
+
+@router.get(
+    "/shared-properties/{shared_id}/usage",
+    response_model=list[SharedPropertyUsageOut],
+)
+async def shared_property_usage(
+    shared_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[SharedPropertyUsageOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await shared_properties_service.usage(
+            conn, access.workspace_id, shared_id
+        )
+    return [SharedPropertyUsageOut(**r) for r in rows]
+
+
+@router.patch("/shared-properties/{shared_id}", response_model=SharedPropertyOut)
+async def update_shared_property(
+    shared_id: UUID,
+    body: SharedPropertyUpdate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> SharedPropertyOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await shared_properties_service.update_shared(
+            conn,
+            workspace_id=access.workspace_id,
+            shared_id=shared_id,
+            display_name=body.display_name,
+            description=body.description,
+            data_type=body.data_type,
+            visibility=body.visibility,
+            value_format_raw=body.value_format,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="shared_property.update",
+            resource_type="shared_property",
+            resource_id=shared_id,
+            workspace_id=access.workspace_id,
+            metadata={"usage_count": row["usage_count"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return SharedPropertyOut(**row)
+
+
+@router.delete(
+    "/shared-properties/{shared_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_shared_property(
+    shared_id: UUID,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> Response:
+    """p.185: every object type using it reverts to a regular property.
+
+    Not refused when in use, and the audit record says how many reverted -
+    which is the number somebody will want when they ask what that delete did.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        users = await shared_properties_service.usage(
+            conn, access.workspace_id, shared_id
+        )
+        await shared_properties_service.delete_shared(
+            conn, access.workspace_id, shared_id
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="shared_property.delete",
+            resource_type="shared_property",
+            resource_id=shared_id,
+            workspace_id=access.workspace_id,
+            metadata={"reverted_properties": len(users)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---- link types (workspace-scoped) ------------------------------------------

@@ -1069,6 +1069,44 @@ export interface ObjectTypeProperty {
    * (Foundry `object-link-types` p.143–148). Null for an ordinary property.
    * Evaluated on the single-object read and never stored. */
   derivation: Derivation | null;
+  /** The shared property this one inherits its metadata from (Foundry
+   * `object-link-types` p.187–188), or null for an ordinary property.
+   *
+   * `display_name`, `description`, `visibility` and `value_format` above are
+   * already **resolved** when this is set — the server overlays them on the
+   * way out so that editing the shared property reaches every object type
+   * using it (p.178). The browser therefore reads them exactly as it always
+   * did; what it must not do is let somebody edit them, which p.188 disables
+   * and the API refuses. */
+  shared_property_id: string | null;
+  /** The shared property's own api_name, so p.178's globe can say *which*
+   * without a request per property. Null iff `shared_property_id` is. */
+  shared_property_api_name: string | null;
+}
+
+/** One property definition used by several object types (Foundry
+ * `object-link-types` p.178–191).
+ *
+ * Metadata only. p.178: "While property metadata is shared across object
+ * types, the underlying object data is not" — each object type keeps its own
+ * instances, under its own property api_name.
+ *
+ * Foundry's **type classes** and **render hints** are absent rather than
+ * stubbed: nothing in this platform reads a type class, and reindex tuning is
+ * not something this instance store exposes. `docs/parity/ontology.md` says
+ * so. */
+export interface SharedProperty {
+  id: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  data_type: PropertyDataType;
+  visibility: PropertyVisibility;
+  value_format: ValueFormat | null;
+  /** p.191's Usage, as a count. Zero is the only safe number to delete on. */
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
 }
 
 /** A derived property's question (Foundry `object-link-types` p.143–148): a

@@ -3390,6 +3390,40 @@ Ten mutations, all red. **1165 API tests**, **193 unit** (was 179), **167 browse
 
 **The row stays ◑, and honestly so.** Four of p.145's nine aggregations are still refused, and one of them is p.143's own opening example. Drawing a derived property works; deriving an average does not, and will not until instance properties carry their declared types into the index.
 
+### 164. One property definition, several object types (this session)
+
+Shared properties (`ontology.md` §1.2; `object-link-types` p.178-191). p.178's example is `start date` on both `Employee` and `Contractor`, so that the metadata can be updated "in one place instead of on each object type" - and that sentence is the entire design constraint, because the obvious implementation satisfies half of it.
+
+**A copy taken at attach time would pass every test that reads back what it wrote.** So the reference is a foreign key and the inherited fields are resolved when the object type is *read*, and the test that matters attaches two object types, edits the shared property once, and asks both. `resolve()` runs in both directions - on the way out so an edit shows through immediately, and on the way in so what gets stored is what was resolved - because two functions would be two chances to inherit a different set of fields.
+
+**Attaching adopts; editing an attached property refuses.** p.187 and p.188 are two different moments and this is the line between them. Choosing a shared property *is* choosing its metadata, so a fresh attach takes the inherited fields whatever the request said - otherwise a client would have to read the shared property back and echo it just to point at it. Once attached, p.188 disables those fields, and a contradicting value is refused rather than discarded, because silently dropping somebody's edit is the failure this repo has now fixed in four other places.
+
+**p.185 is one line of SQL and it is the one worth reading twice.** "When a shared property is deleted, all object types using this shared property will revert to regular properties" - so `ON DELETE SET NULL`, not cascade. A cascade would take two object types' properties, and their instances' values out of every application that reads them, as a side effect of tidying up an ontology. The property keeps its last inherited metadata, because the columns are written at save time as well as resolved at read time; that redundancy is also what keeps 0028's version snapshots honest, since a snapshot recording "see elsewhere" would change meaning when the shared property was later edited.
+
+**One divergence, decided rather than inherited.** Foundry lists base type as editable on a shared property and does not say what happens to the object types using it. Cascading would retype every attached property silently, which is the precise change `type_impact` exists to make somebody acknowledge - so a base type change is refused while anything uses it, and the refusal names who is in the way. **Type classes and render hints are absent rather than stubbed**: nothing here reads a type class, and reindex tuning is not something this instance store exposes.
+
+**A defect this unit did not introduce and should not leave unnamed:** `object_type_versions` snapshots only six fields per property, so **restoring an old version silently drops `visibility`, `value_format`, `conditional_format`, `edit_only`, `derivation` and now `shared_property_id`**. That is five already-shipped features losing their configuration to a restore, with no error. Found here, not fixed here - it is its own claim ("a restore restores the whole definition") and deserves its own tests. Next unit.
+
+Thirteen mutations, all red - twelve in Python and one on the foreign key itself, since p.185's whole claim rests on `SET NULL` rather than on any line of code. **1187 API tests** (was 1165), 193 unit, 167 browser.
+
+The row is ✅ for what Foundry documents this feature to be, with the two absences above named in `docs/parity/ontology.md` rather than hidden behind the mark. The **Ontology Manager surface** for it - p.180's shared property page, p.187's dropdown on a property, p.178's globe - is the next half.
+
+### 165. The shared property page, and a cache that hid the whole point (this session)
+
+§164's other half: p.180's page with p.181's creation modal, p.187's dropdown on a property, p.188's Detach, p.191's Usage, and p.178's globe.
+
+**The one defect this unit found is worth more than the surface it was found in.** p.178's reason to exist is that editing a shared property updates every object type using it - and it did, on the server, and the browser showed the old metadata anyway. The object type *detail* is a separate React Query key per type (`["object-type", typeId]`), `staleTime` is 15 seconds, and the panel was only invalidating the summaries. So for fifteen seconds after the edit that was the entire point of the feature, the property editor showed what the property used to be. Nothing errored, and a reload fixed it, which is the shape of bug that survives a demo.
+
+The test for it is the part worth copying: it **waits on the refetch** rather than asserting after it. Without the invalidation the dialog is served from cache and *no request is made at all*, so `expect_response` times out instead of racing - a check that fails for the right reason rather than a sleep that fails eventually.
+
+**Only shared properties whose base type matches are offered** (p.181), the rule the derived-property editor follows about links. The ones that do not match are still counted in the hint, because "there are none" and "there are four and none is a date" are different situations and only one of them is somebody's mistake.
+
+**The adoption rule is a pure module with its own tests** (`lib/shared-property.ts`), for the reason `lib/derived-property.ts` is: both ways of getting the inherited list wrong are silent. A field left out is one the server overwrites on save, so the form and the stored row simply disagree; a field added that Foundry does not share is one the server refuses on the *next* save, from a value the browser put there.
+
+**And p.188's "disabled" is enforced twice on purpose.** The API refuses an edit to inherited metadata (§164); the row disables the two controls that could make one. Neither is redundant - the refusal is what makes the rule true, and the disabling is what stops somebody meeting it after typing.
+
+Nine mutations, all red: five on the pure adoption rules, four on the browser claims (the globe, the two disabled controls, and the carry-through). **1187 API tests**, **200 unit** (was 193), **173 browser** (was 167).
+
 
 
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.
