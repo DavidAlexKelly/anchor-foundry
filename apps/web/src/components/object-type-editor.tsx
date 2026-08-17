@@ -21,6 +21,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
+import { ValueFormatEditor, formattable } from "@/components/value-format-editor";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import type {
   ObjectTypeDetail,
@@ -47,8 +48,28 @@ export function PropertyRows({
   properties: PropertyInput[];
   onChange: (next: PropertyInput[]) => void;
 }) {
+  // Which row's formatter is open, by index. One dialog rather than one per
+  // row: only one can be open, and a dialog per property is a dialog per
+  // property to keep in step.
+  const [formatting, setFormatting] = useState<number | null>(null);
+  const editing = formatting === null ? null : properties[formatting];
+
   return (
     <div>
+      {editing && (
+        <ValueFormatEditor
+          open
+          onClose={() => setFormatting(null)}
+          propertyName={editing.api_name || `property ${formatting! + 1}`}
+          dataType={editing.data_type}
+          value={editing.value_format}
+          onSave={(next) => {
+            const rows = [...properties];
+            rows[formatting!] = { ...editing, value_format: next };
+            onChange(rows);
+          }}
+        />
+      )}
       {properties.map((prop, index) => (
         <div key={index} className="row-actions" style={{ marginBottom: 6 }}>
           <input
@@ -114,6 +135,21 @@ export function PropertyRows({
             />
             required
           </label>
+          {/* Value formatting (Foundry `object-link-types` p.94-101). Offered
+              only where it applies (p.95) - a Format button on a string
+              property would open a dialog whose every answer the server
+              refuses. The dot says one is set without opening anything. */}
+          {formattable(prop.data_type) && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              aria-label={`Property ${index + 1} format`}
+              onClick={() => setFormatting(index)}
+            >
+              Format{prop.value_format ? " •" : ""}
+            </button>
+          )}
           <button
             type="button"
             className="btn danger"
@@ -321,8 +357,12 @@ export function EditObjectTypeDialog({
       required: p.required,
       // Carried through, or opening this dialog and saving would silently
       // reset every property to `normal` - a setting lost by editing something
-      // else, which is the worst way to lose one.
+      // else, which is the worst way to lose one. Value formatting joined this
+      // list for exactly the same reason, and that is why the list is worth a
+      // comment: every new property setting has to be added here, and nothing
+      // fails if it is not.
       visibility: p.visibility,
+      value_format: p.value_format,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(

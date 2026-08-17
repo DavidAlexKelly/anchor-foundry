@@ -307,8 +307,8 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Value formatting** — fraction digits, min/max decimals, local to the module not the ontology | ○ | (Formatting section) |
-| **Conditional formatting** | ◑ | ontology-level only, §83; Workshop-level ○ |
+| **Value formatting** — fraction digits, min/max decimals, local to the module not the ontology | ○ | (Formatting section). The *ontology-level* one is built (§157, `ontology.md` §1.2) and this is the other one: Workshop's is per module, so two applications can show one property differently. Not free on top of §157 — the formatter type and `formatValue` are reusable, but a module-level override needs somewhere in the document to live and a rule for which wins |
+| **Conditional formatting** | ○ | ontology-level and Workshop-level both. **This row said ◑ on the strength of §83 and was wrong** — see `ontology.md` §1.2, where the same mistaken citation was corrected while building §157 |
 | **Derived properties** — runtime calculations per object type, defined at module level, including linked aggregations | ○ | (Derived properties section) |
 | **Auto-refresh** — register object sets to watch; module refreshes when data changes anywhere in the platform | ○ | (Auto-refresh section); we have §refresh plumbing but not registration |
 | **Performance Profiler** — reload in profiler mode, record network requests from initialisation | ○ | |

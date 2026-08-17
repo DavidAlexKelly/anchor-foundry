@@ -86,6 +86,7 @@ function LinkedPreview({
               <PropertyValue
                 workspaceId={workspaceId}
                 dataType={property.data_type}
+                valueFormat={property.value_format}
                 value={instance.properties[property.api_name]}
               />
             </td>

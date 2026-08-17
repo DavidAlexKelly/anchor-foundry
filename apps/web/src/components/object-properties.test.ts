@@ -16,6 +16,7 @@ function prop(
     description: "",
     sort_order: 0,
     visibility,
+    value_format: null,
   };
 }
 

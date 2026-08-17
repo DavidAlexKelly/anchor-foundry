@@ -163,6 +163,7 @@ class Module:
         title: str | None = None,
         visibility: dict[str, str] | None = None,
         types: dict[str, str] | None = None,
+        formats: dict[str, dict | None] | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
         instances."""
@@ -197,6 +198,10 @@ class Module:
                         "data_type": (types or {}).get(c, "string"),
                         **({"required": True} if c == key else {}),
                         **({"visibility": (visibility or {})[c]} if c in (visibility or {}) else {}),
+                        # How a reader should see the value (`object-link-types`
+                        # p.94-101). Absent means unformatted, which is what
+                        # every property of every other fixture is.
+                        **({"value_format": (formats or {})[c]} if c in (formats or {}) else {}),
                     }
                     for c in columns
                 ],

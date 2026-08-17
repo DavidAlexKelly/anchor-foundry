@@ -40,8 +40,8 @@ Ours has `json`, which Foundry does not — Foundry's equivalent is Struct, whic
 |---|---|---|
 | Display name, description, API name | ✅ | |
 | **Visibility** — normal, prominent, hidden | ✅ | (`object-link-types` p.111); drives standard Object View layout (`object-views` p.10), Explorer columns, and the Linked objects rows (§145 — one shared rule, because the third surface is where a second copy of it leaked) |
-| **Value formatting** | ○ | `object-link-types` TOC §11 |
-| **Conditional formatting** | ✅ | §83 |
+| **Value formatting** | ◑ | §157 — p.94-101. Numeric (currency, unit, percentage, prefix/suffix, grouping, notation, and p.98's five digit options) and date/time (p.99's six styles, and p.100's timezone: a named zone or the reader's own). Applied in the browser, because p.100's "the application user's current timezone" is not something a server knows — and because formatting on the way out would make filters, actions and exports read `"$100K"` where they used to read `100000`. **What is missing is p.95's three lookup formatters** — Foundry ID, resource RID, artifact GID — each of which turns an ID into a name by *asking something*, so none is a transformation of the value in hand; and p.97's Fixed Values, which is a value-to-label map for the same reason |
+| **Conditional formatting** | ○ | `object-link-types` p.102-109. **This row said ✅ §83 and was wrong**: §83 is the Object Table's columns, sort and paging, and there is no conditional-formatting rule anywhere in the codebase. Found while building §157, which is the neighbouring page in the same PDF. The two compose rather than compete when it is built — value formatting decides the *text*, a conditional rule colours it, and the rule has to compare the **raw** value, because `"$100K"` was never greater than 50000 |
 | **Required properties** | ✅ | §154 — p.116. The flag has existed since migration 0003 and meant nothing; now **actions refuse** a write that empties one and **sync reports** the rows that do not comply rather than refusing to index them, which is p.116's own split |
 | **Edit-only properties** | ○ | TOC §14 |
 | Mandatory control properties | ○ | TOC §16 |

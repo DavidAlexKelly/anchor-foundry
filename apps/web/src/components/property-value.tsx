@@ -14,7 +14,8 @@
 import { useEffect, useState } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { mediaKind } from "@/components/media-kind";
-import type { AttachmentRef, GeoPoint, PropertyDataType } from "@/lib/types";
+import type { AttachmentRef, GeoPoint, PropertyDataType, ValueFormat } from "@/lib/types";
+import { formatValue } from "@/lib/value-format";
 
 function isGeoPoint(value: unknown): value is GeoPoint {
   return (
@@ -91,13 +92,28 @@ export function PropertyValue({
   workspaceId,
   dataType,
   value,
+  valueFormat,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
   value: unknown;
+  /** The property's own formatter (Foundry `object-link-types` p.94–101).
+   * Optional so a caller that has no property declaration to hand — an action
+   * form preview, a value read off an instance — keeps working unchanged. */
+  valueFormat?: ValueFormat | null;
 }) {
   if (value === null || value === undefined || value === "") {
     return <span style={{ color: "var(--ink-soft)" }}>∅</span>;
+  }
+  if (valueFormat) {
+    const formatted = formatValue(value, valueFormat);
+    if (formatted !== null) {
+      // **The raw value stays reachable in the tooltip.** p.94's whole point is
+      // that "$100K" is easier to read, and the cost of easier is that the
+      // reader can no longer see 100000 — which is the number they will type
+      // into a filter. Both, rather than a choice between them.
+      return <span title={String(value)}>{formatted}</span>;
+    }
   }
   if (dataType === "geopoint" && isGeoPoint(value)) {
     // Coordinates, not a map. A map needs a tile source, which means an

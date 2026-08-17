@@ -569,6 +569,10 @@ export interface PropertyInput {
   required?: boolean;
   description?: string;
   visibility?: import("./types").PropertyVisibility;
+  /** How a reader should see the value (Foundry `object-link-types`
+   * p.94–101). Null clears an existing formatter; omitted keeps nothing,
+   * which is why the editor sends it explicitly on every save. */
+  value_format?: import("./types").ValueFormat | null;
 }
 
 /** What a saved search is saved *as*. Deliberately the same four parameters

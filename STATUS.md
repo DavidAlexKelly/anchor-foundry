@@ -3209,6 +3209,44 @@ Eleven mutations, all red. **1077 API tests** (was 1056), 137 unit, 146 browser.
 
 Twelve mutations, all red: six on the panel, six on the transform. **1082 API tests**, 137 unit, **149 browser** (was 146).
 
+
+### 157. Value formatting (this session)
+
+`ontology.md` §1.2's first ○, and stage 3's own headline - "property types and **formatting**". A property can now say how its value should be read: p.94's own two examples are a weight shown as "72.5 kg" and a value shown as "$100K".
+
+**The stored value never changes, and that is the whole design.** Formatting on the way out of the API would make `"$100K"` the answer to a question that used to be answered `100000` - and every consumer that is not a screen would be wrong at once: filters, actions, aggregations, exports. p.100 settles it independently by offering *"the application user's current timezone"* as a legal choice, which is not something a server knows. So the formatter is stored beside the property, validated on the server, and applied in the browser.
+
+**The server's contribution is refusals**, each of which is a page that would otherwise render wrongly or not at all:
+
+* *A formatter that does not match the base type* (p.95). A number formatter on a string is not an error anybody sees - it is a setting that does nothing, forever.
+* *The digit pairs `Intl.NumberFormat` throws on.* A minimum above its maximum is a `RangeError`, which in a browser is a blank cell and a console message nobody reads. Refused at save, where the answer can still be changed.
+* *A style missing the thing that style is for* - a currency with no code, a unit with no unit, p.97's Prefix/Suffix with neither. The last is not a style at all; it is `plain` with extra steps, and saving it shows an editor a setting whose effect is nothing.
+* *A misspelled option, refused rather than dropped.* Silently ignored, it is a setting somebody believes they turned on - and will believe again every time they reopen the editor and see it sitting there.
+* *A timezone on a `date`.* p.100 scopes zones to timestamps, and it is right to: shifting a date by an offset moves it to a different day, which is a wrong answer rather than a differently-presented one.
+
+**An absent timezone is deliberately not defaulted to UTC.** A stored `"UTC"` is an author's decision and an absent one is "wherever the reader is". Collapsing the two would take a choice away and look like tidying up.
+
+**p.99's footnote is a rule, not a detail.** "Relative to now" only spans 24 hours; past that it renders short form **with the day of the week**. The weekday is what makes it its own branch rather than a fall-through to `datetime_short`, so a test renders the same instant both ways and holds them apart. Relative units are *truncated* rather than rounded, which is a decision the spec does not make: rounding turns 23h59m into "24 hours ago", a reading that names the very boundary the branch exists to stay inside.
+
+**The vitest suite already ran in New York, and it earned its keep.** `vitest.config.ts` pins `TZ=America/New_York` for §151's reason - a UTC machine cannot tell a timezone option from a missing one. Three zones are asserted on one instant, including "no timezone means the reader's own", which is only checkable because that instant is still the previous day in New York.
+
+**Two fallbacks, both so that a cell is never blank.** Properties are stored untyped, so a `float` column routinely holds `"n/a"` from a dataset nobody cleaned; `Intl` renders that as `NaN`, which reads like a computed answer rather than like the text that is actually stored. Same for an unparseable date and "Invalid Date". And if `Intl` refuses the options anyway, the plain number is still shown - a blank cell is the one outcome that tells a reader nothing.
+
+**The raw value stays reachable in the tooltip.** p.94's readability is bought by hiding the number somebody has to type into a filter. Both, rather than a choice between them.
+
+**The editor invents nothing, and its Apply button is not a trap.** The first version pre-filled `USD` and `kilogram` when you chose those styles - which is a guess that saves silently and renders every number in a currency nobody chose. Now the field starts blank, Apply is disabled while the draft is one the server would refuse, and the sentence saying why is on screen. The rules are the same list as `services/value_format.py`, checked in the one place where the answer can still be changed. p.96's live preview is the same `formatValue` the tables use, not an approximation of it.
+
+**Two mutations survived, and both were tests true for the wrong reason.**
+
+*The first was `to_have_count(0)` asserted before anything had rendered.* "A string property is offered no Format button" passed against a build where **every** property offered one, because an empty dialog also has zero of them. Presence before absence is the fix and this is the fifth time this repo has recorded that shape - the assertion was about the absence of a thing rather than about the rule that produces it.
+
+*The second was hidden by the default I have just removed.* "Typing a unit lands it on the draft" passed with the unit input wired to nothing, because the style switch had already filled in `kilogram` - the test asserted a value it never set. Removing the invented default fixed the test and improved the editor, which is the good case: the mutation did not find a broken rule, it found a *convenience* that made a rule unobservable.
+
+**And a wrong ✅ in the parity doc, found by reading the neighbouring page.** `ontology.md` §1.2 claimed **Conditional formatting** was done, citing §83 - which is the Object Table's columns, sort and paging. There is no conditional-formatting rule anywhere in the codebase. Both that row and `workshop.md`'s matching ◑ are now ○ with the correction stated, because a false ✅ in the specification-to-meet is worse than a ○: it is the one status nobody re-checks.
+
+Thirty-six mutations, all red: thirteen on the validator, fourteen on the formatter, nine on the wiring and the editor. Two of those nine survived their first run - they are the two above, and they went red once the tests (and, in the second case, the editor) were fixed. **1104 API tests** (was 1082), **155 unit** (was 137), **154 browser** (was 149).
+
+---
 ---
 ---
 ---

@@ -182,6 +182,7 @@ export default function ObjectInstancesPage() {
                         <PropertyValue
                           workspaceId={workspace!.id}
                           dataType={p.data_type}
+                          valueFormat={p.value_format}
                           value={instance.properties[p.api_name]}
                         />
                       </td>
