@@ -3346,6 +3346,31 @@ Eight mutations, all red. One near-miss worth recording: the mutation harness ba
 
 Seventeen mutations, all red. **1159 API tests** (was 1135), 179 unit, 163 browser.
 
+---
+
+### 162. Derived properties, answered (this session)
+
+§161's other half, and the one that makes the feature real: a derived property is now **evaluated when an object is read**.
+
+**The chain is an object set rooted at the one object, so there is no traversal code here.** A derived property asks "follow these links from *me*, then reduce what you find", and §155 already expresses exactly that - a set of the starting type filtered to this instance's key, wrapped in one `Traversal` per hop, answered by `_resolve_traversal`. That is what filtering on `$primary_key` was for, and it is why a three-hop derivation cost nothing new. The pieces lining up like that is the strongest evidence so far that §155's shape was right.
+
+**Two limits, and both are named rather than discovered.**
+
+*Single reads only.* Each hop costs a query, so filling these in for a page of a table would be a silent N+1 on every list in the product. p.143's own examples are all object-shaped - "this department's average salary", "this project's lead engineer" - so the object view is where the answer is worth paying for. A derived *column* needs the aggregation pushed into the index, which is the same typed-index work §87 is blocked on.
+
+*Four of nine aggregations still refused*, per §161.
+
+**Each aggregation answers an empty chain with its own empty.** Written first with one shared sentinel, which produced a genuine inconsistency: an empty *base* answered `None` while an empty *far side* answered `[]` - the same question, two shapes, depending on which end of the chain ran out. Now `count` is 0, a collection is `[]`, a single value is `None`, and one function decides it.
+
+**Three mutations survived, and all three were one fixture being too comfortable.** The first version reused the customers dataset as both types, so every customer had exactly one linked object - which made "count" and "count the first one", "limit 2" and "no limit", and "empty" and "one" all indistinguishable. The fixture is deliberately lopsided now: Ada has three orders and Grace has none. **A fixture where every case looks the same cannot fail for any of them**, which is the same lesson as §158's but arriving through the data rather than through the assertions.
+
+**And the empty-chain path needed *two* hops to reach at all.** A single hop always has a base - the object being read - so "nothing found" there is just an empty far side, not a chain that ran out. It takes a second hop for the walk to stop partway, which is the only way into the short-circuit. p.147's multi-hop is what makes that branch reachable, and without a test for it the branch was three surviving mutants pretending to be covered.
+
+Ten mutations, all red. **1163 API tests** (was 1159), 179 unit, 163 browser.
+
+**Still not in the property editor**, so a derivation is set through the API. That is the last piece, and it is now the only thing between this and ✅.
+
+
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.
 
 
