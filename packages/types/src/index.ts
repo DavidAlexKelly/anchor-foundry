@@ -1320,14 +1320,23 @@ export interface ModuleStateDetail extends ModuleState {
 }
 
 export interface OntologySearchHit {
-  kind: "object_type" | "property" | "link_type" | "action_type";
+  kind: "object_type" | "property" | "link_type" | "action_type" | "shared_property";
   id: string;
   api_name: string;
   display_name: string;
   /** Where it lives. A property called "status" is not somewhere anybody can
-   * navigate to; "status on Ticket" is. */
-  object_type_id: string;
+   * navigate to; "status on Ticket" is.
+   *
+   * **Null for a shared property**, which belongs to no object type by
+   * definition (`object-link-types` p.178) — null rather than a stand-in,
+   * because a made-up owner would send whoever clicked it somewhere with
+   * nothing to do with what they searched for. */
+  object_type_id: string | null;
   object_type_name: string;
+  /** How many properties use it. Set only for a shared property, which is the
+   * one kind with no owner to name — "used by 3 object types" is the closest
+   * true answer to "where does this live". */
+  usage_count: number | null;
   matched_field: string;
   matched_value: string;
 }

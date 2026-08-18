@@ -159,6 +159,34 @@ def test_editing_the_shared_property_renames_it_on_the_object_type(page, module)
     expect(page.get_by_label(f"Property {index} visibility")).to_have_value("prominent")
 
 
+def test_the_ontology_search_finds_one_and_opens_it(page, module) -> None:
+    """`ontology-manager` p.28 lists shared properties among the things the
+    header search covers. They existed for two units before it looked at them
+    (§164 built them, §167 added them here) - and a shared property is exactly
+    what somebody searches for *before* creating a second one that means the
+    same, so a search that could not find one was helping the ontology grow
+    duplicates.
+
+    The hit has no object type to open, so it opens the shared property
+    itself. Runs after the attaching test, so the count is one rather than
+    zero.
+    """
+    open_objects(page, module)
+    row = page.get_by_test_id("shared-table").locator("tbody tr").first
+    api_name = row.locator(".slug").inner_text()
+
+    page.get_by_role("searchbox").fill(api_name)
+    hit = page.locator("[data-kind='shared_property']").first
+    expect(hit).to_be_visible(timeout=15000)
+    # No owner to name, so it says how many properties use it instead.
+    expect(hit).to_contain_text("used by 1 property")
+    hit.click()
+
+    # p.184's edit dialog, opened from the search rather than from the row.
+    expect(page.get_by_test_id("shared-name")).to_be_visible()
+    expect(page.get_by_role("heading", name=f"Edit {api_name}")).to_be_visible()
+
+
 def test_a_base_type_that_does_not_match_is_not_offered(page, module) -> None:
     """p.181 requires the base types to match, so offering a `date` shared
     property for a `string` column would be offering a save that fails - the
@@ -204,7 +232,13 @@ def test_deleting_a_shared_property_leaves_the_property_behind(page, module) -> 
     row = page.get_by_test_id("shared-table").locator("tbody tr").first
     api_name = row.locator(".slug").inner_text()
     row.get_by_role("button", name=f"Delete {api_name}").click()
-    expect(page.get_by_test_id("shared-table")).not_to_contain_text(api_name)
+    # The *row* is gone, which is the claim. Not the table's text: this was
+    # the workspace's only shared property, so the table itself unmounts in
+    # favour of the empty state, and an assertion about the text of an element
+    # that legitimately disappears fails for the wrong reason.
+    expect(
+        page.locator("tbody tr").filter(has_text=api_name)
+    ).to_have_count(0)
 
     # Same reason as the rename test: the revert happens in the database, and
     # this refetch is what makes it visible without a reload.

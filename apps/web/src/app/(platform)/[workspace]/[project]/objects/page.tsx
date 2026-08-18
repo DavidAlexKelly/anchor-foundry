@@ -901,6 +901,10 @@ export default function ObjectsPage() {
   // The id, not the row: the edit dialog needs the full definition (properties
   // and the title property), which the summary list does not carry.
   const [editingType, setEditingType] = useState<string | null>(null);
+  // Set by an ontology-search hit on a shared property, cleared by the
+  // panel once it has opened one - so a second search for the same one
+  // opens it again rather than being swallowed as "no change".
+  const [editingShared, setEditingShared] = useState<string | null>(null);
   // The object type whose configured view is being chosen. Name as well as id,
   // because the dialog's title says which type and the row already knows it.
   const [viewingType, setViewingType] = useState<{ id: string; name: string } | null>(null);
@@ -986,6 +990,7 @@ export default function ObjectsPage() {
         <OntologySearch
           workspaceId={workspace.id}
           onOpenType={(typeId) => setEditingType(typeId)}
+          onOpenSharedProperty={(sharedId) => setEditingShared(sharedId)}
         />
       )}
 
@@ -1088,6 +1093,8 @@ export default function ObjectsPage() {
           <SharedPropertiesPanel
             workspaceId={workspace!.id}
             canEdit={canEditOntology}
+            openId={editingShared}
+            onOpened={() => setEditingShared(null)}
           />
 
           <div className="page-head" style={{ marginTop: 32 }}>
