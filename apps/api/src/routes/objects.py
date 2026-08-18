@@ -315,14 +315,21 @@ class OntologySearchHit(BaseModel):
     the one that put the row in the list.
     """
 
-    kind: str  # "object_type" | "property" | "link_type" | "action_type"
+    kind: str  # object_type | property | link_type | action_type | shared_property
     id: UUID
     api_name: str
     display_name: str
     # Where it lives. A property called "status" is not somewhere anybody can
     # navigate to; "status on Ticket" is.
-    object_type_id: UUID
-    object_type_name: str
+    #
+    # **Null for a shared property**, which belongs to no object type by
+    # definition (`object-link-types` p.178). Optional rather than faked: a
+    # made-up owner would send whoever clicked it to a type that has nothing
+    # to do with what they searched for.
+    object_type_id: UUID | None = None
+    object_type_name: str = ""
+    # How many properties use it, for the one kind with no owner to name.
+    usage_count: int | None = None
     matched_field: str
     matched_value: str
 

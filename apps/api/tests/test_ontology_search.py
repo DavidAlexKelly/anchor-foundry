@@ -114,7 +114,20 @@ def ontology(client: TestClient, fx: Fixture) -> dict:
         },
     )
     assert r.status_code == 201, r.text
-    return {"word": word, "type_id": type_id, "far_id": far_id, "link_id": link_id}
+
+    # The fifth kind (§164, §167). Attached to nothing on purpose, so the
+    # usage count in the hit is a number this fixture knows.
+    r = client.post(
+        f"{wbase(fx)}/shared-properties",
+        headers=hdr(fx.editor_sub),
+        json={"api_name": f"sp_{word}", "display_name": f"Shared {word}",
+              "data_type": "string"},
+    )
+    assert r.status_code == 201, r.text
+    shared_id = r.json()["id"]
+
+    return {"word": word, "type_id": type_id, "far_id": far_id,
+            "link_id": link_id, "shared_id": shared_id}
 
 
 def search(client: TestClient, fx: Fixture, q: str, sub: str | None = None) -> list[dict]:
@@ -126,13 +139,74 @@ def search(client: TestClient, fx: Fixture, q: str, sub: str | None = None) -> l
 
 
 def test_one_query_reaches_every_kind_we_have(client: TestClient, fx: Fixture, ontology: dict) -> None:
-    """p.28 lists seven kinds; four exist here. This is the check that all four
+    """p.28 lists seven kinds; five exist here. This is the check that all five
     are actually looked at - a search that quietly skipped one would be
-    indistinguishable from an ontology that had none of them."""
+    indistinguishable from an ontology that had none of them, which is exactly
+    what happened to shared properties between §164 and §167."""
     hits = search(client, fx, ontology["word"])
     assert {h["kind"] for h in hits} == {
-        "object_type", "property", "link_type", "action_type",
+        "object_type", "property", "link_type", "action_type", "shared_property",
     }
+
+
+def test_a_shared_property_is_found_and_says_how_many_use_it(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """**A shared property belongs to no object type**, which is the point of
+    one (`object-link-types` p.178) - so it is the one kind whose hit carries
+    no owner. What takes the place of "status on Ticket" is the usage count,
+    because "used by 3 object types" is the fact somebody deciding whether to
+    open it is actually after."""
+    hit = next(
+        h for h in search(client, fx, ontology["word"])
+        if h["kind"] == "shared_property"
+    )
+    assert hit["id"] == ontology["shared_id"]
+    assert hit["object_type_id"] is None, "no owner, rather than a made-up one"
+    assert hit["usage_count"] == 0
+
+
+def test_a_shared_propertys_usage_count_is_live(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """Not a constant zero. Attaching a property changes the number the search
+    reports, which is what makes it worth carrying at all."""
+    r = client.get(
+        f"{wbase(fx)}/object-types/{ontology['far_id']}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    detail = r.json()
+    r = client.patch(
+        f"{wbase(fx)}/object-types/{ontology['far_id']}",
+        headers=hdr(fx.editor_sub),
+        json={
+            "display_name": detail["display_name"],
+            "properties": [
+                {"api_name": "code", "data_type": "string",
+                 "shared_property_id": ontology["shared_id"]}
+            ],
+            "title_property": "code",
+        },
+    )
+    assert r.status_code == 200, r.text
+    hit = next(
+        h for h in search(client, fx, ontology["word"])
+        if h["kind"] == "shared_property"
+    )
+    assert hit["usage_count"] == 1
+
+
+def test_only_a_shared_property_has_no_owner(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """The other four kinds still name where they live. `object_type_id`
+    became optional for one kind, and a nullable field is exactly the sort
+    that quietly becomes null for all of them."""
+    for hit in search(client, fx, ontology["word"]):
+        if hit["kind"] == "shared_property":
+            continue
+        assert hit["object_type_id"] is not None, hit
+        assert hit["usage_count"] is None, hit
 
 
 def test_a_result_says_which_field_matched(client: TestClient, fx: Fixture, ontology: dict) -> None:

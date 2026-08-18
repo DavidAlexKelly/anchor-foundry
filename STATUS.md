@@ -3440,6 +3440,26 @@ Nine mutations, all red - including reverting the snapshot to its original six f
 
 **The sandbox rewound the checkout again mid-unit** (HEAD back at `16bed37`, `node_modules` intact, the database back at migration 0040). Third time; the recovery in the notes below worked unchanged. Nothing was lost because §164 and §165 were already merged - which is the argument for the merge-per-unit rhythm rather than a long-lived branch.
 
+### 167. The search that could not find a shared property (this session)
+
+`ontology-manager` p.28 lists seven kinds the header search covers. Four existed; §164 built the fifth and did not add it here, which §164 recorded as a gap rather than leaving the parity row's old sentence ("there is nothing to search") standing as a lie. This closes it.
+
+**Worth doing before anything larger, for a reason specific to what a shared property is.** It is the thing somebody looks for by name *before* creating a second one that means the same. A search that could not find one was actively helping the ontology grow duplicates - the opposite of what the feature exists for.
+
+**The one modelling decision: a shared property has no object type, and the hit says so rather than inventing one.** Every other kind answers "where does this live" with an owner - "status on Ticket" - and the search result carried `object_type_id` as a required field. A shared property belongs to no object type by definition (p.178), so its hit carries `null` and a **usage count** instead: "used by 3 properties" is the closest true answer, and it is the fact somebody deciding whether to open it actually wants. A borrowed owner would have sent whoever clicked it to a type with nothing to do with their query.
+
+That made `object_type_id` nullable, which is the sort of change that quietly becomes null everywhere - so there is a test asserting the other four kinds still name their owner.
+
+**A hit needs somewhere to go.** The search hands a shared property id up to the page, which passes it into the panel, which opens the editor. Resolved during render rather than in an effect, because the id can arrive before the list does and an effect keyed on the id alone would miss the case where the list is what arrives second.
+
+Six mutations, all red: three on the server (not searching them at all - the original gap - a constant usage count, and a faked owner) and three on the browser (a hit that opens nothing, a missing count, a panel that ignores the id).
+
+**One test fixed rather than papered over.** §165's delete test asserted `not_to_contain_text` on the shared properties table. That table *unmounts* when the last shared property goes, in favour of the empty state - so the assertion was failing for the wrong reason once the ordering changed. It now asserts the row is gone, which is the claim, and holds whether the table is empty or absent.
+
+**1200 API tests** (was 1197), 200 unit, **174 browser** (was 173).
+
+**One flake seen once and not reproduced, recorded rather than tidied away.** The first full browser run came back 172/2, both failures `to_contain_text` timeouts on the search results panel in `test_ontology_search.py`; the second run was 174/0, and both pass in isolation. The rendering path they exercise is unchanged by this unit - for a `property` hit the new ternary falls through to exactly the same markup - so the likely cause is timing: `search()` now makes one more query per request, and under a full-suite load that can push a response past Playwright's 5s default. Not fixed by raising the timeout, because a timeout raised to hide slowness is a check made harder to fail. If it recurs it should be visible.
+
 
 
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.

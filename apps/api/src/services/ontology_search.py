@@ -5,11 +5,17 @@
 > properties, link types, action types, shared properties, interfaces, and
 > functions." (p.28)
 
-Four of those seven exist here; shared properties, interfaces and functions are
-`○` in §1.2/§1.3 and are absent from this search for the same reason they are
-absent from the Ontology Manager - there is nothing to find. Named rather than
-silently skipped, because "search found nothing" and "search does not look
-there" read identically to whoever typed the query.
+Five of those seven exist here. Interfaces and functions are `○` in §1.2/§1.3
+and are absent from this search for the same reason they are absent from the
+Ontology Manager - there is nothing to find. Named rather than silently
+skipped, because "search found nothing" and "search does not look there" read
+identically to whoever typed the query.
+
+**Shared properties were the fifth, and were missing for a while after they
+existed** (§164 built them, §167 added them here). That gap was worth closing
+before any other: a shared property is precisely the thing somebody looks for
+by name *before* creating a second one that means the same, so a search that
+could not find one was helping the ontology grow duplicates.
 
 **One query per kind, matched in Python.** The four tables are small - an
 ontology is tens of types, not millions of rows - and the alternative is four
@@ -68,6 +74,7 @@ async def search(
     """
     from . import actions as actions_service
     from . import ontology as ontology_service
+    from . import shared_properties
 
     needle = query.strip().casefold()
     if not needle:
@@ -144,6 +151,27 @@ async def search(
             "display_name": row["display_name"],
             "object_type_id": str(row["object_type_id"]),
             "object_type_name": row["object_type_name"],
+            "matched_field": field,
+            "matched_value": str(row[field] or ""),
+        })
+
+    # **A shared property belongs to no object type**, which is the whole
+    # point of one (`object-link-types` p.178), so it is the one kind whose
+    # `object_type_id` is None. What takes its place is the usage count: "used
+    # by 3 object types" is the fact somebody is deciding on, and it is the
+    # closest true answer to "where does this live".
+    for row in await shared_properties.list_shared(conn, workspace_id):
+        field = _matched_field(row, needle)
+        if not field:
+            continue
+        results.append({
+            "kind": "shared_property",
+            "id": str(row["id"]),
+            "api_name": row["api_name"],
+            "display_name": row["display_name"],
+            "object_type_id": None,
+            "object_type_name": "",
+            "usage_count": int(row["usage_count"]),
             "matched_field": field,
             "matched_value": str(row[field] or ""),
         })

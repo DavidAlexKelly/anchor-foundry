@@ -246,9 +246,17 @@ function UsageDialog({
 export function SharedPropertiesPanel({
   workspaceId,
   canEdit,
+  openId,
+  onOpened,
 }: {
   workspaceId: string;
   canEdit: boolean;
+  /** Open this one's editor as soon as it can be resolved. The ontology
+   * search hands over an id, and only this component knows how to turn one
+   * into an open dialog — the alternative is the page holding a duplicate of
+   * the edit dialog so that the search has something of its own to open. */
+  openId?: string | null;
+  onOpened?: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<SharedProperty | null>(null);
@@ -259,6 +267,17 @@ export function SharedPropertiesPanel({
     queryKey: ["shared-properties", workspaceId],
     queryFn: () => objApi.listSharedProperties(workspaceId),
   });
+
+  // Resolved during render rather than in an effect: the id may arrive before
+  // the list does, and an effect keyed on `openId` alone would miss the case
+  // where the list is what arrives second.
+  const requested = openId
+    ? (shared.data ?? []).find((s) => s.id === openId) ?? null
+    : null;
+  if (requested && editing?.id !== requested.id) {
+    setEditing(requested);
+    onOpened?.();
+  }
 
   const remove = useMutation({
     mutationFn: (id: string) => objApi.deleteSharedProperty(workspaceId, id),

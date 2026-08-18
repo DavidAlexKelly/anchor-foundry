@@ -32,16 +32,23 @@ const KIND_LABELS: Record<OntologySearchHit["kind"], string> = {
   property: "Property",
   link_type: "Link type",
   action_type: "Action",
+  shared_property: "Shared property",
 };
 
 export function OntologySearch({
   workspaceId,
   onOpenType,
+  onOpenSharedProperty,
 }: {
   workspaceId: string;
-  /** Where a hit goes. Every kind belongs to an object type, which is the one
-   * place all four can be looked at. */
+  /** Where a hit goes. Four of the five kinds belong to an object type, which
+   * is the one place all four can be looked at. */
   onOpenType: (typeId: string) => void;
+  /** The fifth. A shared property belongs to no object type
+   * (`object-link-types` p.178), so it has its own destination rather than a
+   * borrowed one — without this a hit would either go nowhere, or go somewhere
+   * that has nothing to do with what was searched for. */
+  onOpenSharedProperty: (sharedId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -102,7 +109,11 @@ export function OntologySearch({
                     style={{ padding: "4px 10px", fontSize: 12.5, textAlign: "left" }}
                     data-kind={hit.kind}
                     data-matched-field={hit.matched_field}
-                    onClick={() => onOpenType(hit.object_type_id)}
+                    onClick={() =>
+                      hit.object_type_id
+                        ? onOpenType(hit.object_type_id)
+                        : onOpenSharedProperty(hit.id)
+                    }
                   >
                     <span className="slug" style={{ marginRight: 8 }}>
                       {KIND_LABELS[hit.kind]}
@@ -123,11 +134,20 @@ export function OntologySearch({
                         ),
                       )}
                     </span>
-                    {hit.kind !== "object_type" && (
+                    {/* Where it lives, in whichever way is true of it. A
+                        shared property has no owner to name, so it says how
+                        many properties use it instead — which is the fact
+                        somebody about to open it is deciding on. */}
+                    {hit.kind === "shared_property" ? (
+                      <span className="slug" style={{ marginLeft: 8 }}>
+                        used by {hit.usage_count}{" "}
+                        {hit.usage_count === 1 ? "property" : "properties"}
+                      </span>
+                    ) : hit.kind !== "object_type" ? (
                       <span className="slug" style={{ marginLeft: 8 }}>
                         on {hit.object_type_name}
                       </span>
-                    )}
+                    ) : null}
                   </button>
                 </li>
               ))}
