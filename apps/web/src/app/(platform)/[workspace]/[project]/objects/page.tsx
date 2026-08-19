@@ -15,6 +15,9 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { OntologySearch } from "@/components/ontology-search";
 import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
+import {
+  GroupChips, GroupFilter, ObjectTypeGroupsPanel,
+} from "@/components/object-type-groups-panel";
 import { StatusBadge } from "@/components/status-field";
 import { canDelete, deleteBlockedReason } from "@/lib/ontology-status";
 import { ValueTypesPanel } from "@/components/value-types-panel";
@@ -908,6 +911,8 @@ export default function ObjectsPage() {
   // panel once it has opened one - so a second search for the same one
   // opens it again rather than being swallowed as "no change".
   const [editingShared, setEditingShared] = useState<string | null>(null);
+  const [openingGroup, setOpeningGroup] = useState<string | null>(null);
+  const [groupFilter, setGroupFilter] = useState<string | null>(null);
   // The object type whose configured view is being chosen. Name as well as id,
   // because the dialog's title says which type and the row already knows it.
   const [viewingType, setViewingType] = useState<{ id: string; name: string } | null>(null);
@@ -916,9 +921,15 @@ export default function ObjectsPage() {
   const [definingAction, setDefiningAction] = useState<ActionType | null>(null);
   const queryClient = useQueryClient();
 
+  // **Keyed by the filter, deliberately.** Six other components cache the
+  // unfiltered list under `["object-types", workspaceId]` and every one of
+  // them wants the whole ontology - the group picker inside this very page
+  // most of all, since a picker that only offered the group you were already
+  // filtered to could never move a type out of it. React Query matches keys by
+  // prefix, so invalidating the shorter key still refreshes this one.
   const types = useQuery({
-    queryKey: ["object-types", workspace?.id],
-    queryFn: () => objApi.listTypes(workspace!.id),
+    queryKey: ["object-types", workspace?.id, groupFilter],
+    queryFn: () => objApi.listTypes(workspace!.id, groupFilter),
     enabled: !!workspace,
   });
   const linkTypes = useQuery({
@@ -994,13 +1005,37 @@ export default function ObjectsPage() {
           workspaceId={workspace.id}
           onOpenType={(typeId) => setEditingType(typeId)}
           onOpenSharedProperty={(sharedId) => setEditingShared(sharedId)}
+          onOpenGroup={(groupId) => setOpeningGroup(groupId)}
         />
       )}
 
       {types.isPending && <div className="state">Loading the ontology…</div>}
       {types.isError && <div className="state error">Couldn&apos;t load object types. Refresh to try again.</div>}
 
-      {types.data && types.data.length === 0 && (
+      {/* **An empty filter result is not an empty ontology.** Falling through
+          to "The ontology starts here" because a group happens to hold nothing
+          would tell somebody with two hundred object types that they have
+          none - and offer them a Define button as the way out of a filter. */}
+      {types.data && types.data.length === 0 && groupFilter && (
+        <div className="empty" data-testid="empty-group-filter">
+          <h2>Nothing in this group</h2>
+          <p>
+            The group exists and this workspace has object types — none of them
+            is filed under it yet.
+          </p>
+          <div className="row-actions" style={{ justifyContent: "center" }}>
+            <button
+              className="btn"
+              data-testid="clear-group-filter"
+              onClick={() => setGroupFilter(null)}
+            >
+              Show all object types
+            </button>
+          </div>
+        </div>
+      )}
+
+      {types.data && types.data.length === 0 && !groupFilter && (
         <div className="empty">
           <h2>The ontology starts here</h2>
           <p>Object types give your data business meaning: a Customer, an Order, a Shipment - typed properties, typed relationships, shared across the workspace.</p>
@@ -1010,6 +1045,18 @@ export default function ObjectsPage() {
               <button className="btn" onClick={() => setCreatingType(true)}>Define object type</button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* p.262's filter. Above the table rather than in a header cell, because
+          it changes what the table *is* rather than how one column sorts. */}
+      {workspace && (
+        <div className="row-actions" style={{ marginBottom: 10 }}>
+          <GroupFilter
+            workspaceId={workspace.id}
+            value={groupFilter}
+            onChange={setGroupFilter}
+          />
         </div>
       )}
 
@@ -1029,6 +1076,9 @@ export default function ObjectsPage() {
                         about which object types are intended for use". A
                         listing is the first of those places. */}
                     <StatusBadge status={t.status} />
+                    {/* p.262's "displaying … by group", on the row it
+                        describes. */}
+                    <GroupChips groups={t.groups} />
                     <div className="slug">{t.api_name}</div>
                   </td>
                   <td className="count">{t.source_count}</td>
@@ -1117,6 +1167,16 @@ export default function ObjectsPage() {
           <ValueTypesPanel
             workspaceId={workspace!.id}
             canEdit={canEditOntology}
+          />
+
+          {/* Groups last of the three, because it is the only one that says
+              nothing about what an object type *is* - p.261 makes it a way of
+              finding types rather than a way of defining them. */}
+          <ObjectTypeGroupsPanel
+            workspaceId={workspace!.id}
+            canEdit={canEditOntology}
+            openId={openingGroup}
+            onOpened={() => setOpeningGroup(null)}
           />
 
           <div className="page-head" style={{ marginTop: 32 }}>

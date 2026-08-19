@@ -622,6 +622,17 @@ export interface SharedPropertyInput {
   value_format?: import("./types").ValueFormat | null;
 }
 
+/** Creating or renaming a group (`object-link-types` p.261).
+ *
+ * `api_name` only on create: it is the stable machine name, and it is what
+ * p.262's search matches on, so a rename would move a group out from under a
+ * saved query with nothing to say so. */
+export interface ObjectTypeGroupInput {
+  api_name?: string;
+  display_name: string;
+  description?: string;
+}
+
 /** One row of p.191's Usage. The property's own api_name is here because
  * p.188 lets it differ from the shared property's. */
 export interface SharedPropertyUsage {
@@ -832,8 +843,15 @@ export const objects = {
     ),
   deleteSearch: (wid: string, searchId: string) =>
     request<void>(`/workspaces/${wid}/object-searches/${searchId}`, { method: "DELETE" }),
-  listTypes: (wid: string) =>
-    request<import("./types").ObjectTypeSummary[]>(`/workspaces/${wid}/object-types`),
+  /** p.262: the table of object types "supports displaying and filtering by
+   * group". `groupId` is the filtering half — server-side, so narrowing to a
+   * group of four does not make the client pay for every type in the
+   * ontology. */
+  listTypes: (wid: string, groupId?: string | null) =>
+    request<import("./types").ObjectTypeSummary[]>(
+      `/workspaces/${wid}/object-types` +
+        (groupId ? `?group_id=${encodeURIComponent(groupId)}` : ""),
+    ),
   getType: (wid: string, typeId: string) =>
     request<import("./types").ObjectTypeDetail>(`/workspaces/${wid}/object-types/${typeId}`),
   createType: (wid: string, input: ObjectTypeCreateInput) =>
@@ -958,6 +976,53 @@ export const objects = {
     request<void>(`/workspaces/${wid}/shared-properties/${sharedId}`, {
       method: "DELETE",
     }),
+
+  // ---- object type groups (`object-link-types` p.261-263) ------------------
+  listObjectTypeGroups: (wid: string) =>
+    request<import("./types").ObjectTypeGroup[]>(
+      `/workspaces/${wid}/object-type-groups`,
+    ),
+  createObjectTypeGroup: (wid: string, input: ObjectTypeGroupInput) =>
+    request<import("./types").ObjectTypeGroup>(
+      `/workspaces/${wid}/object-type-groups`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  updateObjectTypeGroup: (wid: string, groupId: string, input: ObjectTypeGroupInput) =>
+    request<import("./types").ObjectTypeGroup>(
+      `/workspaces/${wid}/object-type-groups/${groupId}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+  deleteObjectTypeGroup: (wid: string, groupId: string) =>
+    request<void>(`/workspaces/${wid}/object-type-groups/${groupId}`, {
+      method: "DELETE",
+    }),
+  objectTypeGroupMembers: (wid: string, groupId: string) =>
+    request<import("./types").ObjectTypeGroupMember[]>(
+      `/workspaces/${wid}/object-type-groups/${groupId}/members`,
+    ),
+  /** PUT because the body is the whole membership (p.261's groups menu):
+   * "remove the last one" and "set it to these three" are the same request. */
+  setObjectTypeGroupMembers: (wid: string, groupId: string, objectTypeIds: string[]) =>
+    request<import("./types").ObjectTypeGroupMember[]>(
+      `/workspaces/${wid}/object-type-groups/${groupId}/members`,
+      { method: "PUT", body: JSON.stringify({ object_type_ids: objectTypeIds }) },
+    ),
+  groupsForObjectType: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeGroupRef[]>(
+      `/workspaces/${wid}/object-types/${typeId}/groups`,
+    ),
+  /** p.261's "Edit groups in the object type overview page".
+   *
+   * **Its own verb, not part of the object type's PATCH.** That endpoint
+   * rebuilds the whole definition, so a client predating groups would send no
+   * `groups` key and silently un-group every type it saved — the carry-through
+   * failure this repo has now met seven times. A classification that is not
+   * the type's own field does not belong in the type's own body. */
+  setGroupsForObjectType: (wid: string, typeId: string, groupIds: string[]) =>
+    request<import("./types").ObjectTypeGroupRef[]>(
+      `/workspaces/${wid}/object-types/${typeId}/groups`,
+      { method: "PUT", body: JSON.stringify({ group_ids: groupIds }) },
+    ),
   listLinkTypes: (wid: string) =>
     request<import("./types").LinkType[]>(`/workspaces/${wid}/link-types`),
   createLinkType: (wid: string, input: LinkTypeCreateInput) =>

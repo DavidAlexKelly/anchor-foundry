@@ -25,6 +25,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { objects as objApi } from "@/lib/api";
 import { highlight } from "@/components/ontology-highlight";
+import { memberSummary } from "@/lib/object-type-groups";
 import type { OntologySearchHit } from "@/lib/types";
 
 const KIND_LABELS: Record<OntologySearchHit["kind"], string> = {
@@ -33,15 +34,17 @@ const KIND_LABELS: Record<OntologySearchHit["kind"], string> = {
   link_type: "Link type",
   action_type: "Action",
   shared_property: "Shared property",
+  group: "Group",
 };
 
 export function OntologySearch({
   workspaceId,
   onOpenType,
   onOpenSharedProperty,
+  onOpenGroup,
 }: {
   workspaceId: string;
-  /** Where a hit goes. Four of the five kinds belong to an object type, which
+  /** Where a hit goes. Four of the six kinds belong to an object type, which
    * is the one place all four can be looked at. */
   onOpenType: (typeId: string) => void;
   /** The fifth. A shared property belongs to no object type
@@ -49,6 +52,11 @@ export function OntologySearch({
    * borrowed one — without this a hit would either go nowhere, or go somewhere
    * that has nothing to do with what was searched for. */
   onOpenSharedProperty: (sharedId: string) => void;
+  /** The sixth, for the same reason (p.261). A group is not on an object type
+   * and cannot borrow one's destination — and the two ownerless kinds cannot
+   * share a handler either, since a group id opened as a shared property finds
+   * nothing and silently does nothing at all. */
+  onOpenGroup: (groupId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -112,7 +120,9 @@ export function OntologySearch({
                     onClick={() =>
                       hit.object_type_id
                         ? onOpenType(hit.object_type_id)
-                        : onOpenSharedProperty(hit.id)
+                        : hit.kind === "group"
+                          ? onOpenGroup(hit.id)
+                          : onOpenSharedProperty(hit.id)
                     }
                   >
                     <span className="slug" style={{ marginRight: 8 }}>
@@ -142,6 +152,15 @@ export function OntologySearch({
                       <span className="slug" style={{ marginLeft: 8 }}>
                         used by {hit.usage_count}{" "}
                         {hit.usage_count === 1 ? "property" : "properties"}
+                      </span>
+                    ) : hit.kind === "group" ? (
+                      /* A group has no owner either, and says its size for the
+                         same reason — except that here **zero is worth saying
+                         out loud**: p.263 makes a group discoverable whether
+                         or not it has members, so an empty one is a real
+                         answer rather than a broken row. */
+                      <span className="slug" style={{ marginLeft: 8 }}>
+                        {memberSummary(hit.usage_count ?? 0)}
                       </span>
                     ) : hit.kind !== "object_type" ? (
                       <span className="slug" style={{ marginLeft: 8 }}>

@@ -28,6 +28,7 @@ import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
 import { ValueTypePicker } from "@/components/value-type-picker";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
+import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import type {
   ObjectTypeDetail,
   ObjectTypeImpact,
@@ -576,6 +577,21 @@ export function EditObjectTypeDialog({
   const [acknowledged, setAcknowledged] = useState(false);
   const queryClient = useQueryClient();
 
+  // p.261's "Edit groups in the object type overview page". Its own query and
+  // its own write, because a group is not one of this type's fields — see
+  // `api.setGroupsForObjectType`.
+  const currentGroups = useQuery({
+    queryKey: ["object-type-groups-for", workspaceId, type.id],
+    queryFn: () => objApi.groupsForObjectType(workspaceId, type.id),
+  });
+  const [groupIds, setGroupIds] = useState<string[] | null>(null);
+  const originalGroupIds = (currentGroups.data ?? []).map((g) => g.id);
+  const selectedGroupIds = groupIds ?? originalGroupIds;
+  const allGroups = useQuery({
+    queryKey: ["object-type-groups", workspaceId],
+    queryFn: () => objApi.listObjectTypeGroups(workspaceId),
+  });
+
   const named = properties.filter((p) => p.api_name.trim());
   const body = {
     display_name: displayName,
@@ -600,14 +616,33 @@ export function EditObjectTypeDialog({
   const blocking = impacts.filter((i) => i.blocking);
 
   const save = useMutation({
-    mutationFn: () =>
-      objApi.updateType(workspaceId, type.id, {
+    mutationFn: async () => {
+      const updated = await objApi.updateType(workspaceId, type.id, {
         ...body,
         status,
         deprecation,
         acknowledge_breaking: blocking.length > 0,
-      }),
+      });
+      // **Only when it actually changed**, and that condition is the whole
+      // defence. The groups are their own resource with their own verb, so
+      // this dialog holds two writes - and a dialog that PUT the membership on
+      // every save would reintroduce the carry-through failure one layer up:
+      // open the dialog, somebody else files the type under a group, change a
+      // description, save, and their grouping is gone. Sending nothing when
+      // nothing changed is what makes that impossible rather than unlikely.
+      if (!sameSelection(selectedGroupIds, originalGroupIds)) {
+        await objApi.setGroupsForObjectType(workspaceId, type.id, selectedGroupIds);
+      }
+      return updated;
+    },
     onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["object-type-groups-for", workspaceId, type.id],
+      });
+      // The group's own member count and p.262's column both moved.
+      await queryClient.invalidateQueries({
+        queryKey: ["object-type-groups", workspaceId],
+      });
       await queryClient.invalidateQueries({ queryKey: ["object-type", type.id] });
       await queryClient.invalidateQueries({ queryKey: ["object-types", workspaceId] });
       await queryClient.invalidateQueries({ queryKey: ["object-sources", workspaceId] });
@@ -652,6 +687,32 @@ export function EditObjectTypeDialog({
             status: p.status ?? "experimental",
           }))}
         />
+        {/* p.261: "Groups can also be added directly to object types by
+            selecting Edit groups in the object type overview page." Drawn only
+            when there is a group to pick - a checklist of nothing is a control
+            that cannot do anything. */}
+        {(currentGroups.data ?? []).length + (allGroups.data ?? []).length > 0 && (
+          <Field
+            label="Groups"
+            hint="A classification for finding this type. Being in one does not change it."
+          >
+            <div data-testid="type-group-picker">
+              {(allGroups.data ?? []).map((g) => (
+                <label key={g.id} style={{ display: "block", padding: "3px 0" }}>
+                  <input
+                    type="checkbox"
+                    data-testid={`type-group-${g.api_name}`}
+                    checked={selectedGroupIds.includes(g.id)}
+                    onChange={() =>
+                      setGroupIds(toggleSelection(selectedGroupIds, g.id))
+                    }
+                  />{" "}
+                  {g.display_name} <span className="slug">{g.api_name}</span>
+                </label>
+              ))}
+            </div>
+          </Field>
+        )}
         <Field label="Properties" hint="Renaming a property removes it and adds a new one">
           <PropertyRows
             properties={properties}
