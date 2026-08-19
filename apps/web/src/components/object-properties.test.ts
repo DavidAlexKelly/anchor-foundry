@@ -26,6 +26,8 @@ function prop(
     effective_value_type_id: null,
     value_type_api_name: null,
     value_constraint: null,
+    status: "experimental",
+    deprecation: null,
   };
 }
 

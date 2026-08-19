@@ -589,6 +589,10 @@ export interface PropertyInput {
   /** The value type constraining this property (`object-link-types` p.227).
    * Null detaches it, so it is sent explicitly rather than omitted. */
   value_type_id?: string | null;
+  /** Developmental state (`object-link-types` p.253). Defaults to
+   * `experimental` (p.256) when a client says nothing. */
+  status?: import("./types").OntologyStatus;
+  deprecation?: import("./types").Deprecation | null;
 }
 
 export interface ValueTypeInput {
@@ -656,6 +660,11 @@ export interface ObjectTypeUpdateInput {
   colour?: string;
   properties: PropertyInput[];
   title_property?: string | null;
+  /** p.253's status. **Omitted means unchanged**, not `experimental` — this
+   * is a whole-definition save, and a client that says nothing must not
+   * silently demote a type somebody promoted. */
+  status?: import("./types").OntologyStatus;
+  deprecation?: import("./types").Deprecation | null;
   /** Required to push through a change that breaks an existing consumer. */
   acknowledge_breaking?: boolean;
 }
