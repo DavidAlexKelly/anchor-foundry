@@ -465,6 +465,33 @@ def check_required(
             )
 
 
+def check_constraints(
+    writes: dict[str, Any],
+    constrained: dict[str, tuple[str, dict[str, Any]]],
+) -> None:
+    """Refuse a write that breaks a value type constraint (p.222, p.227).
+
+    **Only what this action actually writes.** A row that was already
+    non-compliant is the sync's business to report (§154's split); refusing
+    here on the strength of a value it is not touching would make the one
+    action that could fix an object the one action that cannot run - the same
+    trap `check_required` names.
+
+    Raised before anything is written, like `check_required` and
+    `check_criteria`: refused and refused-halfway look the same to the caller
+    and are very different in the dataset.
+    """
+    from . import value_constraints
+
+    for api_name in sorted(writes):
+        if api_name not in constrained:
+            continue
+        base_type, constraint = constrained[api_name]
+        why = value_constraints.violation(constraint, base_type, writes[api_name])
+        if why is not None:
+            raise ValueError(f"{api_name!r} fails its value type: {why}")
+
+
 def changes_the_subject(rules: list[dict[str, Any]]) -> bool:
     """Whether any rule writes a property of the object the action ran on.
 

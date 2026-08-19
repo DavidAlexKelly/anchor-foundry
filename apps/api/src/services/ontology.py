@@ -28,7 +28,10 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # Re-exported so callers keep saying ontology.coerce_property_value; the
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
-from . import conditional_format, derived_properties, shared_properties, value_format
+from . import (
+    conditional_format, derived_properties, shared_properties, value_format,
+    value_types,
+)
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
     PropertyValueError,
@@ -145,6 +148,16 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
     the stored row would see the value from the last time the type was saved.
     `shared_property_api_name` comes back too, so an application can draw
     p.178's globe without a second query.
+
+    **The value type's current constraint is resolved here too** (p.222-234),
+    and by the same argument: p.230 has a new version propagate to every use,
+    so a reader that saw a stored copy would see the rule as it was when the
+    type was last saved. `value_constraint` is what will actually be enforced.
+
+    A property takes a value type from itself, **or from the shared property it
+    is attached to** - p.227 allows one in either place, and `COALESCE` names
+    the precedence rather than leaving it to whichever join ran last: the
+    property's own choice wins, because it is the more specific statement.
     """
     rows = await fetch_all(
         conn,
@@ -158,9 +171,21 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
                sp.description AS sp_description,
                sp.data_type AS sp_data_type,
                sp.visibility AS sp_visibility,
-               sp.value_format AS sp_value_format
+               sp.value_format AS sp_value_format,
+               p.value_type_id AS own_value_type_id,
+               vt.id AS value_type_id,
+               vt.api_name AS value_type_api_name,
+               vv.constraint_json AS value_constraint
           FROM object_type_properties p
           LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+          LEFT JOIN value_types vt
+                 ON vt.id = COALESCE(p.value_type_id, sp.value_type_id)
+          -- The current version is the highest-numbered one (p.230).
+          LEFT JOIN LATERAL (
+              SELECT constraint_json FROM value_type_versions
+               WHERE value_type_id = vt.id
+               ORDER BY version_number DESC LIMIT 1
+          ) vv ON true
          WHERE p.object_type_id = :tid ORDER BY p.sort_order, p.api_name
         """,
         {"tid": str(type_id)},
@@ -181,7 +206,36 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
             else None
         )
         prop = {k: v for k, v in full.items() if not k.startswith("sp_")}
+        # `own_value_type_id` is what a save has to send back; `value_type_id`
+        # may have come from the shared property, and echoing *that* would
+        # silently convert an inherited value type into a locally chosen one.
+        prop["value_type_id"] = full["own_value_type_id"]
+        prop["effective_value_type_id"] = full["value_type_id"]
+        del prop["own_value_type_id"]
         out.append(shared_properties.resolve(prop, shared))
+    return out
+
+
+def constrained_properties(
+    properties: list[dict[str, Any]],
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    """The api names carrying a value type constraint, with the base type to
+    judge them against (`object-link-types` p.222).
+
+    The same shape of helper as `required_properties`, and read by the same two
+    callers for the same reason: the sync reports what does not comply and the
+    action refuses to write it (p.116's split, applied to p.227's rule). A
+    property whose value type has no constraint is absent - it carries meaning
+    without a rule, and there is nothing to check.
+    """
+    out: dict[str, tuple[str, dict[str, Any]]] = {}
+    for prop in properties:
+        constraint = prop.get("value_constraint")
+        if constraint is None:
+            continue
+        if isinstance(constraint, str):
+            constraint = json.loads(constraint)
+        out[str(prop["api_name"])] = (str(prop["data_type"]), constraint)
     return out
 
 
@@ -337,6 +391,39 @@ async def _apply_shared(
         prop.update(shared_properties.resolve(prop, shared))
 
 
+async def _apply_value_types(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    properties: list[dict[str, Any]],
+) -> None:
+    """Check every value type attachment (`object-link-types` p.222-234).
+
+    Only a base type check, and deliberately only that. A value type carries no
+    metadata a property inherits - unlike a shared property, whose display name
+    and formatting are the whole point (p.178) - so there is nothing to resolve
+    on the way in, and nothing a client could contradict. What it carries is a
+    *constraint*, which is resolved on the way out and enforced where the data
+    is.
+    """
+    ids = {
+        UUID(str(p["value_type_id"]))
+        for p in properties
+        if p.get("value_type_id")
+    }
+    known = await value_types.by_id(conn, workspace_id, ids)
+    for prop in properties:
+        raw = prop.get("value_type_id")
+        if not raw:
+            prop["value_type_id"] = None
+            continue
+        found = known.get(str(raw))
+        if found is None:
+            raise value_types.ValueTypeError(
+                f"{prop['api_name']}: no value type {raw} in this workspace"
+            )
+        value_types.check_attachment(prop, found)
+
+
 async def _attached_shared_ids(
     conn: AsyncConnection, type_id: UUID
 ) -> dict[str, str]:
@@ -372,6 +459,7 @@ async def create_type(
     _validate_properties(properties)
     # Nothing is stored yet, so every attachment here is a fresh one.
     await _apply_shared(conn, workspace_id, properties, already_attached={})
+    await _apply_value_types(conn, workspace_id, properties)
     for prop in properties:
         if prop.get("derivation") is not None:
             # Not a limitation so much as a consequence: a derived property
@@ -441,11 +529,12 @@ async def _write_property_rows(
                                                 data_type, required, description, sort_order,
                                                 visibility, value_format,
                                                 conditional_format, edit_only,
-                                                derivation, shared_property_id)
+                                                derivation, shared_property_id,
+                                                value_type_id)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
-                    CAST(:deriv AS jsonb), :shared)
+                    CAST(:deriv AS jsonb), :shared, :valuetype)
             RETURNING id
             """,
             {
@@ -479,6 +568,14 @@ async def _write_property_rows(
                 "shared": (
                     str(prop["shared_property_id"])
                     if prop.get("shared_property_id")
+                    else None
+                ),
+                # p.227's other attachment point. Carried with the rest of the
+                # property for the same reason - a setting written by a
+                # separate call is a setting somebody forgets to make.
+                "valuetype": (
+                    str(prop["value_type_id"])
+                    if prop.get("value_type_id")
                     else None
                 ),
             },
@@ -557,7 +654,8 @@ async def _snapshot_version(
                                'conditional_format', p.conditional_format,
                                'edit_only', p.edit_only,
                                'derivation', p.derivation,
-                               'shared_property_id', p.shared_property_id)
+                               'shared_property_id', p.shared_property_id,
+                               'value_type_id', p.value_type_id)
                            ORDER BY p.sort_order, p.api_name)
                       FROM object_type_properties p WHERE p.object_type_id = ot.id),
                    '[]'::jsonb),
@@ -812,6 +910,7 @@ async def update_type(
         properties,
         already_attached=await _attached_shared_ids(conn, type_id),
     )
+    await _apply_value_types(conn, workspace_id, properties)
     # The chain is checked against the ontology rather than against itself:
     # whether the links join up, and whether any hop can reach more than one
     # object, are facts only the workspace's link types can answer.
