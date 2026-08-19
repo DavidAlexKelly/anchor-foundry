@@ -3570,6 +3570,25 @@ It also happens to be the shape this repo's own scar tissue argues for. **RLS po
 
 **1332 API tests** (was 1303).
 
+
+### 173. The groups menu, and a write that must not happen (this session)
+
+The Ontology Manager surface for §172 (`ontology.md` §1.3; `object-link-types` p.261-263): p.261's groups menu, p.261's "Edit groups" on the object type, and p.262's three appearances - chips on each row, a filter above the table, and the group kind in search.
+
+**An empty group is drawn like any other, and it says "0 object types" rather than going quiet.** That is p.263's rule reaching the screen. Every group is empty for the seconds after somebody creates one, so a panel that hid it - or a count that rendered zero as blank - would fail on the very first use, and fail as an *absence* rather than an error.
+
+**The interesting decision is a write that must not happen.** Membership is its own resource with its own verb (§172 made it one deliberately, so an object type's PATCH cannot carry it). But the edit dialog holds both, so it does two writes - and one that PUT the groups on every save would reintroduce the carry-through failure a layer up: open the dialog, a colleague files the type under a group, change a description, save, and their grouping is gone. **This is the eighth time this repo has met that shape** (§157, §160, §163, §164, §165, §169, §171), and the first answered by *not carrying the value* rather than by carrying it more carefully: the dialog sends nothing when nothing changed. `sameSelection` is therefore load-bearing and silent when wrong in either direction - always-true drops edits, always-false clobbers - so it is a pure function in `lib/object-type-groups.ts` with its own tests, not an inline `JSON.stringify`.
+
+**A cache key that had to be different.** The page's object type query is now keyed by the filter, because six other components cache the *unfiltered* list under `["object-types", workspaceId]` - the group picker inside this very page most of all, since a picker offering only the group you were already filtered to could never move a type out of it. React Query matches by prefix, so the existing invalidations still reach it.
+
+**An empty filter result is not an empty ontology.** Falling through to "The ontology starts here" because a group holds nothing would tell somebody with two hundred object types that they have none, and offer a Define button as the way out of a filter. Its own empty state, with a way back.
+
+**Fifteen browser mutations, four survivors, and the interesting one was a race the test was losing.** The carry-through test attaches the group through the API *after* opening the dialog - that is the whole setup, since the bug only exists when somebody else changes the membership while the dialog is open. But the dialog's groups query was still in flight when the API call landed, so its answer already contained the colleague's group and even a dialog that PUT on every save sent the right value. **A test whose setup races the thing it is testing passes for a reason unrelated to the code.** The fix is a deterministic wait for evidence the read finished *and finished without the group*: an unticked checkbox for it. Worth generalising - anywhere a browser test writes through the API to set up a stale-client scenario, the client has to be provably past its read first.
+
+Two more survivors were ordinary gaps: the members dialog was never reopened, so "opens with nothing ticked" - which under a whole-membership PUT is the same bug as "empties the group" - went unseen; and the search hit was checked for being visible but never clicked, so a group hit that opened nothing looked fine. The fourth was **a leftover-state artifact**: this module reuses a workspace, so a group with members left by an earlier run kept the listing on screen when the mutant would otherwise have emptied it. The claim is about a workspace whose only group is a new empty one, so the test now builds that workspace rather than hoping for it.
+
+**246 web unit tests** (was 232).
+
 ---
 ---
 ---
