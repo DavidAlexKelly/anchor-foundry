@@ -540,6 +540,24 @@ async def execute_action(
             return required_by_type[type_id]
 
         actions_service.check_required(values, required=required_by_type[str(object_type_id)])
+        # p.222's constraints, at the same moment and for the same reason.
+        # `constrained_properties` reads the value type's *current* version
+        # (p.230), so an action refused today is refused against the rule in
+        # force today rather than the one that applied when the type was saved.
+        constrained_by_type = {
+            str(object_type_id): ontology_service.constrained_properties(properties)
+        }
+
+        async def _constrained_for(type_id: str):
+            if type_id not in constrained_by_type:
+                constrained_by_type[type_id] = ontology_service.constrained_properties(
+                    await ontology_service.list_properties(conn, UUID(type_id))
+                )
+            return constrained_by_type[type_id]
+
+        actions_service.check_constraints(
+            values, constrained_by_type[str(object_type_id)]
+        )
         # **A create is checked whole.** There is no "already" for a new
         # object, so a required property absent from the rule is a row born
         # non-compliant - which is the one case where absence and emptiness
@@ -549,6 +567,10 @@ async def execute_action(
                 creation["properties"],
                 required=await _required_for(creation["object_type_id"]),
                 creating=True,
+            )
+            actions_service.check_constraints(
+                creation["properties"],
+                await _constrained_for(creation["object_type_id"]),
             )
         modifications = actions_service.object_modifications(
             bound,

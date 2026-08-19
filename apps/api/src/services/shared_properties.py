@@ -93,6 +93,7 @@ async def list_shared(
         """
         SELECT sp.id, sp.api_name, sp.display_name, sp.description,
                sp.data_type, sp.visibility, sp.value_format,
+               sp.value_type_id,
                sp.created_at, sp.updated_at,
                (SELECT count(*) FROM object_type_properties p
                  WHERE p.shared_property_id = sp.id) AS usage_count
@@ -113,6 +114,7 @@ async def get_shared(
         """
         SELECT sp.id, sp.api_name, sp.display_name, sp.description,
                sp.data_type, sp.visibility, sp.value_format,
+               sp.value_type_id,
                sp.created_at, sp.updated_at,
                (SELECT count(*) FROM object_type_properties p
                  WHERE p.shared_property_id = sp.id) AS usage_count
@@ -163,6 +165,7 @@ async def create_shared(
     data_type: str,
     visibility: str,
     value_format_raw: Any,
+    value_type_id: UUID | None,
     created_by: UUID,
 ) -> dict[str, Any]:
     _check_definition(
@@ -183,11 +186,13 @@ async def create_shared(
         """
         INSERT INTO shared_properties (workspace_id, api_name, display_name,
                                        description, data_type, visibility,
-                                       value_format, created_by)
+                                       value_format, value_type_id, created_by)
         VALUES (:wid, :api, :name, :descr, CAST(:dtype AS property_data_type),
-                CAST(:vis AS property_visibility), CAST(:vfmt AS jsonb), :by)
+                CAST(:vis AS property_visibility), CAST(:vfmt AS jsonb),
+                :valuetype, :by)
         RETURNING id, api_name, display_name, description, data_type,
-                  visibility, value_format, created_at, updated_at
+                  visibility, value_format, value_type_id,
+                  created_at, updated_at
         """,
         {
             "wid": str(workspace_id),
@@ -197,6 +202,10 @@ async def create_shared(
             "dtype": data_type,
             "vis": visibility,
             "vfmt": json.dumps(fmt) if fmt is not None else None,
+            # p.227's other attachment point: a value type may sit on the
+            # shared property, so every property using it inherits the
+            # constraint without choosing one itself.
+            "valuetype": str(value_type_id) if value_type_id else None,
             "by": str(created_by),
         },
     )
@@ -214,6 +223,7 @@ async def update_shared(
     data_type: str,
     visibility: str,
     value_format_raw: Any,
+    value_type_id: UUID | None,
 ) -> dict[str, Any]:
     """Edit the definition. Every object type using it sees the change on its
     next read, which is p.178's "update … in one place".
@@ -249,7 +259,8 @@ async def update_shared(
                SET display_name = :name, description = :descr,
                    data_type = CAST(:dtype AS property_data_type),
                    visibility = CAST(:vis AS property_visibility),
-                   value_format = CAST(:vfmt AS jsonb)
+                   value_format = CAST(:vfmt AS jsonb),
+                   value_type_id = :valuetype
              WHERE id = :sid
             """
         ),
@@ -259,6 +270,7 @@ async def update_shared(
             "dtype": data_type,
             "vis": visibility,
             "vfmt": json.dumps(fmt) if fmt is not None else None,
+            "valuetype": str(value_type_id) if value_type_id else None,
             "sid": str(shared_id),
         },
     )
@@ -372,7 +384,7 @@ async def by_id(
         conn,
         """
         SELECT id, api_name, display_name, description, data_type,
-               visibility, value_format
+               visibility, value_format, value_type_id
           FROM shared_properties
          WHERE workspace_id = :wid AND id = ANY(CAST(:ids AS uuid[]))
         """,

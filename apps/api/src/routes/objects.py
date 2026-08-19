@@ -46,6 +46,7 @@ from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import ontology_search
 from ..services import shared_properties as shared_properties_service
+from ..services import value_types as value_types_service
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["objects"])
@@ -106,6 +107,11 @@ class PropertyIn(BaseModel):
     # id and a cleared one have to be tellable apart, and the object type
     # editor sends the whole definition every time.
     shared_property_id: UUID | None = None
+    # The value type constraining this property (`object-link-types` p.227).
+    # Null detaches it. Independent of `shared_property_id`: p.227 allows a
+    # value type in either place, and a property may take one from its shared
+    # property while choosing its own.
+    value_type_id: UUID | None = None
 
 
 class PropertyOut(BaseModel):
@@ -126,6 +132,16 @@ class PropertyOut(BaseModel):
     # to their name." The name comes back with the id so an application can
     # say *which* shared property without a second request per property.
     shared_property_api_name: str | None = None
+    # This property's *own* choice, which is what a save sends back.
+    value_type_id: UUID | None = None
+    # What is actually in force, which may have come from the shared property
+    # (p.227). Echoing this one back on a save would silently turn an inherited
+    # value type into a locally chosen one, so the two are reported apart.
+    effective_value_type_id: UUID | None = None
+    value_type_api_name: str | None = None
+    # The current version's rule (p.230), resolved on the way out so a reader
+    # never sees a stale copy. Enforced by the sync and by actions.
+    value_constraint: dict[str, Any] | None = None
 
 
 class ObjectTypeSummary(BaseModel):
@@ -274,6 +290,10 @@ class SyncResult(BaseModel):
     #: belongs to indexing, and a sync that refused would leave an object type
     #: that will not load and no way to see why. Absent keys mean no failures.
     missing_required: dict[str, int]
+    # p.227's rule, per property: how many rows broke the value type's
+    # constraint and one example of why. Reported rather than refused - see
+    # `instances.constraint_violation_counts`.
+    constraint_violations: dict[str, dict[str, Any]] = Field(default_factory=dict)
     source: SourceOut
 
 
@@ -1113,6 +1133,229 @@ async def download_attachment(
     )
 
 
+# ---- value types (workspace-scoped; `object-link-types` p.222-234) ----------
+class ValueTypeOut(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    description: str
+    example_value: str
+    # From the current version (p.230), not from the value type itself: both
+    # are immutable per version, and reporting them here is what stops a caller
+    # having to fetch the version list to know what is being enforced.
+    base_type: str
+    version_number: int
+    constraint: dict[str, Any] | None = None
+    # The same rule as a sentence, so a listing has something to show that is
+    # shorter than the shape and more use than the kind.
+    constraint_summary: str = ""
+    usage_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ValueTypeVersionOut(BaseModel):
+    id: UUID
+    version_number: int
+    base_type: str
+    constraint: dict[str, Any] | None = None
+    constraint_summary: str = ""
+    created_at: datetime
+
+
+class ValueTypeUsageOut(BaseModel):
+    # p.227 names two places a value type can be used, and they are different
+    # enough that a row has to say which it is.
+    kind: str  # "object_type_property" | "shared_property"
+    owner_name: str
+    property_api_name: str
+    object_type_id: UUID | None = None
+
+
+class ValueTypeCreate(BaseModel):
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    example_value: str = Field(default="", max_length=200)
+    base_type: str = Field(
+        pattern="^(" + "|".join(sorted(ontology_service.PROPERTY_TYPES)) + ")$"
+    )
+    # Free-form here and checked in `services/value_constraints`, for
+    # `value_format`'s reason: which fields are legal depends on the base type,
+    # which a per-field pydantic model cannot see.
+    constraint: dict[str, Any] | None = None
+
+
+class ValueTypeMetadataUpdate(BaseModel):
+    """p.229's mutable half. No `api_name` and no `base_type`: the first is the
+    stable machine name a consumer holds, the second p.229 calls immutable."""
+
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    example_value: str = Field(default="", max_length=200)
+
+
+class ValueTypeVersionCreate(BaseModel):
+    """p.229's immutable half: a constraint change is a new version."""
+
+    constraint: dict[str, Any] | None = None
+
+
+@router.get("/value-types", response_model=list[ValueTypeOut])
+async def list_value_types(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ValueTypeOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await value_types_service.list_types(conn, access.workspace_id)
+    return [ValueTypeOut(**r) for r in rows]
+
+
+@router.post(
+    "/value-types", response_model=ValueTypeOut, status_code=status.HTTP_201_CREATED
+)
+async def create_value_type(
+    body: ValueTypeCreate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ValueTypeOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await value_types_service.create(
+            conn,
+            workspace_id=access.workspace_id,
+            api_name=body.api_name,
+            display_name=body.display_name,
+            description=body.description,
+            example_value=body.example_value,
+            base_type=body.base_type,
+            constraint_raw=body.constraint,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="value_type.create",
+            resource_type="value_type",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            metadata={"api_name": body.api_name, "base_type": body.base_type},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ValueTypeOut(**row)
+
+
+@router.get("/value-types/{value_type_id}/versions",
+            response_model=list[ValueTypeVersionOut])
+async def list_value_type_versions(
+    value_type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ValueTypeVersionOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await value_types_service.list_versions(
+            conn, access.workspace_id, value_type_id
+        )
+    return [ValueTypeVersionOut(**r) for r in rows]
+
+
+@router.get("/value-types/{value_type_id}/usage",
+            response_model=list[ValueTypeUsageOut])
+async def value_type_usage(
+    value_type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ValueTypeUsageOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await value_types_service.usage(
+            conn, access.workspace_id, value_type_id
+        )
+    return [ValueTypeUsageOut(**r) for r in rows]
+
+
+@router.patch("/value-types/{value_type_id}", response_model=ValueTypeOut)
+async def update_value_type(
+    value_type_id: UUID,
+    body: ValueTypeMetadataUpdate,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ValueTypeOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await value_types_service.update_metadata(
+            conn,
+            workspace_id=access.workspace_id,
+            value_type_id=value_type_id,
+            display_name=body.display_name,
+            description=body.description,
+            example_value=body.example_value,
+        )
+    return ValueTypeOut(**row)
+
+
+@router.post("/value-types/{value_type_id}/versions", response_model=ValueTypeOut,
+             status_code=status.HTTP_201_CREATED)
+async def add_value_type_version(
+    value_type_id: UUID,
+    body: ValueTypeVersionCreate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ValueTypeOut:
+    """p.229: changing a constraint appends a version rather than editing one.
+
+    A POST to `/versions` rather than a PATCH of the value type, because that
+    is what it is - the old rule stays readable, which is the whole reason
+    p.229 makes constraints immutable.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await value_types_service.add_version(
+            conn,
+            workspace_id=access.workspace_id,
+            value_type_id=value_type_id,
+            constraint_raw=body.constraint,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="value_type.version",
+            resource_type="value_type",
+            resource_id=value_type_id,
+            workspace_id=access.workspace_id,
+            metadata={"version_number": row["version_number"],
+                      "usage_count": row["usage_count"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ValueTypeOut(**row)
+
+
+@router.delete("/value-types/{value_type_id}",
+               status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def delete_value_type(
+    value_type_id: UUID,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> Response:
+    async with user_connection(access.auth.user_id) as conn:
+        users = await value_types_service.usage(
+            conn, access.workspace_id, value_type_id
+        )
+        await value_types_service.delete(conn, access.workspace_id, value_type_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="value_type.delete",
+            resource_type="value_type",
+            resource_id=value_type_id,
+            workspace_id=access.workspace_id,
+            # The number that answers "what did that delete do" - these
+            # properties are no longer constrained by anything.
+            metadata={"unconstrained_properties": len(users)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # ---- shared properties (workspace-scoped; `object-link-types` p.178-191) ----
 class SharedPropertyOut(BaseModel):
     id: UUID
@@ -1122,6 +1365,9 @@ class SharedPropertyOut(BaseModel):
     data_type: str
     visibility: str
     value_format: dict[str, Any] | None = None
+    # p.227: a value type may sit on a shared property, so every property that
+    # attaches to it inherits the constraint without choosing one itself.
+    value_type_id: UUID | None = None
     # p.191's Usage, as a number. The list of object types is its own endpoint,
     # because "is anyone using this" and "who exactly" are asked at different
     # moments - the first before deleting, the second after being surprised.
@@ -1148,6 +1394,7 @@ class SharedPropertyCreate(BaseModel):
     )
     visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
     value_format: dict[str, Any] | None = None
+    value_type_id: UUID | None = None
 
 
 class SharedPropertyUpdate(BaseModel):
@@ -1161,6 +1408,7 @@ class SharedPropertyUpdate(BaseModel):
     )
     visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
     value_format: dict[str, Any] | None = None
+    value_type_id: UUID | None = None
 
 
 @router.get("/shared-properties", response_model=list[SharedPropertyOut])
@@ -1192,6 +1440,7 @@ async def create_shared_property(
             data_type=body.data_type,
             visibility=body.visibility,
             value_format_raw=body.value_format,
+            value_type_id=body.value_type_id,
             created_by=access.auth.user_id,
         )
         await audit.record(
@@ -1241,6 +1490,7 @@ async def update_shared_property(
             data_type=body.data_type,
             visibility=body.visibility,
             value_format_raw=body.value_format,
+            value_type_id=body.value_type_id,
         )
         await audit.record(
             conn,
@@ -1606,6 +1856,7 @@ async def sync_source(
     ok, error = True, None
     upserted = removed = 0
     missing: dict[str, int] = {}
+    violations: dict[str, dict[str, Any]] = {}
     rows: list[tuple[str, dict[str, Any]]] = []
     try:
         local_path = await anyio.to_thread.run_sync(
@@ -1661,6 +1912,22 @@ async def sync_source(
                 ontology_service.required_properties(declared)
                 - ontology_service.edit_only_properties(declared),
             )
+            # p.227's rule, reported rather than refused - see
+            # `constraint_violation_counts` for why this platform diverges
+            # from "the object type will fail to index". Edit-only properties
+            # are excluded for the same reason as above: this dataset has no
+            # column for one, so every row would be judged on a value it was
+            # never asked to carry.
+            violations = instances_service.constraint_violation_counts(
+                rows,
+                {
+                    name: rule
+                    for name, rule in ontology_service.constrained_properties(
+                        declared
+                    ).items()
+                    if name not in ontology_service.edit_only_properties(declared)
+                },
+            )
 
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.mark_source_synced(conn, source_id, ok=ok, error=error)
@@ -1680,13 +1947,15 @@ async def sync_source(
                 # own rule" is a question about history, and the sync result is
                 # gone the moment the response is read.
                 **({"missing_required": missing} if missing else {}),
+                **({"constraint_violations": violations} if violations else {}),
             },
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
     return SyncResult(
         ok=ok, error=error, upserted=upserted, removed=removed,
-        missing_required=missing, source=_source_out(updated_source),
+        missing_required=missing, constraint_violations=violations,
+        source=_source_out(updated_source),
     )
 
 

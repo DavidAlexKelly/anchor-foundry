@@ -3461,6 +3461,25 @@ Six mutations, all red: three on the server (not searching them at all - the ori
 **One flake seen once and not reproduced, recorded rather than tidied away.** The first full browser run came back 172/2, both failures `to_contain_text` timeouts on the search results panel in `test_ontology_search.py`; the second run was 174/0, and both pass in isolation. The rendering path they exercise is unchanged by this unit - for a `property` hit the new ternary falls through to exactly the same markup - so the likely cause is timing: `search()` now makes one more query per request, and under a full-suite load that can push a response past Playwright's 5s default. Not fixed by raising the timeout, because a timeout raised to hide slowness is a check made harder to fail. If it recurs it should be visible.
 
 
+### 168. Value types: a rule you can reuse (this session)
+
+Value types (`ontology.md` §1.2; `object-link-types` p.222-234). p.222's own example is an `email` value type whose regex means every property using it "is explicitly understood to contain an email address".
+
+**The constraint-sibling of shared properties, and the pairing is the design.** §164 shares *metadata* - what a property is called and how it is shown. This shares a *rule* - what a value is allowed to be. They attach independently and compose, which is why p.227 names both places one can go, and why a property inherits its shared property's value type when it has not chosen one of its own.
+
+**p.229 splits a value type in half and the schema follows the split exactly.** Name and description are editable; base type and constraint are immutable, and changing a constraint appends a version. Two tables rather than one with an `updated_at`, because "what was this checking last March" is precisely the question somebody asks after finding data that was rejected. The current version is the highest-numbered one rather than a pointer column - p.230 makes propagation automatic, so there is one answer to "what is being enforced" and no second place for it to disagree.
+
+**The deliberate divergence is enforcement.** p.227: a property with failing values makes the object type "fail to index" - which takes a whole type off every screen because one row is wrong. §154 already chose the other way for required properties, following p.116's own split, so this follows it: **the sync reports and the action refuses**. The report carries a count *and an example*, because "412 rows failed `email`" sends somebody to read 412 rows and "412 rows failed, e.g. 'n/a' does not match ...@..." tells them what their pipeline is putting there.
+
+**Twenty-seven mutations, all red** - sixteen on the pure constraint module, eleven on the wiring. **One survived first and found a real bug**: the temporal tests used only zero-padded dates, so text and date ordering agreed and a text-comparing implementation passed them. Fixing the test exposed that the comparator *dropped* a timestamp's offset rather than converting it, making `2026-01-01T05:00+06:00` sort as 05:00 when the instant it names is 23:00 the day before. Two readings that both compare cleanly, only one right, and nothing raising either way - the exact shape of defect mutation testing exists to catch.
+
+**1256 API tests** (was 1200).
+
+The row is ◑: the constraints are enforced, the **Ontology Manager surface** is the remaining half, and p.233's `rid`, array and struct constraints are absent for reasons named in the parity doc rather than hidden.
+
+**A second source gap, found and recorded rather than worked around.** I went looking for Interfaces first - it is the bigger stage-3 mechanism and shared properties are its foundation - and `docs/pal/` **has no Interfaces chapter**. `foundry_ontology.pdf` p.54 links back to "Interfaces / Metadata reference" and `foundry_functions.pdf` p.427 forward to "Interfaces / Overview"; neither page is in the export. What survives is the definition, the design guidance, and the rules a property must satisfy to implement one - enough to build *from*, not enough to build *to*, since the create/edit/metadata reference is the part that would decide the schema. The row is now marked `[?]` beside the Object Explorer gap the parity README already names, and value types were chosen instead because they have thirteen fully-sourced pages.
+
+
 
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.
 

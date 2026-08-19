@@ -133,6 +133,40 @@ def missing_required(
     return counts
 
 
+def constraint_violation_counts(
+    rows: list[tuple[str, dict[str, Any]]],
+    constrained: dict[str, tuple[str, dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    """How many rows break each value type constraint, and one example why.
+
+    **Counts and reports rather than refusing the sync**, which is where this
+    diverges from Foundry and does so deliberately. p.227 says an object type
+    with failing values "will fail to index" - taking the whole type off every
+    screen because one row is wrong. This platform already made the opposite
+    choice for required properties (§154, p.116's own split: sync reports,
+    actions refuse), and applying it here keeps one rule instead of two: a bad
+    row is reported, the good rows still index, and the report says which
+    property and gives a reason somebody can act on.
+
+    The example matters more than the count. "412 rows failed `email`" sends
+    somebody to look at 412 rows; "412 rows failed `email`, e.g. 'n/a' does not
+    match ...@..." tells them what the pipeline is putting there.
+    """
+    from . import value_constraints
+
+    out: dict[str, dict[str, Any]] = {}
+    for _, properties in rows:
+        for api_name, (base_type, constraint) in constrained.items():
+            why = value_constraints.violation(
+                constraint, base_type, properties.get(api_name)
+            )
+            if why is None:
+                continue
+            seen = out.setdefault(api_name, {"count": 0, "example": why})
+            seen["count"] += 1
+    return out
+
+
 async def upsert_instances(
     conn: AsyncConnection,
     *,
