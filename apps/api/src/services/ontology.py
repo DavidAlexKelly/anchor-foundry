@@ -29,8 +29,8 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # definitions live in their own module because the worker needs a verbatim
 # copy of them (see that module's docstring).
 from . import (
-    conditional_format, derived_properties, shared_properties, value_format,
-    value_types,
+    conditional_format, derived_properties, ontology_status, shared_properties,
+    value_format, value_types,
 )
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
@@ -103,7 +103,7 @@ async def list_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str
         """
         SELECT ot.id, ot.api_name, ot.display_name, ot.description, ot.icon,
                ot.colour, ot.title_property_id, ot.resource_id,
-               ot.created_at, ot.updated_at,
+               ot.status, ot.deprecation, ot.created_at, ot.updated_at,
                (SELECT count(*) FROM object_type_sources s
                  WHERE s.object_type_id = ot.id) AS source_count,
                -- Just the hidden ones, not every property. A browser listing
@@ -129,7 +129,7 @@ async def get_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) -> 
         conn,
         """
         SELECT id, api_name, display_name, description, icon, colour,
-               title_property_id, created_at, updated_at
+               title_property_id, status, deprecation, created_at, updated_at
           FROM object_types WHERE id = :tid AND workspace_id = :wid
         """,
         {"tid": str(type_id), "wid": str(workspace_id)},
@@ -165,6 +165,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         SELECT p.id, p.api_name, p.display_name, p.data_type, p.required,
                p.description, p.sort_order, p.visibility, p.value_format,
                p.conditional_format, p.edit_only, p.derivation,
+               p.status, p.deprecation,
                p.shared_property_id,
                sp.api_name AS shared_property_api_name,
                sp.display_name AS sp_display_name,
@@ -396,6 +397,15 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             # p.148's own list, checked here because each item is a fact about
             # the *property* rather than about the chain.
             derived_properties.check_compatible(prop, property_name=api)
+        # p.253-256. Normalised in place for `value_format`'s reason: what is
+        # stored has to be what was checked.
+        prop["status"] = ontology_status.check_status(
+            str(prop.get("status") or ontology_status.DEFAULT_STATUS),
+            kind="property",
+        )
+        prop["deprecation"] = ontology_status.parse_deprecation(
+            prop.get("deprecation"), prop["status"]
+        )
 
 
 async def _apply_shared(
@@ -593,11 +603,12 @@ async def _write_property_rows(
                                                 visibility, value_format,
                                                 conditional_format, edit_only,
                                                 derivation, shared_property_id,
-                                                value_type_id)
+                                                value_type_id, status, deprecation)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
-                    CAST(:deriv AS jsonb), :shared, :valuetype)
+                    CAST(:deriv AS jsonb), :shared, :valuetype,
+                    CAST(:status AS ontology_status), CAST(:depr AS jsonb))
             RETURNING id
             """,
             {
@@ -641,6 +652,14 @@ async def _write_property_rows(
                     if prop.get("value_type_id")
                     else None
                 ),
+                # p.256's default, and the propagation p.256/p.258 describe has
+                # already run over these rows by the time they get here.
+                "status": str(prop.get("status") or ontology_status.DEFAULT_STATUS),
+                "depr": (
+                    json.dumps(prop["deprecation"])
+                    if prop.get("deprecation") is not None
+                    else None
+                ),
             },
         )
         assert prow is not None
@@ -654,7 +673,19 @@ async def _write_property_rows(
 
 
 async def delete_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) -> None:
-    await get_type(conn, workspace_id, type_id)
+    """p.256: an `active` or `promoted` object type cannot be deleted.
+
+    **This is what turns the status from a label into a promise.** Applications
+    are built against object types, and p.253 says the status exists so that
+    somebody editing the ontology knows which ones are being relied on -
+    knowing and being stopped are different things, and only the second one
+    survives a busy afternoon.
+    """
+    existing = await get_type(conn, workspace_id, type_id)
+    ontology_status.check_deletable(
+        str(existing["status"]), kind="object type",
+        name=str(existing["api_name"]),
+    )
     await fetch_one(
         conn, "DELETE FROM object_types WHERE id = :tid RETURNING id", {"tid": str(type_id)}
     )
@@ -718,7 +749,9 @@ async def _snapshot_version(
                                'edit_only', p.edit_only,
                                'derivation', p.derivation,
                                'shared_property_id', p.shared_property_id,
-                               'value_type_id', p.value_type_id)
+                               'value_type_id', p.value_type_id,
+                               'status', p.status,
+                               'deprecation', p.deprecation)
                            ORDER BY p.sort_order, p.api_name)
                       FROM object_type_properties p WHERE p.object_type_id = ot.id),
                    '[]'::jsonb),
@@ -944,6 +977,8 @@ async def update_type(
     title_property: str | None,
     updated_by: UUID,
     acknowledge_breaking: bool = False,
+    status: str | None = None,
+    deprecation: Any = None,
 ) -> dict[str, Any]:
     """Edit a type's definition, recording the result as a new version.
 
@@ -965,8 +1000,16 @@ async def update_type(
     simpler than a diff with nothing to lose, and it is what keeps sort_order
     honestly equal to the order the caller sent.
     """
-    await get_type(conn, workspace_id, type_id)
+    existing = await get_type(conn, workspace_id, type_id)
+    type_status = ontology_status.check_status(
+        str(status or existing["status"]), kind="object_type"
+    )
+    type_deprecation = ontology_status.parse_deprecation(deprecation, type_status)
     _validate_properties(properties)
+    # p.256/p.258: a type going down takes its properties with it. Run after
+    # the per-property validation so the value being lowered is the checked
+    # one, and before the write so what is stored is what propagated.
+    ontology_status.propagate_to_properties(type_status, properties)
     await _apply_shared(
         conn,
         workspace_id,
@@ -1006,12 +1049,16 @@ async def update_type(
             """
             UPDATE object_types
                SET display_name = :name, description = :descr, icon = :icon,
-                   colour = :colour, title_property_id = NULL
+                   colour = :colour, title_property_id = NULL,
+                   status = CAST(:status AS ontology_status),
+                   deprecation = CAST(:depr AS jsonb)
              WHERE id = :tid
             """
         ),
         {"name": display_name, "descr": description, "icon": icon,
-         "colour": colour, "tid": str(type_id)},
+         "colour": colour, "tid": str(type_id),
+         "status": type_status,
+         "depr": json.dumps(type_deprecation) if type_deprecation else None},
     )
     # title_property_id is cleared above so the delete below cannot trip a
     # dangling reference before the new rows exist.
@@ -1176,7 +1223,7 @@ def _normalise_join(
 _LINK_SELECT = """
         SELECT lt.id, lt.api_name, lt.display_name, lt.cardinality, lt.created_at,
                lt.from_property, lt.to_property,
-               lt.from_side_name, lt.to_side_name,
+               lt.from_side_name, lt.to_side_name, lt.status, lt.deprecation,
                lt.from_object_type_id, f.display_name AS from_display_name,
                lt.to_object_type_id, t.display_name AS to_display_name
           FROM link_types lt
@@ -1314,7 +1361,8 @@ async def create_link_type(
                 :fprop, :tprop, :fside, :tside)
         RETURNING id, api_name, display_name, from_object_type_id,
                   to_object_type_id, cardinality, created_at,
-                  from_property, to_property, from_side_name, to_side_name
+                  from_property, to_property, from_side_name, to_side_name,
+                  status, deprecation
         """,
         {
             "wid": str(workspace_id),
@@ -1343,8 +1391,10 @@ async def set_link_join(
     to_property: str | None,
     from_side_name: str | None = None,
     to_side_name: str | None = None,
+    status: str | None = None,
 ) -> dict[str, Any]:
-    """Map (or unmap) the properties a link joins on, and name its two sides.
+    """Map (or unmap) the properties a link joins on, name its two sides, and
+    set its status.
 
     Only the join is mutable. Changing an endpoint or the cardinality would
     make it a different relationship wearing the same name - delete and
@@ -1365,9 +1415,43 @@ async def set_link_join(
         await _validate_join_property(
             conn, UUID(str(link["to_object_type_id"])), to_property, end="to"
         )
+
+    # p.257: a link type may be no more production-ready than the object types
+    # it joins, nor than the properties it joins on. The *capped* value is what
+    # gets stored rather than the requested one, so the invalid state p.257's
+    # troubleshooting section describes ("an experimental object type cannot
+    # have an active link type") is unreachable rather than merely detected.
+    from_type = await get_type(conn, workspace_id, UUID(str(link["from_object_type_id"])))
+    to_type = await get_type(conn, workspace_id, UUID(str(link["to_object_type_id"])))
+    joined = await fetch_all(
+        conn,
+        """
+        SELECT object_type_id, api_name, status FROM object_type_properties
+         WHERE (object_type_id = :from_id AND api_name = :fprop)
+            OR (object_type_id = :to_id AND api_name = :tprop)
+        """,
+        {"from_id": str(link["from_object_type_id"]),
+         "to_id": str(link["to_object_type_id"]),
+         "fprop": from_property, "tprop": to_property},
+    )
+    by_type = {str(r["object_type_id"]): str(r["status"]) for r in joined}
+    capped = ontology_status.link_status(
+        ontology_status.check_status(
+            str(status or link["status"]), kind="link_type"
+        ),
+        from_status=str(from_type["status"]),
+        to_status=str(to_type["status"]),
+        from_property_status=by_type.get(str(link["from_object_type_id"])),
+        to_property_status=by_type.get(str(link["to_object_type_id"])),
+    )
     await conn.execute(
         text(
             "UPDATE link_types SET from_property = :fprop, to_property = :tprop, "
+            # p.257 caps a link's status by its ends and its foreign keys, so
+            # what is stored is the capped value rather than what was asked
+            # for - a link cannot be more production-ready than the things it
+            # depends on.
+            "       status = CAST(:status AS ontology_status), "
             # COALESCE, so a caller that only means to change the join does not
             # blank the names by omitting them. Clearing a name is therefore not
             # expressible here, which is the right trade: an unnamed side falls
@@ -1376,7 +1460,7 @@ async def set_link_join(
             "       to_side_name = COALESCE(:tside, to_side_name) "
             "WHERE id = :lid AND workspace_id = :wid"
         ),
-        {"fprop": from_property, "tprop": to_property,
+        {"fprop": from_property, "tprop": to_property, "status": capped,
          "fside": (from_side_name or "").strip() or None,
          "tside": (to_side_name or "").strip() or None,
          "lid": str(link_id), "wid": str(workspace_id)},
@@ -1385,6 +1469,18 @@ async def set_link_join(
 
 
 async def delete_link_type(conn: AsyncConnection, workspace_id: UUID, link_id: UUID) -> None:
+    """p.256's refusal again, for the other kind it names."""
+    existing = await fetch_one(
+        conn,
+        "SELECT api_name, status FROM link_types WHERE id=:lid AND workspace_id=:wid",
+        {"lid": str(link_id), "wid": str(workspace_id)},
+    )
+    if existing is None:
+        raise NotFoundError("link type")
+    ontology_status.check_deletable(
+        str(existing["status"]), kind="link type",
+        name=str(existing["api_name"]),
+    )
     row = await fetch_one(
         conn,
         "DELETE FROM link_types WHERE id=:lid AND workspace_id=:wid RETURNING id",
