@@ -41,6 +41,15 @@ SPEC_TABLES = {
 # It had drifted: sixteen of these existed and the check reported them as
 # unexplained on every run, so the one check here that watches for accidental
 # tables had been failing continuously and telling nobody anything.
+#
+# **And it drifted again**, by seven tables between 0040 and 0054, found while
+# adding 0056's two. That is the predictable outcome of a check nothing runs:
+# §88 fixed the list, and the reason it went stale a second time is unchanged
+# - this file needs a *fresh* database (see its module docstring; `audit_log`'s
+# append-only rule means the fixture organisation cannot be cleaned up, so a
+# second run dies on a duplicate slug), which is exactly the thing a test suite
+# against the shared dev database cannot provide. Until it can be run per
+# migration, expect to add several rows at once rather than one.
 POST_SPEC_TABLES = {
     "sync_runs": "0011",
     "object_instances": "0012",
@@ -63,6 +72,15 @@ POST_SPEC_TABLES = {
     "action_parameters": "0044",
     "action_rules": "0044",
     "action_criteria": "0045",
+    "object_type_views": "0046",
+    "object_type_series": "0047",
+    "module_states": "0048",
+    "object_searches": "0040",
+    "shared_properties": "0053",
+    "value_types": "0054",
+    "value_type_versions": "0054",
+    "object_type_groups": "0056",
+    "object_type_group_members": "0056",
 }
 
 # Not the platform's at all: the control plane keeps its own registry, and in

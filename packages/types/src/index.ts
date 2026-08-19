@@ -1340,8 +1340,37 @@ export interface ObjectTypeSummary {
   resource_id: string;
   status: OntologyStatus;
   deprecation: Deprecation | null;
+  /** The groups this type is filed under (Foundry `object-link-types` p.262:
+   * the table of object types "supports displaying and filtering by group"). */
+  groups: ObjectTypeGroupRef[];
   created_at: string;
   updated_at: string;
+}
+
+/** A classification of object types, for search and exploration (Foundry
+ * `object-link-types` p.261-263).
+ *
+ * **It carries no schema.** An object type in a group is unchanged by being in
+ * one; p.262 lists the whole purpose as three places a group shows up. And by
+ * p.263 a group is visible to anyone who can see the ontology *whether or not
+ * its members are* — including when it has none, which is why `member_count`
+ * is reported rather than used to decide whether to show the group at all. */
+export interface ObjectTypeGroup {
+  id: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A group as it appears on an object type: enough to draw a label, not the
+ * whole group. */
+export interface ObjectTypeGroupRef {
+  id: string;
+  api_name: string;
+  display_name: string;
 }
 
 export interface ObjectTypeDetail {

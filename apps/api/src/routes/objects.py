@@ -44,6 +44,7 @@ from ..services import object_views as object_views_service
 from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
+from ..services import object_type_groups as groups_service
 from ..services import ontology_search
 from ..services import shared_properties as shared_properties_service
 from ..services import value_types as value_types_service
@@ -154,6 +155,19 @@ class PropertyOut(BaseModel):
     deprecation: dict[str, Any] | None = None
 
 
+class ObjectTypeGroupRef(BaseModel):
+    """A group as it appears *on* an object type (`object-link-types` p.262).
+
+    Three fields, not the whole group: a listing draws the name, and carrying
+    the description and member count of every group on every row would make a
+    table of object types pay for a table of groups.
+    """
+
+    id: UUID
+    api_name: str
+    display_name: str
+
+
 class ObjectTypeSummary(BaseModel):
     id: UUID
     api_name: str
@@ -172,6 +186,10 @@ class ObjectTypeSummary(BaseModel):
     resource_id: UUID
     status: str = "experimental"
     deprecation: dict[str, Any] | None = None
+    # p.262: "The table of object types in Ontology Manager supports
+    # displaying and filtering by group." Displaying needs them on the row;
+    # filtering is the `group_id` query parameter below.
+    groups: list[ObjectTypeGroupRef] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -366,20 +384,22 @@ class OntologySearchHit(BaseModel):
     the one that put the row in the list.
     """
 
-    kind: str  # object_type | property | link_type | action_type | shared_property
+    # object_type | property | link_type | action_type | shared_property | group
+    kind: str
     id: UUID
     api_name: str
     display_name: str
     # Where it lives. A property called "status" is not somewhere anybody can
     # navigate to; "status on Ticket" is.
     #
-    # **Null for a shared property**, which belongs to no object type by
-    # definition (`object-link-types` p.178). Optional rather than faked: a
-    # made-up owner would send whoever clicked it to a type that has nothing
-    # to do with what they searched for.
+    # **Null for a shared property and for a group**, neither of which belongs
+    # to an object type by definition (`object-link-types` p.178, p.261).
+    # Optional rather than faked: a made-up owner would send whoever clicked it
+    # to a type that has nothing to do with what they searched for.
     object_type_id: UUID | None = None
     object_type_name: str = ""
-    # How many properties use it, for the one kind with no owner to name.
+    # How many things use it, for the kinds with no owner to name: object types
+    # for a shared property, member object types for a group.
     usage_count: int | None = None
     matched_field: str
     matched_value: str
@@ -401,11 +421,24 @@ async def search_ontology(
 # ---- object types (workspace-scoped) ----------------------------------------
 @router.get("/object-types", response_model=list[ObjectTypeSummary])
 async def list_object_types(
+    group_id: UUID | None = Query(default=None),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> list[ObjectTypeSummary]:
+    """p.262's table, which "supports displaying and filtering by group".
+
+    The memberships come back in **one** query for the whole list rather than
+    one per row - §169's N+1 is recent enough to still be the first thing to
+    check when a loop wants a lookup.
+    """
     async with user_connection(access.auth.user_id) as conn:
-        rows = await ontology_service.list_types(conn, access.workspace_id)
-    return [ObjectTypeSummary(**r) for r in rows]
+        rows = await ontology_service.list_types(
+            conn, access.workspace_id, group_id=group_id
+        )
+        by_type = await groups_service.groups_by_type(conn, access.workspace_id)
+    return [
+        ObjectTypeSummary(**r, groups=by_type.get(str(r["id"]), []))
+        for r in rows
+    ]
 
 
 @router.post(
@@ -1584,6 +1617,273 @@ async def delete_shared_property(
             user_agent=request.headers.get("user-agent"),
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---- object type groups (workspace-scoped; `object-link-types` p.261-263) ----
+#
+# p.261: groups are "created and managed using Ontology Manager, generally by
+# ontology owners and editors", so writes sit at the workspace editor floor
+# already used for object types themselves, and reads at viewer - which is
+# p.263's "users must have viewer permission on the project that the object
+# type group is in", a workspace being this platform's ontology (db 0003).
+class ObjectTypeGroupOut(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    description: str
+    # p.263 makes a group discoverable whether or not its members are, so this
+    # is reported rather than used as a filter: a group with no object types in
+    # it is a group, and a listing that dropped it would be re-implementing the
+    # behaviour p.263 describes having removed.
+    member_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ObjectTypeGroupMemberOut(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    status: str = "experimental"
+
+
+class ObjectTypeGroupCreate(BaseModel):
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+
+
+class ObjectTypeGroupUpdate(BaseModel):
+    """No `api_name`: it is the stable machine name, and it is what p.262's
+    search matches on, so renaming it would move a group out from under a
+    saved query with nothing to say so."""
+
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+
+
+class ObjectTypeGroupMembers(BaseModel):
+    object_type_ids: list[UUID] = Field(default_factory=list)
+
+
+class ObjectTypeGroupIds(BaseModel):
+    group_ids: list[UUID] = Field(default_factory=list)
+
+
+@router.get("/object-type-groups", response_model=list[ObjectTypeGroupOut])
+async def list_object_type_groups(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ObjectTypeGroupOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await groups_service.list_groups(conn, access.workspace_id)
+    return [ObjectTypeGroupOut(**r) for r in rows]
+
+
+@router.post(
+    "/object-type-groups",
+    response_model=ObjectTypeGroupOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_object_type_group(
+    body: ObjectTypeGroupCreate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectTypeGroupOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await groups_service.create_group(
+            conn,
+            workspace_id=access.workspace_id,
+            api_name=body.api_name,
+            display_name=body.display_name,
+            description=body.description,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_group.create",
+            resource_type="object_type_group",
+            resource_id=row["id"],
+            workspace_id=access.workspace_id,
+            metadata={"api_name": body.api_name},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ObjectTypeGroupOut(**row)
+
+
+@router.patch(
+    "/object-type-groups/{group_id}", response_model=ObjectTypeGroupOut
+)
+async def update_object_type_group(
+    group_id: UUID,
+    body: ObjectTypeGroupUpdate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ObjectTypeGroupOut:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await groups_service.update_group(
+            conn,
+            workspace_id=access.workspace_id,
+            group_id=group_id,
+            display_name=body.display_name,
+            description=body.description,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_group.update",
+            resource_type="object_type_group",
+            resource_id=group_id,
+            workspace_id=access.workspace_id,
+            metadata={"member_count": row["member_count"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ObjectTypeGroupOut(**row)
+
+
+@router.delete(
+    "/object-type-groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_object_type_group(
+    group_id: UUID,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> Response:
+    """Deletes the classification, never the object types in it.
+
+    Not refused when the group has members: a group makes no claim anything
+    depends on, so there is nothing downstream to break. The audit record says
+    how many object types stopped being classified.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        current = await groups_service.get_group(
+            conn, access.workspace_id, group_id
+        )
+        await groups_service.delete_group(conn, access.workspace_id, group_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_group.delete",
+            resource_type="object_type_group",
+            resource_id=group_id,
+            workspace_id=access.workspace_id,
+            metadata={"unclassified_object_types": current["member_count"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/object-type-groups/{group_id}/members",
+    response_model=list[ObjectTypeGroupMemberOut],
+)
+async def list_object_type_group_members(
+    group_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ObjectTypeGroupMemberOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await groups_service.members(conn, access.workspace_id, group_id)
+    return [ObjectTypeGroupMemberOut(**r) for r in rows]
+
+
+@router.put(
+    "/object-type-groups/{group_id}/members",
+    response_model=list[ObjectTypeGroupMemberOut],
+)
+async def set_object_type_group_members(
+    group_id: UUID,
+    body: ObjectTypeGroupMembers,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[ObjectTypeGroupMemberOut]:
+    """p.261's groups menu. PUT because the body is the whole membership -
+    a POST-per-member API would make "remove the last one" a different verb
+    from "set it to these three"."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await groups_service.set_members(
+            conn,
+            workspace_id=access.workspace_id,
+            group_id=group_id,
+            object_type_ids=body.object_type_ids,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_group.set_members",
+            resource_type="object_type_group",
+            resource_id=group_id,
+            workspace_id=access.workspace_id,
+            metadata={"member_count": len(rows)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return [ObjectTypeGroupMemberOut(**r) for r in rows]
+
+
+@router.get(
+    "/object-types/{type_id}/groups", response_model=list[ObjectTypeGroupRef]
+)
+async def list_groups_for_object_type(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ObjectTypeGroupRef]:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await groups_service.groups_for_type(
+            conn, access.workspace_id, type_id
+        )
+    return [ObjectTypeGroupRef(**r) for r in rows]
+
+
+@router.put(
+    "/object-types/{type_id}/groups", response_model=list[ObjectTypeGroupRef]
+)
+async def set_groups_for_object_type(
+    type_id: UUID,
+    body: ObjectTypeGroupIds,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[ObjectTypeGroupRef]:
+    """p.261: "Groups can also be added directly to object types by selecting
+    Edit groups in the object type overview page."
+
+    **Deliberately not part of the object type's own PATCH.** That endpoint
+    rebuilds the whole definition, and a client predating groups would send a
+    body with no `groups` key on every save - which under a rebuild means an
+    empty list, and would silently un-group every type somebody edited. §170
+    met the same shape with `status` and answered it with an "omitted means
+    unchanged" default; here the classification is not the type's own field at
+    all, so the honest answer is a separate resource with its own verb.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await groups_service.set_groups_for_type(
+            conn,
+            workspace_id=access.workspace_id,
+            type_id=type_id,
+            group_ids=body.group_ids,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type_group.set_for_type",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"group_count": len(rows)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return [ObjectTypeGroupRef(**r) for r in rows]
 
 
 # ---- link types (workspace-scoped) ------------------------------------------
