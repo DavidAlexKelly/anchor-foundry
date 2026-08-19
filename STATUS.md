@@ -3500,6 +3500,29 @@ Fixed by giving search a single `list_properties_for_workspace` query that resol
 Two things worth keeping. **A loop that issues a query is a loop whose cost is somebody else's to change** - the N+1 was not a bug until a later unit made the N expensive, and nothing warned. And **§167's two-test flake was probably this, early**: same file, same symptom, and the reading at the time ("one more query per request, under full-suite load") was directionally right and an underestimate. It was recorded rather than tidied away, which is why it was recognisable the second time.
 
 
+### 170. Statuses, and the refusals that make one mean something (this session)
+
+Ontology resource statuses (`ontology.md` §1.3; `object-link-types` p.253-259). All five of p.254's values on object types, properties and link types.
+
+**A status column with nothing behind it would be `required` before §154** - displayed, accepted, enforcing nothing. p.253 says statuses exist so somebody editing the ontology knows what applications rely on, and knowing is not the same as being stopped. So: an `active` or `promoted` resource cannot be deleted (p.256), and the refusal names the way through, because "cannot delete" without "mark it deprecated first" is a dead end rather than a step.
+
+**p.257's table is a cap, not a warning.** Foundry describes the invalid state as an error somebody *receives* - "an experimental object type cannot have an active link type". Storing the capped value instead makes that state unreachable: a link type is written at the lowest of its own declaration, its two object types, and the properties it joins on. Nothing to troubleshoot.
+
+**Propagation lowers and never raises**, and p.258 is explicit that it should: applying `active` to every property is "the option to also apply", not a consequence. A field still being built on an otherwise finished type stays experimental rather than being declared production-ready by somebody finishing the type around it.
+
+**The compatibility rule was the one that could have gone wrong quietly.** The type editor sends the whole definition on every save. `status` defaults to *unchanged* rather than to `experimental` - if it had defaulted to the documented default for a new resource, every save from a client predating statuses would silently demote a promoted object type, and demote its properties with it by p.256's own propagation. There is a test named after that.
+
+**Twenty-three mutations, and four of them were worth the run.**
+
+*One equivalent mutant, resolved by deleting code rather than adding a test.* A `CONTAGIOUS` list gated which statuses propagate - and `weakest` already refuses to raise, so adding `active` to that list changed nothing. Two spellings of one rule, and the redundant one was the one that could drift.
+
+*Three survivors that were real test gaps*, and one needed a case I had not thought to construct. p.257 caps a link by its object types *and* by its join properties, and the two cannot be pulled apart from above - demoting a type demotes its properties. Isolating the object-type half needs a link joining on **`$primary_key`**: a sentinel rather than a property row (db 0027), so there is no far-side property status, leaving the type's own status as the only thing that can hold the link back.
+
+**1303 API tests** (was 1256).
+
+**Mandatory control properties are declined rather than deferred** (p.121-126), and recorded in the parity doc. They are row-level access controls enforced by markings and **restricted views** - p.124 says so directly - and this platform has neither. Building the flag without the mechanism would be a control that looks like access control and enforces nothing, which is worse than its absence because somebody would rely on it. Same reasoning as decision 0009's refusal of the media reference type.
+
+
 
 **A second source gap, found and recorded rather than worked around.** I went looking for Interfaces first - it is the bigger stage-3 mechanism and shared properties are its foundation - and `docs/pal/` **has no Interfaces chapter**. `foundry_ontology.pdf` p.54 links back to "Interfaces / Metadata reference" and `foundry_functions.pdf` p.427 forward to "Interfaces / Overview"; neither page is in the export. What survives is the definition, the design guidance, and the rules a property must satisfy to implement one - enough to build *from*, not enough to build *to*, since the create/edit/metadata reference is the part that would decide the schema. The row is now marked `[?]` beside the Object Explorer gap the parity README already names, and value types were chosen instead because they have thirteen fully-sourced pages.
 

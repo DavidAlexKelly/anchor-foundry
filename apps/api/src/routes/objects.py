@@ -112,6 +112,14 @@ class PropertyIn(BaseModel):
     # value type in either place, and a property may take one from its shared
     # property while choosing its own.
     value_type_id: UUID | None = None
+    # Developmental state (`object-link-types` p.253). Defaults to
+    # `experimental` (p.256) so a client written before statuses existed keeps
+    # saying exactly what it used to.
+    status: str = Field(
+        default="experimental",
+        pattern="^(promoted|active|experimental|deprecated|example)$",
+    )
+    deprecation: dict[str, Any] | None = None
 
 
 class PropertyOut(BaseModel):
@@ -142,6 +150,8 @@ class PropertyOut(BaseModel):
     # The current version's rule (p.230), resolved on the way out so a reader
     # never sees a stale copy. Enforced by the sync and by actions.
     value_constraint: dict[str, Any] | None = None
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
 
 
 class ObjectTypeSummary(BaseModel):
@@ -160,6 +170,8 @@ class ObjectTypeSummary(BaseModel):
     # So a caller that has a type can open the type's application (item 4.2)
     # without a second lookup. NOT NULL since db 0032.
     resource_id: UUID
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -173,6 +185,8 @@ class ObjectTypeDetail(BaseModel):
     colour: str
     title_property_id: UUID | None
     properties: list[PropertyOut]
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -206,6 +220,11 @@ class LinkTypeOut(BaseModel):
     # named separately.
     from_side_name: str | None = None
     to_side_name: str | None = None
+    # p.253's developmental state. What is stored is p.257's cap - a link type
+    # may be no more production-ready than the object types it joins or the
+    # properties it joins on - so this is the *capped* value, not a request.
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
 
 
 # Either a property api_name or the reserved '$primary_key' (db 0027). Empty
@@ -226,6 +245,12 @@ class LinkTypeCreate(BaseModel):
     # link whose two directions read the same way needs only one name.
     from_side_name: str | None = Field(default=None, min_length=1, max_length=200)
     to_side_name: str | None = Field(default=None, min_length=1, max_length=200)
+    # p.253's developmental state. Defaults to unchanged, and what is stored
+    # is p.257's cap rather than what was asked for.
+    status: str | None = Field(
+        default=None,
+        pattern="^(promoted|active|experimental|deprecated|example)$",
+    )
 
 
 class LinkJoinUpdate(BaseModel):
@@ -236,6 +261,12 @@ class LinkJoinUpdate(BaseModel):
     to_property: str | None = Field(default=None, pattern=_JOIN_PROPERTY)
     from_side_name: str | None = Field(default=None, min_length=1, max_length=200)
     to_side_name: str | None = Field(default=None, min_length=1, max_length=200)
+    # p.253's developmental state. Defaults to unchanged, and what is stored is
+    # p.257's cap rather than what was asked for.
+    status: str | None = Field(
+        default=None,
+        pattern="^(promoted|active|experimental|deprecated|example)$",
+    )
 
 
 class SourceOut(BaseModel):
@@ -434,6 +465,15 @@ class ObjectTypeUpdate(BaseModel):
     colour: str = Field(default="#2f6f4f", max_length=32)
     properties: list[PropertyIn] = Field(min_length=1, max_length=100)
     title_property: str | None = Field(default=None, max_length=100)
+    # p.253's developmental state. Optional and defaulting to *unchanged* -
+    # not to `experimental` - because this is a whole-definition PUT and a
+    # client that has never heard of statuses must not silently demote a type
+    # somebody promoted.
+    status: str | None = Field(
+        default=None,
+        pattern="^(promoted|active|experimental|deprecated|example)$",
+    )
+    deprecation: dict[str, Any] | None = None
     # Required to push through a change that would break an existing mapping,
     # action or link join. Default false so a client that never asks about
     # impact cannot silently break something.
@@ -504,6 +544,8 @@ async def update_object_type(
             title_property=body.title_property,
             updated_by=access.auth.user_id,
             acknowledge_breaking=body.acknowledge_breaking,
+            status=body.status,
+            deprecation=body.deprecation,
         )
         detail = await _type_detail(conn, access.workspace_id, type_id)
         await audit.record(
@@ -1614,6 +1656,7 @@ async def update_link_join(
             to_property=body.to_property,
             from_side_name=body.from_side_name,
             to_side_name=body.to_side_name,
+            status=body.status,
         )
         await audit.record(
             conn,
