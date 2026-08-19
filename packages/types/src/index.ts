@@ -1093,6 +1093,8 @@ export interface ObjectTypeProperty {
   /** The current version's rule (p.230), resolved server-side so no reader
    * ever sees a stale copy. Enforced by the sync and by actions. */
   value_constraint: ValueConstraint | null;
+  status: OntologyStatus;
+  deprecation: Deprecation | null;
 }
 
 /** One property definition used by several object types (Foundry
@@ -1166,6 +1168,29 @@ export interface ValueType {
   usage_count: number;
   created_at: string;
   updated_at: string;
+}
+
+/** Developmental state (Foundry `object-link-types` p.253–259). Every object
+ * type, property and link type has one; it defaults to `experimental` (p.256).
+ *
+ * More than a label: an `active` or `promoted` resource cannot be deleted
+ * (p.256), and a link type is capped at the lowest status of the things it
+ * depends on (p.257). `promoted` applies to object types only (p.255). */
+export type OntologyStatus =
+  | "promoted"
+  | "active"
+  | "experimental"
+  | "deprecated"
+  | "example";
+
+/** p.254: why a resource is being deprecated, when it is expected to go, and
+ * what replaces it. Null on anything not deprecated — the server refuses it
+ * elsewhere and clears it when a resource stops being deprecated. */
+export interface Deprecation {
+  reason?: string;
+  /** ISO 8601 date. */
+  deadline?: string;
+  replacement_id?: string;
 }
 
 export interface ValueTypeVersion {
@@ -1313,6 +1338,8 @@ export interface ObjectTypeSummary {
   hidden_properties: string[];
   /** Where this type opens as an application (`/r/{id}`, item 4.2). */
   resource_id: string;
+  status: OntologyStatus;
+  deprecation: Deprecation | null;
   created_at: string;
   updated_at: string;
 }
@@ -1326,6 +1353,8 @@ export interface ObjectTypeDetail {
   colour: string;
   title_property_id: string | null;
   properties: ObjectTypeProperty[];
+  status: OntologyStatus;
+  deprecation: Deprecation | null;
   created_at: string;
   updated_at: string;
 }
@@ -1481,6 +1510,12 @@ export interface LinkType {
    * here until a traversal picker needed to say which way it was going. */
   from_side_name: string | null;
   to_side_name: string | null;
+  /** p.257's *cap*, not a request: a link is stored at the lowest status of
+   * its own declaration, its two object types, and the properties it joins
+   * on. Asking for `active` on a link between experimental types stores
+   * `experimental`. */
+  status: OntologyStatus;
+  deprecation: Deprecation | null;
 }
 
 /** Reserved join reference: the instance's primary key, not a property. */

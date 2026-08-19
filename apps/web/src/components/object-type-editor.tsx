@@ -25,6 +25,7 @@ import { ValueFormatEditor, formattable } from "@/components/value-format-editor
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
+import { StatusField } from "@/components/status-field";
 import { ValueTypePicker } from "@/components/value-type-picker";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import type {
@@ -544,6 +545,8 @@ export function EditObjectTypeDialog({
 }) {
   const [displayName, setDisplayName] = useState(type.display_name);
   const [description, setDescription] = useState(type.description);
+  const [status, setStatus] = useState(type.status);
+  const [deprecation, setDeprecation] = useState(type.deprecation);
   const [properties, setProperties] = useState<PropertyInput[]>(
     type.properties.map((p) => ({
       api_name: p.api_name,
@@ -563,6 +566,8 @@ export function EditObjectTypeDialog({
       derivation: p.derivation,
       shared_property_id: p.shared_property_id,
       value_type_id: p.value_type_id,
+      status: p.status,
+      deprecation: p.deprecation,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(
@@ -598,6 +603,8 @@ export function EditObjectTypeDialog({
     mutationFn: () =>
       objApi.updateType(workspaceId, type.id, {
         ...body,
+        status,
+        deprecation,
         acknowledge_breaking: blocking.length > 0,
       }),
     onSuccess: async () => {
@@ -631,6 +638,20 @@ export function EditObjectTypeDialog({
             maxLength={2000}
           />
         </Field>
+        {/* p.253's developmental state, above the properties because
+            p.256's propagation reaches them - the warning has to be readable
+            next to what it is about to change. */}
+        <StatusField
+          kind="object_type"
+          value={status}
+          deprecation={deprecation}
+          onChange={setStatus}
+          onDeprecationChange={setDeprecation}
+          properties={properties.map((p) => ({
+            api_name: p.api_name,
+            status: p.status ?? "experimental",
+          }))}
+        />
         <Field label="Properties" hint="Renaming a property removes it and adds a new one">
           <PropertyRows
             properties={properties}

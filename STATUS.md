@@ -3531,6 +3531,23 @@ Ontology resource statuses (`ontology.md` §1.3; `object-link-types` p.253-259).
 **What is left, and it is the half that makes this usable:** evaluating a derived property when an object is read, and an editor for it. The evaluation composes with what is already built - §155's `via` traversal expresses the chain, `aggregate_object_set` answers `count` and `count_distinct`, and a collection is the far set read with p.146's limit - so the shape is known; it is simply not written.
 
 
+### 171. Telling somebody what a status change is about to do (this session)
+
+The Ontology Manager surface for §170 (`ontology.md` §1.3; `object-link-types` p.253-259): p.256's dropdown, p.253's badge in the listing, p.254's deprecation note, and a Delete button that explains its own refusal.
+
+**The one thing that needed a browser rather than a test client is the warning.** p.256's propagation is invisible until it has already run - demoting an object type demotes every property on it - so `propagationWarning` names the properties that are about to move, in the form, while the choice is still a choice. A response that reports the demotion afterwards is somebody discovering the change by re-reading a page they thought they understood.
+
+**`experimental` draws no badge.** It is p.256's default, so badging it would put a label on every row of a new ontology and say nothing by being everywhere. That is a decision a test has to hold, because "shows nothing" and "is broken" look the same.
+
+**Delete says why in the server's own words.** `deleteBlockedReason` returns the same sentence `check_deletable` raises, including the way through - "mark it deprecated or experimental first" - so somebody who reads the tooltip and somebody who reaches the refusal are not told two different things. The button is disabled rather than absent: a control that vanishes teaches nothing.
+
+**Eight browser mutations, and two survived the first run** - both of them the same failure this repo keeps finding.
+
+*The carry-through failure, for the seventh time* (§157, §160, §163, §164, §165, §169, and here). The edit dialog rebuilds every property from the type, so a setting it forgets to carry is silently reset by somebody changing a display name. There is no per-property status control on this screen, which is exactly what makes it dangerous: the value is one nothing on the page can see. The test sets a property to `deprecated` through the API, does an unrelated edit in the browser, and reads it back through the API.
+
+*And a save that had to be asserted, not just observed.* Moving away from `deprecated` clears p.254's note. Hiding the fields while keeping the values would look identical on screen and then be refused by the server - a 422 nobody sees, because the dialog closes either way. §160's lesson, in a new place: the test waits on the PATCH and checks it was accepted.
+
+**232 web unit tests** (was 218), **1303 API tests**, browser suite green.
 
 ---
 ---

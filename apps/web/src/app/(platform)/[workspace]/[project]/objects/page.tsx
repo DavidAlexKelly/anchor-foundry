@@ -15,6 +15,8 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { OntologySearch } from "@/components/ontology-search";
 import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
+import { StatusBadge } from "@/components/status-field";
+import { canDelete, deleteBlockedReason } from "@/lib/ontology-status";
 import { ValueTypesPanel } from "@/components/value-types-panel";
 import { Dialog, Field } from "@/components/dialog";
 import {
@@ -1022,6 +1024,11 @@ export default function ObjectsPage() {
                 <tr key={t.id}>
                   <td>
                     <strong>{t.display_name}</strong>
+                    {/* p.253: statuses are "viewable in Object Explorer,
+                        Object Views, and Workshop to provide more information
+                        about which object types are intended for use". A
+                        listing is the first of those places. */}
+                    <StatusBadge status={t.status} />
                     <div className="slug">{t.api_name}</div>
                   </td>
                   <td className="count">{t.source_count}</td>
@@ -1060,7 +1067,13 @@ export default function ObjectsPage() {
                         <button
                           className="btn danger"
                           style={{ padding: "3px 9px", fontSize: 12 }}
-                          disabled={removeType.isPending}
+                          // p.256 refuses this on the server; saying so here
+                          // turns a rejected request into a button that
+                          // explains itself. The words are the server's, so a
+                          // reader who somehow reaches the refusal is not told
+                          // two different things.
+                          disabled={removeType.isPending || !canDelete(t.status)}
+                          title={deleteBlockedReason(t.status) ?? undefined}
                           onClick={() => {
                             if (window.confirm(`Delete ${t.display_name}? Its link types and dataset mappings go with it.`)) {
                               removeType.mutate(t.id);
