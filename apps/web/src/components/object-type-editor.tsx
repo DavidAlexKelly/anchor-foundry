@@ -25,6 +25,7 @@ import { ValueFormatEditor, formattable } from "@/components/value-format-editor
 import { ConditionalFormatEditor } from "@/components/conditional-format-editor";
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
+import { ValueTypePicker } from "@/components/value-type-picker";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import type {
   ObjectTypeDetail,
@@ -53,6 +54,7 @@ export function PropertyRows({
   onChange,
   workspaceId,
   objectTypeId,
+  effectiveValueTypes,
 }: {
   properties: PropertyInput[];
   onChange: (next: PropertyInput[]) => void;
@@ -62,6 +64,11 @@ export function PropertyRows({
    * there (§161). */
   workspaceId?: string;
   objectTypeId?: string;
+  /** What each property is *actually* constrained by, which may have come from
+   * its shared property (`object-link-types` p.227). Read-only context for the
+   * picker: it is not something a save sends back, and echoing it would turn
+   * an inherited value type into a local choice. */
+  effectiveValueTypes?: Record<string, string | null>;
 }) {
   // Which row's formatter is open, by index. One dialog rather than one per
   // row: only one can be open, and a dialog per property is a dialog per
@@ -77,6 +84,9 @@ export function PropertyRows({
   const derivingRow = deriving === null ? null : properties[deriving];
   const [sharing, setSharing] = useState<number | null>(null);
   const sharingRow = sharing === null ? null : properties[sharing];
+  const [constraining, setConstraining] = useState<number | null>(null);
+  const constrainingRow =
+    constraining === null ? null : properties[constraining];
 
   return (
     <div>
@@ -120,6 +130,22 @@ export function PropertyRows({
           onSave={(next) => {
             const rows = [...properties];
             rows[sharing!] = next;
+            onChange(rows);
+          }}
+        />
+      )}
+      {constrainingRow && workspaceId && (
+        <ValueTypePicker
+          open
+          onClose={() => setConstraining(null)}
+          propertyName={constrainingRow.api_name || `property ${constraining! + 1}`}
+          workspaceId={workspaceId}
+          value={constrainingRow}
+          dataType={constrainingRow.data_type}
+          effectiveId={effectiveValueTypes?.[constrainingRow.api_name]}
+          onSave={(next) => {
+            const rows = [...properties];
+            rows[constraining!] = next;
             onChange(rows);
           }}
         />
@@ -271,6 +297,25 @@ export function PropertyRows({
               onClick={() => setSharing(index)}
             >
               Shared{prop.shared_property_id ? " •" : ""}
+            </button>
+          )}
+          {/* Value type (`object-link-types` p.227). Beside Shared because
+              they are siblings - one shares this property's metadata, the
+              other its rule - and a property may carry both. */}
+          {workspaceId && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              aria-label={`Property ${index + 1} value type`}
+              onClick={() => setConstraining(index)}
+            >
+              Rule
+              {prop.value_type_id
+                ? " •"
+                : effectiveValueTypes?.[prop.api_name]
+                  ? " ↑"
+                  : ""}
             </button>
           )}
           {/* Conditional formatting (`object-link-types` p.102-109). Unlike
@@ -517,6 +562,7 @@ export function EditObjectTypeDialog({
       edit_only: p.edit_only,
       derivation: p.derivation,
       shared_property_id: p.shared_property_id,
+      value_type_id: p.value_type_id,
     })),
   );
   const [titleProperty, setTitleProperty] = useState(
@@ -590,6 +636,9 @@ export function EditObjectTypeDialog({
             properties={properties}
             workspaceId={workspaceId}
             objectTypeId={type.id}
+            effectiveValueTypes={Object.fromEntries(
+              type.properties.map((p) => [p.api_name, p.effective_value_type_id]),
+            )}
             onChange={(next) => {
               setProperties(next);
               setAcknowledged(false);  // a changed proposal is not the one that was accepted
