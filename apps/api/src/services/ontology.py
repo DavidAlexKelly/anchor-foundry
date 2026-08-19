@@ -97,7 +97,17 @@ def to_api_name(display: str, *, type_case: bool) -> str:
 
 
 # ---- object types -----------------------------------------------------------
-async def list_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str, Any]]:
+async def list_types(
+    conn: AsyncConnection, workspace_id: UUID, *, group_id: UUID | None = None
+) -> list[dict[str, Any]]:
+    """Every object type in the workspace, optionally only those in one group.
+
+    `group_id` is p.262's "The table of object types in Ontology Manager
+    supports displaying and filtering by group". Filtering here rather than in
+    the caller because an ontology is the thing being narrowed - a client that
+    fetched everything and dropped rows would still pay for every type's
+    hidden-property scan to show a group of four.
+    """
     rows = await fetch_all(
         conn,
         """
@@ -117,9 +127,16 @@ async def list_types(conn: AsyncConnection, workspace_id: UUID) -> list[dict[str
                             AND p.visibility = 'hidden'), '{}') AS hidden_properties
           FROM object_types ot
          WHERE ot.workspace_id = :wid
+           -- Cast on both mentions: an untyped NULL parameter compared with
+           -- nothing else gives Postgres no way to infer a type, and the
+           -- failure is at execution rather than at import.
+           AND (CAST(:gid AS uuid) IS NULL OR EXISTS (
+                   SELECT 1 FROM object_type_group_members m
+                    WHERE m.object_type_id = ot.id
+                      AND m.group_id = CAST(:gid AS uuid)))
          ORDER BY ot.display_name
         """,
-        {"wid": str(workspace_id)},
+        {"wid": str(workspace_id), "gid": str(group_id) if group_id else None},
     )
     return [dict(r) for r in rows]
 

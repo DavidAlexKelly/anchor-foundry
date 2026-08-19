@@ -5,8 +5,12 @@
 > properties, link types, action types, shared properties, interfaces, and
 > functions." (p.28)
 
-Five of those seven exist here. Interfaces and functions are `○` in §1.2/§1.3
-and are absent from this search for the same reason they are absent from the
+Five of those seven exist here, plus **object type groups**, which p.28's list
+predates: p.262 says separately that "Groups are searchable in Ontology
+Manager's Search bar and Search bar dialog", and §172 added them here in the
+same commit that created them, so there was never a window where a group could
+exist and not be findable. Interfaces and functions are `○` in §1.2/§1.3 and
+are absent from this search for the same reason they are absent from the
 Ontology Manager - there is nothing to find. Named rather than silently
 skipped, because "search found nothing" and "search does not look there" read
 identically to whoever typed the query.
@@ -73,6 +77,7 @@ async def search(
     already has one of those.
     """
     from . import actions as actions_service
+    from . import object_type_groups
     from . import ontology as ontology_service
     from . import shared_properties
 
@@ -181,6 +186,28 @@ async def search(
             "object_type_id": None,
             "object_type_name": "",
             "usage_count": int(row["usage_count"]),
+            "matched_field": field,
+            "matched_value": str(row[field] or ""),
+        })
+
+    # **A group is a way of finding object types, so being findable is the
+    # whole of it** (`object-link-types` p.262: "Groups are searchable in
+    # Ontology Manager's Search bar and Search bar dialog"). Like a shared
+    # property it belongs to no object type, and the member count takes that
+    # slot for the same reason - "6 object types" is what somebody is deciding
+    # on when a group name comes back.
+    for row in await object_type_groups.list_groups(conn, workspace_id):
+        field = _matched_field(row, needle)
+        if not field:
+            continue
+        results.append({
+            "kind": "group",
+            "id": str(row["id"]),
+            "api_name": row["api_name"],
+            "display_name": row["display_name"],
+            "object_type_id": None,
+            "object_type_name": "",
+            "usage_count": int(row["member_count"]),
             "matched_field": field,
             "matched_value": str(row[field] or ""),
         })

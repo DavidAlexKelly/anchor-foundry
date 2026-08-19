@@ -3549,6 +3549,27 @@ The Ontology Manager surface for §170 (`ontology.md` §1.3; `object-link-types`
 
 **232 web unit tests** (was 218), **1303 API tests**, browser suite green.
 
+
+### 172. Object type groups, and a rule about not looking (this session)
+
+Groups (`ontology.md` §1.3; `object-link-types` p.261-263), server side. Create, rename, delete; both of p.261's directions for editing membership; p.262's three appearances - ontology search, a column on the object type listing, and a filter on it.
+
+**Most of what a feature usually needs is absent here, and that is the finding rather than a shortcut.** A group carries no schema. Grouping an object type does not change it, deleting a group deletes only the classification, and nothing downstream was told anything by the grouping - so there is no validation about what may be grouped with what, and no refusal to delete one in use. Writing those tests would have been writing tests for nothing.
+
+**The one rule with teeth is a rule about not looking.** p.263 records Foundry *changing* it: a group used to be non-discoverable when all its members were, and now "all groups will now be discoverable to any user that can view the ontology … to increase clarity and transparency in governance". So a group's visibility is a fact about the group, never derived from its members. That is one RLS policy on `workspace_id` with no join - and the natural implementation, listing groups by joining the membership table, silently reimplements the behaviour p.263 describes having removed. Its cheapest visible case is a group with no members, which is the state every group is in for the few seconds after somebody creates one: that version lets you create a group and then shows you nothing.
+
+It also happens to be the shape this repo's own scar tissue argues for. **RLS policies that read another RLS-protected table** are a recorded bug class here (0008, 0009, 0015), so the membership row carries a denormalised `workspace_id` rather than reaching through to the group - pinned by composite foreign keys that make it impossible to get wrong and, as a side effect, **spell p.192's boundary in SQL**: a group cannot contain an object type from another workspace.
+
+**Twenty-nine mutations over two rounds. The first fifteen all died, which was the reason to write the second fourteen** - a clean sheet is evidence about the mutants, not about the tests. Six of the second round survived, and every one was a real gap:
+
+*Five were the same gap wearing different hats: the suite had one workspace.* `get_group`, `_check_types_exist` and the duplicate-name check could each drop their `workspace_id` clause and nothing noticed. The shared `Fixture` has a second *organisation*, which the permission middleware rejects before a query runs - so it proves the middleware and nothing about the SQL underneath it. What was missing is a second workspace **the same person can legitimately see**, where the path names one ontology and the id belongs to another and the only thing in the way is the query itself.
+
+*One survived because a second check upstream covered it.* The delete route reads the group before deleting it, for the audit record's "how many object types stopped being classified" - so removing `delete_group`'s own existence check changes nothing observable through HTTP. Not an equivalent mutant, unlike §170's: the guard belongs to the service, and the route's read is there for metadata. The fix is one test that goes in through the service, which is also the first in this file to do so.
+
+**A second finding, outside the unit.** `verify_schema.py`'s "no unexplained extra tables" check had drifted again - **seven tables** between 0040 and 0054, found while adding 0056's two. §88 fixed exactly this list and it went stale for exactly the reason it went stale the first time: the file needs a *fresh* database (its own `audit_log` fixture cannot be cleaned up, so a second run dies on a duplicate slug), which is the one thing a suite against the shared dev database cannot give it. Fixed and the reason recorded in the file, because the next person will be adding several rows at once too.
+
+**1332 API tests** (was 1303).
+
 ---
 ---
 ---
