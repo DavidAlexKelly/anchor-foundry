@@ -3477,6 +3477,30 @@ Value types (`ontology.md` §1.2; `object-link-types` p.222-234). p.222's own ex
 
 The row is ◑: the constraints are enforced, the **Ontology Manager surface** is the remaining half, and p.233's `rid`, array and struct constraints are absent for reasons named in the parity doc rather than hidden.
 
+### 169. The value type page, and a rule that says what it bounds (this session)
+
+§168's other half: p.224's create form, p.227's dropdown on a property, p.229's version history, and the constraint editor that produces the rule.
+
+**The constraint editor offers only what the base type can carry** (p.233 lists constraints *per* base type, not one menu mostly greyed out) - and it is the one piece worth a pure module of its own. `lib/value-type.ts` decides which kinds are offered and what a form may not save; `services/value_constraints.py` stays authoritative and enforces on every synced row. Nothing in the browser can widen what a save accepts, only stop the form proposing one that fails.
+
+**A range says what it bounds.** For every type but `string` that is the value; for a string p.233 constrains the *length*. One word for two meanings is how somebody ends up believing they bounded the alphabet, so the label changes with the base type - and there is a browser test that fails if it stops.
+
+**Changing a rule is a different button from changing a name**, which is p.229 rather than layout: metadata is editable and unversioned, the constraint is immutable and a change appends a version. One dialog for both would put a versioned change and an unversioned one behind the same Save and leave nobody sure which they had made. The version dialog lists the previous rules beside the new one, because that is the point of making them immutable.
+
+**Inheritance is shown rather than hidden.** A property constrained through its shared property (p.227) shows `↑` where one that chose its own shows `•`, and the picker says which value type it is inheriting and from where. They are different states and only one of them is this property's own choice - which is also why the save sends `value_type_id` and never `effective_value_type_id`.
+
+**The carry-through failure, for the sixth time** (§157, §160, §163, §164, §165, and here). The edit dialog rebuilds every property from the type, so a setting it forgets to carry is silently reset by somebody editing a description. The test that catches it needs a *second* edit; it is now in six files and the pattern has not varied once.
+
+Eighteen mutations, all red: twelve on the pure module, six on the browser claims. **218 unit tests** (was 200), **180 browser** (was 174), 1256 API.
+
+**And the full browser run found a real regression, which is what a full run is for.** Five ontology-search tests failed with the panel still reading "Searching…" - and unlike §167's flake, this reproduced in isolation. The endpoint was taking **over two minutes**: `ontology_search` called `list_properties` **once per object type**, and one dev workspace has 226 of them. That N+1 has been there since §146 and stayed survivable right up until §168 put a join through `value_type_versions` inside the N - a table whose row-level-security policy subqueries `value_types`, which has a policy of its own.
+
+Fixed by giving search a single `list_properties_for_workspace` query that resolves shared metadata and deliberately **not** the value type: search matches on api_name, display_name and description, so the expensive half of `list_properties` was the half it never wanted. **Over 120s to 2.3s** on the same workspace.
+
+Two things worth keeping. **A loop that issues a query is a loop whose cost is somebody else's to change** - the N+1 was not a bug until a later unit made the N expensive, and nothing warned. And **§167's two-test flake was probably this, early**: same file, same symptom, and the reading at the time ("one more query per request, under full-suite load") was directionally right and an underestimate. It was recorded rather than tidied away, which is why it was recognisable the second time.
+
+
+
 **A second source gap, found and recorded rather than worked around.** I went looking for Interfaces first - it is the bigger stage-3 mechanism and shared properties are its foundation - and `docs/pal/` **has no Interfaces chapter**. `foundry_ontology.pdf` p.54 links back to "Interfaces / Metadata reference" and `foundry_functions.pdf` p.427 forward to "Interfaces / Overview"; neither page is in the export. What survives is the definition, the design guidance, and the rules a property must satisfy to implement one - enough to build *from*, not enough to build *to*, since the create/edit/metadata reference is the part that would decide the schema. The row is now marked `[?]` beside the Object Explorer gap the parity README already names, and value types were chosen instead because they have thirteen fully-sourced pages.
 
 

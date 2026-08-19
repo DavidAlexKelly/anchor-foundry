@@ -1082,6 +1082,17 @@ export interface ObjectTypeProperty {
   /** The shared property's own api_name, so p.178's globe can say *which*
    * without a request per property. Null iff `shared_property_id` is. */
   shared_property_api_name: string | null;
+  /** The value type this property chose itself (`object-link-types` p.227).
+   * This is what a save sends back. */
+  value_type_id: string | null;
+  /** What is actually in force, which may have come from the shared property
+   * (p.227). Reported apart from the above because echoing *this* one back on
+   * a save would silently turn an inherited value type into a local choice. */
+  effective_value_type_id: string | null;
+  value_type_api_name: string | null;
+  /** The current version's rule (p.230), resolved server-side so no reader
+   * ever sees a stale copy. Enforced by the sync and by actions. */
+  value_constraint: ValueConstraint | null;
 }
 
 /** One property definition used by several object types (Foundry
@@ -1105,8 +1116,65 @@ export interface SharedProperty {
   value_format: ValueFormat | null;
   /** p.191's Usage, as a count. Zero is the only safe number to delete on. */
   usage_count: number;
+  /** The value type constraining every property that uses this shared
+   * property (`object-link-types` p.227), or null. */
+  value_type_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** What a value type allows (Foundry `object-link-types` p.233).
+ *
+ * Only the four kinds this platform builds. `rid` is Foundry-specific — our
+ * resource ids are UUIDs, so `uuid` is the same check under one name — and
+ * array and struct constraints have no base type here to carry them. */
+export type ValueConstraint =
+  | { kind: "enum"; values: (string | number | boolean)[]; case_sensitive?: boolean }
+  /** On numbers and temporals directly; on a *string's length* (p.233). */
+  | { kind: "range"; minimum?: number | string; maximum?: number | string }
+  /** `substring` is p.233's opt-in; anchored is the default, because that is
+   * what somebody writing `^[a-z]+@example\.com$` means. */
+  | { kind: "regex"; pattern: string; substring?: boolean }
+  | { kind: "uuid" };
+
+/** A reusable constraint with meaning attached (Foundry `object-link-types`
+ * p.222–234) — "an email value type that has a regular expression constraint
+ * to ensure any property that uses the value type represents a valid email
+ * address" (p.222).
+ *
+ * The constraint-sibling of {@link SharedProperty}: that one shares *metadata*,
+ * this one shares a *rule*. Both can sit on the same property.
+ *
+ * `base_type`, `version_number` and `constraint` come from the **current
+ * version** (p.230), because p.229 makes those immutable per version while the
+ * name and description are not. */
+export interface ValueType {
+  id: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  /** p.225 step 7's preview value: what a conforming value looks like, so
+   * nobody has to read a regex to find out. */
+  example_value: string;
+  base_type: PropertyDataType;
+  version_number: number;
+  constraint: ValueConstraint | null;
+  /** The same rule as one readable line, for listings with no room for the
+   * shape. Server-rendered, so the browser cannot disagree about it. */
+  constraint_summary: string;
+  /** Across both of p.227's attachment points. */
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ValueTypeVersion {
+  id: string;
+  version_number: number;
+  base_type: PropertyDataType;
+  constraint: ValueConstraint | null;
+  constraint_summary: string;
+  created_at: string;
 }
 
 /** A derived property's question (Foundry `object-link-types` p.143–148): a

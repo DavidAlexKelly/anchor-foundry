@@ -22,6 +22,10 @@ function prop(
     derivation: null,
     shared_property_id: null,
     shared_property_api_name: null,
+    value_type_id: null,
+    effective_value_type_id: null,
+    value_type_api_name: null,
+    value_constraint: null,
   };
 }
 

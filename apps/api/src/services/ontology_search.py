@@ -98,8 +98,17 @@ async def search(
                 "matched_value": str(row[field] or ""),
             })
 
+    # **One query for every property in the workspace**, not one per object
+    # type. This was N+1 from the start (§146) and stayed survivable until
+    # value types put a row-level-security-nested join inside the N (§168) -
+    # at which point a workspace with a couple of hundred types stopped
+    # returning at all. The lesson is not "add an index": a loop that issues a
+    # query is a loop whose cost is somebody else's to change.
+    properties_by_type = await ontology_service.list_properties_for_workspace(
+        conn, workspace_id
+    )
     for type_id, owner in by_id.items():
-        for row in await ontology_service.list_properties(conn, UUID(type_id)):
+        for row in properties_by_type.get(type_id, []):
             field = _matched_field(row, needle)
             if not field:
                 continue

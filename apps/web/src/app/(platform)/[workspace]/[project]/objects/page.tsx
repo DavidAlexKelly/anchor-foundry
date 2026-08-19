@@ -15,6 +15,7 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { OntologySearch } from "@/components/ontology-search";
 import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
+import { ValueTypesPanel } from "@/components/value-types-panel";
 import { Dialog, Field } from "@/components/dialog";
 import {
   EditObjectTypeDialog,
@@ -1095,6 +1096,14 @@ export default function ObjectsPage() {
             canEdit={canEditOntology}
             openId={editingShared}
             onOpened={() => setEditingShared(null)}
+          />
+
+          {/* Value types beside shared properties: a shared property
+              shares a property's metadata, a value type shares its rule, and
+              a property may carry both. */}
+          <ValueTypesPanel
+            workspaceId={workspace!.id}
+            canEdit={canEditOntology}
           />
 
           <div className="page-head" style={{ marginTop: 32 }}>

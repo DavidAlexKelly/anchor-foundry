@@ -216,6 +216,69 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
     return out
 
 
+async def list_properties_for_workspace(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, list[dict[str, Any]]]:
+    """Every object type's properties, in **one** query, keyed by type id.
+
+    **Written because the ontology search was N+1 and the N got expensive.**
+    `ontology_search` called `list_properties` once per object type; a
+    workspace with 226 of them therefore made 226 round trips, each one
+    resolving shared metadata and - after value types landed - joining through
+    `value_type_versions` under a row-level-security policy that subqueries
+    `value_types`, which has a policy of its own. The per-call cost had always
+    been paid; the join is what pushed the total past the point where a search
+    box returns.
+
+    The value type is deliberately **not** resolved here. Search matches on
+    api_name, display_name and description, and a constraint is none of those -
+    so the expensive half of `list_properties` is the half search never wanted.
+    Shared metadata *is* resolved, because a property displaying its shared
+    property's name has to be findable by that name (p.178).
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT p.object_type_id, p.id, p.api_name, p.display_name, p.data_type,
+               p.required, p.description, p.sort_order, p.visibility,
+               p.shared_property_id,
+               sp.api_name AS shared_property_api_name,
+               sp.display_name AS sp_display_name,
+               sp.description AS sp_description,
+               sp.data_type AS sp_data_type,
+               sp.visibility AS sp_visibility,
+               sp.value_format AS sp_value_format
+          FROM object_type_properties p
+          JOIN object_types ot ON ot.id = p.object_type_id
+          LEFT JOIN shared_properties sp ON sp.id = p.shared_property_id
+         WHERE ot.workspace_id = :wid
+         ORDER BY p.object_type_id, p.sort_order, p.api_name
+        """,
+        {"wid": str(workspace_id)},
+    )
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        full = dict(row)
+        shared = (
+            {
+                "api_name": full["shared_property_api_name"],
+                "display_name": full["sp_display_name"],
+                "description": full["sp_description"],
+                "data_type": full["sp_data_type"],
+                "visibility": full["sp_visibility"],
+                "value_format": full["sp_value_format"],
+            }
+            if full["shared_property_id"] is not None
+            else None
+        )
+        prop = {k: v for k, v in full.items() if not k.startswith("sp_")}
+        type_id = str(prop.pop("object_type_id"))
+        out.setdefault(type_id, []).append(
+            shared_properties.resolve(prop, shared)
+        )
+    return out
+
+
 def constrained_properties(
     properties: list[dict[str, Any]],
 ) -> dict[str, tuple[str, dict[str, Any]]]:

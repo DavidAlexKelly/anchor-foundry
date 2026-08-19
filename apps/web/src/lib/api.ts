@@ -586,6 +586,27 @@ export interface PropertyInput {
    * Null is p.188's Detach, which is why it is sent explicitly rather than
    * omitted — an absent field and a cleared one would be the same request. */
   shared_property_id?: string | null;
+  /** The value type constraining this property (`object-link-types` p.227).
+   * Null detaches it, so it is sent explicitly rather than omitted. */
+  value_type_id?: string | null;
+}
+
+export interface ValueTypeInput {
+  api_name?: string;
+  display_name: string;
+  description?: string;
+  example_value?: string;
+  base_type?: import("./types").PropertyDataType;
+  constraint?: import("./types").ValueConstraint | null;
+}
+
+/** One row of where a value type is used. p.227 names two attachment points,
+ * and they are different enough that a row has to say which it is. */
+export interface ValueTypeUsage {
+  kind: "object_type_property" | "shared_property";
+  owner_name: string;
+  property_api_name: string;
+  object_type_id: string | null;
 }
 
 export interface SharedPropertyInput {
@@ -874,6 +895,39 @@ export const objects = {
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
     ),
+  /** Value types (`object-link-types` p.222–234). */
+  listValueTypes: (wid: string) =>
+    request<import("./types").ValueType[]>(`/workspaces/${wid}/value-types`),
+  createValueType: (wid: string, input: ValueTypeInput) =>
+    request<import("./types").ValueType>(`/workspaces/${wid}/value-types`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  /** p.229's mutable half. A constraint change is `addValueTypeVersion`. */
+  updateValueType: (wid: string, id: string, input: ValueTypeInput) =>
+    request<import("./types").ValueType>(`/workspaces/${wid}/value-types/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  /** p.229: changing a constraint appends a version rather than editing one. */
+  addValueTypeVersion: (
+    wid: string,
+    id: string,
+    constraint: import("./types").ValueConstraint | null,
+  ) =>
+    request<import("./types").ValueType>(
+      `/workspaces/${wid}/value-types/${id}/versions`,
+      { method: "POST", body: JSON.stringify({ constraint }) },
+    ),
+  valueTypeVersions: (wid: string, id: string) =>
+    request<import("./types").ValueTypeVersion[]>(
+      `/workspaces/${wid}/value-types/${id}/versions`,
+    ),
+  valueTypeUsage: (wid: string, id: string) =>
+    request<ValueTypeUsage[]>(`/workspaces/${wid}/value-types/${id}/usage`),
+  deleteValueType: (wid: string, id: string) =>
+    request<void>(`/workspaces/${wid}/value-types/${id}`, { method: "DELETE" }),
+
   /** Shared properties (`object-link-types` p.178–191). */
   listSharedProperties: (wid: string) =>
     request<import("./types").SharedProperty[]>(`/workspaces/${wid}/shared-properties`),

@@ -27,6 +27,7 @@ const SHARED: SharedProperty = {
   visibility: "prominent",
   value_format: { kind: "datetime", style: "date" },
   usage_count: 2,
+  value_type_id: null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
