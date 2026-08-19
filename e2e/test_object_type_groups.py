@@ -266,6 +266,14 @@ def test_an_unrelated_edit_does_not_touch_the_groups(page, module, group, api) -
         page.get_by_role("button", name="Save", exact=True).click()
     assert saved.value.ok, saved.value.text()
 
+    # **Wait for the dialog to close, not just for the PATCH.** The groups PUT
+    # is a *second* request, awaited after the PATCH resolves - so a read taken
+    # on the PATCH's response happens before a wrongly-issued PUT lands, and
+    # sees the membership still intact. The dialog closes in `onSuccess`, which
+    # runs only once both writes have finished, so its disappearance is the
+    # signal that there is nothing more coming.
+    expect(page.get_by_test_id("status-select")).to_have_count(0, timeout=15000)
+
     after = {g["id"] for g in api.call("GET", groups_url)}
     assert group["id"] in after, after
 
