@@ -1129,8 +1129,92 @@ async def update_type(
         {"tid": str(type_id)},
     )
     await _write_property_rows(conn, type_id, properties, title_property)
+    # **After the property rows**, because a link is capped by the join
+    # columns as well as by the object types, and propagation may just have
+    # lowered them.
+    await recap_link_types(conn, workspace_id, type_id)
     await _snapshot_version(conn, type_id, created_by=updated_by)
     return await get_type(conn, workspace_id, type_id)
+
+
+async def recap_link_types(
+    conn: AsyncConnection, workspace_id: UUID, type_id: UUID
+) -> list[dict[str, Any]]:
+    """Re-apply p.257's cap to every link touching this object type.
+
+    > "If at least one object type in a link type is changed to
+    > `experimental`, the link type **will automatically be changed** to
+    > `experimental`." (p.257)
+
+    **§170 implemented the cap and missed the event.** `set_link_join` computed
+    it whenever the *link* was edited, which made the cap true of every link
+    somebody touched and of no other - so demoting an object type left an
+    `active` link hanging off an `experimental` one, which is the exact state
+    p.257's troubleshooting section says cannot exist
+    (`ConflictBetweenLinkTypeStatusAndObjectTypeStatus`). The parity note
+    claimed the state was unreachable. It was reachable in two API calls.
+
+    **Lowers only, and the stored status is the declaration.** A link's row
+    already holds the capped value rather than what was asked for, so
+    re-capping from it can only go down. That is p.257's own asymmetry - it
+    says a link "will automatically be changed" when a dependency drops, and
+    says nothing about restoring one when a dependency recovers, because the
+    link's own readiness is not a fact its object types know.
+
+    Returns the links it changed, so a caller can say what a demotion took
+    with it rather than leaving somebody to notice later.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT lt.id, lt.api_name, lt.status, lt.from_property, lt.to_property,
+               lt.from_object_type_id, lt.to_object_type_id,
+               f.status AS from_status, t.status AS to_status,
+               (SELECT p.status FROM object_type_properties p
+                 WHERE p.object_type_id = lt.from_object_type_id
+                   AND p.api_name = lt.from_property) AS from_property_status,
+               (SELECT p.status FROM object_type_properties p
+                 WHERE p.object_type_id = lt.to_object_type_id
+                   AND p.api_name = lt.to_property) AS to_property_status
+          FROM link_types lt
+          JOIN object_types f ON f.id = lt.from_object_type_id
+          JOIN object_types t ON t.id = lt.to_object_type_id
+         WHERE lt.workspace_id = :wid
+           AND (lt.from_object_type_id = :tid OR lt.to_object_type_id = :tid)
+        """,
+        {"wid": str(workspace_id), "tid": str(type_id)},
+    )
+    changed: list[dict[str, Any]] = []
+    for row in rows:
+        capped = ontology_status.link_status(
+            str(row["status"]),
+            from_status=str(row["from_status"]),
+            to_status=str(row["to_status"]),
+            # A join on `$primary_key` is a sentinel rather than a property row
+            # (db 0027), so there is no status to cap by - and None is what
+            # `link_status` already ignores.
+            from_property_status=(
+                str(row["from_property_status"])
+                if row["from_property_status"] else None
+            ),
+            to_property_status=(
+                str(row["to_property_status"]) if row["to_property_status"] else None
+            ),
+        )
+        if capped == str(row["status"]):
+            continue
+        await conn.execute(
+            text(
+                "UPDATE link_types SET status = CAST(:status AS ontology_status) "
+                "WHERE id = :lid"
+            ),
+            {"status": capped, "lid": str(row["id"])},
+        )
+        changed.append(
+            {"id": row["id"], "api_name": row["api_name"],
+             "was": str(row["status"]), "now": capped}
+        )
+    return changed
 
 
 async def _drop_deleted_shared_properties(
