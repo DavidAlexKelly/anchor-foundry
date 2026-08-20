@@ -160,9 +160,13 @@ but "the only authoring surface for transforms that are not yet files".
   the conditional warning banner; revert as a new version with a generated
   description; and p.192's two settings.
 - **Stage 2 is done.** One item inside it is still ◑ rather than ✅: the Widget
-  setup tab holds a flat list rather than being organised variables-first
-  (`workshop.md` §2). The largest thing §6 still lacks is the **Changelog
-  panel** (p.193), which is also the prerequisite for module branching.
+  setup tab. §178 made it variables-first — p.65's Inputs → Configuration →
+  Outputs, with p.66's progressive disclosure — for three of the eighteen
+  variable-bearing panels, including p.65-67's own worked example. The rest is
+  a mechanical per-panel conversion, deliberately not done in one change: it
+  would have been a ~4,700-line refactor nobody could review. The largest
+  thing §6 still lacks is the **Changelog panel** (p.193), which is also the
+  prerequisite for module branching.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
 | **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |

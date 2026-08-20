@@ -3665,6 +3665,21 @@ p.258's three sentences, which finish `ontology.md` §1.3 apart from p.255's pro
 
 **1381 API tests** (was 1364).
 
+
+### 178. Variables-first, and a refactor deliberately left half done (this session)
+
+The Widget setup tab, organised the way p.65 describes it (`workshop.md` §2).
+
+**p.65's order is the order somebody has to think in.** The Object Set that populates the widget, then the options that set makes answerable, then what the widget produces for others to read. The panel was a flat list of whatever each widget's author wrote first, which puts three different kinds of decision on the same footing.
+
+**The only *behaviour* in the row is p.66's progressive disclosure**, and it is the reason this is more than a layout change: "This configuration option is revealed in more detail once the Object Set is populated". Wrong in either direction is silent - revealed too early is a panel of empty dropdowns asking questions nothing can answer, revealed too late is a widget that looks unfinishable. So `configReady` is pure and tested, and the panel says *which* input it is waiting on rather than "configure this widget first", because a widget with three inputs would otherwise leave somebody guessing.
+
+**Deliberately not finished, and that is the notable decision.** Eighteen of the twenty-one settings panels bind variables. Converting all of them is mechanical but is roughly 4,700 lines of restructuring in one file, which is a change nobody could review and a large blast radius for a presentational refactor. Three are converted - Filter List (p.65-67's own worked example), Search, Time Series - and the parity row says exactly which, and that the rest still render flat. A half-converted panel set is a real cost, and naming it is better than a row that claims more than it did.
+
+**Eleven mutations, and two "survivors" that were the script's fault rather than the tests'.** `configReady` lives in a pure module covered by vitest; the mutation script ran only the browser file, which exercises one required input with a null value - so "an unset select counts as bound" and "one bound input reveals everything" both passed. The tests that kill them already existed. **A mutation run measures the suite you point it at**, and pointing it at one layer of a two-layer feature reports gaps that are not there - which is the same error as trusting a green suite, one level up.
+
+**256 web unit tests** (was 251).
+
 ---
 ---
 ---
