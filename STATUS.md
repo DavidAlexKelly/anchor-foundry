@@ -3646,6 +3646,25 @@ The cap was computed in `set_link_join`, so it held for every link somebody edit
 
 **1364 API tests** (was 1359).
 
+
+### 177. Bulk status editing, and a bulk edit as a way round the rules (this session)
+
+p.258's three sentences, which finish `ontology.md` §1.3 apart from p.255's proposal path.
+
+**A bulk edit is a way round every rule it forgets**, so the interesting work was not the loop. `set_type_statuses` runs the same pure functions the single-type path does - p.255's promotion role, p.255's visibility, p.256's propagation into properties, §176's link re-cap, and a version per type - and most of the tests are one per rule, asserting the new path did not become a back door. Mutation testing was the right tool for exactly this: every "bulk skips rule X" mutant is a plausible thing to have written.
+
+**p.258's option is an option, and that is the whole of §170's asymmetry.** "When changing an object type from `experimental` to `active`, there is the option to also apply the `active` status to all properties." A parameter rather than a consequence, unticked by default - and the test that matters is the one that *does not* tick it, because a version that always raised would pass every test that does.
+
+**Bulk property statuses are capped at the object type's own status**, which is the decision in this unit. p.256's propagation runs on every save of the type, so a property raised above it would be silently demoted by the next unrelated edit - a change somebody made, gone later, with nothing to say why. That is the carry-through failure in a new place, and capping refuses to create the state rather than letting it exist until something tidies it away.
+
+**All or nothing.** One refusal fails the whole request: a half-applied bulk edit leaves somebody to work out which half, and the caller chose those types together.
+
+**A comment that claimed something false, removed rather than kept.** The bulk route's first docstring said its declaration order mattered because FastAPI would otherwise read `bulk-status` as a `{type_id}`. Checking rather than asserting showed both `{type_id}` POST routes have extra path segments, so no collision is possible. §176's lesson one level down: a confident comment is a claim, and an unchecked one is worse than none.
+
+**Twenty-two mutations, all killed** (15 server, 7 UI).
+
+**1381 API tests** (was 1364).
+
 ---
 ---
 ---

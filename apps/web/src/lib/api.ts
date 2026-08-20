@@ -852,6 +852,36 @@ export const objects = {
       `/workspaces/${wid}/object-types` +
         (groupId ? `?group_id=${encodeURIComponent(groupId)}` : ""),
     ),
+  /** p.258's Edit status button, over the types somebody ticked. All or
+   * nothing: one refusal fails the request rather than leaving half of them
+   * changed. */
+  bulkTypeStatus: (
+    wid: string,
+    input: {
+      object_type_ids: string[];
+      status: import("./types").OntologyStatus;
+      deprecation?: import("./types").Deprecation | null;
+      /** p.258's "option to also apply the `active` status to all
+       * properties" — an option, so it is asked for rather than assumed. */
+      apply_to_properties?: boolean;
+    },
+  ) =>
+    request<import("./types").ObjectTypeSummary[]>(
+      `/workspaces/${wid}/object-types/bulk-status`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** p.258's bulk edit from the Properties page. The server caps these at the
+   * object type's own status, so the answer is what was stored rather than
+   * what was asked for. */
+  bulkPropertyStatus: (
+    wid: string,
+    typeId: string,
+    input: { api_names: string[]; status: import("./types").OntologyStatus },
+  ) =>
+    request<import("./types").ObjectTypeProperty[]>(
+      `/workspaces/${wid}/object-types/${typeId}/property-statuses`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   getType: (wid: string, typeId: string) =>
     request<import("./types").ObjectTypeDetail>(`/workspaces/${wid}/object-types/${typeId}`),
   createType: (wid: string, input: ObjectTypeCreateInput) =>

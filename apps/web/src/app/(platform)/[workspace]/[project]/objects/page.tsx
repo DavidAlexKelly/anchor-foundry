@@ -916,6 +916,11 @@ export default function ObjectsPage() {
   const [editingShared, setEditingShared] = useState<string | null>(null);
   const [openingGroup, setOpeningGroup] = useState<string | null>(null);
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
+  // p.258's checkboxes. A Set rather than a per-row flag, because the thing
+  // the Edit status button needs is the selection, not the rows.
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState<OntologyStatus>("active");
+  const [applyToProperties, setApplyToProperties] = useState(false);
   // The object type whose configured view is being chosen. Name as well as id,
   // because the dialog's title says which type and the row already knows it.
   const [viewingType, setViewingType] = useState<{ id: string; name: string } | null>(null);
@@ -975,6 +980,26 @@ export default function ObjectsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["object-sources", project?.id] });
       queryClient.invalidateQueries({ queryKey: ["object-types", workspace?.id] });
+    },
+  });
+  // p.258's Edit status button. Clears the selection on success so the bar
+  // goes away with the thing it was about - a bar still offering to act on
+  // types it has already changed is a second click nobody meant.
+  const bulkStatusChange = useMutation({
+    mutationFn: () =>
+      objApi.bulkTypeStatus(workspace!.id, {
+        object_type_ids: [...selectedTypes],
+        status: bulkStatus,
+        apply_to_properties: applyToProperties,
+      }),
+    onSuccess: async () => {
+      setSelectedTypes(new Set());
+      setApplyToProperties(false);
+      await queryClient.invalidateQueries({ queryKey: ["object-types", workspace?.id] });
+      await queryClient.invalidateQueries({ queryKey: ["link-types", workspace?.id] });
+      // Every property status may have moved (p.256), and the detail query is
+      // keyed per type.
+      await queryClient.invalidateQueries({ queryKey: ["object-type"] });
     },
   });
   const removeAction = useMutation({
@@ -1060,6 +1085,62 @@ export default function ObjectsPage() {
         </div>
       )}
 
+      {/* p.258's Edit status bar. Only once something is ticked: a control
+          that can act on nothing is a control that does nothing. */}
+      {canEditOntology && selectedTypes.size > 0 && (
+        <div className="row-actions" style={{ marginBottom: 10 }} data-testid="bulk-status-bar">
+          <span className="slug" data-testid="bulk-selected-count">
+            {selectedTypes.size} selected
+          </span>
+          <select
+            data-testid="bulk-status-select"
+            aria-label="Status to apply"
+            value={bulkStatus}
+            onChange={(e) => setBulkStatus(e.target.value as OntologyStatus)}
+          >
+            {statusesFor("object_type", {
+              canPromote: workspace?.effective_role === "admin",
+            }).map((sv) => (
+              <option key={sv} value={sv}>{STATUS_LABELS[sv]}</option>
+            ))}
+          </select>
+          <label style={{ fontSize: 12.5 }}>
+            <input
+              type="checkbox"
+              data-testid="bulk-apply-to-properties"
+              checked={applyToProperties}
+              onChange={(e) => setApplyToProperties(e.target.checked)}
+            />{" "}
+            {/* p.258: "there is the option to also apply the `active` status
+                to all properties on the object type" - an option, so it is
+                unticked until somebody ticks it. */}
+            also apply to every property
+          </label>
+          <button
+            className="btn"
+            data-testid="bulk-status-apply"
+            disabled={bulkStatusChange.isPending}
+            onClick={() => bulkStatusChange.mutate()}
+          >
+            Edit status
+          </button>
+          <button
+            className="btn quiet"
+            data-testid="bulk-status-clear"
+            onClick={() => setSelectedTypes(new Set())}
+          >
+            Clear
+          </button>
+          {bulkStatusChange.isError && (
+            <span className="slug" data-testid="bulk-status-error">
+              {bulkStatusChange.error instanceof ApiError
+                ? bulkStatusChange.error.message
+                : "Could not change the statuses."}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* p.262's filter. Above the table rather than in a header cell, because
           it changes what the table *is* rather than how one column sorts. */}
       {workspace && (
@@ -1076,11 +1157,32 @@ export default function ObjectsPage() {
         <>
           <table className="table" style={{ marginBottom: 28 }}>
             <thead>
-              <tr><th>Object type</th><th>Sources</th><th aria-label="Actions" /></tr>
+              <tr>
+                <th aria-label="Select" />
+                <th>Object type</th><th>Sources</th><th aria-label="Actions" />
+              </tr>
             </thead>
             <tbody>
               {types.data.map((t) => (
                 <tr key={t.id}>
+                  <td>
+                    {canEditOntology && (
+                      <input
+                        type="checkbox"
+                        data-testid={`select-${t.api_name}`}
+                        aria-label={`Select ${t.api_name}`}
+                        checked={selectedTypes.has(t.id)}
+                        onChange={() =>
+                          setSelectedTypes((current) => {
+                            const next = new Set(current);
+                            if (next.has(t.id)) next.delete(t.id);
+                            else next.add(t.id);
+                            return next;
+                          })
+                        }
+                      />
+                    )}
+                  </td>
                   <td>
                     <strong>{t.display_name}</strong>
                     {/* p.253: statuses are "viewable in Object Explorer,
