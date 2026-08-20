@@ -16,6 +16,7 @@ import {
 } from "@/lib/api";
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
 import { VariableBridge } from "./VariableBridge";
+import { WidgetSetup } from "./WidgetSetup";
 import { CanvasNode } from "./SettingsPanel";
 import {
   CanvasHeaderCollapsedContext,
@@ -444,15 +445,16 @@ function FilterListSettings() {
   const { declared } = useCanvasVariables();
   const sets = Object.values(declared).filter((v) => v.kind === "object_set");
   const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  // p.65-67's worked example, in p.65's order: the Object Set that populates
+  // the widget, the filter options that set makes answerable, then the Filter
+  // Output. p.66 keeps the middle one out of the way until the first is
+  // bound - "revealed in more detail once the Object Set is populated".
   return (
-    <>
-      <label className="field">
-        <span className="field-label">Title</span>
-        <input
-          value={title ?? ""}
-          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
-        />
-      </label>
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Object set</span>
         <select
@@ -473,6 +475,28 @@ function FilterListSettings() {
         </select>
         <span className="field-hint">The set the options are read from</span>
       </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          value={title ?? ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Properties</span>
+        <input
+          value={properties ?? ""}
+          placeholder="region, status"
+          onChange={(e) =>
+            setProp((p: { properties: string }) => (p.properties = e.target.value))
+          }
+        />
+        <span className="field-hint">Comma-separated property names to offer</span>
+      </label>
+      </>}
+      outputs={<>
       <label className="field">
         <span className="field-label">Writes its filters to</span>
         <select
@@ -493,18 +517,8 @@ function FilterListSettings() {
           filtered set other widgets read.
         </span>
       </label>
-      <label className="field">
-        <span className="field-label">Properties</span>
-        <input
-          value={properties ?? ""}
-          placeholder="region, status"
-          onChange={(e) =>
-            setProp((p: { properties: string }) => (p.properties = e.target.value))
-          }
-        />
-        <span className="field-hint">Comma-separated property names to offer</span>
-      </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -1393,8 +1407,15 @@ function SearchSettings() {
     enabled: !!typeId,
   });
 
+  // p.65's order, and p.66's disclosure: the property list is read from the
+  // set's object type, so it is a question nothing can answer until the set
+  // is bound - which is p.66's own example, one widget over.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Object set</span>
         <select
@@ -1413,6 +1434,8 @@ function SearchSettings() {
         </select>
         <span className="field-hint">Which set&apos;s properties to offer below</span>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Property</span>
         <select
@@ -1426,6 +1449,16 @@ function SearchSettings() {
           ))}
         </select>
       </label>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      </>}
+      outputs={<>
       <label className="field">
         <span className="field-label">Writes to</span>
         <select
@@ -1446,15 +1479,8 @@ function SearchSettings() {
             : "Give this its own variable, and chain the narrow_set derivations"}
         </span>
       </label>
-      <label className="field">
-        <span className="field-label">Label</span>
-        <input
-          type="text"
-          value={label || ""}
-          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
-        />
-      </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -2222,8 +2248,14 @@ function TimeSeriesSettings() {
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
 
+  // No outputs: this widget reads a set and draws it. An empty Outputs
+  // heading would promise a control that does not exist.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Object set</span>
         <select
@@ -2239,6 +2271,8 @@ function TimeSeriesSettings() {
           ))}
         </select>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Bucket</span>
         <select
@@ -2264,7 +2298,8 @@ function TimeSeriesSettings() {
           onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
         />
       </label>
-    </>
+      </>}
+    />
   );
 }
 

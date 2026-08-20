@@ -107,7 +107,7 @@ Foundry's widget panel has **three** tabs (p.65–68). An earlier roadmap draft 
 
 | Tab | Contents | Status |
 |---|---|---|
-| **Widget setup** | input and output variables, plus widget-specific configuration | ✅ the tab exists and holds the per-widget panel; ◑ the panel itself is still a flat list rather than variables-first |
+| **Widget setup** | input and output variables, plus widget-specific configuration | ◑ §178 — the panel is **variables-first** for the object-set widgets: p.65's order (Inputs → Configuration → Outputs) as three labelled sections, and p.66's progressive disclosure, which is the only *behaviour* in the row — "revealed in more detail once the Object Set is populated", so configuration nothing can answer yet is replaced by a line naming the input it is waiting on. A widget with nothing to output draws no Outputs heading, since an empty one promises a control that does not exist. **Converted: Filter List (p.65-67's own worked example), Search, Time Series.** The other fifteen variable-bearing panels still render flat — the wrapper is per-panel opt-in and the conversion is mechanical, but doing all eighteen in one change would have been a ~4,700-line refactor with no way to review it |
 | **Metadata** | rename widget; **view and edit raw widget JSON** | ✅ |
 | **Display** | sizing only: **Auto (max)**, **Absolute** (fixed px), **Flex** (ratio) | ✅ for height; **width is not per-widget here** — see below |
 
