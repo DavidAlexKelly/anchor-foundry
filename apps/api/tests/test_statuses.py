@@ -453,3 +453,119 @@ def test_deprecation_details_on_a_live_property_are_refused(
     r = save(client, fx, detail)
     assert r.status_code == 422, r.text
     assert "only to a deprecated resource" in r.text
+
+
+# ---- p.257's cap is an *event*, not only a validation (§176) -----------------
+def read_link(client: TestClient, fx: Fixture, link_id: str) -> dict:
+    links = client.get(f"{wbase(fx)}/link-types", headers=hdr(fx.viewer_sub)).json()
+    return next(l for l in links if l["id"] == link_id)
+
+
+def test_demoting_an_object_type_demotes_its_link_types(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The defect §170 shipped, named.**
+
+    > "If at least one object type in a link type is changed to
+    > `experimental`, the link type **will automatically be changed** to
+    > `experimental`." (p.257)
+
+    §170 computed the cap in `set_link_join`, so it held for every link
+    somebody edited and for no other. Demoting an object type left an `active`
+    link hanging off an `experimental` one - the exact state p.257's
+    troubleshooting section says cannot exist, and which §170's parity note
+    claimed was unreachable. It was reachable in two API calls.
+    """
+    a, b, link = make_link(client, fx)
+    activate(client, fx, a["id"])
+    activate(client, fx, b["id"])
+    assert set_link_status(client, fx, link, "active")["status"] == "active"
+
+    # Demote one end. Nothing touches the link itself.
+    assert save(client, fx, read_type(client, fx, a["id"]),
+                status="experimental").status_code == 200
+    assert read_link(client, fx, link["id"])["status"] == "experimental"
+
+
+def test_demoting_a_join_property_demotes_the_link_too(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.257: "The same requirements are true of foreign keys of a link type."
+
+    Its own test because the two are capped from different places - the object
+    type's row and the property's - and a fix that read only the first would
+    pass the test above.
+    """
+    a, b, link = make_link(client, fx)
+    activate(client, fx, a["id"])
+    activate(client, fx, b["id"])
+    assert set_link_status(client, fx, link, "active")["status"] == "active"
+
+    # The type stays active; only the column it joins on steps down.
+    detail = read_type(client, fx, a["id"])
+    for prop in detail["properties"]:
+        prop["status"] = "deprecated"
+    assert save(client, fx, detail, status="active").status_code == 200
+
+    assert read_type(client, fx, a["id"])["status"] == "active"
+    assert read_link(client, fx, link["id"])["status"] == "deprecated"
+
+
+def test_demoting_the_far_join_property_demotes_the_link_too(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The same rule from the other end, and it needs its own test: a re-cap
+    that read only the near side's join column would pass the test above and
+    leave every link capped by half of what p.257 names."""
+    a, b, link = make_link(client, fx)
+    activate(client, fx, a["id"])
+    activate(client, fx, b["id"])
+    assert set_link_status(client, fx, link, "active")["status"] == "active"
+
+    # This time the *far* type's join column steps down, and the edit is made
+    # on that type - so the re-cap has to find the link from its `to` side.
+    detail = read_type(client, fx, b["id"])
+    for prop in detail["properties"]:
+        prop["status"] = "example"
+    assert save(client, fx, detail, status="active").status_code == 200
+
+    assert read_link(client, fx, link["id"])["status"] == "example"
+
+
+def test_re_promoting_the_object_type_does_not_restore_the_link(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Lowers only**, which is p.257's own asymmetry: it says a link "will
+    automatically be changed" when a dependency drops and says nothing about
+    restoring one when a dependency recovers. A link's readiness is not a fact
+    its object types know - p.257 makes that point itself, about a foreign key
+    that may be in production "while the link type and its backing datasource
+    are still in development"."""
+    a, b, link = make_link(client, fx)
+    activate(client, fx, a["id"])
+    activate(client, fx, b["id"])
+    assert set_link_status(client, fx, link, "active")["status"] == "active"
+
+    assert save(client, fx, read_type(client, fx, a["id"]),
+                status="experimental").status_code == 200
+    assert read_link(client, fx, link["id"])["status"] == "experimental"
+
+    activate(client, fx, a["id"])
+    assert read_link(client, fx, link["id"])["status"] == "experimental"
+
+
+def test_an_unrelated_type_does_not_touch_the_link(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The query is scoped to links that actually reference the type. Without
+    that it would be a workspace-wide re-cap on every save - correct by
+    accident, and quadratic."""
+    a, b, link = make_link(client, fx)
+    activate(client, fx, a["id"])
+    activate(client, fx, b["id"])
+    assert set_link_status(client, fx, link, "active")["status"] == "active"
+
+    other = make_type(client, fx)
+    assert save(client, fx, read_type(client, fx, other["id"]),
+                status="example").status_code == 200
+    assert read_link(client, fx, link["id"])["status"] == "active"

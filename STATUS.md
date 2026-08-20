@@ -3629,6 +3629,23 @@ p.255's other two sentences, the ones §170 read past while taking its `promoted
 
 **1359 API tests** (was 1345), **251 web unit tests** (was 246).
 
+
+### 176. A cap that was only a validation (this session)
+
+**§170 shipped a defect and this repo's own parity note asserted the opposite.** Found while reading p.258 for the next unit, by asking a question the previous four units had not: p.257 says a link type "**will automatically be changed**" when one of its object types is - that is an *event*, and §170 implemented a *validation*.
+
+The cap was computed in `set_link_join`, so it held for every link somebody edited and for no other. Demoting an object type left an `active` link hanging off an `experimental` one: precisely the state p.257's troubleshooting section says cannot exist (`ConflictBetweenLinkTypeStatusAndObjectTypeStatus`), and precisely what `docs/parity/ontology.md` claimed was "unreachable rather than detected". **It was reachable in two API calls**, and a three-line probe showed it in about a minute once the question was asked the right way round.
+
+`recap_link_types` now re-applies p.257 to every link touching a type whose status or join columns just changed, run *after* the property rows are written because a link is capped by its join columns too and propagation may just have lowered them.
+
+**It lowers only, and the stored status is the declaration.** A link's row already holds the capped value rather than what was asked for, so re-capping from it can only go down - which is p.257's own asymmetry, stated for the neighbouring case: a foreign key may be in production "while the link type and its backing datasource are still in development". A dependency recovering does not restore the link, because the link's own readiness is not a fact its object types know.
+
+**Seven mutations. One survivor and one skip, both the same shape:** a rule that names two symmetric things - `from` and `to` - and a test exercising only one of them. The far join column had no test, and the mutant that stopped reading it passed. Worth generalising: whenever a rule reads both ends of a relationship, one test per end, because the code that reads half of it looks exactly like the code that reads all of it.
+
+**The lesson about the parity doc is the bigger one.** A row saying a state is unreachable is a claim, and claims in that file are load-bearing - four later units read it and built on top. It is now corrected in place rather than quietly patched.
+
+**1364 API tests** (was 1359).
+
 ---
 ---
 ---
