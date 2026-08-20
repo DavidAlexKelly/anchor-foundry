@@ -1155,6 +1155,22 @@ export const actions = {
     }),
   removeType: (wid: string, actionTypeId: string) =>
     request<void>(`/workspaces/${wid}/action-types/${actionTypeId}`, { method: "DELETE" }),
+  /** p.256's status dropdown. Its own call rather than a field on
+   * `setDefinition`, because that body is what the action *does* and a status
+   * is how much anyone should rely on it — folding them together would make
+   * every rule edit a status write. **Omitting a field means unchanged.** */
+  setStatus: (
+    wid: string,
+    actionTypeId: string,
+    input: {
+      status?: import("./types").OntologyStatus;
+      deprecation?: import("./types").Deprecation | null;
+    },
+  ) =>
+    request<import("./types").ActionType>(
+      `/workspaces/${wid}/action-types/${actionTypeId}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
   /** Parameters, rules and criteria as one document (decision 0007). Whole
    * document because they constrain each other - see the route. */
   setDefinition: (wid: string, actionTypeId: string, input: ActionDefinitionInput) =>

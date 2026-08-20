@@ -1702,6 +1702,13 @@ export interface ActionType {
    * "which properties does this action write", and that question has this
    * exact answer while `modify_object` is the only rule kind. */
   editable_properties: string[];
+  /** Developmental state (`object-link-types` p.253, which names actions among
+   * the kinds that have one). `promoted` is excluded by p.255. **Not capped by
+   * the object type** — p.257's cap is about link types and says nothing about
+   * actions — which is why deleting an object type refuses while an `active`
+   * action hangs off it. */
+  status: OntologyStatus;
+  deprecation: Deprecation | null;
   created_at: string;
   updated_at: string;
 }

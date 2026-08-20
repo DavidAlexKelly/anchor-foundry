@@ -105,6 +105,11 @@ class ActionTypeOut(BaseModel):
     # itself moves to parameters (decision 0007, "the form gets harder before
     # it gets better").
     editable_properties: list[str]
+    # p.253: "every object type, property, link type, action, or interface in
+    # the Ontology has a status". p.255 excludes `promoted` from action types
+    # by name.
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -115,6 +120,21 @@ class ActionTypeCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
     editable_properties: list[str] = Field(min_length=1, max_length=50)
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
+
+
+class ActionStatusUpdate(BaseModel):
+    """p.256's status dropdown, for an action type.
+
+    **Both fields optional, and omitted means unchanged** - §170's rule. This
+    is the only endpoint that writes an action's status, so treating a missing
+    field as the documented default for a *new* resource would demote an
+    action every time a client that predates statuses touched it.
+    """
+
+    status: str | None = None
+    deprecation: dict[str, Any] | None = None
 
 
 class ActionRunOut(BaseModel):
@@ -154,6 +174,9 @@ def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
             "rules": rules,
             "criteria": [{**c, "config": _parse_json(c["config"])} for c in row["criteria"]],
             "editable_properties": actions_service.editable_properties_of(rules),
+            # jsonb, so it may arrive as text depending on the driver path -
+            # the same treatment `config` gets two lines up.
+            "deprecation": _parse_json(row.get("deprecation")),
         }
     )
 
@@ -189,6 +212,8 @@ async def create_action_type(
             description=body.description,
             editable_properties=body.editable_properties,
             created_by=access.auth.user_id,
+            status=body.status,
+            deprecation=body.deprecation,
         )
         await audit.record(
             conn,
@@ -212,6 +237,42 @@ async def get_action_type(
 ) -> ActionTypeOut:
     async with user_connection(access.auth.user_id) as conn:
         row = await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
+    return _action_type_out(row)
+
+
+@router.patch("/action-types/{action_type_id}", response_model=ActionTypeOut)
+async def set_action_status(
+    action_type_id: UUID,
+    body: ActionStatusUpdate,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> ActionTypeOut:
+    """p.256's status dropdown (`object-link-types` p.253-256).
+
+    Separate from the definition PUT because that body is what the action
+    *does*; a status is a statement about how much anyone should rely on it,
+    and folding one into the other would make every rule edit a status write.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await actions_service.set_action_status(
+            conn,
+            access.workspace_id,
+            action_type_id,
+            status=body.status,
+            deprecation=body.deprecation,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="action_type.status",
+            resource_type="action_type",
+            resource_id=action_type_id,
+            workspace_id=access.workspace_id,
+            metadata={"status": row["status"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
     return _action_type_out(row)
 
 
