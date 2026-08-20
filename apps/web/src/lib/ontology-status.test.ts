@@ -17,8 +17,8 @@ import { describe, expect, it } from "vitest";
 
 import type { OntologyStatus } from "@/lib/types";
 import {
-  canDelete, deleteBlockedReason, propagationWarning, statusesFor,
-  wantsDeprecationNote, weakest,
+  canDelete, deleteBlockedReason, promoteBlockedReason, propagationWarning,
+  statusesFor, wantsDeprecationNote, weakest,
 } from "./ontology-status";
 
 function props(...pairs: [string, OntologyStatus][]) {
@@ -154,5 +154,44 @@ describe("wantsDeprecationNote", () => {
     for (const other of ["promoted", "active", "experimental", "example"] as const) {
       expect(wantsDeprecationNote(other)).toBe(false);
     }
+  });
+});
+
+describe("statusesFor and promotion (§175, p.255)", () => {
+  it("hides promoted from somebody who cannot apply it", () => {
+    // p.255: "Only users with the `Ontology Owner` role on the ontology level
+    // can directly apply the `promoted` status." Offering it to an editor
+    // would be offering a save the server refuses.
+    expect(statusesFor("object_type", { canPromote: false })).not.toContain("promoted");
+    expect(statusesFor("object_type", { canPromote: true })).toContain("promoted");
+  });
+
+  it("keeps promoted on the list when the type already is", () => {
+    // **The blank-select trap.** The server gates the transition, not the
+    // value, so an editor may still save an already-promoted type. Dropping
+    // the option would leave the select with no entry matching its own value
+    // - a blank control that silently demotes the type on the next save.
+    expect(
+      statusesFor("object_type", { canPromote: false, current: "promoted" }),
+    ).toContain("promoted");
+  });
+
+  it("still refuses promoted for the other kinds whoever is asking", () => {
+    // p.255's scope sentence is about the resource, not the person.
+    expect(
+      statusesFor("property", { canPromote: true }),
+    ).not.toContain("promoted");
+    expect(
+      statusesFor("link_type", { canPromote: true, current: "promoted" }),
+    ).not.toContain("promoted");
+  });
+
+  it("defaults to offering it, so an unaware caller is not silently limited", () => {
+    expect(statusesFor("object_type")).toContain("promoted");
+  });
+
+  it("says why when it is not on offer", () => {
+    expect(promoteBlockedReason(false)).toMatch(/workspace admin/);
+    expect(promoteBlockedReason(true)).toBeNull();
   });
 });

@@ -3610,6 +3610,25 @@ The last fully-sourced row on this stage (`ontology.md` §1.3). p.253 names acti
 
 **1345 API tests** (was 1332).
 
+
+### 175. Who may promote, and a role this platform already had (this session)
+
+p.255's other two sentences, the ones §170 read past while taking its `promoted`-scope rule.
+
+**"There is no ontology-level role here" was wrong, and I had said it repeatedly.** `workspace_role` is an enum of admin/editor/viewer (db 0001), ranked in `permissions.py`, and a workspace *is* this platform's ontology (db 0003) - the same equivalence shared properties, value types and groups all lean on. So p.255's "Ontology Owner role on the ontology level" is a **floor on an existing role**, not a permission system that needed inventing.
+
+**And the source says not to invent one.** Foundry's Ontology-roles chapter (`ontology-manager` p.43) opens by marking itself legacy: "no longer the most up-to-date method for ontology resource permissioning. Ontology resources can now be permissioned using the **Compass filesystem**" - their project/folder ACLs, which is structurally what this platform's workspace and project roles already are. A per-resource `ontology_resource_roles` table would have been replicating the model Palantir is migrating *off*, on the strength of a chapter that says so, while the platform already had the shape they moved *to*. The divergence worth naming: our admin is workspace-wide where theirs is per resource - stricter, not looser.
+
+**The gate is on the transition, not the value, and that is the whole design.** The type editor sends the whole definition on every save, so an editor pressing Save on an already-promoted type sends `promoted` without asking for anything. Refusing that would lock every editor out of every promoted type - p.255's protection turned into a rule that makes the most important object types uneditable by the people who build them. The same trap has a second face in the browser: a dropdown that hid `promoted` from an editor would leave the select with no entry matching its own value, which renders blank and demotes the type on the next save. Both have tests named after them.
+
+**p.255's visibility sentence, which needed a column.** "Setting an object type's status to `promoted` will automatically set its visibility to `prominent`." An object type had no visibility of its own - `property_visibility` had existed since 0003 but only ever on properties - so db 0057 adds one, reusing the enum rather than declaring a second holding the same three values. It **raises and never lowers**: p.255 says what promoting does and nothing about demoting undoing it, so a type somebody deliberately made prominent stays that way.
+
+**Seventeen mutations, all killed on the first run** (12 server, 5 UI) - and the browser file is the first here to sign in as *two* people at once, because an option hidden from the wrong person is a feature and an option hidden from the right person is the feature switched off, and one session cannot tell those apart.
+
+**What is deliberately not built** is p.255's second sentence: "Other users must submit a proposal for review and approval by an Ontology Owner." That needs a review surface for ontology changes. §52's proposals and §53's blocking checks are the right machinery and are built around repository change sets rather than ontology edits, so wiring the two together is a feature and plausibly its own stage - not something this refusal should pretend to be.
+
+**1359 API tests** (was 1345), **251 web unit tests** (was 246).
+
 ---
 ---
 ---

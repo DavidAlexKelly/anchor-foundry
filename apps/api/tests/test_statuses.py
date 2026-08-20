@@ -74,7 +74,13 @@ def read_type(client: TestClient, fx: Fixture, type_id: str) -> dict:
     return r.json()
 
 
-def save(client: TestClient, fx: Fixture, detail: dict, **over):
+def save(client: TestClient, fx: Fixture, detail: dict, *, as_admin: bool = False, **over):
+    """Save a whole definition the way the editor does.
+
+    `as_admin` because p.255 restricts *applying* `promoted` to the ontology
+    level (§175). Everything else in this file is an ordinary editor's edit,
+    and saying which is which is part of what these tests assert.
+    """
     body = {
         "display_name": detail["display_name"],
         "properties": [
@@ -87,7 +93,9 @@ def save(client: TestClient, fx: Fixture, detail: dict, **over):
         **over,
     }
     return client.patch(
-        f"{wbase(fx)}/object-types/{detail['id']}", headers=hdr(fx.editor_sub), json=body
+        f"{wbase(fx)}/object-types/{detail['id']}",
+        headers=hdr(fx.admin_sub if as_admin else fx.editor_sub),
+        json=body,
     )
 
 
@@ -348,7 +356,7 @@ def test_an_object_type_can_be_promoted_and_then_not_deleted(
     active status, such as restrictions on deletion"."""
     created = make_type(client, fx)
     assert save(client, fx, read_type(client, fx, created["id"]),
-                status="promoted").status_code == 200
+                status="promoted", as_admin=True).status_code == 200
     assert client.delete(f"{wbase(fx)}/object-types/{created['id']}",
                          headers=hdr(fx.editor_sub)).status_code == 422
 

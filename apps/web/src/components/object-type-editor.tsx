@@ -539,10 +539,14 @@ export function EditObjectTypeDialog({
   workspaceId,
   type,
   onClose,
+  canPromote = true,
 }: {
   workspaceId: string;
   type: ObjectTypeDetail;
   onClose: () => void;
+  /** p.255: only the ontology level may apply `promoted`. The page knows the
+   * caller's workspace role; this dialog only needs the answer. */
+  canPromote?: boolean;
 }) {
   const [displayName, setDisplayName] = useState(type.display_name);
   const [description, setDescription] = useState(type.description);
@@ -686,6 +690,7 @@ export function EditObjectTypeDialog({
             api_name: p.api_name,
             status: p.status ?? "experimental",
           }))}
+          canPromote={canPromote}
         />
         {/* p.261: "Groups can also be added directly to object types by
             selecting Edit groups in the object type overview page." Drawn only

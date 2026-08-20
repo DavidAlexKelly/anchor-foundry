@@ -223,3 +223,48 @@ def test_a_deprecation_may_be_recorded_before_the_details_are_known() -> None:
 def test_a_deadline_that_is_not_a_date_is_refused() -> None:
     with pytest.raises(st.StatusError, match="ISO 8601"):
         st.parse_deprecation({"deadline": "next spring"}, "deprecated")
+
+
+# ---- p.255's permission and visibility sentences (§175) ---------------------
+def test_only_the_ontology_level_may_apply_promoted() -> None:
+    """p.255: "Only users with the `Ontology Owner` role on the ontology level
+    can directly apply the `promoted` status." A workspace is this platform's
+    ontology (db 0003), so that role is `admin`."""
+    with pytest.raises(st.StatusError, match="admin"):
+        st.check_promotion(
+            "promoted", current_status="active", workspace_role="editor"
+        )
+    st.check_promotion("promoted", current_status="active", workspace_role="admin")
+
+
+def test_promotion_is_gated_on_the_transition_not_the_value() -> None:
+    """**The trap.** The type editor sends the whole definition on every save,
+    so an editor pressing Save on an already-promoted type sends `promoted`
+    without asking for anything. Gating on the value would make the most
+    important object types uneditable by the people who build them."""
+    st.check_promotion(
+        "promoted", current_status="promoted", workspace_role="editor"
+    )
+
+
+def test_every_other_status_is_ungated() -> None:
+    """p.255 restricts one status. Anything that refused the other four would
+    be a permission model nobody wrote down."""
+    for status in ("active", "experimental", "deprecated", "example"):
+        st.check_promotion(status, current_status="promoted", workspace_role="viewer")
+
+
+def test_promoting_sets_the_visibility_prominent() -> None:
+    """p.255: "Setting an object type's status to `promoted` will
+    automatically set its visibility to `prominent`."""
+    assert st.visibility_for("promoted", "normal") == "prominent"
+    assert st.visibility_for("promoted", "prominent") == "prominent"
+
+
+def test_visibility_raises_and_never_lowers() -> None:
+    """The same asymmetry propagation has: p.255 says what promoting does and
+    nothing about demoting undoing it. A type somebody deliberately made
+    prominent should not quietly stop being so."""
+    assert st.visibility_for("active", "prominent") == "prominent"
+    assert st.visibility_for("deprecated", "prominent") == "prominent"
+    assert st.visibility_for("active", "normal") == "normal"

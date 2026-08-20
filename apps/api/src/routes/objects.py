@@ -185,6 +185,10 @@ class ObjectTypeSummary(BaseModel):
     # without a second lookup. NOT NULL since db 0032.
     resource_id: UUID
     status: str = "experimental"
+    # p.255: promoting a type sets this to `prominent`. Reported so an
+    # application can surface a promoted type more prominently, which is the
+    # entire point p.255 gives for the rule.
+    visibility: str = "normal"
     deprecation: dict[str, Any] | None = None
     # p.262: "The table of object types in Ontology Manager supports
     # displaying and filtering by group." Displaying needs them on the row;
@@ -204,6 +208,7 @@ class ObjectTypeDetail(BaseModel):
     title_property_id: UUID | None
     properties: list[PropertyOut]
     status: str = "experimental"
+    visibility: str = "normal"
     deprecation: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
@@ -579,6 +584,10 @@ async def update_object_type(
             acknowledge_breaking=body.acknowledge_breaking,
             status=body.status,
             deprecation=body.deprecation,
+            # p.255's permission sentence. The role is the caller's, not the
+            # request's, so a body asking for `promoted` cannot answer the
+            # question of whether it may have it.
+            workspace_role=access.role,
         )
         detail = await _type_detail(conn, access.workspace_id, type_id)
         await audit.record(
