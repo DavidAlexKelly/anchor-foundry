@@ -1137,6 +1137,147 @@ async def update_type(
     return await get_type(conn, workspace_id, type_id)
 
 
+async def set_type_statuses(
+    conn: AsyncConnection,
+    *,
+    workspace_id: UUID,
+    type_ids: list[UUID],
+    status: str,
+    deprecation: Any = None,
+    updated_by: UUID,
+    workspace_role: str | None = None,
+    apply_to_properties: bool = False,
+) -> list[dict[str, Any]]:
+    """p.258's bulk status edit across object types.
+
+    > "Statuses across object types can also be edited in bulk from the home
+    > page object view page by selecting the checkboxes of the object types to
+    > edit and selecting the `Edit status` button." (p.258)
+
+    **Every rule the single-type path applies, applied here too**, because a
+    bulk edit that skipped one would be a way round it: `check_status`,
+    p.255's promotion role, p.255's visibility, p.256's propagation into
+    properties, and p.257's re-cap of the link types. The rules themselves are
+    the same pure functions `update_type` calls - only the sequencing differs,
+    since this writes statuses rather than rewriting whole definitions.
+
+    `apply_to_properties` is p.258's other sentence: "When changing an object
+    type from `experimental` to `active`, there is the option to also apply the
+    `active` status to all properties." An **option**, so it is a parameter
+    rather than a consequence - §170's asymmetry stands, and this is the
+    explicit way past it.
+
+    **All or nothing.** One refusal fails the request rather than leaving some
+    types changed: a bulk edit that half-applied would leave somebody to work
+    out which half, and the caller chose these types together.
+    """
+    ontology_status.check_status(status, kind="object_type")
+    note = ontology_status.parse_deprecation(deprecation, status)
+
+    changed: list[dict[str, Any]] = []
+    for type_id in dict.fromkeys(type_ids):
+        existing = await get_type(conn, workspace_id, type_id)
+        if workspace_role is not None:
+            ontology_status.check_promotion(
+                status,
+                current_status=str(existing["status"]),
+                workspace_role=workspace_role,
+            )
+        visibility = ontology_status.visibility_for(
+            status, str(existing["visibility"])
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE object_types
+                   SET status = CAST(:status AS ontology_status),
+                       visibility = CAST(:vis AS property_visibility),
+                       deprecation = CAST(:depr AS jsonb)
+                 WHERE id = :tid AND workspace_id = :wid
+                """
+            ),
+            {"status": status, "vis": visibility,
+             "depr": json.dumps(note) if note is not None else None,
+             "tid": str(type_id), "wid": str(workspace_id)},
+        )
+
+        properties = await list_properties(conn, type_id)
+        if apply_to_properties:
+            # p.258's option: the type's status applied to *all* of them,
+            # which is what the sentence says. A property somebody had
+            # deliberately deprecated is included - that is why it is a choice
+            # somebody makes rather than something a save does for them.
+            for prop in properties:
+                prop["status"] = status
+        else:
+            ontology_status.propagate_to_properties(status, properties)
+        for prop in properties:
+            await conn.execute(
+                text(
+                    "UPDATE object_type_properties "
+                    "   SET status = CAST(:status AS ontology_status) "
+                    " WHERE object_type_id = :tid AND api_name = :api"
+                ),
+                {"status": str(prop["status"]), "tid": str(type_id),
+                 "api": str(prop["api_name"])},
+            )
+
+        # p.257, and §176's lesson: the cap is an event on the object type,
+        # not a validation on the link.
+        await recap_link_types(conn, workspace_id, type_id)
+        await _snapshot_version(conn, type_id, created_by=updated_by)
+        changed.append(await get_type(conn, workspace_id, type_id))
+    return changed
+
+
+async def set_property_statuses(
+    conn: AsyncConnection,
+    *,
+    workspace_id: UUID,
+    type_id: UUID,
+    api_names: list[str],
+    status: str,
+    updated_by: UUID,
+) -> list[dict[str, Any]]:
+    """p.258's bulk status edit across one object type's properties.
+
+    > "Statuses across properties of an object type can also be edited in bulk
+    > from the Properties page of the object type." (p.258)
+
+    **Capped at the object type's own status**, and that is the interesting
+    decision. p.256's propagation makes a type's properties no more
+    production-ready than the type, and it runs on every save of that type -
+    so a bulk edit that raised a property above its type would create a state
+    the next unrelated save of the type silently undoes. That is the
+    carry-through failure in a new place: a change somebody made, gone later,
+    with nothing to say why. Capping refuses to create it in the first place.
+    """
+    ontology_status.check_status(status, kind="property")
+    owner = await get_type(conn, workspace_id, type_id)
+    capped = ontology_status.weakest(status, str(owner["status"]))
+
+    known = {str(p["api_name"]) for p in await list_properties(conn, type_id)}
+    unknown = [name for name in api_names if name not in known]
+    if unknown:
+        raise NotFoundError(
+            "property " + ", ".join(sorted(unknown)) + " on this object type"
+        )
+
+    for api_name in dict.fromkeys(api_names):
+        await conn.execute(
+            text(
+                "UPDATE object_type_properties "
+                "   SET status = CAST(:status AS ontology_status) "
+                " WHERE object_type_id = :tid AND api_name = :api"
+            ),
+            {"status": capped, "tid": str(type_id), "api": api_name},
+        )
+    # A join column may just have moved, and p.257 caps a link by those too.
+    await recap_link_types(conn, workspace_id, type_id)
+    await _snapshot_version(conn, type_id, created_by=updated_by)
+    return await list_properties(conn, type_id)
+
+
 async def recap_link_types(
     conn: AsyncConnection, workspace_id: UUID, type_id: UUID
 ) -> list[dict[str, Any]]:

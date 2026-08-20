@@ -1838,6 +1838,111 @@ async def set_object_type_group_members(
     return [ObjectTypeGroupMemberOut(**r) for r in rows]
 
 
+# ---- bulk status editing (`object-link-types` p.258) -------------------------
+class BulkTypeStatus(BaseModel):
+    """p.258: "Statuses across object types can also be edited in bulk from the
+    home page object view page by selecting the checkboxes of the object types
+    to edit and selecting the `Edit status` button." """
+
+    object_type_ids: list[UUID] = Field(min_length=1, max_length=200)
+    status: str
+    deprecation: dict[str, Any] | None = None
+    # p.258's other sentence: "there is the option to also apply the `active`
+    # status to all properties on the object type". An option, so a field.
+    apply_to_properties: bool = False
+
+
+class BulkPropertyStatus(BaseModel):
+    """p.258: "Statuses across properties of an object type can also be edited
+    in bulk from the Properties page of the object type." """
+
+    api_names: list[str] = Field(min_length=1, max_length=200)
+    status: str
+
+
+@router.post("/object-types/bulk-status", response_model=list[ObjectTypeSummary])
+async def bulk_set_object_type_status(
+    body: BulkTypeStatus,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[ObjectTypeSummary]:
+    """p.258's Edit status button, for the types somebody ticked.
+
+    A POST rather than a PATCH on each: the caller chose these types
+    *together*, and the service applies them all or refuses them all - which
+    is a single operation with a body, not a convenience loop.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.set_type_statuses(
+            conn,
+            workspace_id=access.workspace_id,
+            type_ids=body.object_type_ids,
+            status=body.status,
+            deprecation=body.deprecation,
+            updated_by=access.auth.user_id,
+            workspace_role=access.role,
+            apply_to_properties=body.apply_to_properties,
+        )
+        rows = await ontology_service.list_types(conn, access.workspace_id)
+        by_type = await groups_service.groups_by_type(conn, access.workspace_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.bulk_status",
+            resource_type="object_type",
+            resource_id=body.object_type_ids[0],
+            workspace_id=access.workspace_id,
+            metadata={
+                "count": len(set(body.object_type_ids)),
+                "status": body.status,
+                "apply_to_properties": body.apply_to_properties,
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    wanted = {str(t) for t in body.object_type_ids}
+    return [
+        ObjectTypeSummary(**r, groups=by_type.get(str(r["id"]), []))
+        for r in rows
+        if str(r["id"]) in wanted
+    ]
+
+
+@router.post(
+    "/object-types/{type_id}/property-statuses", response_model=list[PropertyOut]
+)
+async def bulk_set_property_status(
+    type_id: UUID,
+    body: BulkPropertyStatus,
+    request: Request,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[PropertyOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.set_property_statuses(
+            conn,
+            workspace_id=access.workspace_id,
+            type_id=type_id,
+            api_names=body.api_names,
+            status=body.status,
+            updated_by=access.auth.user_id,
+        )
+        detail = await _type_detail(conn, access.workspace_id, type_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="object_type.bulk_property_status",
+            resource_type="object_type",
+            resource_id=type_id,
+            workspace_id=access.workspace_id,
+            metadata={"count": len(set(body.api_names)), "status": body.status},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return detail.properties
+
+
 @router.get(
     "/object-types/{type_id}/groups", response_model=list[ObjectTypeGroupRef]
 )
