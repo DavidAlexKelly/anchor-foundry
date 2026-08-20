@@ -3595,6 +3595,21 @@ Two more survivors were ordinary gaps: the members dialog was never reopened, so
 
 **246 web unit tests** (was 232).
 
+
+### 174. Action type statuses, and a cascade that walked around p.256 (this session)
+
+The last fully-sourced row on this stage (`ontology.md` §1.3). p.253 names actions among the kinds that carry a status - "every object type, property, link type, **action**, or interface in the Ontology has a status" - and §170 added the column and then enforced nothing with it. All four values (p.255 excludes `promoted` from action types by name), p.256's delete refusal, p.254's note, and §170's "omitted means unchanged" on the one endpoint that writes a status.
+
+**The interesting part is not the column; it is the hole the column made visible.** `action_types.object_type_id` is `ON DELETE CASCADE` (db 0013), so deleting an object type deletes its actions whatever their status. p.256 says an `active` resource cannot be deleted - and a cascade deleted one without ever demoting it, with nothing anywhere saying an action somebody relied on had gone. Deleting an object type now refuses while an `active` action hangs off it, naming every one in the way.
+
+**Link types were already safe from the identical hole, and for a reason that does not transfer.** §170 caps a link at the weakest status of its two object types (p.257), so an `active` link on an experimental object type is a state the ontology cannot hold. Actions are *not* capped, because p.257's table is about link types and its own explanation is specific to them - a foreign key may be in production "while the link type and its backing datasource are still in development". Extending the cap to actions would have been inventing a rule and would silently demote actions nobody asked to demote. **So the decision not to invent a rule is exactly what created the need for the refusal**, and both halves have tests named after them.
+
+**Seventeen mutations, one survivor, and it was the cheapest kind of gap**: nothing asserted the status *badge* was drawn on the row - only that the value was stored. p.253 says statuses exist so that somebody reading the ontology knows what is relied on, which is a claim about the listing rather than about the database.
+
+**A rule already satisfied, worth recording rather than building.** p.256 also says "the API name of an active resource cannot be changed. Changing an API name is only possible for those marked as `experimental`." Every api_name in this platform is immutable on every resource - object types, shared properties, value types, groups, actions - which is strictly stronger than p.256 asks, so there is nothing to add.
+
+**1345 API tests** (was 1332).
+
 ---
 ---
 ---

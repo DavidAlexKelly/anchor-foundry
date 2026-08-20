@@ -19,7 +19,9 @@ import {
   GroupChips, GroupFilter, ObjectTypeGroupsPanel,
 } from "@/components/object-type-groups-panel";
 import { StatusBadge } from "@/components/status-field";
-import { canDelete, deleteBlockedReason } from "@/lib/ontology-status";
+import {
+  STATUS_LABELS, canDelete, deleteBlockedReason, statusesFor,
+} from "@/lib/ontology-status";
 import { ValueTypesPanel } from "@/components/value-types-panel";
 import { Dialog, Field } from "@/components/dialog";
 import {
@@ -36,6 +38,7 @@ import {
   type LinkType,
   type ObjectTypeSource,
   type ObjectTypeSummary,
+  type OntologyStatus,
   type ObjectTypeSuggestion,
 } from "@/lib/types";
 
@@ -978,6 +981,15 @@ export default function ObjectsPage() {
     mutationFn: (actionTypeId: string) => actionApi.removeType(workspace!.id, actionTypeId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["action-types", workspace?.id] }),
   });
+  // p.256's dropdown. No deprecation note here: p.254's fields belong on a
+  // screen with room for them, and this is a row in a listing - the status
+  // itself is what somebody changes from here.
+  const setActionStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: OntologyStatus }) =>
+      actionApi.setStatus(workspace!.id, id, { status }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["action-types", workspace?.id] }),
+  });
 
   const canEditOntology = workspace ? workspace.effective_role !== "viewer" : false;
   const canEditSources = project ? project.effective_role !== "viewer" : false;
@@ -1249,12 +1261,35 @@ export default function ObjectsPage() {
               <tbody>
                 {actionTypes.data.map((a: ActionType) => (
                   <tr key={a.id}>
-                    <td><strong>{a.display_name}</strong><div className="slug">{a.api_name}</div></td>
+                    <td>
+                      <strong>{a.display_name}</strong>
+                      {/* p.253 lists actions among the kinds that carry a
+                          status, so the listing says so the same way the
+                          object type listing does. */}
+                      <StatusBadge status={a.status} />
+                      <div className="slug">{a.api_name}</div>
+                    </td>
                     <td>{a.object_type_name}</td>
                     <td>{a.editable_properties.map((p) => <span key={p} className="chip" style={{ marginRight: 4 }}>{p}</span>)}</td>
                     <td>
                       {canEditOntology && (
                         <>
+                          <select
+                            data-testid={`action-status-${a.api_name}`}
+                            aria-label={`Status of ${a.api_name}`}
+                            style={{ marginRight: 6 }}
+                            value={a.status}
+                            onChange={(e) =>
+                              setActionStatus.mutate({
+                                id: a.id,
+                                status: e.target.value as OntologyStatus,
+                              })
+                            }
+                          >
+                            {statusesFor("link_type").map((sv) => (
+                              <option key={sv} value={sv}>{STATUS_LABELS[sv]}</option>
+                            ))}
+                          </select>
                           <button
                             className="btn quiet"
                             style={{ padding: "3px 9px", fontSize: 12, marginRight: 6 }}
@@ -1265,7 +1300,11 @@ export default function ObjectsPage() {
                           <button
                             className="btn danger"
                             style={{ padding: "3px 9px", fontSize: 12 }}
-                            disabled={removeAction.isPending}
+                            // p.256 refuses this on the server; saying so here
+                            // turns a rejected request into a button that
+                            // explains itself, in the server's own words.
+                            disabled={removeAction.isPending || !canDelete(a.status)}
+                            title={deleteBlockedReason(a.status) ?? undefined}
                             onClick={() => removeAction.mutate(a.id)}
                           >
                             Delete

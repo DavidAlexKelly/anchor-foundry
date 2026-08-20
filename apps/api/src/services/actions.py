@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
+from . import ontology_status
 
 _API_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
@@ -925,6 +926,7 @@ async def list_action_types(
         f"""
         SELECT at.id, at.object_type_id, ot.display_name AS object_type_name,
                at.api_name, at.display_name, at.description,
+               at.status, at.deprecation,
                at.created_at, at.updated_at
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id
@@ -944,6 +946,7 @@ async def get_action_type(
         """
         SELECT at.id, at.object_type_id, ot.display_name AS object_type_name,
                at.api_name, at.display_name, at.description,
+               at.status, at.deprecation,
                at.created_at, at.updated_at
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id
@@ -966,11 +969,17 @@ async def create_action_type(
     description: str,
     editable_properties: list[str],
     created_by: UUID,
+    status: str = ontology_status.DEFAULT_STATUS,
+    deprecation: Any = None,
 ) -> dict[str, Any]:
     if not _API_NAME_RE.match(api_name):
         raise ValueError(f"invalid action api_name {api_name!r}")
     if not editable_properties:
         raise ValueError("an action must make at least one property editable")
+    # p.253 gives an action a status like every other ontological resource, and
+    # p.255 names action types in the list `promoted` does not apply to.
+    ontology_status.check_status(status, kind="action type")
+    note = ontology_status.parse_deprecation(deprecation, status)
 
     from . import ontology as ontology_service
 
@@ -992,14 +1001,17 @@ async def create_action_type(
         conn,
         """
         INSERT INTO action_types (workspace_id, object_type_id, api_name, display_name,
-                                  description, created_by)
-        VALUES (:wid, :tid, :api, :name, :descr, :by)
+                                  description, created_by, status, deprecation)
+        VALUES (:wid, :tid, :api, :name, :descr, :by,
+                CAST(:status AS ontology_status), CAST(:depr AS jsonb))
         RETURNING id, object_type_id, api_name, display_name, description,
-                  created_at, updated_at
+                  status, deprecation, created_at, updated_at
         """,
         {
             "wid": str(workspace_id), "tid": str(object_type_id), "api": api_name,
             "name": display_name, "descr": description, "by": str(created_by),
+            "status": status,
+            "depr": json.dumps(note) if note is not None else None,
         },
     )
     assert row is not None
@@ -1049,9 +1061,96 @@ async def create_action_type(
     }
 
 
+async def set_action_status(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    action_type_id: UUID,
+    *,
+    status: str | None = None,
+    deprecation: Any = None,
+) -> dict[str, Any]:
+    """p.256's "select the dropdown next to the current status", for an action.
+
+    **Omitted means unchanged, not `experimental`.** §170's compatibility rule,
+    and it matters more here than it looks: this is the only endpoint that
+    writes an action's status, so a `None` treated as the documented default
+    for a *new* resource would demote an action every time a client that
+    predates statuses touched it.
+
+    Its own endpoint rather than a field on the definition PUT, because that
+    body is the action's parameters, rules and criteria - what the action
+    *does* - and a status is a statement about how much anyone should rely on
+    it. Folding one into the other would make every rule edit a status write.
+    """
+    current = await get_action_type(conn, workspace_id, action_type_id)
+    next_status = str(current["status"] if status is None else status)
+    ontology_status.check_status(next_status, kind="action type")
+    # Parsed against the *resulting* status, so moving away from `deprecated`
+    # clears p.254's note rather than leaving an action explaining why it was
+    # going to be deleted.
+    note = ontology_status.parse_deprecation(
+        deprecation if deprecation is not None or status is not None
+        else current.get("deprecation"),
+        next_status,
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE action_types
+               SET status = CAST(:status AS ontology_status),
+                   deprecation = CAST(:depr AS jsonb)
+             WHERE id = :aid AND workspace_id = :wid
+            """
+        ),
+        {
+            "status": next_status,
+            "depr": json.dumps(note) if note is not None else None,
+            "aid": str(action_type_id),
+            "wid": str(workspace_id),
+        },
+    )
+    return await get_action_type(conn, workspace_id, action_type_id)
+
+
+async def active_action_types(
+    conn: AsyncConnection, object_type_id: UUID
+) -> list[dict[str, Any]]:
+    """The action types on this object type that p.256 protects from deletion.
+
+    Exists because `action_types.object_type_id` cascades (db 0013), so
+    deleting an object type deletes its actions **whatever their status** -
+    which would walk straight around the refusal `delete_action_type` makes.
+    See `ontology.delete_type`.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT api_name, display_name, status
+          FROM action_types
+         WHERE object_type_id = :tid
+           AND status NOT IN ('experimental', 'deprecated')
+         ORDER BY api_name
+        """,
+        {"tid": str(object_type_id)},
+    )
+    return [dict(r) for r in rows]
+
+
 async def delete_action_type(
     conn: AsyncConnection, workspace_id: UUID, action_type_id: UUID
 ) -> None:
+    """p.256: an `active` action type cannot be deleted.
+
+    p.253 puts actions on the same footing as every other ontological
+    resource - "every object type, property, link type, action, or interface
+    in the Ontology has a status" - so the protection is the same one, and so
+    is the sentence that names the way out of it.
+    """
+    existing = await get_action_type(conn, workspace_id, action_type_id)
+    ontology_status.check_deletable(
+        str(existing["status"]), kind="action type",
+        name=str(existing["api_name"]),
+    )
     row = await fetch_one(
         conn,
         "DELETE FROM action_types WHERE id=:aid AND workspace_id=:wid RETURNING id",

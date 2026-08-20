@@ -703,6 +703,32 @@ async def delete_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) 
         str(existing["status"]), kind="object type",
         name=str(existing["api_name"]),
     )
+
+    # **And the same refusal for what the cascade would take with it.**
+    # `action_types.object_type_id` is ON DELETE CASCADE (db 0013), so without
+    # this an `active` action type is deleted by deleting the *experimental*
+    # object type it belongs to - walking around p.256's protection without
+    # ever demoting the thing p.256 protects, and with nothing on screen to say
+    # an action anybody relied on has gone.
+    #
+    # Link types need no equivalent check: §170 caps a link at the weakest
+    # status of its two object types (p.257), so an `active` link type on an
+    # experimental object type is a state the ontology cannot hold. Actions are
+    # not capped - p.257's table is about link types and says nothing about
+    # actions - which is exactly why they need the check instead.
+    from . import actions as actions_service
+
+    blocked = await actions_service.active_action_types(conn, type_id)
+    if blocked:
+        names = ", ".join(str(a["api_name"]) for a in blocked)
+        raise ontology_status.StatusError(
+            f"{existing['api_name']!r} cannot be deleted while {names} "
+            + ("is" if len(blocked) == 1 else "are")
+            + " still active - mark "
+            + ("it" if len(blocked) == 1 else "them")
+            + " deprecated or experimental first (p.256)"
+        )
+
     await fetch_one(
         conn, "DELETE FROM object_types WHERE id = :tid RETURNING id", {"tid": str(type_id)}
     )
