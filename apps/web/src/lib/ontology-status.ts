@@ -55,10 +55,29 @@ export const DELETABLE: OntologyStatus[] = ["experimental", "deprecated"];
  *
  * p.255: `promoted` "applies only to object types. It is not available for
  * properties, link types, action types or interfaces." */
-export function statusesFor(kind: "object_type" | "property" | "link_type"): OntologyStatus[] {
-  return kind === "object_type"
-    ? STATUSES
-    : STATUSES.filter((s) => s !== "promoted");
+export function statusesFor(
+  kind: "object_type" | "property" | "link_type",
+  /** p.255 also restricts *who* may apply `promoted`: "only users with the
+   * `Ontology Owner` role on the ontology level". A workspace is this
+   * platform's ontology, so this is workspace admin.
+   *
+   * **Left on the list when the type is already promoted**, whoever is
+   * looking. The server gates the transition rather than the value (§175), so
+   * dropping the option from an editor's dropdown would leave the select with
+   * no entry matching its own value — which renders as a blank control that
+   * silently demotes the type on the next save. */
+  { canPromote = true, current }: { canPromote?: boolean; current?: OntologyStatus } = {},
+): OntologyStatus[] {
+  if (kind !== "object_type") return STATUSES.filter((s) => s !== "promoted");
+  if (canPromote || current === "promoted") return STATUSES;
+  return STATUSES.filter((s) => s !== "promoted");
+}
+
+/** Why `promoted` is not on offer, or null when it is. */
+export function promoteBlockedReason(canPromote: boolean): string | null {
+  return canPromote
+    ? null
+    : "Only a workspace admin can promote an object type — ask one, or choose Active.";
 }
 
 export function canDelete(status: OntologyStatus): boolean {

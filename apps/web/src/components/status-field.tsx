@@ -19,8 +19,8 @@
 
 import { Field } from "@/components/dialog";
 import {
-  STATUS_HINTS, STATUS_LABELS, propagationWarning, statusesFor,
-  wantsDeprecationNote,
+  STATUS_HINTS, STATUS_LABELS, promoteBlockedReason, propagationWarning,
+  statusesFor, wantsDeprecationNote,
 } from "@/lib/ontology-status";
 import type { Deprecation, OntologyStatus } from "@/lib/types";
 
@@ -34,6 +34,7 @@ export function StatusField({
    * something to count. Absent means "nothing hangs off this". */
   properties,
   label = "Status",
+  canPromote = true,
 }: {
   kind: "object_type" | "property" | "link_type";
   value: OntologyStatus;
@@ -42,6 +43,10 @@ export function StatusField({
   onDeprecationChange?: (next: Deprecation | null) => void;
   properties?: { api_name: string; status: OntologyStatus }[];
   label?: string;
+  /** p.255: only the ontology level may *apply* `promoted`. False hides the
+   * option — unless the resource already holds it, in which case it stays, or
+   * the select would have no entry matching its own value. */
+  canPromote?: boolean;
 }) {
   const warning = properties ? propagationWarning(value, properties) : null;
 
@@ -60,11 +65,16 @@ export function StatusField({
             if (!wantsDeprecationNote(next)) onDeprecationChange?.(null);
           }}
         >
-          {statusesFor(kind).map((s) => (
+          {statusesFor(kind, { canPromote, current: value }).map((s) => (
             <option key={s} value={s}>{STATUS_LABELS[s]}</option>
           ))}
         </select>
       </Field>
+      {kind === "object_type" && promoteBlockedReason(canPromote) && (
+        <p className="field-hint" data-testid="promote-blocked">
+          {promoteBlockedReason(canPromote)}
+        </p>
+      )}
 
       {warning && (
         <p className="field-hint" data-testid="status-propagation">{warning}</p>

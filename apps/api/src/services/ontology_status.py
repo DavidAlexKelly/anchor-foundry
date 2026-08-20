@@ -56,6 +56,26 @@ DELETABLE = ("experimental", "deprecated")
 #: properties, link types, action types or interfaces."
 OBJECT_TYPE_ONLY = ("promoted",)
 
+#: p.255's permission sentence, as this platform spells it.
+#:
+#: > "Only users with the `Ontology Owner` role on the ontology level can
+#: > directly apply the `promoted` status." (p.255)
+#:
+#: **A workspace is this platform's ontology** (db 0003), and `workspace_role`
+#: already has a tier above editor - so "the ontology level" is a role this
+#: platform has rather than one it needs. Foundry's own Ontology-roles chapter
+#: (`ontology-manager` p.43) is marked legacy and superseded by "the Compass
+#: filesystem", which is its project/folder permission system; building a
+#: per-resource role registry here would have been replicating the model
+#: Palantir is migrating off, when the platform already has the shape they
+#: moved to.
+#:
+#: The divergence worth naming: our admin is workspace-wide, where Foundry's
+#: Ontology Owner is per resource. Nobody can promote who could not already
+#: administer the whole ontology, which is stricter, not looser.
+PROMOTION_ROLE = "admin"
+
+
 class StatusError(ValueError):
     """A status change, or a delete, that the ontology will not allow."""
 
@@ -205,3 +225,58 @@ def link_status(
     limits = [declared, from_status, to_status]
     limits += [s for s in (from_property_status, to_property_status) if s]
     return weakest(*limits)
+
+
+def check_promotion(
+    next_status: str, *, current_status: str, workspace_role: str
+) -> None:
+    """p.255: only the ontology level may apply `promoted`.
+
+    > "Only users with the `Ontology Owner` role on the ontology level can
+    > directly apply the `promoted` status. Other users must submit a proposal
+    > for review and approval by an `Ontology Owner`." (p.255)
+
+    **Gated on the transition, not on the value**, and that distinction is the
+    whole of the function. The object type editor sends the whole definition on
+    every save, so an editor pressing Save on an already-promoted type is
+    sending `promoted` without asking for anything - refusing that would lock
+    every editor out of every promoted type, turning p.255's protection into a
+    trap that makes the most important object types uneditable by the people
+    who build them.
+
+    Demotion is deliberately not gated. p.255 restricts *applying* the status;
+    stepping down from it is the safe direction, and `check_deletable` still
+    stops a promoted type being deleted on the way past.
+
+    The second half of p.255 - a proposal others may submit for approval - is
+    not built. It needs a review surface for ontology changes, which is a
+    feature rather than a rule, and one this refusal does not pretend to be.
+    """
+    if next_status not in OBJECT_TYPE_ONLY:
+        return
+    if next_status == current_status:
+        return
+    if workspace_role != PROMOTION_ROLE:
+        raise StatusError(
+            "only a workspace admin can promote an object type (p.255) - ask "
+            "one to apply it, or choose active instead"
+        )
+
+
+def visibility_for(status: str, current: str) -> str:
+    """What p.255's promotion does to an object type's visibility.
+
+    > "Setting an object type's status to `promoted` will automatically set its
+    > visibility to `prominent`, increasing its discoverability across the
+    > platform." (p.255)
+
+    **Raises and never lowers**, which is the same asymmetry
+    `propagate_to_properties` has and for a related reason: p.255 describes
+    what promoting *does*, and says nothing about demoting undoing it. A type
+    somebody deliberately made prominent should not quietly stop being so
+    because its status stepped down - that is a second decision, and it is
+    theirs to make.
+    """
+    if status == "promoted":
+        return "prominent"
+    return current

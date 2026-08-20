@@ -1367,6 +1367,9 @@ export default function ObjectsPage() {
           workspaceId={workspace.id}
           type={editingDetail.data}
           onClose={() => setEditingType(null)}
+          // p.255: only the ontology level may apply `promoted`, and a
+          // workspace is this platform's ontology (db 0003).
+          canPromote={workspace.effective_role === "admin"}
         />
       )}
       {creatingSource && workspace && project && types.data && (

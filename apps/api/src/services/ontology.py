@@ -113,7 +113,8 @@ async def list_types(
         """
         SELECT ot.id, ot.api_name, ot.display_name, ot.description, ot.icon,
                ot.colour, ot.title_property_id, ot.resource_id,
-               ot.status, ot.deprecation, ot.created_at, ot.updated_at,
+               ot.status, ot.visibility, ot.deprecation,
+               ot.created_at, ot.updated_at,
                (SELECT count(*) FROM object_type_sources s
                  WHERE s.object_type_id = ot.id) AS source_count,
                -- Just the hidden ones, not every property. A browser listing
@@ -146,7 +147,8 @@ async def get_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) -> 
         conn,
         """
         SELECT id, api_name, display_name, description, icon, colour,
-               title_property_id, status, deprecation, created_at, updated_at
+               title_property_id, status, visibility, deprecation,
+               created_at, updated_at
           FROM object_types WHERE id = :tid AND workspace_id = :wid
         """,
         {"tid": str(type_id), "wid": str(workspace_id)},
@@ -1022,6 +1024,7 @@ async def update_type(
     acknowledge_breaking: bool = False,
     status: str | None = None,
     deprecation: Any = None,
+    workspace_role: str | None = None,
 ) -> dict[str, Any]:
     """Edit a type's definition, recording the result as a new version.
 
@@ -1046,6 +1049,21 @@ async def update_type(
     existing = await get_type(conn, workspace_id, type_id)
     type_status = ontology_status.check_status(
         str(status or existing["status"]), kind="object_type"
+    )
+    # p.255: only the ontology level may *apply* `promoted`. Checked on the
+    # transition, so an editor saving an already-promoted type is untouched -
+    # see `check_promotion`. `workspace_role` is None only for callers that
+    # never came through the HTTP permission layer, which is tests and the
+    # worker; those get the unrestricted path deliberately, because a job with
+    # no user attached has no role to check.
+    if workspace_role is not None:
+        ontology_status.check_promotion(
+            type_status,
+            current_status=str(existing["status"]),
+            workspace_role=workspace_role,
+        )
+    type_visibility = ontology_status.visibility_for(
+        type_status, str(existing["visibility"])
     )
     type_deprecation = ontology_status.parse_deprecation(deprecation, type_status)
     _validate_properties(properties)
@@ -1094,13 +1112,14 @@ async def update_type(
                SET display_name = :name, description = :descr, icon = :icon,
                    colour = :colour, title_property_id = NULL,
                    status = CAST(:status AS ontology_status),
+                   visibility = CAST(:vis AS property_visibility),
                    deprecation = CAST(:depr AS jsonb)
              WHERE id = :tid
             """
         ),
         {"name": display_name, "descr": description, "icon": icon,
          "colour": colour, "tid": str(type_id),
-         "status": type_status,
+         "status": type_status, "vis": type_visibility,
          "depr": json.dumps(type_deprecation) if type_deprecation else None},
     )
     # title_property_id is cleared above so the delete below cannot trip a
