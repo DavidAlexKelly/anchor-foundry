@@ -650,8 +650,16 @@ function ParameterSettings() {
   });
   const dataset = list.data?.find((d) => d.id === datasetId);
 
+  // **The widget that is nearly all output.** p.65 splits a widget into what
+  // populates it and "the data that is then produced and output by the
+  // widget" - and a Filter produces without consuming: its parameter name is
+  // what every other widget reads. Its only input is the optional dataset the
+  // dropdown's options come from, which is why `requires` is empty: a widget
+  // whose configuration waited for an input it may not have is a widget
+  // nobody can set up.
   return (
-    <>
+    <WidgetSetup
+      outputs={<>
       <label className="field">
         <span className="field-label">Parameter name</span>
         <input
@@ -662,6 +670,8 @@ function ParameterSettings() {
         />
         <span className="field-hint">Tables reference this name to filter by it</span>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Label</span>
         <input
@@ -714,7 +724,8 @@ function ParameterSettings() {
           </label>
         </>
       )}
-    </>
+      </>}
+    />
   );
 }
 
@@ -819,8 +830,16 @@ function DatasetTableSettings() {
     queryFn: () => dsApi.list(workspaceId, projectId),
   });
   const dataset = list.data?.find((d) => d.id === datasetId);
+  // p.66's disclosure, with a dataset in the object set's place: a column
+  // picker is a question nobody can answer before something has said which
+  // table the columns belong to - which is why binding the dataset clears the
+  // column beside it.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ datasetId }}
+      requires={["datasetId"]}
+      labels={{ datasetId: "a dataset" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Dataset</span>
         <select
@@ -840,6 +859,8 @@ function DatasetTableSettings() {
           ))}
         </select>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Filter column</span>
         <select
@@ -875,7 +896,8 @@ function DatasetTableSettings() {
           <option value="contains">Contains</option>
         </select>
       </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -4236,8 +4258,17 @@ function ActionFormSettings() {
     queryKey: ["action-types", workspaceId],
     queryFn: () => actionApi.listTypes(workspaceId),
   });
+  // The action type is the input: until one is chosen there is no form, so
+  // "which variable does it edit" is a question about nothing. Note the *lack*
+  // of a `subjectVariable` requirement - leaving it unset is a real answer
+  // ("whatever the viewer picks"), not an unfinished one, so it belongs under
+  // configuration rather than beside the action.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ actionTypeId }}
+      requires={["actionTypeId"]}
+      labels={{ actionTypeId: "an action" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Action</span>
         <select
@@ -4252,6 +4283,8 @@ function ActionFormSettings() {
           ))}
         </select>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Edits</span>
         <select
@@ -4274,7 +4307,8 @@ function ActionFormSettings() {
           A single-object variable — what a row or pin selection writes
         </span>
       </label>
-    </>
+      </>}
+    />
   );
 }
 
