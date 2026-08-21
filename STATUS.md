@@ -2503,7 +2503,7 @@ Built: the history with the editor's **name** rather than their id, descriptions
 
 **828 API tests, 1 skipped, 43 vitest, 72 browser, all green.** Migration 0041 adds the description column and the two settings; all three default to today's behaviour, so no existing module changes.
 
-**Not built, and it is the biggest thing §6 still lacks:** the **Changelog panel** (p.193) — range or single-version diffs highlighting "additions, deletions, changes, moves, and newly unused elements". It is also the prerequisite for module branching and rebasing, which is out of scope, so building it is a decision about branching rather than about versioning.
+**Not built, and it is the biggest thing §6 still lacks:** the **Changelog panel** (p.193) — range or single-version diffs highlighting "additions, deletions, changes, moves, and newly unused elements". It is also the prerequisite for module branching and rebasing, which is out of scope, so building it is a decision about branching rather than about versioning. *(Built in §132, and finished in §183.)*
 
 ---
 
@@ -3753,6 +3753,22 @@ The generalisable form: **guard a control on the options it offers, not on one o
 **A message that had only ever been exercised at two.** The Chart's three-way choice came out as "a time series set **or** an object set **or** a dataset" — the choice arm joined with a plain `" or "`, which reads fine at two and badly at three, while the all-of arm three lines below had the comma form all along. One `joined(names, conjunction)` helper now serves both, so they cannot drift apart again. This was caught by a browser assertion failing on the exact string rather than on containment, which is the same lesson §181 recorded one unit earlier.
 
 Nine mutations, all red; two of them died at the **unit** layer. **226 browser tests** (was 222), **273 web unit** (was 271).
+
+---
+
+### 183. The rest of p.193's sentence (this session)
+
+§132 built the Changelog panel and stopped one sentence short, naming what it had skipped rather than implying it was done: "You can inspect **JSON diffs** to see the exact modifications and review a **visual hierarchy** to understand how changes relate to nested components." Both are here now, and the row is ✅.
+
+**The JSON diff is leaf by leaf, not line by line.** "JSON diffs" reads like two pretty-printed blocks with a gutter, and that is the wrong tool for this job: a key inserted earlier in an object shifts every line beneath it, and re-indenting a nested object rewrites lines whose values are identical, so a line diff reports work nobody did. `fieldChanges` walks both values and names the smallest thing that actually differs — `props.columns[1]`, `text`, `set.filters[0].op` — which is the modification itself and is the same answer however the documents happen to be serialised. A change of *shape* (an object replaced by a string) is one change at that path rather than a removal per leaf followed by an addition, because "this became a string" is what happened.
+
+**A move reports its position.** Its props are identical by definition — that is what makes it a move rather than a change — so a detail computed from props would be empty, and an empty detail on an entry that clearly changed reads as a panel that failed to load one. `changeDetail` compares the parent and sibling index instead, which is the only thing that happened to it.
+
+**The hierarchy is the layout tree, pruned to branches that contain a change.** Both unpruned extremes are wrong in the same way: the full tree is the whole module, and a changelog that redraws the module buries the four things that moved; a flat list of only the changed nodes loses the nesting p.193 is asking about. An ancestor with no change of its own is drawn without a chip — labelling it would claim a change nobody made. And deleted nodes are grafted back at the position they held in the older version, since building from the newest document alone would drop the one kind of change that has no node left to hang off, which is also the kind somebody most wants placed.
+
+**Two survivors, both real gaps rather than equivalent mutants.** Walking arrays to `Math.min` of the two lengths passed every array test, because they all compared arrays of equal length — and a column added to a table is the most ordinary edit this panel has to describe. And the check that an unchanged ancestor carries no chip was written as `data-change="context"`, an attribute the mutant did not touch; scoping a chip count to the node's *direct* children is what actually asserts it, since the changed node underneath does have one. Twelve mutations, ten red on the first pass, twelve after the tests were fixed.
+
+**289 web unit** (was 273), **230 browser** (was 226).
 
 ---
 ---

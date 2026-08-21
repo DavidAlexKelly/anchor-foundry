@@ -20,10 +20,12 @@
  * from one section to another changes only the first while one dragged up a
  * column changes only the second. Both are moves; neither is a prop change.
  *
- * **What is deliberately not built:** the JSON diff view and the visual
- * hierarchy p.193 also describes. This answers *what* changed; showing the
- * exact modification is a second piece of work, and the rebasing UI that p.193
- * says reuses this panel needs branching first, which we do not have.
+ * **§183 added p.193's other two halves**: `changeDetail` is "inspect JSON
+ * diffs to see the exact modifications", and `changeTree` is "review a visual
+ * hierarchy to understand how changes relate to nested components". Both are
+ * separate functions rather than extra keys on `Change`, for two reasons: a
+ * detail nobody expanded is work nobody asked for, and `Change` is the shape
+ * this module's own tests compare against wholesale.
  */
 
 export type ChangeKind = "added" | "deleted" | "changed" | "moved" | "unused";
@@ -199,4 +201,182 @@ export function isEmptyChangelog(changelog: ModuleChangelog): boolean {
     changelog.variables.length === 0 &&
     changelog.events.length === 0
   );
+}
+
+// ---- p.193's JSON diff: "the exact modifications" ---------------------------
+
+/** One leaf that differs, named by where it sits.
+ *
+ * **Leaf by leaf rather than line by line.** p.193 says "JSON diffs", and the
+ * obvious reading is two pretty-printed blocks with a line gutter - but a line
+ * diff of re-serialised JSON reports noise nobody changed: a key inserted
+ * earlier in an object shifts every line under it, and re-indenting a nested
+ * object rewrites lines whose values are identical. A path and its two values
+ * is the modification itself, and it is the same answer however the two
+ * documents happen to be serialised.
+ */
+export interface FieldChange {
+  /** Dotted, with array indices in brackets: `props.columns[1]`. */
+  path: string;
+  kind: "added" | "removed" | "changed";
+  /** Absent on an addition. */
+  before?: unknown;
+  /** Absent on a removal. */
+  after?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function join(prefix: string, key: string): string {
+  return prefix ? `${prefix}.${key}` : key;
+}
+
+/** Every leaf that differs between two values.
+ *
+ * Recurses through objects and arrays and stops at anything else, so the paths
+ * name the smallest thing that actually changed. Two values of *different*
+ * shapes - an object replaced by a string, say - are one change at that path
+ * rather than a removal of every leaf beneath it followed by an addition,
+ * because "this became a string" is what happened.
+ */
+export function fieldChanges(before: unknown, after: unknown, prefix = ""): FieldChange[] {
+  if (!differs(before, after)) return [];
+
+  if (isRecord(before) && isRecord(after)) {
+    const changes: FieldChange[] = [];
+    // Every key of either side, in the after-document's order first so a
+    // reader sees the current shape and then whatever it lost.
+    const keys = [...Object.keys(after), ...Object.keys(before).filter((k) => !(k in after))];
+    for (const key of keys) {
+      changes.push(...fieldChanges(before[key], after[key], join(prefix, key)));
+    }
+    return changes;
+  }
+
+  if (Array.isArray(before) && Array.isArray(after)) {
+    const changes: FieldChange[] = [];
+    for (let i = 0; i < Math.max(before.length, after.length); i += 1) {
+      changes.push(...fieldChanges(before[i], after[i], `${prefix}[${i}]`));
+    }
+    return changes;
+  }
+
+  if (before === undefined) return [{ path: prefix, kind: "added", after }];
+  if (after === undefined) return [{ path: prefix, kind: "removed", before }];
+  return [{ path: prefix, kind: "changed", before, after }];
+}
+
+/** Which part of a document a change came from, so the detail can be looked up
+ * again without the panel knowing the document's shape. */
+export type ChangeArea = "widgets" | "variables" | "events";
+
+/** The exact modifications behind one entry in the changelog (p.193).
+ *
+ * A widget is compared on its **props**, matching `diffModules`: the parent and
+ * sibling order live in the same object and are the move, not the change. A
+ * move reports that position as its modification, because "it is in a
+ * different section now" is the only thing that happened to it - and a move
+ * with an empty detail would read as a panel that failed to load one.
+ */
+export function changeDetail(before: Doc, after: Doc, change: Change, area: ChangeArea): FieldChange[] {
+  if (area !== "widgets") {
+    const key = area === "variables" ? "variables" : "events";
+    return fieldChanges(section(before, key)[change.id], section(after, key)[change.id]);
+  }
+
+  const beforeLayout = section(before, "layout");
+  const afterLayout = section(after, "layout");
+  if (change.kind === "moved") {
+    const was = position(beforeLayout, change.id);
+    const now = position(afterLayout, change.id);
+    return fieldChanges(was, now);
+  }
+  return fieldChanges(beforeLayout[change.id]?.props, afterLayout[change.id]?.props);
+}
+
+// ---- p.193's visual hierarchy ----------------------------------------------
+
+/** A node in the layout tree, carrying its change if it has one.
+ *
+ * `kind` is null for a node that did not itself change and is only present to
+ * hold a changed descendant - which is the whole point of the hierarchy, and
+ * the reason this is a tree rather than a list with indentation baked in.
+ */
+export interface ChangeNode {
+  id: string;
+  label: string;
+  kind: ChangeKind | null;
+  children: ChangeNode[];
+}
+
+/** The widget changes arranged as p.193's "visual hierarchy… how changes
+ * relate to nested components".
+ *
+ * **Pruned to branches that contain a change.** The unpruned tree is the whole
+ * module, and a changelog that redraws the module buries the four things that
+ * moved; a flat list of only the changed nodes loses the nesting that the
+ * sentence is asking for. So a node survives when it changed or when one of
+ * its descendants did.
+ *
+ * Built from the *after* layout, with deleted nodes grafted back in at the
+ * position they held in the *before* layout - otherwise the one kind of change
+ * that has no node to hang off would be the one kind the hierarchy cannot
+ * show.
+ */
+export function changeTree(before: Doc, after: Doc, widgets: Change[]): ChangeNode[] {
+  const beforeLayout = section(before, "layout");
+  const afterLayout = section(after, "layout");
+  const kinds = new Map(widgets.map((change) => [change.id, change.kind]));
+
+  const parentOf = (id: string): string => {
+    const layout = id in afterLayout ? afterLayout : beforeLayout;
+    return String(layout[id]?.parent ?? "");
+  };
+
+  // Children in the after-document's order, with each deleted node put back
+  // beside the sibling it used to follow.
+  const childrenOf = (id: string): string[] => {
+    const live = ((afterLayout[id]?.nodes ?? []) as unknown[]).map(String);
+    const gone = Object.keys(beforeLayout).filter(
+      (child) => !(child in afterLayout) && String(beforeLayout[child]?.parent ?? "") === id,
+    );
+    return [...live, ...gone];
+  };
+
+  const build = (id: string): ChangeNode | null => {
+    const children = childrenOf(id)
+      .map(build)
+      .filter((node): node is ChangeNode => node !== null);
+    const kind = kinds.get(id) ?? null;
+    if (kind === null && children.length === 0) return null;
+    return {
+      id,
+      label: widgetName(afterLayout[id] ?? beforeLayout[id]),
+      kind,
+      children,
+    };
+  };
+
+  // `ROOT` is Craft.js's own container. It is walked but never drawn - "the
+  // module changed" is not news, and a tree with one permanent root wastes the
+  // indentation the hierarchy exists to spend.
+  const ids = new Set([...Object.keys(afterLayout), ...Object.keys(beforeLayout)]);
+  const top = childrenOf("ROOT");
+  const isRoot = (id: string): boolean => {
+    if (id === "ROOT") return false;
+    const parent = parentOf(id);
+    return parent === "" || parent === "ROOT" || !ids.has(parent);
+  };
+  // ROOT's own children in the order it lists them, then anything orphaned -
+  // a node whose parent is missing is a document this panel did not write, and
+  // dropping its changes silently is the failure worth avoiding.
+  const ordered = [
+    ...top.filter(isRoot),
+    ...[...ids].filter((id) => isRoot(id) && !top.includes(id)),
+  ];
+  return ordered
+    .map(build)
+    .filter((node): node is ChangeNode => node !== null);
 }
