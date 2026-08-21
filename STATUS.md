@@ -3681,6 +3681,24 @@ The Widget setup tab, organised the way p.65 describes it (`workshop.md` §2).
 **256 web unit tests** (was 251).
 
 ---
+
+
+### 179. Four more panels, and the rule the first three did not need (this session)
+
+Continuing §178's conversion rather than leaving it half done, because a half-converted panel set was the cost §178 named and leaving it while starting something new is what would have made that decision a bad one. **Object table, Card list, Pivot table, Metric card** - seven of eighteen now.
+
+**It was not the mechanical chunk it looked like.** Every object-set widget is populated *either* by a bound object set variable *or* by an object type picked directly, and `configReady` was all-of. Waiting for both would wait for something nobody is meant to supply: the configuration would never appear and the widget would look permanently unfinishable. So `requires` now takes a **choice** - a nested array meaning "any one of these" - and the waiting message reads as a choice too, because naming only the first would send somebody to fill in a field they do not need and leave the one they do.
+
+§178 converted three widgets that happen to have a single input. The rule they did not need is exactly the rule the fourth one is built on, which is a decent argument for converting a *family* rather than the three easiest.
+
+**Two panels earned their reordering rather than just receiving it.** The Pivot table is the one that shows why there are three sections and not two - its drill-down variable is p.65's "the data that is then produced and output by the widget". The Metric card is the one where p.65's order does real work: its **label describes a number the widget cannot produce until a set is chosen**, so asking for the label first asks somebody to name a thing they have not picked. That reordering is asserted as *containment* rather than position - the claim is that the set is an input and the label is configuration, not that one is drawn above the other.
+
+**An equivalent mutant, resolved by deleting code.** The empty-alternative guard read `requirement.length > 0 && requirement.some(...)` - and `some` on an empty array is already false, so the guard changed no behaviour at all. §170's pattern exactly: two spellings of one rule, and the redundant one is the one that can drift. The test that pins the behaviour stays; the code that duplicated it is gone.
+
+**The mutation script runs both layers this time**, which is §178's own lesson applied rather than repeated: that unit reported two survivors that existing vitest tests already killed, because the script only ran the browser file.
+
+**270 web unit tests** (was 256).
+
 ---
 ---
 ---
