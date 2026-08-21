@@ -24,6 +24,8 @@ raises anything, so both need a real render.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from playwright.sync_api import expect
 
@@ -293,3 +295,120 @@ def test_a_metric_card_asks_for_its_set_before_its_label(page, api) -> None:
     expect(page.get_by_test_id("setup-inputs")).to_contain_text("Object set variable")
     expect(page.get_by_test_id("setup-configuration")).to_contain_text("Label")
     expect(page.get_by_test_id("setup-inputs")).not_to_contain_text("Label")
+
+
+# ---- the widgets that are not populated by an object set (§180) --------------
+def test_a_parameter_control_leads_with_what_it_produces(page, api) -> None:
+    """**The widget that inverts p.65's shape**, and the reason the sections
+    are three rather than a fixed order of two.
+
+    A Filter produces without consuming: its parameter name is what every
+    other widget reads, and it has no input at all. So there is no Inputs
+    section to lead with, nothing for the configuration to wait on, and the
+    panel opens on Outputs. A rule that made configuration wait for an input
+    would leave this widget permanently unconfigurable.
+    """
+    mod = Module(api, "Widget setup order (parameter)")
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "ctl": {"resolvedName": "CanvasParameterControl",
+                    "props": {"name": "region", "label": "Region",
+                              "control": "text", "datasetId": None,
+                              "column": None}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    outputs = page.get_by_test_id("setup-outputs")
+    expect(outputs).to_be_visible()
+    expect(outputs).to_contain_text("Parameter name")
+    # Configuration is on screen straight away - it is not waiting for
+    # anything, because there is nothing it could wait for.
+    expect(page.get_by_test_id("setup-configuration")).to_be_visible()
+    expect(page.get_by_test_id("setup-waiting")).to_have_count(0)
+    expect(page.get_by_test_id("setup-inputs")).to_have_count(0)
+
+
+def test_a_dataset_table_waits_for_its_dataset(page, api) -> None:
+    """p.66's disclosure with a dataset in the object set's place: the filter
+    column is read from the dataset's schema, so before one is chosen there
+    are no columns to list."""
+    mod = Module(api, "Widget setup order (dataset)")
+    # For the dataset the picker offers: `object_type` uploads its seed CSV
+    # into this module's project, which is a dataset like any other.
+    mod.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "dt": {"resolvedName": "CanvasDatasetTable",
+                   "props": {"datasetId": None, "filterColumn": None,
+                             "filterParameter": None, "filterOperator": "equals"}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    waiting = page.get_by_test_id("setup-waiting")
+    expect(waiting).to_be_visible()
+    expect(waiting).to_contain_text("a dataset")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+
+    page.get_by_test_id("setup-inputs").locator("select").select_option(index=1)
+    expect(page.get_by_test_id("setup-configuration")).to_be_visible(timeout=15000)
+
+
+def test_an_action_form_asks_for_the_action_before_what_it_edits(page, api) -> None:
+    """**The panel whose two fields look alike and are not.**
+
+    Both are dropdowns; only one is an input. Until an action type is chosen
+    there is no form, so "which variable does it edit" is a question about
+    nothing - and leaving *that* unset is a real answer ("whatever the viewer
+    picks"), which is why it sits under configuration rather than beside the
+    action as a second thing to supply.
+    """
+    mod = Module(api, "Widget setup order (action form)")
+    type_id = mod.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    api.call(
+        "POST",
+        f"/workspaces/{mod.workspace_id}/action-types",
+        {
+            "object_type_id": type_id,
+            "api_name": f"rename_{uuid.uuid4().hex[:8]}",
+            "display_name": "Rename",
+            "editable_properties": ["name"],
+        },
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "frm": {"resolvedName": "CanvasActionForm",
+                    "props": {"actionTypeId": None, "subjectVariable": None}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    waiting = page.get_by_test_id("setup-waiting")
+    expect(waiting).to_be_visible()
+    expect(waiting).to_contain_text("an action")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+
+    page.get_by_test_id("setup-inputs").locator("select").select_option(index=1)
+    configuration = page.get_by_test_id("setup-configuration")
+    expect(configuration).to_be_visible(timeout=15000)
+    expect(configuration).to_contain_text("Edits")
+    expect(page.get_by_test_id("setup-inputs")).not_to_contain_text("Edits")

@@ -3700,6 +3700,22 @@ Continuing §178's conversion rather than leaving it half done, because a half-c
 **270 web unit tests** (was 256).
 
 ---
+
+### 180. The three widgets that are not populated by an object set (this session)
+
+**Parameter control, Dataset table, Action form** — ten of eighteen. §179 converted a *family*: four widgets that all read an object set, all shaped the same way. These three are the argument for not stopping there, because each one bends p.65's shape somewhere different and a rule fitted to the object-set family gets each of them wrong.
+
+**The Parameter control has no input at all.** It produces the value everything else reads — its parameter name is what every table and chart references — so the panel opens on Outputs, and its configuration waits for nothing. That is not an omission: the widget has an *optional* dataset the dropdown's options can come from, and a `requires` naming it would make configuration wait for something nobody is obliged to supply, leaving the widget permanently unconfigurable. §179's choice-rule does not help here; what is needed is no requirement at all. The mutant that adds one is killed by the browser suite, which is the only place "the panel is stuck" is visible.
+
+**The Action form's two dropdowns look alike and are not.** Action type and "Edits" are both `<select>`s over a list, drawn one after the other in the original flat panel. The action type is the input — until one is chosen there is no form, so *which variable does it edit* is a question about nothing. But leaving the second unset is a **real answer** ("whatever the viewer picks from a list"), not an unfinished one, so it is configuration rather than a second input. Requiring both would mean the configuration never appears for the perfectly ordinary form that lets the viewer choose. Two mutants cover the two ways to get this wrong — requiring the subject variable, and calling Edits an input — and both die.
+
+**The Dataset table is the only straightforward one**: p.66's disclosure with a dataset in the object set's place, since the filter-column picker reads the dataset's schema. Binding the dataset also clears the column beside it, which is the same reason the disclosure exists.
+
+**Map and Chart are not a wrap, and that is why they are not here.** Both have a `source` toggle — `"objects"` vs `"dataset"` for the Map, three alternatives for the Chart — with inputs and configuration *interleaved inside each branch*, and the Chart's drill-down output sitting between two of them. Converting them means restructuring the branches so each one contributes to three sections, not adding a wrapper around a flat list. Recorded rather than attempted: they are a unit of their own, and doing them badly inside a mechanical conversion is how a "mechanical" change stops being reviewable.
+
+Seven mutations, all red, across **both layers** — §179's lesson kept rather than re-learned. **219 browser tests** (was 216); web unit unchanged at 270, since the change is entirely in the panels rather than in the pure module they share.
+
+---
 ---
 ---
 ---
