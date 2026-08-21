@@ -25,6 +25,9 @@
  * document and concerns itself with *when* things happen.
  */
 
+import { useEditor } from "@craftjs/core";
+
+import { collapseState, nextCollapsed } from "./collapse";
 import {
   useCanvasActions,
   useCanvasPage,
@@ -77,6 +80,16 @@ export interface EventContext {
     properties: Record<string, unknown>;
   };
   openUrl?: (url: string) => void;
+  /** p.82's Expand/Collapse/Toggle. Takes the effect rather than a boolean so
+   * Toggle is resolved against *what is on screen* - the caller knows both the
+   * override and the backing variable, and this list does not. A Toggle
+   * computed from the variable instead would look like the feature working
+   * right up until an event and a variable disagree, which p.82 says they are
+   * allowed to. */
+  setSectionCollapsed?: (
+    section: string,
+    effect: "expand_section" | "collapse_section" | "toggle_section",
+  ) => void;
   /** Run an action against the object the trigger was about (roadmap 1.3).
    * The only effect that writes, and so the only one whose outcome anybody
    * has to be told about — see `CanvasActions`. */
@@ -131,9 +144,10 @@ export function useEventContext(
   object?: EventContext["object"],
 ): EventContext {
   const { setMany } = useCanvasParameters();
-  const { go, openOverlay, closeOverlay } = useCanvasPage();
+  const { go, openOverlay, closeOverlay, collapsed, setCollapsed } = useCanvasPage();
   const { run: runAction } = useCanvasActions();
   const { resolved } = useCanvasVariables();
+  const { query } = useEditor();
   return {
     setVariables: setMany,
     runAction,
@@ -143,6 +157,31 @@ export function useEventContext(
     closeOverlay,
     overlayIds,
     openUrl: (url: string) => window.open(url, "_blank", "noopener,noreferrer"),
+    // **Toggle is resolved here, against what is on screen.** The section's
+    // own props say which variable backs it and how it starts, and `resolved`
+    // says what that variable currently holds - so this is the only place with
+    // all three inputs. Reading the tree rather than asking the section is what
+    // lets a button expand a section it has never met, which is p.82's own
+    // worked example.
+    setSectionCollapsed: (section, effect) => {
+      let backing: unknown;
+      let byDefault = false;
+      try {
+        const props = query.node(section).get()?.data?.props ?? {};
+        const bound = props.collapsedWhen as string | null | undefined;
+        backing = bound ? resolved[bound] : undefined;
+        byDefault = Boolean(props.collapsedByDefault);
+      } catch {
+        // No tree to ask - a bare render, or a section deleted since the event
+        // was saved. Falling through leaves the effect acting on defaults,
+        // which beats throwing part-way through a list of effects.
+      }
+      const now = collapseState(collapsed[section], backing, byDefault);
+      setCollapsed(section, {
+        collapsed: nextCollapsed(effect, now),
+        against: backing === undefined ? null : Boolean(collapseState(undefined, backing, false)),
+      });
+    },
     payload,
     object,
   };
@@ -209,6 +248,20 @@ export function run(
               : String(template ?? "");
         }
         context.runAction({ action, subject, values }, { object: held ?? null });
+      } else if (
+        effect.type === "expand_section"
+        || effect.type === "collapse_section"
+        || effect.type === "toggle_section"
+      ) {
+        const section = String(config.section ?? "");
+        // **p.82's gotcha lives in what is *not* here.** These three write no
+        // variable: "If the specified section has a Boolean variable backing
+        // the collapse state, the value of this variable will not be updated
+        // as a result of one of these events." Nothing is added to `written`,
+        // so a backing variable is left exactly as it was - which is why the
+        // page tells the builder to add a Set Variable Value event if they
+        // want the two to agree.
+        if (section) context.setSectionCollapsed?.(section, effect.type);
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })

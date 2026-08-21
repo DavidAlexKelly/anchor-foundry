@@ -45,7 +45,7 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 | Add page from Layout panel | ✅ | |
 | Layout template picker with hover preview | ○ | (p.52) |
 | Switch page via Layout event | ✅ | |
-| Variable-Based Page Selection | ○ | a string variable backs the current page; **note the documented gotcha** — a Switch-to-Page event does *not* update it (p.81) |
+| Variable-Based Page Selection | ○ | a string variable backs the current page; **note the documented gotcha** — a Switch-to-Page event does *not* update it (p.81). §185 built the same shape one row down for sections, so the rule and its resolution (`components/canvas/collapse.ts`) are the pattern to copy rather than re-derive: p.81's sentence is p.82's, with a page id in place of a boolean |
 
 ### 1.3 Sections — all six layouts
 
@@ -72,7 +72,7 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 | Section feature | Status | Notes |
 |---|---|---|
 | Conditional visibility on a variable | ◑ | we support it; Foundry also shows **layout-panel icons and tooltips** marking conditionally-visible sections so they can be found while hidden (p.55) |
-| Collapsible sections, with Expand / Collapse / Toggle events | ○ | same gotcha as pages: a Boolean variable backing collapse state is not updated by these events (p.82) |
+| Collapsible sections, with Expand / Collapse / Toggle events | ✅ §185 | (p.55, p.82) — the three events, a header the section draws for itself, a `collapsedByDefault`, and p.82's "Boolean variable backing the collapse state". **The gotcha is implemented rather than merely noted**: none of the three writes that variable, and the settings panel says so beside the picker rather than leaving somebody to meet it as a bug. The server refuses an effect aimed at a section that is not collapsible — p.82 offers them "for each collapsible section", and a section that cannot collapse has no state for them to change, so saving one would save a button that does nothing. **The rule p.82 does not state**: a section can be told two things at once, and the reading here is that the most recent instruction wins — an event overrides the variable and stays in force until the variable's own value *changes*. The two simpler rules each break one of p.82's own sentences: "the variable always wins" makes Expand and Collapse do nothing on exactly the sections the page says they are for, and "the event always wins" makes the word *backing* false after the first click |
 | Drop zones for drag payloads | ○ | cross-application interactivity (p.55) — see §11 |
 | Cut / copy / paste sections and widgets | ○ | (p.55) |
 

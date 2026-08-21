@@ -68,6 +68,15 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
   { type: "close_overlay", label: "Close the overlay", hint: "returns to the page underneath" },
   { type: "open_url", label: "Open a link", hint: "" },
   { type: "run_action", label: "Run an action", hint: "writes to the object it acts on" },
+  // p.82's three. Foundry groups them with `navigate` under "Layout events" -
+  // they change "the on-screen display within a Workshop module".
+  { type: "expand_section", label: "Expand a section", hint: "" },
+  { type: "collapse_section", label: "Collapse a section", hint: "" },
+  {
+    type: "toggle_section",
+    label: "Toggle a section",
+    hint: "expands it if collapsed, collapses it if expanded",
+  },
 ];
 
 /** Widget names that can fire something, for the caller reading the tree.
@@ -108,6 +117,7 @@ export function EventsPanel({
   variables,
   triggerNodes,
   pages,
+  sections,
   actions = [],
   onChange,
   readOnly,
@@ -119,6 +129,9 @@ export function EventsPanel({
   triggerNodes: TriggerCandidate[];
   /** Pages and overlays, which is what `navigate` accepts. */
   pages: PageCandidate[];
+  /** The module's **collapsible** sections, which is what p.82's three
+   * effects accept - and only those, because the server refuses the rest. */
+  sections?: PageCandidate[];
   /** The workspace's action types, which is what `run_action` accepts. */
   actions?: ActionCandidate[];
   onChange: (next: Record<string, WorkshopEvent>) => void;
@@ -262,6 +275,7 @@ export function EventsPanel({
                     variables={writable}
                     objects={objects}
                     pages={pages}
+                    sections={sections ?? []}
                     actions={actions}
                     readOnly={readOnly}
                     onChange={(next) => setEffect(event, index, next)}
@@ -314,6 +328,7 @@ function EffectEditor({
   variables,
   objects,
   pages,
+  sections,
   actions,
   readOnly,
   onChange,
@@ -326,6 +341,7 @@ function EffectEditor({
   variables: WorkshopVariable[];
   objects: WorkshopVariable[];
   pages: PageCandidate[];
+  sections: PageCandidate[];
   actions: ActionCandidate[];
   readOnly: boolean;
   onChange: (next: WorkshopEffect) => void;
@@ -474,6 +490,33 @@ function EffectEditor({
             onChange={(e) => setConfig({ url: e.target.value })}
           />
           <span className="field-hint">http, https, mailto or a path</span>
+        </label>
+      )}
+
+      {(effect.type === "expand_section"
+        || effect.type === "collapse_section"
+        || effect.type === "toggle_section") && (
+        <label className="field">
+          <span className="field-label">Section</span>
+          <select
+            disabled={readOnly}
+            data-testid="effect-section"
+            value={String(config.section ?? "")}
+            onChange={(e) => setConfig({ section: e.target.value || undefined })}
+          >
+            <option value="">Pick a collapsible section</option>
+            {sections.map((s: PageCandidate) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          {sections.length === 0 && (
+            <span className="field-hint">
+              No collapsible sections yet — turn on Collapsible in a section&apos;s
+              settings first
+            </span>
+          )}
         </label>
       )}
 
