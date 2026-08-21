@@ -89,15 +89,15 @@ Configurable at **page, section and widget level**. This is unglamorous and it i
 
 | Feature | Status | Notes |
 |---|---|---|
-| Section header formatting: Block, Contained, Floating | ○ | (p.58) |
-| Background colours: five preset shades **per theme**, Blueprint palette, transparent | ○ | (p.58) |
-| Custom hex background, with module-level saved colours reusable on sections and pages | ○ | (p.59) |
-| Widgets auto-switch light/dark **by background brightness** | ○ | (p.59–60) — a rule, not a style; needs a test. Pick a contrast threshold and assert a widget on a dark custom background renders its light variant |
-| Border styles: Bordered, Outer drop shadow, Inner shadow, Borderless | ○ | (p.60) |
-| Padding scale: None, Compact 16px, Regular 24/48, Large 40/62, Custom | ○ | (p.62) |
-| Inner section style applied to all child sections | ○ | (p.62) |
+| Section header formatting: Block, Contained, Floating | ○ | (p.58) — blocked on a feature we do not have: p.58 says these "can be added when the header is enabled on a section", and sections here have no header. That is its own row, not part of the style block |
+| Background colours: five preset shades, Blueprint palette, transparent | ◑ §184 | (p.58) — five presets and transparent, offered at all three levels. **Not "per theme"**: p.58 offers a ladder for light *and* dark mode and this platform has one theme, so a dark ladder would be five swatches that look wrong on every page they appear on. Adding a dark theme is a platform-wide decision, not Workshop's. No Blueprint palette either — Blueprint is Palantir's own design system and is not a dependency here; a custom hex reaches the same colours |
+| Custom hex background | ✅ §184 | (p.59) — on pages, sections and widgets. `#abc`, `abc` and `#aabbcc` all mean the same colour, because this value is typed by hand and a picker that ignored `abc` would look broken rather than strict. **Module-level saved colours are not built** — that is a module-scoped palette, which is a store rather than a control |
+| Widgets auto-switch light/dark **by background brightness** | ✅ §184 | (p.59–60) — the one item here that is a rule. WCAG relative luminance, and the threshold is WCAG's own crossover (`√(1.05×0.05) − 0.05` ≈ 0.179) rather than a round half, which would put white text on a mid-grey that black text reads better on. Applied as **one `data-scheme` attribute** that redefines the ink and line tokens beneath it, so a widget written years before this feature inherits legible colours without knowing it exists — colouring widgets individually would mean touching every one, and the one missed would be invisible until somebody picked a dark background |
+| Border styles: Bordered, Outer drop shadow, Inner shadow, Borderless | ✅ §184 | (p.60) — on sections and widgets, which is where p.60 says and nowhere else |
+| Padding scale: None, Compact 16px, Regular 24/48, Large 40/62, Custom | ✅ §184 | (p.62) — on pages and sections, p.62's own levels. Regular and Large are **not square**, which is the detail a single-number-per-option shape quietly loses |
+| Inner section style applied to all child sections | ○ | (p.62) — inheritance rather than a value, and p.62's list of the "pre-defined section styles" it offers does not survive extraction from the PDF, so there is nothing to be faithful to yet |
 
-The auto-switching rule is the only item here with behaviour worth testing; the rest are tokens and a settings panel. Doing the whole block together is cheaper than doing it piecemeal, because they share one style-resolution path from page → section → widget.
+**§184 built the block as one pure module.** The values are p.62's own numbers and p.60's own four, which is exactly why they are tested rather than typed into three panels: a control using 20px where the page says 24 looks plausible and nothing else in the system objects. The per-level asymmetry is p.57–62's own — backgrounds everywhere (p.58), borders on "sections and widgets" (p.60), padding on "pages and sections" (p.62) — and offering all four at every level would have been less code and would have put a padding control on a widget with nothing to pad.
 
 ---
 

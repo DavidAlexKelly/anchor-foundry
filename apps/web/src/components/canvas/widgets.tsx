@@ -17,6 +17,10 @@ import {
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
 import { VariableBridge } from "./VariableBridge";
 import { WidgetSetup } from "./WidgetSetup";
+import { StyleFields } from "./StyleFields";
+import {
+  schemeFor, styleFor, type BorderName, type PaddingName, type StyleProps,
+} from "./style";
 import { CanvasNode } from "./SettingsPanel";
 import {
   CanvasHeaderCollapsedContext,
@@ -95,11 +99,17 @@ export function CanvasContainer({
   children,
   background,
   padding,
+  border = null,
   visibleWhen = null,
 }: {
   children?: React.ReactNode;
   background?: string;
   padding?: number;
+  /** p.60's border styles, which "can be configured on sections and widgets".
+   * A widget gets no p.62 padding control - that page says "pages and
+   * sections" - and this container's own numeric `padding` is older than the
+   * style block and keeps its meaning. */
+  border?: BorderName | null;
   /** A variable that must be truthy for this box to show (roadmap 1.7). */
   visibleWhen?: string | null;
 }) {
@@ -131,7 +141,19 @@ export function CanvasContainer({
     <div
       ref={(ref) => connectDragDrop(ref, connect, drag)}
       className={`canvas-block${asideHeader ? " canvas-block--aside" : ""}`}
-      style={{ background: background || "transparent", padding: padding ?? 12 }}
+      // p.59-60's rule reaches everything inside, so it is an attribute on the
+      // box rather than a colour on each widget: the stylesheet redefines the
+      // ink and line tokens beneath it and a widget written years ago inherits
+      // legible colours without knowing the feature exists.
+      data-scheme={schemeFor({ background })}
+      style={{
+        ...styleFor({ background, border }),
+        // This container's own padding, which predates p.62's scale and is a
+        // plain number. Written after the style block so it wins - the two
+        // would otherwise both emit `padding` and the order would decide.
+        padding: padding ?? 12,
+        ...(background ? {} : { background: "transparent" }),
+      }}
     >
       {marker && <p className="canvas-hidden-marker">{marker}</p>}
       {children}
@@ -167,6 +189,41 @@ function VisibilityField({
   );
 }
 
+/** The style block bound to one node's props (p.57-62).
+ *
+ * Three panels need the same four controls writing the same four props, and
+ * the only thing that differs between them is which controls p.57-62 offers at
+ * that level. Repeating the wiring three times is how one of them ends up
+ * writing `customPadding` and the other two not.
+ */
+function NodeStyleFields({ padding = false, border = false }: {
+  padding?: boolean; border?: boolean;
+}) {
+  const {
+    style,
+    actions: { setProp },
+  } = useNode((node) => ({
+    style: {
+      background: node.data.props.background,
+      padding: node.data.props.padding,
+      customPadding: node.data.props.customPadding,
+      border: node.data.props.border,
+    } as StyleProps,
+  }));
+  return (
+    <StyleFields
+      props={style}
+      padding={padding}
+      border={border}
+      set={(key, value) =>
+        setProp((p: Record<string, unknown>) => {
+          p[key] = value;
+        })
+      }
+    />
+  );
+}
+
 function ContainerSettings() {
   const {
     background,
@@ -184,15 +241,10 @@ function ContainerSettings() {
         value={visibleWhen}
         onChange={(next) => setProp((p: { visibleWhen: string | null }) => (p.visibleWhen = next))}
       />
-      <label className="field">
-        <span className="field-label">Background</span>
-        <input
-          type="text"
-          value={background || ""}
-          placeholder="transparent"
-          onChange={(e) => setProp((p: { background: string }) => (p.background = e.target.value))}
-        />
-      </label>
+      {/* p.58's backgrounds and p.60's borders reach widgets; p.62's padding
+          scale does not - that page says "pages and sections", and this box's
+          own numeric padding below is older and means something else. */}
+      <NodeStyleFields border />
       <label className="field">
         <span className="field-label">Padding (px)</span>
         <input
@@ -207,7 +259,7 @@ function ContainerSettings() {
 
 CanvasContainer.craft = {
   displayName: "Container",
-  props: { background: "", padding: 12, visibleWhen: null },
+  props: { background: "", padding: 12, border: null, visibleWhen: null },
   related: { settings: ContainerSettings },
 };
 
@@ -4652,8 +4704,19 @@ export function CanvasSection({
   minHeight = 0,
   visibleWhen = null,
   scroll = false,
+  background = null,
+  padding = null,
+  customPadding = null,
+  border = null,
   children,
 }: {
+  /** p.57-62's style block. A section gets all three - p.58 offers
+   * backgrounds on sections, p.60 borders, p.62 padding - which is the only
+   * one of the three levels that does. */
+  background?: string | null;
+  padding?: PaddingName | null;
+  customPadding?: readonly [number, number] | null;
+  border?: BorderName | null;
   /** Foundry's section layouts (p.54). Columns, Rows and Tabs were here; Flow
    * and Toolbar are the two that are a *section* rather than a widget.
    *
@@ -4773,6 +4836,10 @@ export function CanvasSection({
     <div
       ref={(ref) => connectDragDrop(ref, connect, drag)}
       className={`canvas-section canvas-section--${direction}`}
+      // p.59-60: "widgets within that section automatically switch between
+      // light and dark mode based on the brightness of the background".
+      data-scheme={schemeFor({ background })}
+      style={styleFor({ background, padding, customPadding, border })}
     >
       {marker && <p className="canvas-hidden-marker">{marker}</p>}
       {/* A section fills itself with its children, so in the builder there is
@@ -4942,14 +5009,21 @@ function SectionSettings() {
           value={gap ?? 12}
           onChange={(e) => setProp((p: { gap: number }) => (p.gap = Number(e.target.value)))}
         />
+        {/* Not p.62's padding, and kept apart from it: gap is the space
+            *between* children, padding is the space around all of them. */}
+        <span className="field-hint">Between its widgets, not around them</span>
       </label>
+      <NodeStyleFields padding border />
     </>
   );
 }
 
 CanvasSection.craft = {
   displayName: "Section",
-  props: { direction: "columns", weights: "", gap: 12, minHeight: 0, visibleWhen: null, scroll: false },
+  props: {
+    direction: "columns", weights: "", gap: 12, minHeight: 0, visibleWhen: null, scroll: false,
+    background: null, padding: null, customPadding: null, border: null,
+  },
   isCanvas: true,
   related: { settings: SectionSettings },
 };
@@ -5207,9 +5281,17 @@ CanvasHeader.craft = {
  */
 export function CanvasPage({
   title = "Page",
+  background = null,
+  padding = null,
+  customPadding = null,
   children,
 }: {
   title?: string;
+  /** p.57-62's style block, minus the border: p.60 names "sections and
+   * widgets" and stops there, and a page is neither. */
+  background?: string | null;
+  padding?: PaddingName | null;
+  customPadding?: readonly [number, number] | null;
   /** The author-set ID this page appears under in the URL, when routing is on
    * (p.197). Read off the layout by `pageIdOf` rather than through props,
    * because the *viewer* needs it for a page it is not rendering; declared
@@ -5248,6 +5330,8 @@ export function CanvasPage({
     <section
       ref={(ref) => connectDragDrop(ref, connect, drag)}
       className={`canvas-page${active ? " on" : ""}`}
+      data-scheme={schemeFor({ background })}
+      style={styleFor({ background, padding, customPadding })}
     >
       {mode === "edit" && (
         <p className="canvas-page-label">
@@ -5315,13 +5399,18 @@ function PageSettings() {
           by opening the module.
         </span>
       </label>
+      {/* No border: p.60 names "sections and widgets" and stops there. */}
+      <NodeStyleFields padding />
     </>
   );
 }
 
 CanvasPage.craft = {
   displayName: "Page",
-  props: { title: "Page", icon: "", pageId: "" },
+  props: {
+    title: "Page", icon: "", pageId: "",
+    background: null, padding: null, customPadding: null,
+  },
   isCanvas: true,
   related: { settings: PageSettings },
 };
