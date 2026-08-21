@@ -3771,6 +3771,29 @@ Nine mutations, all red; two of them died at the **unit** layer. **226 browser t
 **289 web unit** (was 273), **230 browser** (was 226).
 
 ---
+
+### 184. The style block, and the one rule inside it (this session)
+
+`workshop.md` §1.5 (p.57-62) was seven ○ rows and the largest untouched block left in Workshop — "unglamorous, and most of the distance between 'a canvas' and 'looks like Workshop'". Five of the seven are now done.
+
+**It is values, which is exactly why it is a tested pure module rather than three settings panels.** The numbers are p.62's own: Compact 16, **Regular 24 top/bottom and 48 left/right**, Large 40 and 62. Regular and Large are not square, and one-number-per-option is the shape that quietly loses that. A control using 20px where the page says 24 looks plausible and nothing else in the system objects — there is no failing request, no error, nothing to notice.
+
+**The per-level asymmetry is p.57-62's own.** Backgrounds are offered at all three levels (p.58); border styles "can be configured on sections and widgets" (p.60); padding is "for pages and sections" (p.62). Offering all four everywhere would have been less code and would have put a padding control on a widget with nothing to pad.
+
+**One rule, and it is the item worth the work.** p.59-60: "widgets within that section automatically switch between light and dark mode based on the brightness of the background". Two decisions inside it:
+
+* **The threshold is WCAG's own crossover**, `√(1.05 × 0.05) − 0.05` ≈ 0.179, derived from its contrast formula rather than picked. A round 0.5 is the obvious answer and is far too high — it puts white text on a mid-grey that black text reads better on. And the luminance is weighted rather than averaged: a saturated blue and a saturated yellow have the same naive channel average and could not be less alike to read against.
+* **It applies as one `data-scheme` attribute** that redefines the ink and line tokens beneath it. Every widget already reads `--ink` and `--line`, so the rule reaches widgets written years before it existed — including ones nobody thought to check. Colouring widgets individually would mean touching each, and the one missed would be invisible until somebody picked a dark background.
+
+**A compatibility trap, caught while writing it.** The Container's `background` has been free-text CSS since the first canvas. The tidy version of `resolveBackground` validates and returns `null` for anything that is not a preset or a hex — which would blank `red` and `var(--panel)` on every module in the corpus that set one. It passes unrecognised values through instead, and `isDarkBackground` refuses to guess at a colour it cannot parse rather than flipping a section's text on a value nothing read.
+
+**One survivor, and it is the "passes for a reason it did not state" shape again.** The check that a widget gets no padding control selected the *Text* widget — which has no style block at all, so its panel lacks every one of these controls whatever the rule says. The assertion could not fail. The Container is the widget that does carry the block, and is the only one that can tell a correct per-level rule from a missing one. Sixteen mutations, fifteen red on the first pass, sixteen after.
+
+**Two rows deliberately left ○.** Section header formatting (p.58) is blocked on a feature that does not exist — p.58 says those options "can be added when the header is enabled on a section", and sections here have no header. And p.62's inner-section-style inheritance names a list of "pre-defined section styles" that does not survive extraction from the PDF, so there is nothing to be faithful to yet. Both are recorded as their own rows rather than folded in and half-built.
+
+**310 web unit** (was 289), **236 browser** (was 230).
+
+---
 ---
 ---
 ---
