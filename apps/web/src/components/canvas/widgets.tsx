@@ -2514,8 +2514,18 @@ function EmbeddedModuleSettings() {
     queryFn: () => canvasApi.list(workspaceId, projectId),
   });
 
+  // p.127 puts the disclosure in its own words, and puts the mapping on the
+  // configuration side while it is at it: "Once a child module is selected,
+  // the module interface for the child module will be shown in the widget
+  // **configuration panel**." Before a module is chosen there is no interface
+  // to map onto - `InterfaceMapping` used to answer that by rendering `null`,
+  // which is the silent version of the same thing.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ moduleId }}
+      requires={["moduleId"]}
+      labels={{ moduleId: "a module" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Module</span>
         <select
@@ -2530,6 +2540,8 @@ function EmbeddedModuleSettings() {
           ))}
         </select>
       </label>
+      </>}
+      configuration={<>
       <InterfaceMapping moduleId={moduleId} />
       <label className="field">
         <span className="field-label">Title</span>
@@ -2539,7 +2551,8 @@ function EmbeddedModuleSettings() {
           onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
         />
       </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -2882,8 +2895,17 @@ function LoopSectionSettings() {
   // the kind that actually describes one object - see the spec note.
   const candidates = published.filter((v) => v.kind === "single_object");
 
+  // **The widget that needs `requires` in its original all-of form.** §179
+  // taught it a choice for the Object table, which takes an object set *or* an
+  // object type; a Loop takes a set *and* a module, and neither alone leaves
+  // anything to configure - "Receives each object" reads the module's published
+  // interface (p.134) and the paging options count items from the set.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ objectSetVariable, moduleId }}
+      requires={["objectSetVariable", "moduleId"]}
+      labels={{ objectSetVariable: "an object set", moduleId: "a module" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Object set to loop through</span>
         <select
@@ -2918,38 +2940,40 @@ function LoopSectionSettings() {
           ))}
         </select>
       </label>
-
-      {moduleId && (
-        <label className="field">
-          <span className="field-label">Receives each object</span>
-          <select
-            value={itemVariable ?? ""}
-            data-testid="loop-item"
-            onChange={(e) =>
-              setProp((p: { itemVariable: string | null }) =>
-                (p.itemVariable = e.target.value || null))
-            }
-          >
-            <option value="">Choose…</option>
-            {candidates.map((v) => (
-              <option key={v.external_id} value={v.external_id!}>
-                {v.interface?.display_name || v.label}
-              </option>
-            ))}
-          </select>
-          {candidates.length === 0 && (
-            <span className="field-hint">
-              That module publishes no single-object interface variable, so there
-              is nowhere to put each object. Add one in its Variables panel.
-            </span>
-          )}
-          {/* p.135's warning, carried across rather than left to be discovered. */}
+      </>}
+      configuration={<>
+      {/* No `moduleId &&` guard any more: this whole section only renders once
+          `requires` is satisfied, and a module is half of that. Two spellings
+          of one rule, and §170's precedent says delete the redundant one. */}
+      <label className="field">
+        <span className="field-label">Receives each object</span>
+        <select
+          value={itemVariable ?? ""}
+          data-testid="loop-item"
+          onChange={(e) =>
+            setProp((p: { itemVariable: string | null }) =>
+              (p.itemVariable = e.target.value || null))
+          }
+        >
+          <option value="">Choose…</option>
+          {candidates.map((v) => (
+            <option key={v.external_id} value={v.external_id!}>
+              {v.interface?.display_name || v.label}
+            </option>
+          ))}
+        </select>
+        {candidates.length === 0 && (
           <span className="field-hint">
-            Each copy gets its own object. Changing this variable inside the
-            module itself is not supported.
+            That module publishes no single-object interface variable, so there
+            is nowhere to put each object. Add one in its Variables panel.
           </span>
-        </label>
-      )}
+        )}
+        {/* p.135's warning, carried across rather than left to be discovered. */}
+        <span className="field-hint">
+          Each copy gets its own object. Changing this variable inside the
+          module itself is not supported.
+        </span>
+      </label>
 
       <label className="field">
         <span className="field-label">Paging</span>
@@ -3015,7 +3039,9 @@ function LoopSectionSettings() {
         </>
       )}
 
-      {moduleId && published.length > candidates.length && (
+      {/* The `moduleId &&` half of this condition went the same way as the one
+          above; the length comparison is the part that still says something. */}
+      {published.length > candidates.length && (
         <InterfaceMapping moduleId={moduleId} except={itemVariable} />
       )}
 
@@ -3027,7 +3053,8 @@ function LoopSectionSettings() {
         <code> docs/decisions/0006</code>. The order is the set&apos;s own, which
         is stable.
       </p>
-    </>
+      </>}
+    />
   );
 }
 
@@ -5498,8 +5525,39 @@ function ButtonSettings() {
     enabledVariable: node.data.props.enabledVariable,
   }));
   const { declared } = useCanvasVariables();
+  // p.65 in full: the tab configures "the input and output variables of a
+  // widget … **as well as** any additional configuration and display options".
+  // A Button's label, icon and style are display options by that sentence's own
+  // words; the variable it reads to decide whether it is pressable is an input.
+  // No `requires`, for the Parameter control's reason (§180) - "Always" is a
+  // real answer, so a panel that waited for this would never open.
   return (
-    <>
+    <WidgetSetup
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Pressable when</span>
+        <select
+          value={enabledVariable ?? ""}
+          onChange={(e) =>
+            setProp(
+              (p: { enabledVariable: string | null }) =>
+                (p.enabledVariable = e.target.value || null),
+            )
+          }
+        >
+          <option value="">Always</option>
+          {Object.values(declared).map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.label || v.id}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">
+          The button is greyed out while this variable is empty or false
+        </span>
+      </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Label</span>
         <input
@@ -5532,29 +5590,8 @@ function ButtonSettings() {
           <option value="danger">Danger</option>
         </select>
       </label>
-      <label className="field">
-        <span className="field-label">Pressable when</span>
-        <select
-          value={enabledVariable ?? ""}
-          onChange={(e) =>
-            setProp(
-              (p: { enabledVariable: string | null }) =>
-                (p.enabledVariable = e.target.value || null),
-            )
-          }
-        >
-          <option value="">Always</option>
-          {Object.values(declared).map((v) => (
-            <option key={v.id} value={v.id}>
-              {v.label || v.id}
-            </option>
-          ))}
-        </select>
-        <span className="field-hint">
-          The button is greyed out while this variable is empty or false
-        </span>
-      </label>
-    </>
+      </>}
+    />
   );
 }
 
