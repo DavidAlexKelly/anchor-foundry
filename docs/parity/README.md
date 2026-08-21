@@ -167,9 +167,11 @@ but "the only authoring surface for transforms that are not yet files".
   Map and Chart, were a restructure rather than a wrap: their inputs and
   configuration are interleaved inside `source` conditionals, and reading them
   closely enough to unpick that turned up four controls that were disabled
-  with their options already loaded (`STATUS.md` §182). The largest thing §6
-  still lacks is the **Changelog panel** (p.193), which is also the
-  prerequisite for module branching.
+  with their options already loaded (`STATUS.md` §182). §6's **Changelog
+  panel** (p.193) is finished too as of §183 — the JSON diff and the visual
+  hierarchy joined §132's five change kinds — which clears the prerequisite
+  p.193 names for module branching. What branching still needs is its own
+  model: two heads of one module, and a rule for what a conflict is.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |
 | **4** | Code Repositories: five tabs, sandbox branches, multi-file tabs, the nine helper panels | Self-contained; can run in parallel with 2–3 if there is a second pair of hands. |
