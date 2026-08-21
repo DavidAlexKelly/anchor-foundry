@@ -3843,6 +3843,38 @@ Fourteen mutations across **three** layers — API, unit, browser — all red. *
 **1396 API tests** (was 1389), 1 skipped, and **242 browser** green.
 
 ---
+
+### 187. The project half, and the cost it is worth naming (this session)
+
+§186 left `rls_can_access_project` untouched across **25 policies** and three mixed workspace/project expressions. This finishes the isolation layer: **no policy in the database evaluates a per-row access function any more.**
+
+**The rule is longer, so the set is longer.** `effective_project_role` has five outcomes and two of them are revocations. As a set, a caller reaches a project when it is the worker's own workspace; or they are an active org owner/admin of its organisation; or it is `inherited` and they can see its workspace; or it is `custom` and they have a **direct** entry that is not `none`; or it is `custom`, they have *no* direct entry, and some group entry grants a real role.
+
+**The order between the last two is the rule**, and it is the thing most likely to be got wrong: a direct entry always wins, **including a revocation**, because per-user assignments are more specific than group grants. Hence the `NOT EXISTS` in the group branch rather than a plain union — without it, a user revoked by name is let back in by a group. Three mutants cover that pair and all three are red.
+
+**`rls_workspace_ids()` gates the last three branches**, standing in for `effective_workspace_role(...) IS NOT NULL`, and it is equivalent rather than merely close: the two workspaces it adds beyond plain membership are the worker's and an org admin's, and the first two branches have already granted every project in both.
+
+**The tests build what the database cannot supply.** The shared dev database holds **267** direct `'none'` entries and exactly **one** group entry, with no group `'none'` at all — so "a direct `none` beats a group grant" and "every group entry is `none`" have nothing to be sampled from. Sampling alone would have reported full agreement on the two rules most likely to be wrong. Those four cases get a fixture built and rolled back.
+
+**And the cost, which is real and is not hidden.** This idiom trades a per-*row* cost for a per-*statement* one, and the API suite is thousands of tiny statements — the profile where that trade is worst. Measured rather than assumed:
+
+* `rls_project_ids()` is **~1.2ms** for a typical caller (one or two visible projects) and **~8-10ms** for the one user in this sandbox who can see 881, which is residue rather than a real shape;
+* the same test file with the old policies and the new ones: **3.07s → 3.75s**, about 22%;
+* the whole API suite, warm: **219s → 333s**, of which **45s is the two new equivalence files** themselves, so roughly 31% on the pre-existing suite.
+
+Against that, the ontology search went 4.5s → 0.37s in §186 and a 425-row read went 237ms → 1.3ms. **The crossover is around three rows** — a point lookup pays a little more, anything that returns a list pays far less. That is the right trade for this application, and it is worth writing the number down rather than reporting only the half that improved.
+
+**One tempting optimisation declined.** `user_connection` already sets `app.user_id` once per request and could stash both arrays as GUCs, removing the per-statement cost entirely. It would also make the security backstop depend on the application setting it correctly, and a stale or forged value would silently widen isolation. The point of RLS here is that it holds when the application is wrong.
+
+**Three survivors, and all three were rules the sample could not reach.** Second time in two units that mutation testing has caught an equivalence check agreeing for the wrong reason, and the pattern is the same: the corpus has no rows of the interesting shape.
+
+* **A direct project grant in a workspace the user has lost.** Step 2 of the rule says a `project_members` row is not on its own enough — but every direct grant in the corpus happens to sit in a workspace its user is also a member of, so dropping the workspace gate changed nothing observable.
+* **The org-admin branch, dropped entirely.** It survived because an org admin can see every workspace in the organisation and so reaches every *inherited* project through the workspace gate anyway. The branch is load-bearing for exactly one case: a `custom` project with no entry for them.
+* **`u.status = 'active'`, removed.** No deactivated org admins exist in this database — and "a disabled account keeps full access to the organisation" is precisely the kind of thing that stays true for a long time before anyone notices.
+
+Each got a constructed case. Thirteen mutants, ten red on the first pass and thirteen after. **1410 API tests** (was 1396), 1 skipped.
+
+---
 ---
 ---
 ---
