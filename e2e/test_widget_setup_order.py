@@ -157,3 +157,139 @@ def test_a_widget_with_no_output_shows_no_outputs_heading(page, api) -> None:
     expect(page.get_by_test_id("setup-configuration")).to_be_visible()
     # ...and there is no Outputs section at all.
     expect(page.get_by_test_id("setup-outputs")).to_have_count(0)
+
+
+# ---- the object-set family (§179) -------------------------------------------
+def test_an_object_table_reveals_its_configuration_from_either_input(
+    page, api
+) -> None:
+    """**The rule §178 did not need and this one does.**
+
+    An Object table is populated *either* by a bound object set variable *or*
+    by an object type picked directly. Waiting for both would be waiting for
+    something nobody is meant to supply - the configuration would never
+    appear, and the widget would look permanently unfinishable.
+
+    Bound by the object *type* here, deliberately: it is the half a rule
+    written for the Filter List's single input would get wrong.
+    """
+    mod = Module(api, "Widget setup order (table)")
+    type_id = mod.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "tbl": {"resolvedName": "CanvasObjectTable",
+                    "props": {"objectTypeId": type_id, "objectSetVariable": None,
+                              "filterProperty": None, "filterParameter": None,
+                              "searchParameter": None, "pageSize": 25,
+                              "columns": "", "sort": "recent"}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    expect(page.get_by_test_id("setup-inputs")).to_be_visible()
+    expect(page.get_by_test_id("setup-configuration")).to_be_visible()
+    expect(page.get_by_test_id("setup-waiting")).to_have_count(0)
+
+
+def test_an_object_table_with_neither_input_says_it_takes_either(
+    page, api
+) -> None:
+    """And the message reads as the choice it is. Naming only the first would
+    send somebody to fill in a field they do not need and leave the one they
+    do."""
+    mod = Module(api, "Widget setup order (empty table)")
+    mod.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "tbl": {"resolvedName": "CanvasObjectTable",
+                    "props": {"objectTypeId": None, "objectSetVariable": None,
+                              "filterProperty": None, "filterParameter": None,
+                              "searchParameter": None, "pageSize": 25,
+                              "columns": "", "sort": "recent"}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    waiting = page.get_by_test_id("setup-waiting")
+    expect(waiting).to_be_visible()
+    expect(waiting).to_contain_text("an object set or an object type")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+
+
+def test_a_pivot_table_shows_all_three_sections(page, api) -> None:
+    """The widget that shows why there are three: the set populates the grid,
+    the axes are what that set makes answerable, and the drill-down variable
+    is "the data that is then produced and output by the widget" (p.65)."""
+    mod = Module(api, "Widget setup order (pivot)")
+    type_id = mod.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "pv": {"resolvedName": "CanvasPivotTable",
+                   "props": {"objectSetVariable": "v_all", "rowProperty": None,
+                             "columnProperty": None, "drilldownVariable": None,
+                             "title": ""}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                      "object_set": object_set(type_id)},
+        },
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    for section in ("inputs", "configuration", "outputs"):
+        expect(page.get_by_test_id(f"setup-{section}")).to_be_visible()
+
+
+def test_a_metric_card_asks_for_its_set_before_its_label(page, api) -> None:
+    """**The reordering p.65 is actually for.** The label describes a number
+    this widget cannot produce until something says which set to count, so
+    asking for it first asks somebody to name a thing they have not chosen.
+
+    Asserted as containment rather than by position: the claim is that the set
+    is an *input* and the label is *configuration*, which is what p.65
+    separates - not that one happens to be drawn above the other.
+    """
+    mod = Module(api, "Widget setup order (metric)")
+    type_id = mod.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "mc": {"resolvedName": "CanvasMetricCard",
+                   "props": {"objectSetVariable": "v_all", "aggregation": "count",
+                             "property": None, "label": ""}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                      "object_set": object_set(type_id)},
+        },
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    expect(page.get_by_test_id("setup-inputs")).to_contain_text("Object set variable")
+    expect(page.get_by_test_id("setup-configuration")).to_contain_text("Label")
+    expect(page.get_by_test_id("setup-inputs")).not_to_contain_text("Label")

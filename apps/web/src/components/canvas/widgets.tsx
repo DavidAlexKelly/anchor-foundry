@@ -1151,8 +1151,19 @@ function ObjectTableSettings() {
     enabled: !!objectTypeId,
   });
 
+  // p.65's order, and p.66's disclosure. **A choice rather than a
+  // requirement**: this widget is populated either by a bound object set or
+  // by an object type picked directly, so waiting for both would be waiting
+  // for something nobody is meant to supply.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ objectSetVariable, objectTypeId }}
+      requires={[["objectSetVariable", "objectTypeId"]]}
+      labels={{
+        objectSetVariable: "an object set",
+        objectTypeId: "an object type",
+      }}
+      inputs={<>
       {/* The variable binding comes first because it *replaces* the three
           fields under it. Offering them equally would invite configuring both
           and wondering which won. */}
@@ -1234,6 +1245,8 @@ function ObjectTableSettings() {
         />
         <span className="field-hint">Substring across every property — for a search box</span>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Rows per page</span>
         <input
@@ -1277,7 +1290,8 @@ function ObjectTableSettings() {
           Sorting by a property needs its declared type behind it — see the ontology roadmap
         </span>
       </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -1689,8 +1703,16 @@ function ObjectCardsSettings() {
     enabled: !!typeId,
   });
 
+  // p.65's order: the set that populates the cards, then how they look.
+  // p.66 keeps the field list out of the way until the set names a type -
+  // property names mean nothing before then, which is why binding the set
+  // clears them.
   return (
-    <>
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Object set</span>
         <select
@@ -1708,6 +1730,8 @@ function ObjectCardsSettings() {
           ))}
         </select>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Fields</span>
         <input
@@ -1750,7 +1774,8 @@ function ObjectCardsSettings() {
             accepts beats a control that sometimes 422s. */}
         <span className="field-hint">Sorting by a property is not available yet</span>
       </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -2040,8 +2065,16 @@ function PivotTableSettings() {
   });
   const properties = type.data?.properties ?? [];
 
+  // All three of p.65's sections, and this is the widget that shows why they
+  // are three: the set populates the grid, the two axes are what that set
+  // makes answerable, and the drill-down variable is "the data that is then
+  // produced and output by the widget".
   return (
-    <>
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Object set</span>
         <select
@@ -2061,6 +2094,8 @@ function PivotTableSettings() {
           ))}
         </select>
       </label>
+      </>}
+      configuration={<>
       <label className="field">
         <span className="field-label">Rows</span>
         <select
@@ -2096,6 +2131,16 @@ function PivotTableSettings() {
         </select>
       </label>
       <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title || ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      </>}
+      outputs={<>
+      <label className="field">
         <span className="field-label">Clicking a cell writes to</span>
         <select
           value={drilldownVariable || ""}
@@ -2115,15 +2160,8 @@ function PivotTableSettings() {
             : "Give this its own variable, and chain the narrow_set derivations"}
         </span>
       </label>
-      <label className="field">
-        <span className="field-label">Title</span>
-        <input
-          type="text"
-          value={title || ""}
-          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
-        />
-      </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -4331,15 +4369,16 @@ function MetricCardSettings() {
     enabled: !!typeId,
   });
 
+  // **The set moved above the label**, which is the point of p.65's order
+  // rather than a tidy-up: the label describes a number this widget cannot
+  // produce until something has said which set to count, so asking for it
+  // first asks somebody to name a thing they have not chosen yet.
   return (
-    <>
-      <label className="field">
-        <span className="field-label">Label</span>
-        <input
-          value={label ?? ""}
-          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
-        />
-      </label>
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Object set variable</span>
         <select
@@ -4354,6 +4393,15 @@ function MetricCardSettings() {
             <option key={v.id} value={v.id}>{v.label}</option>
           ))}
         </select>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          value={label ?? ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
       </label>
       <label className="field">
         <span className="field-label">Shows</span>
@@ -4386,7 +4434,8 @@ function MetricCardSettings() {
           </select>
         </label>
       )}
-    </>
+      </>}
+    />
   );
 }
 

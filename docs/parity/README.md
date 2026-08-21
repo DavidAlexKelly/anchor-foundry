@@ -160,8 +160,8 @@ but "the only authoring surface for transforms that are not yet files".
   the conditional warning banner; revert as a new version with a generated
   description; and p.192's two settings.
 - **Stage 2 is done.** One item inside it is still ◑ rather than ✅: the Widget
-  setup tab. §178 made it variables-first — p.65's Inputs → Configuration →
-  Outputs, with p.66's progressive disclosure — for three of the eighteen
+  setup tab. §178 and §179 made it variables-first — p.65's Inputs → Configuration →
+  Outputs, with p.66's progressive disclosure — for seven of the eighteen
   variable-bearing panels, including p.65-67's own worked example. The rest is
   a mechanical per-panel conversion, deliberately not done in one change: it
   would have been a ~4,700-line refactor nobody could review. The largest

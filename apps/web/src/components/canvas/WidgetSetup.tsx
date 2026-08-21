@@ -28,6 +28,7 @@ import type { ReactNode } from "react";
 
 import {
   SECTION_HINTS, SECTION_LABELS, configReady, configWaitingFor,
+  type SetupRequirement,
 } from "./widget-setup";
 
 export function WidgetSetup({
@@ -36,7 +37,8 @@ export function WidgetSetup({
   outputs,
   /** The current values of the input bindings, keyed by prop name. */
   bindings = {},
-  /** Which of them the configuration cannot be answered without (p.66). */
+  /** Which of them the configuration cannot be answered without (p.66). A
+   * nested array is a choice: any one of those will do. */
   requires = [],
   /** Human names for those, so the wait message reads as a sentence. */
   labels = {},
@@ -45,7 +47,7 @@ export function WidgetSetup({
   configuration?: ReactNode;
   outputs?: ReactNode;
   bindings?: Record<string, string | null | undefined>;
-  requires?: readonly string[];
+  requires?: readonly SetupRequirement[];
   labels?: Record<string, string>;
 }) {
   const ready = configReady(bindings, requires);

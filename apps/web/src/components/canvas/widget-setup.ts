@@ -30,21 +30,56 @@
  * is a widget that looks unfinishable.
  */
 
+/** One thing the configuration waits on: a single input, or a set of inputs
+ * any one of which will do.
+ *
+ * **The alternative is not a convenience.** Every object-set widget takes
+ * *either* a bound object set variable *or* an object type picked directly -
+ * p.65's "the data that initially populates a widget", arrived at two ways.
+ * Treating those as two separate requirements would mean a widget could never
+ * reveal its configuration, because binding either one leaves the other
+ * empty by design. §178 converted three widgets that happen to have a single
+ * input and did not need this; the first widget with a choice does.
+ */
+export type SetupRequirement = string | readonly string[];
+
+function bound(
+  bindings: Readonly<Record<string, string | null | undefined>>,
+  name: string,
+): boolean {
+  const value = bindings[name];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function satisfied(
+  bindings: Readonly<Record<string, string | null | undefined>>,
+  requirement: SetupRequirement,
+): boolean {
+  return typeof requirement === "string"
+    ? bound(bindings, requirement)
+    // An empty alternative is *not* satisfied - it would mean "any of
+    // nothing", and reading that as ready would reveal a configuration whose
+    // inputs somebody forgot to name. `some` on an empty array is already
+    // false, so that falls out rather than needing a guard: an earlier version
+    // wrote `requirement.length > 0 &&` in front of this, and mutation testing
+    // showed it changed no behaviour at all. Two spellings of one rule, and
+    // the redundant one is the one that can drift.
+    : requirement.some((name) => bound(bindings, name));
+}
+
 /** Whether a widget's configuration section can be answered yet.
  *
- * `required` names the input bindings the configuration depends on. Empty
- * means "nothing to wait for", which is the common case and must stay
- * permissive - a widget with no inputs whose configuration never appeared
- * would be a widget nobody can set up.
+ * `required` names the input bindings the configuration depends on - a string
+ * for one that must be bound, or an array for a choice where any one will do.
+ * Empty means "nothing to wait for", which is the common case and must stay
+ * permissive: a widget with no inputs whose configuration never appeared would
+ * be a widget nobody can set up.
  */
 export function configReady(
   bindings: Readonly<Record<string, string | null | undefined>>,
-  required: readonly string[],
+  required: readonly SetupRequirement[],
 ): boolean {
-  return required.every((name) => {
-    const value = bindings[name];
-    return typeof value === "string" && value.trim().length > 0;
-  });
+  return required.every((requirement) => satisfied(bindings, requirement));
 }
 
 /** What to say in place of the configuration that is not ready yet.
@@ -55,14 +90,21 @@ export function configReady(
  */
 export function configWaitingFor(
   bindings: Readonly<Record<string, string | null | undefined>>,
-  required: readonly string[],
+  required: readonly SetupRequirement[],
   labels: Readonly<Record<string, string>> = {},
 ): string | null {
   const missing = required.filter(
-    (name) => !configReady(bindings, [name]),
+    (requirement) => !satisfied(bindings, requirement),
   );
   if (!missing.length) return null;
-  const named = missing.map((name) => labels[name] ?? name);
+  // A choice reads as a choice: "an object set or an object type", because
+  // naming only the first would send somebody to fill in a field they do not
+  // need and leave the one they do.
+  const named = missing.map((requirement) =>
+    typeof requirement === "string"
+      ? labels[requirement] ?? requirement
+      : requirement.map((name) => labels[name] ?? name).join(" or "),
+  );
   const list =
     named.length === 1
       ? named[0]

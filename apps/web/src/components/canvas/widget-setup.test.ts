@@ -95,3 +95,68 @@ describe("the order p.65 gives", () => {
     }
   });
 });
+
+describe("a configuration that waits on a choice (§179)", () => {
+  // Every object-set widget takes *either* a bound object set variable *or*
+  // an object type picked directly. Treating those as two requirements would
+  // mean the configuration never appears, because binding either one leaves
+  // the other empty by design.
+  const choice = [["objectSetVariable", "objectTypeId"]] as const;
+
+  it("is ready when either one is bound", () => {
+    expect(configReady({ objectSetVariable: "sales" }, choice)).toBe(true);
+    expect(configReady({ objectTypeId: "type-1" }, choice)).toBe(true);
+  });
+
+  it("is not ready when neither is", () => {
+    expect(configReady({}, choice)).toBe(false);
+    expect(
+      configReady({ objectSetVariable: null, objectTypeId: "" }, choice),
+    ).toBe(false);
+  });
+
+  it("is still ready when both are", () => {
+    // Not an error state - the panels that offer both say which one wins, and
+    // a rule that refused here would hide the configuration from somebody who
+    // had over-answered rather than under-answered.
+    expect(
+      configReady({ objectSetVariable: "sales", objectTypeId: "type-1" }, choice),
+    ).toBe(true);
+  });
+
+  it("treats an empty alternative as unsatisfied", () => {
+    // "any of nothing" read as ready would reveal a configuration whose
+    // inputs somebody forgot to name - a silent hole rather than a bug.
+    expect(configReady({ objectSetVariable: "sales" }, [[]] as const)).toBe(false);
+  });
+
+  it("still requires a plain string requirement", () => {
+    // The choice form must not weaken the ordinary one, which is what most
+    // widgets use.
+    expect(configReady({ objectTypeId: "t" }, ["objectSetVariable"])).toBe(false);
+  });
+
+  it("combines a choice with a plain requirement", () => {
+    expect(
+      configReady({ objectTypeId: "t" }, [choice[0], "columns"]),
+    ).toBe(false);
+    expect(
+      configReady({ objectTypeId: "t", columns: "a" }, [choice[0], "columns"]),
+    ).toBe(true);
+  });
+
+  it("says the choice as a choice", () => {
+    // Naming only the first would send somebody to fill in a field they do
+    // not need and leave the one they do.
+    expect(
+      configWaitingFor({}, choice, {
+        objectSetVariable: "an object set",
+        objectTypeId: "an object type",
+      }),
+    ).toMatch(/an object set or an object type/);
+  });
+
+  it("says nothing once the choice is answered", () => {
+    expect(configWaitingFor({ objectTypeId: "t" }, choice)).toBeNull();
+  });
+});
