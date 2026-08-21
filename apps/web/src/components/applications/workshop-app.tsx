@@ -868,13 +868,14 @@ function CanvasBody({
   ) => void;
   actions: ActionCandidate[];
 }) {
-  const { enabled, triggerNodes, pageNodes } = useEditor((state) => {
+  const { enabled, triggerNodes, pageNodes, sectionNodes } = useEditor((state) => {
     // Read from the editor's own node map rather than from the saved
     // definition: a widget dropped a moment ago is wireable, and a widget
     // deleted a moment ago is not - which is what somebody wiring an event
     // has just done and expects to see.
     const triggers: TriggerCandidate[] = [];
     const pages: PageCandidate[] = [];
+    const sections: PageCandidate[] = [];
     for (const [id, node] of Object.entries(state.nodes)) {
       const name = node?.data?.name;
       if (!name) continue;
@@ -888,8 +889,19 @@ function CanvasBody({
       if (name === "CanvasPage" || name === "CanvasOverlay") {
         pages.push({ id, label: `${node.data.displayName ?? name} · ${label}` });
       }
+      // p.82 offers its three events "for each collapsible section", so the
+      // picker lists exactly those - the server refuses the rest, and offering
+      // a choice that fails on save is the thing this list exists to avoid.
+      if (name === "CanvasSection" && props.collapsible) {
+        sections.push({ id, label: `Section · ${String(props.title || label)}`.slice(0, 60) });
+      }
     }
-    return { enabled: state.options.enabled, triggerNodes: triggers, pageNodes: pages };
+    return {
+      enabled: state.options.enabled,
+      triggerNodes: triggers,
+      pageNodes: pages,
+      sectionNodes: sections,
+    };
   });
   const showChrome = enabled && canEdit;
   // Three things want the right-hand column: the selected widget's settings,
@@ -941,6 +953,7 @@ function CanvasBody({
               variables={variables}
               triggerNodes={triggerNodes}
               pages={pageNodes}
+              sections={sectionNodes}
               actions={actions}
               onChange={onEventsChange}
               readOnly={!canEdit}

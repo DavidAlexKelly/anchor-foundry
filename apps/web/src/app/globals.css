@@ -1962,6 +1962,36 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .chip-moved,
 .chip-unused { background: var(--paper); color: var(--ink-soft); box-shadow: inset 0 0 0 1px var(--line); }
 
+/* A collapsible section's own control (p.55, p.82). Full width and left
+   aligned, because it is the section's header rather than a button in it - and
+   it is the only thing on screen once the section is shut, so it has to say
+   which section this is. */
+.canvas-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.canvas-section-toggle:hover { color: var(--accent); }
+
+/* **`[hidden]` alone does not hide this.** The UA stylesheet's
+   `[hidden] { display: none }` is one attribute selector, and
+   `.canvas-section-parts` sets `display: flex` with a class - which wins on
+   specificity. So the attribute was set, the DOM read as hidden, and the
+   section stayed on screen: exactly the silent-CSS failure this repo has
+   already been caught by twice. Stated explicitly, at a specificity that
+   cannot lose. */
+.canvas-section-parts[hidden] { display: none; }
+
 /* p.62's custom padding: two numbers, top/bottom then left/right. Side by side
    because they are one setting - stacked, they read as two. */
 .style-padding-pair { display: flex; gap: 8px; }

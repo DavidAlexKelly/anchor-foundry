@@ -32,6 +32,7 @@ import {
   useCanvasParameters,
 } from "./context";
 import { invalidateCanvasReads } from "./refresh";
+import type { CollapseOverride } from "./collapse";
 import { RoutingSync } from "./RoutingSync";
 import { StateBar } from "./StateBar";
 
@@ -122,6 +123,9 @@ export function VariableBridge({
   // be a second thing to mount in both routes and forget in one.
   const [page, setPage] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<string | null>(null);
+  // p.82's collapse state, by the same argument as the page above: runtime
+  // state with exactly the lifetime of the variable values beside it.
+  const [collapsed, setCollapsedState] = useState<Record<string, CollapseOverride>>({});
 
   // And running an action (roadmap 1.3), by the same argument.
   const queryClient = useQueryClient();
@@ -167,6 +171,9 @@ export function VariableBridge({
           overlay,
           openOverlay: setOverlay,
           closeOverlay: () => setOverlay(null),
+          collapsed,
+          setCollapsed: (id, override) =>
+            setCollapsedState((current) => ({ ...current, [id]: override })),
         }}
       >
         <CanvasActionsProvider

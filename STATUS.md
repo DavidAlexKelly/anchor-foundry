@@ -3794,6 +3794,29 @@ Nine mutations, all red; two of them died at the **unit** layer. **226 browser t
 **310 web unit** (was 289), **236 browser** (was 230).
 
 ---
+
+### 185. Collapsible sections, and a gotcha implemented rather than noted (this session)
+
+p.55's collapsible sections and p.82's three events — Expand, Collapse, Toggle — with the sentence that follows them built in rather than carried as a comment:
+
+> "If the specified section has a Boolean variable backing the collapse state, **the value of this variable will not be updated** as a result of one of these events."
+
+**The rule p.82 does not state, and something has to.** A section can be told two different things at once: what its backing variable says, and what an event last said. p.82 is explicit that the two may disagree, and silent about which is on screen — and getting it wrong is invisible, either a Toggle that appears to do nothing or a variable that appears not to be read. The reading here is **the most recent instruction wins**: an event overrides the variable and stays in force until the variable's own value *changes*, at which point the variable is the newer instruction. The two simpler rules each break one of p.82's own sentences. "The variable always wins" makes Expand and Collapse do nothing on exactly the sections the page says they are available for. "The event always wins" makes the word *backing* false after the first click — the variable would drive the section once and never again. Both are mutants, and both are red.
+
+**Toggle is resolved against what is on screen**, not against the variable, and that distinction is a mutant of its own: computing it from the variable looks like the feature working right up until an event and a variable disagree, which p.82 says they are allowed to.
+
+**The server refuses an effect aimed at a section that cannot collapse.** p.82 offers its three "for each collapsible section", and a section with no collapse state has nothing for them to change — so saving one would save a button that does nothing, which is the one outcome nobody can debug from the outside. Checking mere layout membership would have accepted a Toggle aimed at a *button*; that is a separate test.
+
+**Three survivors, and all three were instructive.**
+
+* Two were **false**: the harness mutated `widgets.tsx` and ran the browser layer before Next had rebuilt, so the tests ran against the previous bundle. §178's stale-dev-server lesson, one layer over — the harness now settles before the browser layer, and both mutants died immediately. Worth knowing because the symptom is a *surviving* mutant, which reads as a missing test rather than a missing wait.
+* One was **real, and it was the gotcha itself**. The test clicked, waited for the section to open, and asserted the variable still read `true` — which passes trivially, because a write to that variable would take a debounce plus a server round trip to show up and the assertion ran long before that. **A negative assertion needs a clock.** The click now also sets a marker variable, and the test waits for the marker to land; by then a write to the backing variable would have landed too. Asserted as one string, so the two cannot be read apart.
+
+**A silent-CSS failure, found by a red test rather than by reading.** The section's body is hidden with the `hidden` attribute — chosen so a table inside a collapsed section does not refetch every time somebody opens it. The UA stylesheet's `[hidden] { display: none }` is one attribute selector and lost on specificity to `.canvas-section-parts { display: flex }`: the DOM read as hidden and the section stayed on screen. Third time this repo has been caught by CSS that is silently nothing.
+
+Fourteen mutations across **three** layers — API, unit, browser — all red. **321 web unit** (was 310), **242 browser** (was 236), **1389 API tests** (was 1381).
+
+---
 ---
 ---
 ---

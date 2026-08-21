@@ -2,6 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
+import type { CollapseOverride } from "./collapse";
+
 /** Environment a canvas widget renders in - never part of the saved
  * definition (Craft.js node props), since it's the same app rendered from
  * different routes (editor, workspace-wide published view) rather than
@@ -241,6 +243,17 @@ export interface CanvasPageState {
   overlay: string | null;
   openOverlay: (nodeId: string) => void;
   closeOverlay: () => void;
+  /** What p.82's Expand/Collapse/Toggle events have said about each section,
+   * by node id, and the backing-variable value each was said against.
+   *
+   * Here rather than inside the section, because an event routinely fires
+   * from somewhere else: p.82's own worked example is a button that expands
+   * an object view. A section holding its own state could not be told
+   * anything by a widget it cannot see - which is decision 0002's argument
+   * for events living beside the layout, one level down.
+   */
+  collapsed: Record<string, CollapseOverride>;
+  setCollapsed: (nodeId: string, override: CollapseOverride) => void;
 }
 
 const PageContext = createContext<CanvasPageState>({
@@ -249,6 +262,8 @@ const PageContext = createContext<CanvasPageState>({
   overlay: null,
   openOverlay: () => {},
   closeOverlay: () => {},
+  collapsed: {},
+  setCollapsed: () => {},
 });
 
 export const CanvasPageProvider = PageContext.Provider;

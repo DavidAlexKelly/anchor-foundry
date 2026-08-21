@@ -40,7 +40,15 @@ TRIGGERS = ("click", "row_select", "change")
 # Effects the browser runs. `run_action` is the only one that *writes* - the
 # rest move the reader around - which is why it is the only one whose outcome
 # the runtime reports.
-EFFECTS = ("set_variable", "open_url", "navigate", "close_overlay", "run_action")
+EFFECTS = (
+    "set_variable", "open_url", "navigate", "close_overlay", "run_action",
+    # p.82's three, which Foundry groups with `navigate` under "Layout events":
+    # they change "the on-screen display within a Workshop module".
+    "expand_section", "collapse_section", "toggle_section",
+)
+
+# The three above, and the fact that binds them: each names a section.
+SECTION_EFFECTS = ("expand_section", "collapse_section", "toggle_section")
 
 # Named, refused, and blocked on something real rather than on effort: `export`
 # needs a download surface the viewer route does not have. Refusing with the
@@ -77,6 +85,9 @@ OVERLAY_WIDGET = "CanvasOverlay"
 # title, the tabs and any module-wide buttons. It is not a navigation target:
 # it is always showing, so an effect that "went to" it would mean nothing.
 HEADER_WIDGET = "CanvasHeader"
+
+# A section, which is what p.82's three effects act on.
+SECTION_WIDGET = "CanvasSection"
 
 # What a `set_variable` may write instead of a template value.
 #
@@ -151,6 +162,24 @@ def overlays(layout: Any) -> list[str]:
     return pages(layout, widget=OVERLAY_WIDGET)
 
 
+def collapsible_sections(layout: Any) -> list[str]:
+    """Node ids of every section a builder marked collapsible (p.55, p.82).
+
+    **Marked, not merely a section.** p.82 offers its three events "for each
+    collapsible section in the module", and that qualifier is the whole
+    refusal below: an Expand aimed at a section that cannot collapse is a click
+    that does nothing, which is precisely the failure this module exists to
+    make unsaveable.
+    """
+    found: list[str] = []
+    for node_id in pages(layout, widget=SECTION_WIDGET):
+        node = layout.get(node_id) if isinstance(layout, dict) else None
+        props = node.get("props") if isinstance(node, dict) else None
+        if isinstance(props, dict) and props.get("collapsible"):
+            found.append(node_id)
+    return found
+
+
 def headers(layout: Any) -> list[str]:
     """Node ids of every header, same reading as `pages`.
 
@@ -192,6 +221,7 @@ def parse(
     nodes = set(layout) if isinstance(layout, dict) else None
     # A navigate may target either; what differs is what the browser does.
     page_ids = set(pages(layout)) | set(overlays(layout))
+    collapsible = set(collapsible_sections(layout))
     declared = variables or {}
 
     events: dict[str, Event] = {}
@@ -228,7 +258,8 @@ def parse(
         if len(raw_effects) > MAX_EFFECTS:
             raise EventError(f"event {key!r} may have at most {MAX_EFFECTS} effects")
         effects = tuple(
-            _parse_effect(eid, e, declared, nodes, page_ids, actions) for e in raw_effects
+            _parse_effect(eid, e, declared, nodes, page_ids, actions, collapsible)
+            for e in raw_effects
         )
         events[eid] = Event(id=eid, node=node, on=on, effects=effects)
     return events
@@ -241,6 +272,7 @@ def _parse_effect(
     nodes: set[str] | None = None,
     page_ids: set[str] | None = None,
     actions: dict[str, list[str]] | None = None,
+    collapsible: set[str] | None = None,
 ) -> Effect:
     if not isinstance(raw, dict):
         raise EventError(f"event {eid!r}: each effect must be an object")
@@ -361,6 +393,24 @@ def _parse_effect(
                     f"event {eid!r} writes {', '.join(repr(u) for u in unknown)}, which "
                     "this action does not make editable"
                 )
+    elif kind in SECTION_EFFECTS:
+        target = config.get("section")
+        if not target or not isinstance(target, str):
+            raise EventError(f"event {eid!r}: {kind} needs a section to act on")
+        if nodes is not None and target not in nodes:
+            raise EventError(
+                f"event {eid!r} {kind.split('_')[0]}s {target!r}, which this layout "
+                "does not contain"
+            )
+        if collapsible is not None and nodes is not None and target not in collapsible:
+            # p.82 offers these "for each collapsible section", and a section
+            # that cannot collapse has no state for them to change. Saving one
+            # would be saving a button that does nothing - and doing nothing is
+            # the one outcome nobody can debug from the outside.
+            raise EventError(
+                f"event {eid!r} {kind.split('_')[0]}s {target!r}, which is not a "
+                "collapsible section - turn on Collapsible in its settings first"
+            )
     elif kind == "open_url":
         url = config.get("url")
         if not url or not isinstance(url, str):

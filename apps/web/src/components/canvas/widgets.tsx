@@ -21,6 +21,7 @@ import { StyleFields } from "./StyleFields";
 import {
   schemeFor, styleFor, type BorderName, type PaddingName, type StyleProps,
 } from "./style";
+import { asCollapsed, collapseState } from "./collapse";
 import { CanvasNode } from "./SettingsPanel";
 import {
   CanvasHeaderCollapsedContext,
@@ -4708,8 +4709,23 @@ export function CanvasSection({
   padding = null,
   customPadding = null,
   border = null,
+  collapsible = false,
+  collapsedByDefault = false,
+  collapsedWhen = null,
+  title = "",
   children,
 }: {
+  /** p.55: "Collapsible sections, with Expand / Collapse / Toggle events".
+   * A collapsible section draws a header with its own control; p.82's three
+   * events act on it from anywhere in the module. */
+  collapsible?: boolean;
+  collapsedByDefault?: boolean;
+  /** p.82's "Boolean variable backing the collapse state" - and the variable
+   * those three events pointedly do **not** write. */
+  collapsedWhen?: string | null;
+  /** Shown in the collapsible header. A section that collapses to a bare
+   * chevron is a section nobody can identify once it is shut. */
+  title?: string;
   /** p.57-62's style block. A section gets all three - p.58 offers
    * backgrounds on sections, p.60 borders, p.62 padding - which is the only
    * one of the three levels that does. */
@@ -4756,11 +4772,22 @@ export function CanvasSection({
   children?: React.ReactNode;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
     actions: { setProp },
   } = useNode();
   const { mode } = useCanvasEnv();
   const { hidden, marker } = useVisibility(visibleWhen);
+  // p.82's collapse state. Read even when this section is not collapsible, so
+  // the hook order does not depend on a prop somebody can toggle.
+  const { collapsed: overrides, setCollapsed } = useCanvasPage();
+  const backing = useCanvasVariable(collapsedWhen);
+  const shut = collapsible
+    && collapseState(
+      overrides[nodeId],
+      collapsedWhen ? backing : undefined,
+      collapsedByDefault,
+    );
   // Only Columns and Rows divide their space between children, so only they
   // have proportions to configure or handles to drag. Flow and Toolbar are
   // about *not* doing that.
@@ -4842,6 +4869,25 @@ export function CanvasSection({
       style={styleFor({ background, padding, customPadding, border })}
     >
       {marker && <p className="canvas-hidden-marker">{marker}</p>}
+      {collapsible && (
+        <button
+          type="button"
+          className="canvas-section-toggle"
+          data-testid={`section-toggle-${nodeId}`}
+          aria-expanded={!shut}
+          onClick={() =>
+            setCollapsed(nodeId, {
+              collapsed: !shut,
+              // The same bookkeeping p.82's events do: remember what the
+              // backing variable said, so a later change to it takes over
+              // again rather than being outvoted forever by one click.
+              against: collapsedWhen ? asCollapsed(backing) : null,
+            })
+          }
+        >
+          <span aria-hidden="true">{shut ? "▸" : "▾"}</span> {title || "Section"}
+        </button>
+      )}
       {/* A section fills itself with its children, so in the builder there is
           otherwise nowhere to click that is the section rather than a widget
           inside it - and its settings (proportions, direction, gap) would be
@@ -4855,6 +4901,10 @@ export function CanvasSection({
       )}
       <div
         className="canvas-section-parts"
+        // `hidden` rather than not rendering: a collapsed section keeps its
+        // children mounted, so a table inside one does not refetch every time
+        // somebody opens it - and a widget that was mid-edit is still there.
+        hidden={shut}
         style={{
           gap,
           ...(direction === "rows" && minHeight > 0 ? { minHeight } : {}),
@@ -4923,6 +4973,10 @@ function SectionSettings() {
     gap,
     minHeight,
     visibleWhen,
+    collapsible,
+    collapsedByDefault,
+    collapsedWhen,
+    title,
     actions: { setProp },
   } = useNode((node) => ({
     direction: node.data.props.direction,
@@ -4931,7 +4985,12 @@ function SectionSettings() {
     gap: node.data.props.gap,
     minHeight: node.data.props.minHeight,
     visibleWhen: node.data.props.visibleWhen,
+    collapsible: node.data.props.collapsible,
+    collapsedByDefault: node.data.props.collapsedByDefault,
+    collapsedWhen: node.data.props.collapsedWhen,
+    title: node.data.props.title,
   }));
+  const { declared } = useCanvasVariables();
   return (
     <>
       <VisibilityField
@@ -5013,6 +5072,71 @@ function SectionSettings() {
             *between* children, padding is the space around all of them. */}
         <span className="field-hint">Between its widgets, not around them</span>
       </label>
+      {/* p.55's collapsible sections. Its own block rather than folded into
+          the style fields: collapsing is behaviour, and p.82 gives it three
+          events - none of which the style block has. */}
+      <label className="vars-toggle field">
+        <input
+          type="checkbox"
+          checked={!!collapsible}
+          data-testid="section-collapsible"
+          onChange={(e) => setProp((p: { collapsible: boolean }) => (p.collapsible = e.target.checked))}
+        />
+        Collapsible
+      </label>
+      {collapsible && (
+        <>
+          <label className="field">
+            <span className="field-label">Header</span>
+            <input
+              value={title ?? ""}
+              placeholder="Section"
+              data-testid="section-title"
+              onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+            />
+            <span className="field-hint">
+              A section that collapses to a bare chevron is one nobody can
+              identify once it is shut
+            </span>
+          </label>
+          <label className="vars-toggle field">
+            <input
+              type="checkbox"
+              checked={!!collapsedByDefault}
+              data-testid="section-collapsed-default"
+              onChange={(e) =>
+                setProp((p: { collapsedByDefault: boolean }) =>
+                  (p.collapsedByDefault = e.target.checked))
+              }
+            />
+            Start collapsed
+          </label>
+          <label className="field">
+            <span className="field-label">Collapsed when</span>
+            <select
+              value={collapsedWhen ?? ""}
+              data-testid="section-collapsed-when"
+              onChange={(e) =>
+                setProp((p: { collapsedWhen: string | null }) =>
+                  (p.collapsedWhen = e.target.value || null))
+              }
+            >
+              <option value="">Not bound — the control above decides</option>
+              {Object.values(declared)
+                .filter((v) => v.kind === "boolean")
+                .map((v) => (
+                  <option key={v.id} value={v.id}>{v.label || v.id}</option>
+                ))}
+            </select>
+            {/* p.82, carried across rather than left to be discovered - it is
+                the sentence somebody will otherwise meet as a bug. */}
+            <span className="field-hint">
+              Expand, Collapse and Toggle events do not write this variable.
+              Add a Set variable event beside them to keep the two in step.
+            </span>
+          </label>
+        </>
+      )}
       <NodeStyleFields padding border />
     </>
   );
@@ -5023,6 +5147,7 @@ CanvasSection.craft = {
   props: {
     direction: "columns", weights: "", gap: 12, minHeight: 0, visibleWhen: null, scroll: false,
     background: null, padding: null, customPadding: null, border: null,
+    collapsible: false, collapsedByDefault: false, collapsedWhen: null, title: "",
   },
   isCanvas: true,
   related: { settings: SectionSettings },

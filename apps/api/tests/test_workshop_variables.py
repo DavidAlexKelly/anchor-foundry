@@ -1966,3 +1966,80 @@ def test_following_a_link_from_something_that_is_not_a_set_is_refused() -> None:
     })
     with pytest.raises(wv.VariableError, match="not an object set"):
         wv.evaluate(variables, {"v_text": "north"})
+
+
+# ---- collapsible sections (p.55, p.82) ---------------------------------------
+def section_node(*, collapsible: bool = True) -> dict:
+    return {
+        "type": {"resolvedName": "CanvasSection"},
+        "props": {"direction": "columns", "collapsible": collapsible},
+        "nodes": [],
+    }
+
+
+def collapse_layout(*, collapsible: bool = True) -> dict:
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["sec", "btn"]},
+        "sec": section_node(collapsible=collapsible),
+        "btn": node({}),
+    }
+
+
+def section_effect(kind: str, section: str = "sec") -> dict:
+    return {"type": kind, "config": {"section": section}}
+
+
+@pytest.mark.parametrize("kind", ["expand_section", "collapse_section", "toggle_section"])
+def test_p82s_three_section_effects_are_accepted(kind: str) -> None:
+    """p.82: "For each collapsible section in the module, the following three
+    events are available: Expand… Collapse… Toggle"."""
+    events = we.parse(
+        {"e_1": event("e_1", effects=[section_effect(kind)])},
+        layout=collapse_layout(),
+    )
+    assert [e.type for e in events["e_1"].effects] == [kind]
+
+
+def test_collapsible_sections_are_read_from_the_layout() -> None:
+    assert we.collapsible_sections(collapse_layout()) == ["sec"]
+    # **Marked, not merely a section.** The qualifier in p.82's sentence is
+    # the whole refusal below.
+    assert we.collapsible_sections(collapse_layout(collapsible=False)) == []
+
+
+def test_a_section_effect_needs_a_section() -> None:
+    with pytest.raises(we.EventError, match="needs a section"):
+        we.parse(
+            {"e_1": event("e_1", effects=[{"type": "toggle_section", "config": {}}])},
+            layout=collapse_layout(),
+        )
+
+
+def test_a_section_effect_on_a_node_that_is_not_there_is_refused() -> None:
+    with pytest.raises(we.EventError, match="does not contain"):
+        we.parse(
+            {"e_1": event("e_1", effects=[section_effect("expand_section", "gone")])},
+            layout=collapse_layout(),
+        )
+
+
+def test_a_section_effect_on_a_section_that_cannot_collapse_is_refused() -> None:
+    """**The refusal p.82's own wording asks for.** Its three events are
+    offered "for each collapsible section", and a section that cannot collapse
+    has no state for them to change - so this would save a button that does
+    nothing, which is the one outcome nobody can debug from the outside."""
+    with pytest.raises(we.EventError, match="not a collapsible section"):
+        we.parse(
+            {"e_1": event("e_1", effects=[section_effect("collapse_section")])},
+            layout=collapse_layout(collapsible=False),
+        )
+
+
+def test_a_section_effect_aimed_at_a_widget_is_refused_for_the_same_reason() -> None:
+    """A button is in the layout and is not collapsible. Checking only
+    membership would accept this and produce a click that does nothing."""
+    with pytest.raises(we.EventError, match="not a collapsible section"):
+        we.parse(
+            {"e_1": event("e_1", effects=[section_effect("toggle_section", "btn")])},
+            layout=collapse_layout(),
+        )
