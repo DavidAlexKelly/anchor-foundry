@@ -160,13 +160,13 @@ but "the only authoring surface for transforms that are not yet files".
   the conditional warning banner; revert as a new version with a generated
   description; and p.192's two settings.
 - **Stage 2 is done.** One item inside it is still ◑ rather than ✅: the Widget
-  setup tab. §178, §179 and §180 made it variables-first — p.65's Inputs →
-  Configuration → Outputs, with p.66's progressive disclosure — for ten of the
-  eighteen variable-bearing panels, including p.65-67's own worked example. The
-  rest is a mechanical per-panel conversion, deliberately not done in one
-  change: it would have been a ~4,700-line refactor nobody could review — with
-  the exception of **Map and Chart**, which are a restructure rather than a
-  wrap (§180). The largest
+  setup tab. §178 to §181 made it variables-first — p.65's Inputs →
+  Configuration → Outputs, with p.66's progressive disclosure — for **thirteen
+  of the fifteen** variable-bearing panels, including p.65-67's own worked
+  example. (The count read "eighteen" until §181, which counted six panels
+  that bind no variable at all.) The two left are **Map and Chart**, which are
+  a restructure rather than a wrap: their inputs and configuration are
+  interleaved inside `source` conditionals. The largest
   thing §6 still lacks is the **Changelog panel** (p.193), which is also the
   prerequisite for module branching.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |

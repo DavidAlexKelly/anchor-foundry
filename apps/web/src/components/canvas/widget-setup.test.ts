@@ -69,6 +69,21 @@ describe("configWaitingFor", () => {
     expect(message).toContain("a date");
   });
 
+  it("joins several missing inputs with 'and', not 'or'", () => {
+    // **The distinction the containment test above cannot see**, and the Loop
+    // (§181) is the first widget where getting it wrong is a real bug: it
+    // needs a set to loop through *and* a module to repeat, and "a set or a
+    // module" would tell somebody they were finished when they were half
+    // finished. Both spellings contain both names.
+    expect(configWaitingFor({}, ["a", "b"], { a: "a set", b: "a module" })).toBe(
+      "Pick a set and a module first — the rest depends on it.",
+    );
+    // ...while a *choice* still reads as a choice (§179).
+    expect(configWaitingFor({}, [["a", "b"]], { a: "a set", b: "a type" })).toBe(
+      "Pick a set or a type first — the rest depends on it.",
+    );
+  });
+
   it("says nothing once they are bound", () => {
     expect(configWaitingFor({ a: "x" }, ["a"])).toBeNull();
     expect(configWaitingFor({}, [])).toBeNull();

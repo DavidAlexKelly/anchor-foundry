@@ -3685,7 +3685,7 @@ The Widget setup tab, organised the way p.65 describes it (`workshop.md` §2).
 
 ### 179. Four more panels, and the rule the first three did not need (this session)
 
-Continuing §178's conversion rather than leaving it half done, because a half-converted panel set was the cost §178 named and leaving it while starting something new is what would have made that decision a bad one. **Object table, Card list, Pivot table, Metric card** - seven of eighteen now.
+Continuing §178's conversion rather than leaving it half done, because a half-converted panel set was the cost §178 named and leaving it while starting something new is what would have made that decision a bad one. **Object table, Card list, Pivot table, Metric card** - seven of eighteen now. (The denominator is corrected to fifteen in §181; six panels bind no variable at all.)
 
 **It was not the mechanical chunk it looked like.** Every object-set widget is populated *either* by a bound object set variable *or* by an object type picked directly, and `configReady` was all-of. Waiting for both would wait for something nobody is meant to supply: the configuration would never appear and the widget would look permanently unfinishable. So `requires` now takes a **choice** - a nested array meaning "any one of these" - and the waiting message reads as a choice too, because naming only the first would send somebody to fill in a field they do not need and leave the one they do.
 
@@ -3703,7 +3703,7 @@ Continuing §178's conversion rather than leaving it half done, because a half-c
 
 ### 180. The three widgets that are not populated by an object set (this session)
 
-**Parameter control, Dataset table, Action form** — ten of eighteen. §179 converted a *family*: four widgets that all read an object set, all shaped the same way. These three are the argument for not stopping there, because each one bends p.65's shape somewhere different and a rule fitted to the object-set family gets each of them wrong.
+**Parameter control, Dataset table, Action form** — ten of eighteen. (Corrected to fifteen in §181.) §179 converted a *family*: four widgets that all read an object set, all shaped the same way. These three are the argument for not stopping there, because each one bends p.65's shape somewhere different and a rule fitted to the object-set family gets each of them wrong.
 
 **The Parameter control has no input at all.** It produces the value everything else reads — its parameter name is what every table and chart references — so the panel opens on Outputs, and its configuration waits for nothing. That is not an omission: the widget has an *optional* dataset the dropdown's options can come from, and a `requires` naming it would make configuration wait for something nobody is obliged to supply, leaving the widget permanently unconfigurable. §179's choice-rule does not help here; what is needed is no requirement at all. The mutant that adds one is killed by the browser suite, which is the only place "the panel is stuck" is visible.
 
@@ -3714,6 +3714,24 @@ Continuing §178's conversion rather than leaving it half done, because a half-c
 **Map and Chart are not a wrap, and that is why they are not here.** Both have a `source` toggle — `"objects"` vs `"dataset"` for the Map, three alternatives for the Chart — with inputs and configuration *interleaved inside each branch*, and the Chart's drill-down output sitting between two of them. Converting them means restructuring the branches so each one contributes to three sections, not adding a wrapper around a flat list. Recorded rather than attempted: they are a unit of their own, and doing them badly inside a mechanical conversion is how a "mechanical" change stops being reviewable.
 
 Seven mutations, all red, across **both layers** — §179's lesson kept rather than re-learned. **219 browser tests** (was 216); web unit unchanged at 270, since the change is entirely in the panels rather than in the pure module they share.
+
+---
+
+### 181. The last three panels, and a denominator that was wrong the whole time (this session)
+
+**Embedded module, Loop, Button** — and with them the conversion is finished except for Map and Chart.
+
+**The count was wrong from §178 onwards.** "Eighteen variable-bearing panels" was never checked; it was twenty-one settings panels minus a guess. Classifying them properly gives **fifteen**: Container, Text, Section, Header, Page and **Overlay** have no variable-bound control at all. Overlay is the one that matters, because it had been sitting on the to-convert list for three units — it has a Title and a "Shows as", both pure display options, so there is nothing for p.65's three sections to separate. §178's own rule already answers it: a widget with nothing to output draws no Outputs heading, because an empty heading promises a control that does not exist. A lone "Configuration" heading over the only content in the panel is that same heading, one section over. So Overlay is declined rather than pending, and the remaining work is two panels, not eight.
+
+**The Embedded module is the one Foundry documents the disclosure for.** p.127: "Once a child module is selected, the module interface for the child module will be shown in the widget **configuration panel**" — which settles both halves at once, the *when* and the *which section*. The mapping already disappeared before a module was chosen, by rendering `null`; that is the silent version of p.66's rule, and the difference between the two is a person wondering whether the widget is broken.
+
+**The Loop is the first widget that needs `requires` in its original all-of form.** §179 taught it a *choice* for the Object table — a set **or** a type — and this is the mirror case: a set to loop through **and** a module to repeat, where neither alone leaves anything to configure. It turned up a real gap in the pure module's tests: the existing all-of test asserted only that both names appeared in the message, and "a set **or** a module" contains both names too. The mutant that swaps the conjunction was the one mutant of the seven killed by the **unit** layer rather than the browser — the clearest argument yet for running both.
+
+Two dead conditions fell out of the same change. `{moduleId && (...)}` guarded the item picker, and the configuration section now only renders once `requires` is satisfied, of which a module is half — so the guard could no longer be false. §170's precedent again: two spellings of one rule, delete the redundant one.
+
+**The Button is p.65 read literally.** The sentence is "the input and output variables of a widget … **as well as** any additional configuration and display options" — so label, icon and style are display options by the page's own words, and the variable the button reads to decide whether it is pressable is an input, and goes first. No `requires`: "Always" is a real answer, the Parameter control's reason from §180.
+
+Seven mutations, all red, across both layers. **222 browser tests** (was 219), **271 web unit** (was 270).
 
 ---
 ---

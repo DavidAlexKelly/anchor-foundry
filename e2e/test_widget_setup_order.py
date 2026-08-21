@@ -412,3 +412,154 @@ def test_an_action_form_asks_for_the_action_before_what_it_edits(page, api) -> N
     expect(configuration).to_be_visible(timeout=15000)
     expect(configuration).to_contain_text("Edits")
     expect(page.get_by_test_id("setup-inputs")).not_to_contain_text("Edits")
+
+
+# ---- the module-composition widgets, and the Button (§181) -------------------
+def child_module(api, name: str) -> Module:
+    """A one-object module that publishes an interface variable, which is what
+    an Embedded module maps onto and a Loop hands each object to (p.127,
+    p.134)."""
+    card = Module(api, name)
+    type_id = card.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    card.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText", "props": {"tag": "p", "text": "CARD"}},
+        }),
+        "variables": {
+            "v_obj": {"id": "v_obj", "kind": "single_object", "label": "The object",
+                      "external_id": "obj",
+                      "interface": {"display_name": "Object", "required": True}},
+        },
+        "events": {},
+    })
+    card.type_id = type_id
+    return card
+
+
+def test_an_embedded_module_reveals_its_interface_once_a_module_is_chosen(
+    page, api
+) -> None:
+    """**p.127 states this widget's disclosure in its own words**, and puts the
+    mapping on the configuration side while it is at it:
+
+    > "Once a child module is selected, the module interface for the child
+    > module will be shown in the widget configuration panel."
+
+    The mapping already disappeared before a module was chosen — by rendering
+    `null`, which is the silent version of the same thing. Under p.66's rule it
+    says which input it is waiting on instead.
+    """
+    card = child_module(api, "Widget setup order (child)")
+    host = Module(api, "Widget setup order (embed)", beside=card)
+    host.define({
+        "format": 2,
+        "layout": layout({
+            "emb": {"resolvedName": "CanvasEmbeddedModule",
+                    "props": {"moduleId": None, "interface": {}, "title": ""}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, host)
+    select_widget(page)
+    waiting = page.get_by_test_id("setup-waiting")
+    expect(waiting).to_be_visible()
+    expect(waiting).to_contain_text("a module")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+
+    page.get_by_test_id("setup-inputs").locator("select").select_option(card.app_id)
+    configuration = page.get_by_test_id("setup-configuration")
+    expect(configuration).to_be_visible(timeout=15000)
+    # p.127's mapping, and it is in the configuration section rather than
+    # beside the module picker.
+    expect(configuration).to_contain_text("Object", timeout=15000)
+
+
+def test_a_loop_waits_for_the_set_and_the_module_together(page, api) -> None:
+    """**The first widget that needs `requires` in its original all-of form.**
+
+    §179 taught `requires` a *choice* for the Object table, which takes a set
+    *or* a type. A Loop takes a set **and** a module: "Receives each object"
+    reads the module's published interface (p.134) and the paging options count
+    items from the set, so neither input alone leaves anything to configure.
+
+    The message is asserted for its conjunction, not just for both names —
+    "a set or a module" contains both words too, and would tell somebody they
+    were finished when they were half finished.
+    """
+    card = child_module(api, "Widget setup order (loop child)")
+    host = Module(api, "Widget setup order (loop)", beside=card)
+    host.define({
+        "format": 2,
+        "layout": layout({
+            "loop": {"resolvedName": "CanvasLoopSection",
+                     "props": {"objectSetVariable": None, "moduleId": None,
+                               "itemVariable": None, "interface": {},
+                               "paging": "limit", "maxItems": 12, "pageSize": 12,
+                               "display": "list", "maxColumns": 3,
+                               "minCardWidth": 220}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                      "object_set": object_set(card.type_id)},
+        },
+        "events": {},
+    })
+
+    open_builder(page, host)
+    select_widget(page)
+    waiting = page.get_by_test_id("setup-waiting")
+    expect(waiting).to_be_visible()
+    expect(waiting).to_contain_text("an object set and a module")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+
+    # One input is not enough - the half-bound state is the one an all-of rule
+    # gets wrong, and it is invisible unless something stops here.
+    page.get_by_test_id("loop-set").select_option("v_all")
+    expect(page.get_by_test_id("setup-waiting")).to_be_visible()
+    expect(page.get_by_test_id("setup-waiting")).to_contain_text("a module")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+
+    page.get_by_test_id("loop-module").select_option(card.app_id)
+    configuration = page.get_by_test_id("setup-configuration")
+    expect(configuration).to_be_visible(timeout=15000)
+    expect(page.get_by_test_id("loop-item")).to_be_visible()
+    expect(page.get_by_test_id("setup-waiting")).to_have_count(0)
+
+
+def test_a_button_leads_with_the_variable_it_reads(page, api) -> None:
+    """p.65 in full: the tab configures "the input and output variables of a
+    widget … **as well as** any additional configuration and display options".
+
+    A Button's label, icon and style are display options by that sentence's own
+    words; the variable it reads to decide whether it is pressable is an input,
+    and so goes first. There is no `requires` — "Always" is a real answer, so a
+    panel that waited for it would never open.
+    """
+    mod = Module(api, "Widget setup order (button)")
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "btn": {"resolvedName": "CanvasButton",
+                    "props": {"label": "Go", "icon": "", "style": "primary",
+                              "enabledVariable": None}},
+        }),
+        "variables": {
+            "v_ok": {"id": "v_ok", "kind": "string", "label": "Ready"},
+        },
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    inputs = page.get_by_test_id("setup-inputs")
+    expect(inputs).to_contain_text("Pressable when")
+    expect(inputs).not_to_contain_text("Label")
+    expect(page.get_by_test_id("setup-configuration")).to_contain_text("Label")
+    # Nothing is bound and the configuration is on screen regardless.
+    expect(page.get_by_test_id("setup-waiting")).to_have_count(0)
