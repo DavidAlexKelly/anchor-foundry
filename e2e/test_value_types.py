@@ -39,7 +39,17 @@ def module(api):
 
 def open_objects(page, module) -> None:
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    expect(page.get_by_role("heading", name="Value types")).to_be_visible(timeout=30000)
+    # **`exact=True`, and it is not style.** The project these fixtures create
+    # is named after the section they are looking for, so the page carries
+    # `<h2 class="project-name">Value types 706e06</h2>` *and* `<h2>Value
+    # types</h2>` - and `name=` matches by substring. This passed for months
+    # because the assertion succeeded the instant one of them appeared, before
+    # the other arrived; §186 made the page fast enough that both land
+    # together, and Playwright's strict mode then refuses the ambiguity. The
+    # race was always there and was always the test's, not the product's.
+    expect(
+        page.get_by_role("heading", name="Value types", exact=True)
+    ).to_be_visible(timeout=30000)
 
 
 def open_type_editor(page, module) -> None:

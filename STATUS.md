@@ -3838,7 +3838,9 @@ Fourteen mutations across **three** layers — API, unit, browser — all red. *
 
 **Ten mutants on the function itself**, applied with `CREATE OR REPLACE` against the live database rather than by editing a file, since an applied migration is immutable. Four widen the set (every workspace visible; org membership without the admin role; a deactivated admin; a worker seeing everything), five narrow it, and all nine died on the equivalence tests. The tenth — dropping the `WHERE id IS NOT NULL` guard — survived, and was worth the argument: the NULL only appears when `app.service = 'worker'` is set and `app.workspace_id` is not, a half-configured worker connection no test created. Both spellings deny, so nothing could see the difference through the API; what the guard protects is the function's answer being a *total boolean* for anything composing it. A test for that misconfiguration kills it.
 
-**1396 API tests** (was 1389), 1 skipped. The two `test_ontology_search.py` browser tests pass again, with thirteen times the headroom they had.
+**Making things faster unmasked a latent test race**, which is worth writing down because the failure looks nothing like its cause. Three browser tests began failing on Playwright *strict mode* — `get_by_role("heading", name="Value types")` resolving to two elements. Both headings had always been on the page: these fixtures name their project after the section they look for, so the page carries `<h2 class="project-name">Value types 706e06</h2>` beside `<h2>Value types</h2>`, and `name=` matches by substring. The assertion used to succeed the instant *one* of them appeared, before the other arrived. §186 made the page fast enough that both land together. The race was always there and was always the test's; `exact=True` is the fix, and a slow page was the only thing hiding it.
+
+**1396 API tests** (was 1389), 1 skipped, and **242 browser** green.
 
 ---
 ---

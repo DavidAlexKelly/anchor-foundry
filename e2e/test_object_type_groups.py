@@ -58,7 +58,12 @@ def group(api, module):
 
 def open_objects(page, module) -> None:
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    expect(page.get_by_role("heading", name="Groups")).to_be_visible(timeout=30000)
+    # `exact=True` for the reason `test_value_types.py` spells out: the
+    # fixture names its project after the section, `name=` matches by
+    # substring, and the two headings now arrive together.
+    expect(
+        page.get_by_role("heading", name="Groups", exact=True)
+    ).to_be_visible(timeout=30000)
 
 
 def group_row(page, group):
