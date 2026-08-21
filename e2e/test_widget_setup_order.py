@@ -563,3 +563,208 @@ def test_a_button_leads_with_the_variable_it_reads(page, api) -> None:
     expect(page.get_by_test_id("setup-configuration")).to_contain_text("Label")
     # Nothing is bound and the configuration is on screen regardless.
     expect(page.get_by_test_id("setup-waiting")).to_have_count(0)
+
+
+# ---- the two panels that were a restructure, not a wrap (§182) ---------------
+def field_select(page, label: str):
+    """A settings control addressed by its visible label.
+
+    These two panels have no test ids on most of their controls, and adding
+    them for the sake of a test would be putting the test's convenience into
+    the product. The label is what a person reads anyway.
+    """
+    return page.locator(f'label.field:has(span:text-is("{label}")) select')
+
+
+def test_a_map_waits_for_whichever_source_its_toggle_names(page, api) -> None:
+    """**The first panel whose `requires` is not a literal.**
+
+    A Map is pointed at an object type *or* a dataset by a toggle above its
+    inputs, so which input the configuration waits on depends on that toggle.
+    A fixed rule gets one of the two branches wrong in a way nobody can
+    recover from: a map pointed at a dataset would sit waiting for an object
+    type nobody is going to pick.
+    """
+    mod = Module(api, "Widget setup order (map)")
+    mod.object_type(
+        columns=["id", "name", "where"],
+        rows=[{"id": "R1", "name": "Ada", "where": "51.5,-0.1"}],
+        key="id", title="name", types={"where": "geopoint"},
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "mp": {"resolvedName": "CanvasMap",
+                   "props": {"source": "objects", "objectSetVariable": None,
+                             "objectTypeId": None, "locationProperty": None,
+                             "labelProperty": None, "datasetId": None,
+                             "locationColumn": None, "latColumn": None,
+                             "lonColumn": None, "labelColumn": None,
+                             "filterProperty": None, "filterColumn": None,
+                             "filterOperator": "equals", "filterParameter": None,
+                             "searchParameter": None, "limit": 500}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    # Pointed at objects, it names the object-side choice...
+    waiting = page.get_by_test_id("setup-waiting")
+    expect(waiting).to_be_visible()
+    expect(waiting).to_contain_text("an object set or an object type")
+
+    # ...and flipping the toggle changes what it is waiting for, rather than
+    # leaving it waiting for an input the panel no longer offers.
+    field_select(page, "Points from").select_option("dataset")
+    expect(waiting).to_contain_text("a dataset", timeout=15000)
+    expect(waiting).not_to_contain_text("object type")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+
+    field_select(page, "Dataset").select_option(index=1)
+    expect(page.get_by_test_id("setup-configuration")).to_be_visible(timeout=15000)
+    expect(page.get_by_test_id("setup-configuration")).to_contain_text("Location column")
+
+
+def test_a_map_bound_to_a_set_can_still_pick_its_label_property(page, api) -> None:
+    """**A defect, found by reading the panel in order to restructure it.**
+
+    `Location property`, `Label property` and `Filter property` sit side by
+    side and read the same loaded object type. Two of them were disabled
+    unless `objectTypeId` was set — which a map bound to an *object set
+    variable* never has, because the set names its own type. So the controls
+    were greyed out with their options already in the DOM, and only the
+    inconsistency with the sibling beside them showed it was a mistake rather
+    than a decision.
+    """
+    mod = Module(api, "Widget setup order (map set)")
+    type_id = mod.object_type(
+        columns=["id", "name", "where"],
+        rows=[{"id": "R1", "name": "Ada", "where": "51.5,-0.1"}],
+        key="id", title="name", types={"where": "geopoint"},
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "mp": {"resolvedName": "CanvasMap",
+                   "props": {"source": "objects", "objectSetVariable": "v_all",
+                             "objectTypeId": None, "locationProperty": None,
+                             "labelProperty": None, "datasetId": None,
+                             "locationColumn": None, "latColumn": None,
+                             "lonColumn": None, "labelColumn": None,
+                             "filterProperty": None, "filterColumn": None,
+                             "filterOperator": "equals", "filterParameter": None,
+                             "searchParameter": None, "limit": 500}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                      "object_set": object_set(type_id)},
+        },
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    expect(page.get_by_test_id("setup-configuration")).to_be_visible(timeout=15000)
+    # Asserted by *using* them, not by reading `disabled`: a control that is
+    # enabled and offers nothing is the same dead end to the person at the
+    # screen, and `select_option` fails on both.
+    field_select(page, "Label property").select_option("name")
+    field_select(page, "Filter property").select_option("name")
+    field_select(page, "Location property").select_option("where")
+
+
+def test_a_chart_takes_one_of_three_sources(page, api) -> None:
+    """p.280's three "Data input" options are one **choice**, not three inputs.
+
+    §179's alternative was built for the Object table's two; this is the same
+    rule with a third arm. Requiring all three would wait for two sources
+    nobody is meant to supply.
+
+    The title is asserted as configuration for §179's Metric card reason: it
+    describes a chart that cannot be drawn until something says what to plot.
+    """
+    mod = Module(api, "Widget setup order (chart)")
+    mod.object_type(
+        columns=["id", "name"], rows=[{"id": "R1", "name": "Ada"}],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "ch": {"resolvedName": "CanvasChart",
+                   "props": {"datasetId": None, "kind": "bar", "dimension": None,
+                             "measure": None, "aggregate": "count", "title": "",
+                             "filterColumn": None, "filterParameter": None,
+                             "filterOperator": "equals", "objectSetVariable": None,
+                             "seriesVariable": None, "drilldownVariable": None}},
+        }),
+        "variables": {},
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    waiting = page.get_by_test_id("setup-waiting")
+    expect(waiting).to_be_visible()
+    expect(waiting).to_contain_text("a time series set, an object set or a dataset")
+    expect(page.get_by_test_id("setup-configuration")).to_have_count(0)
+    # No set is bound, so there is nothing to narrow and no Outputs section.
+    expect(page.get_by_test_id("setup-outputs")).to_have_count(0)
+
+    # Any one of the three is enough - the dataset is the third and last arm,
+    # so binding it proves the choice is not "the first one".
+    field_select(page, "Dataset").select_option(index=1)
+    configuration = page.get_by_test_id("setup-configuration")
+    expect(configuration).to_be_visible(timeout=15000)
+    expect(configuration).to_contain_text("Title")
+    expect(page.get_by_test_id("setup-inputs")).not_to_contain_text("Title")
+
+
+def test_a_chart_over_a_set_outputs_its_drilldown_and_can_pick_a_category(
+    page, api
+) -> None:
+    """Two claims that share a fixture, because both are about the source the
+    Chart's `disabled` guards forgot.
+
+    The drill-down variable is p.65's "data that is then produced and output by
+    the widget", and it exists only where there is a set to narrow. And the
+    Category picker is populated from the *set's properties* when a set is
+    bound — but guarded on the dataset, so it was disabled with its options
+    loaded, exactly like the Map's two.
+    """
+    mod = Module(api, "Widget setup order (chart set)")
+    type_id = mod.object_type(
+        columns=["id", "name", "region"],
+        rows=[{"id": "R1", "name": "Ada", "region": "north"}],
+        key="id", title="name",
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "ch": {"resolvedName": "CanvasChart",
+                   "props": {"datasetId": None, "kind": "bar", "dimension": None,
+                             "measure": None, "aggregate": "count", "title": "",
+                             "filterColumn": None, "filterParameter": None,
+                             "filterOperator": "equals",
+                             "objectSetVariable": "v_all", "seriesVariable": None,
+                             "drilldownVariable": None}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                      "object_set": object_set(type_id)},
+            "v_clauses": {"id": "v_clauses", "kind": "array", "label": "Clauses"},
+        },
+        "events": {},
+    })
+
+    open_builder(page, mod)
+    select_widget(page)
+    outputs = page.get_by_test_id("setup-outputs")
+    expect(outputs).to_be_visible(timeout=15000)
+    expect(outputs).to_contain_text("Drill-down writes to")
+
+    # The set's own property, offered by a control that used to be disabled.
+    field_select(page, "Category").select_option("region")
+    field_select(page, "Filter column").select_option("region")

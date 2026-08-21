@@ -3734,6 +3734,27 @@ Two dead conditions fell out of the same change. `{moduleId && (...)}` guarded t
 Seven mutations, all red, across both layers. **222 browser tests** (was 219), **271 web unit** (was 270).
 
 ---
+
+### 182. The restructure, and four controls that could never be enabled (this session)
+
+**Map and Chart** — the two panels §180 recorded as "not a wrap", and the Widget setup row is now ✅ across **all fifteen** variable-bearing panels.
+
+**The Map is the first panel whose `requires` is not a literal.** Every conversion before it had one fixed set of inputs; a Map has two, chosen by a `Points from` toggle sitting above them, so the rule is computed from the toggle. A fixed rule is unrecoverable in one of the two branches: a map pointed at a dataset would sit waiting for an object type nobody is going to pick. The toggle itself went into Inputs rather than above the sections — it is not a variable, but it asks the first half of p.65's "what populates this widget".
+
+**The Chart is where p.280's three "Data input" options land as one choice.** §179 built the alternative for the Object table's two; this is the same rule with a third arm. Its drill-down variable became the Outputs section, present only when there is a set to narrow — a dataset-backed or series-backed chart has no set, so a clause would have nothing to mean.
+
+**Four controls were disabled with their options already in the DOM.** Found by reading the panels closely enough to restructure them, and confirmed in a browser before a line was changed:
+
+* the Map's `Label property` and `Filter property` guarded on `objectTypeId`, which a map bound to an **object set variable** never has, because the set names its own type. `Location property`, sitting between them and reading the same loaded type, guarded on `effectiveTypeId` and worked. Three siblings, one query, two asking the wrong question — and it is the *inconsistency* that proves it was a mistake rather than a decision;
+* the Chart's `Category`, `Of column` and `Filter column` guarded on `dataset` while being populated from `columns`, which is computed a few lines above to be *either* the set's properties or the dataset's columns.
+
+The generalisable form: **guard a control on the options it offers, not on one of the several ways those options can arrive.** Both fixes are that sentence.
+
+**A message that had only ever been exercised at two.** The Chart's three-way choice came out as "a time series set **or** an object set **or** a dataset" — the choice arm joined with a plain `" or "`, which reads fine at two and badly at three, while the all-of arm three lines below had the comma form all along. One `joined(names, conjunction)` helper now serves both, so they cannot drift apart again. This was caught by a browser assertion failing on the exact string rather than on containment, which is the same lesson §181 recorded one unit earlier.
+
+Nine mutations, all red; two of them died at the **unit** layer. **226 browser tests** (was 222), **273 web unit** (was 271).
+
+---
 ---
 ---
 ---

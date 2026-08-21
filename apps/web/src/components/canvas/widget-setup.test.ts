@@ -84,6 +84,27 @@ describe("configWaitingFor", () => {
     );
   });
 
+  it("lists a choice of three as a list, not as a chain of ors", () => {
+    // **Only exercised once a widget had three alternatives.** p.280 gives the
+    // Chart three "Data input" options (§182), and the choice arm used to join
+    // with a plain " or ", which reads fine at two and badly at three: "a
+    // series or a set or a dataset". The all-of arm had the comma form all
+    // along, which is what made the inconsistency worth removing rather than
+    // duplicating.
+    expect(
+      configWaitingFor({}, [["a", "b", "c"]], {
+        a: "a time series set", b: "an object set", c: "a dataset",
+      }),
+    ).toBe("Pick a time series set, an object set or a dataset first — the rest depends on it.");
+  });
+
+  it("lists three missing all-of inputs the same way", () => {
+    // One helper, two conjunctions - so the two arms cannot drift apart again.
+    expect(
+      configWaitingFor({}, ["a", "b", "c"], { a: "a set", b: "a module", c: "a date" }),
+    ).toBe("Pick a set, a module and a date first — the rest depends on it.");
+  });
+
   it("says nothing once they are bound", () => {
     expect(configWaitingFor({ a: "x" }, ["a"])).toBeNull();
     expect(configWaitingFor({}, [])).toBeNull();

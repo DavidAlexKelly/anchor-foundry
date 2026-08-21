@@ -3336,8 +3336,28 @@ function MapSettings() {
   // plot nothing and say nothing about why.
   const geopoints = (detail.data?.properties ?? []).filter((p) => p.data_type === "geopoint");
 
+  const objects = source === "objects";
+
+  // **The first panel whose `requires` is not a literal.** Every conversion
+  // before this one had one fixed set of inputs; a Map has two, and which of
+  // them the configuration is waiting on depends on the toggle above them. So
+  // the rule is computed from `source` - a map pointed at a dataset must not
+  // sit waiting for an object type nobody is going to pick.
+  //
+  // "Points from" itself lives in Inputs rather than above the sections. It is
+  // not a variable, but it decides *which* variable populates the widget, and
+  // p.65's "the data that initially populates a widget" is the question it
+  // asks the first half of.
   return (
-    <>
+    <WidgetSetup
+      bindings={objects ? { objectSetVariable, objectTypeId } : { datasetId }}
+      requires={objects ? [["objectSetVariable", "objectTypeId"]] : ["datasetId"]}
+      labels={{
+        objectSetVariable: "an object set",
+        objectTypeId: "an object type",
+        datasetId: "a dataset",
+      }}
+      inputs={<>
       <label className="field">
         <span className="field-label">Points from</span>
         <select
@@ -3348,7 +3368,7 @@ function MapSettings() {
           <option value="dataset">A dataset</option>
         </select>
       </label>
-      {source === "objects" ? (
+      {objects ? (
         <>
           {/* The variable binding comes first because it *replaces* the type
               and filter fields under it - the same ordering the object table
@@ -3392,6 +3412,36 @@ function MapSettings() {
               ))}
             </select>
           </label>
+        </>
+      ) : (
+        <>
+          <label className="field">
+            <span className="field-label">Dataset</span>
+            <select
+              value={datasetId || ""}
+              onChange={(e) =>
+                setProp((p: Record<string, unknown>) => {
+                  p.datasetId = e.target.value || null;
+                  p.locationColumn = null;
+                  p.latColumn = null;
+                  p.lonColumn = null;
+                  p.labelColumn = null;
+                  p.filterColumn = null;
+                })
+              }
+            >
+              <option value="">Choose…</option>
+              {datasetList.data?.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
+      </>}
+      configuration={<>
+      {objects ? (
+        <>
           <label className="field">
             <span className="field-label">Location property</span>
             <select
@@ -3410,11 +3460,19 @@ function MapSettings() {
               <span className="field-hint">This type has no geopoint property</span>
             )}
           </label>
+          {/* **`effectiveTypeId`, not `objectTypeId`** - the options below come
+              from the type behind whichever input is bound, and a map bound to
+              an object set variable has no `objectTypeId` at all. Guarding on
+              one of the two ways the type can arrive left this control and the
+              one under it permanently disabled with their options loaded and
+              sitting in the DOM, while `Location property` beside them - which
+              already guarded on the right thing - worked. Three siblings
+              reading one query, two of them asking the wrong question. */}
           <label className="field">
             <span className="field-label">Label property</span>
             <select
               value={labelProperty || ""}
-              disabled={!objectTypeId}
+              disabled={!effectiveTypeId}
               onChange={(e) =>
                 setProp((p: { labelProperty: string | null }) => (p.labelProperty = e.target.value || null))
               }
@@ -3429,7 +3487,7 @@ function MapSettings() {
             <span className="field-label">Filter property</span>
             <select
               value={filterProperty || ""}
-              disabled={!objectTypeId}
+              disabled={!effectiveTypeId}
               onChange={(e) =>
                 setProp((p: { filterProperty: string | null }) => (p.filterProperty = e.target.value || null))
               }
@@ -3455,27 +3513,6 @@ function MapSettings() {
         </>
       ) : (
         <>
-          <label className="field">
-            <span className="field-label">Dataset</span>
-            <select
-              value={datasetId || ""}
-              onChange={(e) =>
-                setProp((p: Record<string, unknown>) => {
-                  p.datasetId = e.target.value || null;
-                  p.locationColumn = null;
-                  p.latColumn = null;
-                  p.lonColumn = null;
-                  p.labelColumn = null;
-                  p.filterColumn = null;
-                })
-              }
-            >
-              <option value="">Choose…</option>
-              {datasetList.data?.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-          </label>
           <label className="field">
             <span className="field-label">Location column</span>
             <select
@@ -3567,6 +3604,8 @@ function MapSettings() {
           </label>
         </>
       )}
+      {/* Outside the branch, because a parameter name means the same thing to
+          both sources - it is the name a Filter widget publishes. */}
       <label className="field">
         <span className="field-label">Filter parameter</span>
         <input
@@ -3578,7 +3617,8 @@ function MapSettings() {
           }
         />
       </label>
-    </>
+      </>}
+    />
   );
 }
 
@@ -3900,25 +3940,25 @@ function ChartSettings() {
     : dataset?.table_schema ?? [];
   const scatter = kind === "scatter";
 
+  // **p.280's three "Data input" options are one choice, not three inputs.**
+  // §179's alternative was built for the Object table's two; this is the same
+  // rule with a third arm, and it has to be - requiring all three would wait
+  // for two sources nobody is meant to supply, and requiring none would offer
+  // a category picker with nothing behind it.
+  //
+  // The title used to be the first control in this panel. It describes a chart
+  // that cannot be drawn until something says what to plot, which is §179's
+  // Metric card exactly.
   return (
-    <>
-      <label className="field">
-        <span className="field-label">Title</span>
-        <input
-          type="text"
-          value={title || ""}
-          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
-        />
-      </label>
-      <label className="field">
-        <span className="field-label">Chart type</span>
-        <select value={kind || "bar"} onChange={(e) => setProp((p: { kind: string }) => (p.kind = e.target.value))}>
-          <option value="bar">Bar</option>
-          <option value="line">Line</option>
-          <option value="pie">Pie</option>
-          <option value="scatter">Scatter</option>
-        </select>
-      </label>
+    <WidgetSetup
+      bindings={{ seriesVariable, objectSetVariable, datasetId }}
+      requires={[["seriesVariable", "objectSetVariable", "datasetId"]]}
+      labels={{
+        seriesVariable: "a time series set",
+        objectSetVariable: "an object set",
+        datasetId: "a dataset",
+      }}
+      inputs={<>
       {/* p.280's three "Data input" options, offered in the order they take
           precedence, each disabling what it replaces - rather than letting
           several be configured and leaving whoever reads the app to guess
@@ -3967,30 +4007,6 @@ function ChartSettings() {
           <span className="field-hint">Counts objects in each group</span>
         )}
       </label>
-      {/* Only where there is a set to narrow. A dataset-backed chart has no
-          set, so a clause would have nothing to mean. */}
-      {objectSetVariable && (
-        <label className="field">
-          <span className="field-label">Drill-down writes to</span>
-          <select
-            value={drilldownVariable || ""}
-            onChange={(e) =>
-              setProp((p: { drilldownVariable: string | null }) =>
-                (p.drilldownVariable = e.target.value || null))
-            }
-          >
-            <option value="">Not bound — the chart is a picture</option>
-            {clauseVariables.map((v) => (
-              <option key={v.id} value={v.id}>{v.label}</option>
-            ))}
-          </select>
-          <span className="field-hint">
-            {clauseVariables.length === 0
-              ? "Declare an array variable, and derive a narrowed set from it"
-              : "Clicking a bar or slice narrows the set to that category"}
-          </span>
-        </label>
-      )}
       <label className="field">
         <span className="field-label">Dataset</span>
         <select
@@ -4012,11 +4028,37 @@ function ChartSettings() {
           ))}
         </select>
       </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Chart type</span>
+        <select value={kind || "bar"} onChange={(e) => setProp((p: { kind: string }) => (p.kind = e.target.value))}>
+          <option value="bar">Bar</option>
+          <option value="line">Line</option>
+          <option value="pie">Pie</option>
+          <option value="scatter">Scatter</option>
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title || ""}
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      {/* **`columns`, not `dataset`.** These three pickers are populated from
+          whichever source is bound - the set's properties or the dataset's
+          columns, computed above as exactly that. Guarding them on `dataset`
+          asked about one of the two ways their options arrive, so a chart
+          plotting an object set had a Category, an "Of column" and a Filter
+          column that were disabled with their options already loaded. Ask
+          about the options, not about one of the sources they can come from. */}
       <label className="field">
         <span className="field-label">{scatter ? "X column" : "Category"}</span>
         <select
           value={dimension || ""}
-          disabled={!dataset}
+          disabled={!columns.length}
           onChange={(e) => setProp((p: { dimension: string | null }) => (p.dimension = e.target.value || null))}
         >
           <option value="">Choose…</option>
@@ -4043,7 +4085,7 @@ function ChartSettings() {
           <span className="field-label">{scatter ? "Y column" : "Of column"}</span>
           <select
             value={measure || ""}
-            disabled={!dataset}
+            disabled={!columns.length}
             onChange={(e) => setProp((p: { measure: string | null }) => (p.measure = e.target.value || null))}
           >
             <option value="">Choose…</option>
@@ -4055,7 +4097,7 @@ function ChartSettings() {
         <span className="field-label">Filter column</span>
         <select
           value={filterColumn || ""}
-          disabled={!dataset}
+          disabled={!columns.length}
           onChange={(e) => setProp((p: { filterColumn: string | null }) => (p.filterColumn = e.target.value || null))}
         >
           <option value="">No filter</option>
@@ -4084,7 +4126,34 @@ function ChartSettings() {
           <option value="contains">Contains</option>
         </select>
       </label>
-    </>
+      </>}
+      /* p.65's "the data that is then produced and output by the widget", and
+         only where there is a set to narrow: a dataset-backed or series-backed
+         chart has no set, so a clause would have nothing to mean - and the
+         section is omitted rather than shown empty. */
+      outputs={objectSetVariable ? (
+        <label className="field">
+          <span className="field-label">Drill-down writes to</span>
+          <select
+            value={drilldownVariable || ""}
+            onChange={(e) =>
+              setProp((p: { drilldownVariable: string | null }) =>
+                (p.drilldownVariable = e.target.value || null))
+            }
+          >
+            <option value="">Not bound — the chart is a picture</option>
+            {clauseVariables.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            {clauseVariables.length === 0
+              ? "Declare an array variable, and derive a narrowed set from it"
+              : "Clicking a bar or slice narrows the set to that category"}
+          </span>
+        </label>
+      ) : undefined}
+    />
   );
 }
 

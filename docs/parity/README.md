@@ -159,15 +159,16 @@ but "the only authoring surface for transforms that are not yet files".
   description per version; publish a *named* version; view one read-only with
   the conditional warning banner; revert as a new version with a generated
   description; and p.192's two settings.
-- **Stage 2 is done.** One item inside it is still ◑ rather than ✅: the Widget
-  setup tab. §178 to §181 made it variables-first — p.65's Inputs →
-  Configuration → Outputs, with p.66's progressive disclosure — for **thirteen
-  of the fifteen** variable-bearing panels, including p.65-67's own worked
-  example. (The count read "eighteen" until §181, which counted six panels
-  that bind no variable at all.) The two left are **Map and Chart**, which are
-  a restructure rather than a wrap: their inputs and configuration are
-  interleaved inside `source` conditionals. The largest
-  thing §6 still lacks is the **Changelog panel** (p.193), which is also the
+- **Stage 2 is done**, the Widget setup tab included. §178 to §182 made it
+  variables-first — p.65's Inputs → Configuration → Outputs, with p.66's
+  progressive disclosure — across **all fifteen** variable-bearing panels,
+  starting with p.65-67's own worked example. (The count read "eighteen" until
+  §181, which counted six panels that bind no variable at all.) The last two,
+  Map and Chart, were a restructure rather than a wrap: their inputs and
+  configuration are interleaved inside `source` conditionals, and reading them
+  closely enough to unpick that turned up four controls that were disabled
+  with their options already loaded (`STATUS.md` §182). The largest thing §6
+  still lacks is the **Changelog panel** (p.193), which is also the
   prerequisite for module branching.
 | **2** | Workshop structural: the three config tabs, six section layouts, vertical header, ~~external IDs~~ **done, §116**, versions dialog | The mechanisms everything else hangs off. External IDs in particular collapse three roadmap items into one. |
 | **3** | Ontology depth: property types and formatting, link types, action types, Object Views | Upstream of Workshop's object widgets. Object Views are the highest value per unit of work in the whole set. |

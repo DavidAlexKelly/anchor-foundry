@@ -82,6 +82,20 @@ export function configReady(
   return required.every((requirement) => satisfied(bindings, requirement));
 }
 
+/** "a", "a and b", "a, b and c" - and the same shapes with "or".
+ *
+ * **Written once because both branches below need it**, which only became
+ * obvious when a widget turned up with three alternatives. The choice arm used
+ * to join with a plain `" or "`, which reads fine for the two the Object table
+ * has ("a set or a type") and badly for the Chart's three ("a series or a set
+ * or a dataset") - while the all-of arm three lines below had the comma form
+ * all along. One rule, two conjunctions.
+ */
+function joined(names: readonly string[], conjunction: "and" | "or"): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} ${conjunction} ${names[names.length - 1]}`;
+}
+
 /** What to say in place of the configuration that is not ready yet.
  *
  * Naming the input rather than saying "configure this widget first" is the
@@ -103,13 +117,9 @@ export function configWaitingFor(
   const named = missing.map((requirement) =>
     typeof requirement === "string"
       ? labels[requirement] ?? requirement
-      : requirement.map((name) => labels[name] ?? name).join(" or "),
+      : joined(requirement.map((name) => labels[name] ?? name), "or"),
   );
-  const list =
-    named.length === 1
-      ? named[0]
-      : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
-  return `Pick ${list} first — the rest depends on it.`;
+  return `Pick ${joined(named, "and")} first — the rest depends on it.`;
 }
 
 /** The order p.65 gives, as data rather than as the order somebody happened to
