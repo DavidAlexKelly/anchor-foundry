@@ -1,5 +1,18 @@
 """`rls_project_ids()` says exactly what `rls_can_access_project` says
-(migration 0060).
+(migration 0060), and is **not in use** (migration 0061).
+
+**Why a test file for an unused function.** 0060 replaced twenty-five project
+policies with this set and 0061 put them back: the function is equivalent and
+5x slower on `GET /workspaces/{id}/projects`, because `v_user_projects`
+resolves `effective_project_role` *per project* and a workspace holding 881 of
+them then built 881 arrays of 881 ids. The set idiom trades a per-row cost for
+a per-statement one, which is a win when the statement is paid once and a loss
+when something upstream already loops.
+
+Fixing `v_user_projects` is the prerequisite, and it is its own unit. Until
+then this stays proven rather than re-derived: the equivalence is the hard
+part, it is established here over real rows and four constructed cases, and
+thirteen mutants die on it.
 
 The project half of §186. Same idiom, same reason, and the same thing being
 asserted: **equivalence, not speed.** A faster predicate that admits one extra

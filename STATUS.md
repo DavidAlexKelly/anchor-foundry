@@ -3844,35 +3844,30 @@ Fourteen mutations across **three** layers — API, unit, browser — all red. *
 
 ---
 
-### 187. The project half, and the cost it is worth naming (this session)
+### 187. The project half: correct, proven, and reverted (this session)
 
-§186 left `rls_can_access_project` untouched across **25 policies** and three mixed workspace/project expressions. This finishes the isolation layer: **no policy in the database evaluates a per-row access function any more.**
+**The unit that did not ship, and the reason is worth more than the code.** `rls_project_ids()` is written, equivalent, mutation-tested and *not in use*. Migration 0060 put it into twenty-five policies; migration 0061 took it back out.
 
-**The rule is longer, so the set is longer.** `effective_project_role` has five outcomes and two of them are revocations. As a set, a caller reaches a project when it is the worker's own workspace; or they are an active org owner/admin of its organisation; or it is `inherited` and they can see its workspace; or it is `custom` and they have a **direct** entry that is not `none`; or it is `custom`, they have *no* direct entry, and some group entry grants a real role.
+**The rule was the hard part and it came out right.** `effective_project_role` has five outcomes and two are revocations. As a set: the worker's own workspace; an active org owner/admin of the organisation; `inherited` mode plus workspace access; `custom` mode with a **direct** entry that is not `none`; or `custom` mode with no direct entry and some group entry granting a real role. The order between the last two *is* the rule — a direct entry always wins, including a revocation — which is a `NOT EXISTS` in the group branch rather than a plain union.
 
-**The order between the last two is the rule**, and it is the thing most likely to be got wrong: a direct entry always wins, **including a revocation**, because per-user assignments are more specific than group grants. Hence the `NOT EXISTS` in the group branch rather than a plain union — without it, a user revoked by name is let back in by a group. Three mutants cover that pair and all three are red.
+**Three mutants survived the first pass, all rules the sample could not reach.** A direct grant in a workspace the user has lost (every real grant sits in a workspace its user is also in); the org-admin branch dropped entirely (an admin reaches inherited projects through the workspace gate anyway, so the branch is load-bearing only for a `custom` project with no entry for them); and `u.status = 'active'` removed (this database has no deactivated admins, and "a disabled account keeps full access" stays true for a long time unnoticed). Each got a constructed case. Thirteen mutants, ten red first pass, thirteen after.
 
-**`rls_workspace_ids()` gates the last three branches**, standing in for `effective_workspace_role(...) IS NOT NULL`, and it is equivalent rather than merely close: the two workspaces it adds beyond plain membership are the worker's and an org admin's, and the first two branches have already granted every project in both.
+**Then the browser suite said no.** It ran for **1h33m** instead of ~30 minutes, with nine failures that had nothing to do with what they check. The cause was one endpoint:
 
-**The tests build what the database cannot supply.** The shared dev database holds **267** direct `'none'` entries and exactly **one** group entry, with no group `'none'` at all — so "a direct `none` beats a group grant" and "every group entry is `none`" have nothing to be sampled from. Sampling alone would have reported full agreement on the two rules most likely to be wrong. Those four cases get a fixture built and rolled back.
+| | `GET /workspaces/{id}/projects` |
+| --- | --- |
+| before 0060 | **4.4s** |
+| with 0060 | **22.1s** |
 
-**And the cost, which is real and is not hidden.** This idiom trades a per-*row* cost for a per-*statement* one, and the API suite is thousands of tiny statements — the profile where that trade is worst. Measured rather than assumed:
+**The mistake was a cost model, not a rule.** The set idiom replaces a per-*row* cost with a per-*statement* one — a win exactly when the statement is paid once, a loss when something upstream already loops. `v_user_projects` resolves `effective_project_role` **per project**, and that endpoint joins it, so a workspace holding 881 projects ran the resolution 881 times and each one built an 881-element array of its own. Quadratic, from a change whose whole purpose was to remove a multiplication.
 
-* `rls_project_ids()` is **~1.2ms** for a typical caller (one or two visible projects) and **~8-10ms** for the one user in this sandbox who can see 881, which is residue rather than a real shape;
-* the same test file with the old policies and the new ones: **3.07s → 3.75s**, about 22%;
-* the whole API suite, warm: **219s → 333s**, of which **45s is the two new equivalence files** themselves, so roughly 31% on the pre-existing suite.
+**Why the workspace half is safe and stays.** `rls_workspace_ids()` returns a handful of ids, and nothing in the application loops per workspace. The difference between §186 and §187 is not the idiom — it is what the idiom gets multiplied by. That is the sentence to remember before applying this pattern anywhere else.
 
-Against that, the ontology search went 4.5s → 0.37s in §186 and a 425-row read went 237ms → 1.3ms. **The crossover is around three rows** — a point lookup pays a little more, anything that returns a list pays far less. That is the right trade for this application, and it is worth writing the number down rather than reporting only the half that improved.
+**What was kept, and why it is not dead code.** The function and its tests stay. The equivalence is the expensive part to establish — real rows per access route, four constructed cases the corpus cannot supply, thirteen mutants — and deleting it would mean re-deriving and re-proving all of it later. **Fixing `v_user_projects` is the actual prerequisite**, and it is its own unit; the 4.4s baseline is not acceptable either, it was simply not made worse.
 
-**One tempting optimisation declined.** `user_connection` already sets `app.user_id` once per request and could stash both arrays as GUCs, removing the per-statement cost entirely. It would also make the security backstop depend on the application setting it correctly, and a stale or forged value would silently widen isolation. The point of RLS here is that it holds when the application is wrong.
+**A process note.** The API suite was green at 1410 and the equivalence suite was exhaustive, and both were satisfied by a change that made the product five times slower on a core endpoint. The browser suite is the only check that runs the real thing end to end, and it is the one that caught this. That is the second unit running where it earned its cost.
 
-**Three survivors, and all three were rules the sample could not reach.** Second time in two units that mutation testing has caught an equivalence check agreeing for the wrong reason, and the pattern is the same: the corpus has no rows of the interesting shape.
-
-* **A direct project grant in a workspace the user has lost.** Step 2 of the rule says a `project_members` row is not on its own enough — but every direct grant in the corpus happens to sit in a workspace its user is also a member of, so dropping the workspace gate changed nothing observable.
-* **The org-admin branch, dropped entirely.** It survived because an org admin can see every workspace in the organisation and so reaches every *inherited* project through the workspace gate anyway. The branch is load-bearing for exactly one case: a `custom` project with no entry for them.
-* **`u.status = 'active'`, removed.** No deactivated org admins exist in this database — and "a disabled account keeps full access to the organisation" is precisely the kind of thing that stays true for a long time before anyone notices.
-
-Each got a constructed case. Thirteen mutants, ten red on the first pass and thirteen after. **1410 API tests** (was 1396), 1 skipped.
+**1410 API tests**, 1 skipped, green with the revert in place.
 
 ---
 ---
