@@ -3843,6 +3843,33 @@ Fourteen mutations across **three** layers — API, unit, browser — all red. *
 **1396 API tests** (was 1389), 1 skipped, and **242 browser** green.
 
 ---
+
+### 187. The project half: correct, proven, and reverted (this session)
+
+**The unit that did not ship, and the reason is worth more than the code.** `rls_project_ids()` is written, equivalent, mutation-tested and *not in use*. Migration 0060 put it into twenty-five policies; migration 0061 took it back out.
+
+**The rule was the hard part and it came out right.** `effective_project_role` has five outcomes and two are revocations. As a set: the worker's own workspace; an active org owner/admin of the organisation; `inherited` mode plus workspace access; `custom` mode with a **direct** entry that is not `none`; or `custom` mode with no direct entry and some group entry granting a real role. The order between the last two *is* the rule — a direct entry always wins, including a revocation — which is a `NOT EXISTS` in the group branch rather than a plain union.
+
+**Three mutants survived the first pass, all rules the sample could not reach.** A direct grant in a workspace the user has lost (every real grant sits in a workspace its user is also in); the org-admin branch dropped entirely (an admin reaches inherited projects through the workspace gate anyway, so the branch is load-bearing only for a `custom` project with no entry for them); and `u.status = 'active'` removed (this database has no deactivated admins, and "a disabled account keeps full access" stays true for a long time unnoticed). Each got a constructed case. Thirteen mutants, ten red first pass, thirteen after.
+
+**Then the browser suite said no.** It ran for **1h33m** instead of ~30 minutes, with nine failures that had nothing to do with what they check. The cause was one endpoint:
+
+| | `GET /workspaces/{id}/projects` |
+| --- | --- |
+| before 0060 | **4.4s** |
+| with 0060 | **22.1s** |
+
+**The mistake was a cost model, not a rule.** The set idiom replaces a per-*row* cost with a per-*statement* one — a win exactly when the statement is paid once, a loss when something upstream already loops. `v_user_projects` resolves `effective_project_role` **per project**, and that endpoint joins it, so a workspace holding 881 projects ran the resolution 881 times and each one built an 881-element array of its own. Quadratic, from a change whose whole purpose was to remove a multiplication.
+
+**Why the workspace half is safe and stays.** `rls_workspace_ids()` returns a handful of ids, and nothing in the application loops per workspace. The difference between §186 and §187 is not the idiom — it is what the idiom gets multiplied by. That is the sentence to remember before applying this pattern anywhere else.
+
+**What was kept, and why it is not dead code.** The function and its tests stay. The equivalence is the expensive part to establish — real rows per access route, four constructed cases the corpus cannot supply, thirteen mutants — and deleting it would mean re-deriving and re-proving all of it later. **Fixing `v_user_projects` is the actual prerequisite**, and it is its own unit; the 4.4s baseline is not acceptable either, it was simply not made worse.
+
+**A process note.** The API suite was green at 1410 and the equivalence suite was exhaustive, and both were satisfied by a change that made the product five times slower on a core endpoint. The browser suite is the only check that runs the real thing end to end, and it is the one that caught this. That is the second unit running where it earned its cost.
+
+**1410 API tests**, 1 skipped, green with the revert in place.
+
+---
 ---
 ---
 ---
