@@ -3906,6 +3906,38 @@ Two mutants against the wait. Deleting it fails both tests, which is the point. 
 **1434 API tests** (was 1410), 1 skipped; **242 browser tests**, all passing.
 
 ---
+
+### 189. The page a variable is looking at (this session)
+
+p.81's Variable-Based Page Selection, which §185 named as the next one and correctly called "p.82's sentence with a page id where the boolean was". `components/canvas/page-selection.ts` is `collapse.ts` one row up, on the same rule — **the most recent instruction wins**: a Switch-to-Page event overrides the backing variable and stays in force until the variable's own value *changes*. The argument for that rule is §185's and is not repeated; what follows is only the two things a page has that a boolean does not.
+
+**The variable holds a page ID, not a node.** A boolean says everything there is to say about a collapse state, but a page has to be *identified*, and there are two identifiers available. The author-set `pageId` is the right one for p.197's reason: a Craft.js node id is generated, means nothing to whoever types the value, and changes when a page is recreated — so picking it would make a variable set from a transform or a URL silently stop working after an edit nobody would connect to it. The side effect is worth having: the link and the variable name the same page in the same words. The event keeps the *node*, which is how it can still reach a page nobody has named.
+
+**A string can name a page that is not there.** A boolean cannot be wrong; a page ID can be a typo, or belong to a page since deleted. p.197 already answers this for the URL — "users will be returned to the module's default page" — and the same answer is right here, because the alternative to falling back is a blank module with no way out. Blanking is the one outcome that leaves a reader stuck.
+
+**Where the server stops.** It refuses a `page_selection` that names a variable which is absent or is not a string, and deliberately does **not** check the *value* against the pages. The asymmetry is the usual split — the server owns what is legal, the browser owns what to render — and here it has teeth: a kind that is wrong can never work, while a value matching nothing today might match tomorrow, so a value check would make a valid module stop saving because somebody renamed a page.
+
+**Twelve mutants, and the two that survived the first pass were both worth more than the ten that did not.**
+
+The first was `if (now === null) return defaultNode;`. Deleting it changes no behaviour at all — the `nodeForPageId` callback happens to tolerate a null and returns the default anyway — so every test still passed and the line read as something to delete. It is `tsc` that refuses it: without the guard, `now` is `string | null` where a `string` is wanted. So the guard is load-bearing for the *contract* rather than for the arithmetic, and the honest response was to **add a types layer to the harness** rather than to write a test that could not tell the difference. A repo that mutation-tests only behaviour will quietly delete every line whose job is to make a type check out.
+
+The second was the interesting one, and it was a test bug of a shape this repo has not recorded before. Making a Switch-to-Page event record no memory of the variable's value should be trivially fatal, and it was not. Instrumenting the mutant at 250ms intervals:
+
+```
+before    visible: ['p1']  texts: ['PAGE= MARK=']
+t+250ms   visible: ['p3']  texts: ['PAGE=overview MARK=yes']
+t+500ms   visible: ['p1']  texts: ['PAGE=overview MARK=yes']
+```
+
+The mutant *is* observably wrong — it shows the right page for a quarter of a second and then sends the reader home — and the whole test had run and passed inside that window. **`to_be_visible` retries until it sees what it wants and then stops looking**; a wrong first frame is forgiven, and a wrong *last* frame is never examined. The cause is that variables resolve on the server, so for the first few hundred milliseconds `resolved` is empty and the backing variable reads as *absent*, which is precisely the one state in which an event wins unconditionally.
+
+The fix is a `readout()` helper and an ordering rule: **every `showing()` in the file is preceded by a wait for the header to say what the variable is.** One of them earns its place twice over — the test that a mistyped page ID opens the default page would otherwise pass against a build that never read the variable at all, since an unresolved variable also opens the default page.
+
+Both survivors generalise past this unit and are now rough edges: an assertion that can be satisfied by a transient state is not an assertion, and a mutation harness that runs only behavioural layers cannot see a type contract.
+
+**1441 API tests** (was 1434), 1 skipped; **248 browser tests**; 12 mutants, all killed.
+
+---
 ---
 ---
 ---
@@ -3966,6 +3998,10 @@ Two mutants against the wait. Deleting it fails both tests, which is the point. 
 - **Reading a Playwright locator as `count()` then `nth(i)` is a torn read, and it fails as a 30-second hang rather than a wrong answer.** The obvious way to snapshot a column - `{cells.nth(i).inner_text() for i in range(cells.count())}` - is two or more round trips to the browser. A re-render landing between them (a filter change is exactly that) leaves it asking for a row that no longer exists, and `nth(i).inner_text()` then *blocks for the full timeout* instead of returning something stale that a polling helper could reject and retry. Found in the resource-filter browser check: the run took 48s instead of 20s and failed only on the first run after a source edit, which read convincingly as "the dev server was recompiling" for several rounds. Use `all_inner_texts()` (or `all_text_contents()`), which is one call and one snapshot. This matters most inside `eventually`, where the whole design assumes a cheap read that can be retried.
 
 - **Making the server faster breaks browser tests, and the tests were always wrong.** A slow request is an accidental barrier: while it is in flight the page cannot finish rendering, so an assertion written with no wait gets one for free. Remove the slowness and every test leaning on that barrier fails in the same run, which looks exactly like the change broke the feature. Two of these landed in one session. §186 dropped `/ontology-search` from 4.5s to 0.37s and two headings that had always arrived one at a time started arriving together, making a non-`exact` `get_by_role` locator ambiguous. §188 dropped `/projects` from 1.1s to 30ms and two `test_widget_config_tabs.py` tests began reading an object table's height and header count in the ~150ms between "the widget's frame is visible" and "its rows have arrived" — a gap `settled()` does not close, because it waits for a `.canvas-block` and the frame *is* one. **The tell is that the API answers are identical**: diff the responses under both settings first, and when they match, stop looking for a permissions or data bug and get a timeline of requests versus assertions instead. The fix is always a wait for the thing actually being measured, placed in the shared helper rather than in the test that happened to fail.
+
+- **A Playwright assertion that can be satisfied by a transient state is not an assertion.** `to_be_visible` retries until it sees what it wants and then stops looking: a wrong *first* frame is forgiven, and a wrong *last* frame is never examined. §189 found a mutant that showed the correct page for 250ms and then went somewhere else, with the whole test file having run and passed inside that window. The pattern to watch for is a page whose state depends on something arriving asynchronously — a resolved variable, a fetched row — because before it arrives the state is often *legitimately* the one the test is checking for. The fix is an ordering rule rather than a longer timeout: wait for evidence the async thing has landed (a marker variable, a value drawn on screen), and only then assert the thing under test. A related trap in the same family: if the not-yet-loaded state happens to equal the expected answer, the check passes against a build that never implemented the feature at all.
+
+- **A mutation harness that runs only behavioural layers will tell you to delete your type contracts.** §189 had a line whose removal changed no behaviour — a null guard the callee happened to tolerate — so every test passed and it read as dead code. `tsc` was what refused it. Any repo that mutation-tests TypeScript needs a types layer in the harness alongside the test layers, or the discipline quietly argues for deleting every line whose job is to make a type check out.
 
 - **Craft.js gives a canvas widget its children as one Fragment, not a list.** `React.Children.toArray(children)` therefore returns a one-element array however many widgets the node contains, and nothing errors — §78's sections all rendered as a single column until this was found. Any canvas widget that needs to treat its children individually (a section, a grid, anything positional) must go through `childList()` in `widgets.tsx` rather than `React.Children` directly.
 - **An undefined CSS custom property is silently nothing, not an error.** `background: var(--surface)` in a repo whose variable is `--panel` renders transparent, and a structural browser check will pass straight through it — this bit twice (§78's overlay panel, and `.repo-preview-table th` before it). A check on something that must be *visible* should assert a computed colour, not just the element's presence.

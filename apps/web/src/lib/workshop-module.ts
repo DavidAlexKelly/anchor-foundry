@@ -72,11 +72,17 @@ export function moduleFrom(
     events?: Record<string, WorkshopEvent>;
     routing?: { enabled: boolean };
     stateSaving?: WorkshopModule["state_saving"];
+    /** The variable backing page selection (p.81). `""` clears it — which is
+     * why this is `string` rather than `string | undefined`: an undefined
+     * would be indistinguishable from "not part of this save" and would make
+     * the setting impossible to turn off. */
+    pageSelection?: string;
   },
 ): WorkshopModule {
   const current = isV2(definition) ? definition : undefined;
   const routing = parts.routing ?? current?.routing;
   const stateSaving = parts.stateSaving ?? current?.state_saving;
+  const pageSelection = parts.pageSelection ?? current?.page_selection;
   return {
     format: 2,
     layout: parts.layout ?? layoutOf(definition),
@@ -88,12 +94,28 @@ export function moduleFrom(
     // of quiet loss `broken_bindings` is carried to avoid.
     ...(routing ? { routing } : {}),
     ...(stateSaving ? { state_saving: stateSaving } : {}),
+    // Same carry, same reason. Omitted when empty rather than written as `""`
+    // so that turning it off leaves a document indistinguishable from one that
+    // never had it - the server reads absent and empty alike, and a stored
+    // empty string is a setting that looks configured in a diff.
+    ...(pageSelection ? { page_selection: pageSelection } : {}),
   };
 }
 
 /** Whether a module writes its state to the URL (p.195). */
 export function routingOf(definition: unknown): boolean {
   return isV2(definition) ? Boolean(definition.routing?.enabled) : false;
+}
+
+/** The variable backing Variable-Based Page Selection, or "" (p.81).
+ *
+ * Empty string rather than null for the reason `moduleFrom` takes one: this is
+ * the value of a `<select>`, and a control whose "none" is null needs every
+ * reader to convert it back.
+ */
+export function pageSelectionOf(definition: unknown): string {
+  const stored = isV2(definition) ? definition.page_selection : undefined;
+  return typeof stored === "string" ? stored : "";
 }
 
 /** A module's state-saving settings (p.201, p.204), with Foundry's own default

@@ -175,6 +175,14 @@ export interface WorkshopModule {
     /** p.200: "optionally, the current page that a user is viewing". */
     include_page?: boolean;
   };
+  /** The id of the string variable backing Variable-Based Page Selection
+   * (p.81), or absent for a module whose pages are only reached by events.
+   *
+   * A variable id, so it belongs beside the variables for `routing`'s reason.
+   * Its *value* is an author-set page ID — the same identifier routing writes
+   * to the URL — rather than a layout node id, which is generated and would
+   * change under an author who recreated a page. */
+  page_selection?: string;
 }
 
 /** Reserved now, built in roadmap item 1.2. `object_set` is the one that
