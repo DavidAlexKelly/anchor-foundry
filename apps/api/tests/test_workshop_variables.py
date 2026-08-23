@@ -1693,6 +1693,75 @@ def test_a_routing_block_nothing_can_read_is_refused_at_save() -> None:
         wv.validate_module({**module({}, {}), "routing": "yes please"})
 
 
+# ---- variable-based page selection (p.81) ------------------------------------
+def _with_page_selection(value, variables: dict | None = None) -> dict:
+    return {**module(variables or {"v_page": var("v_page")}), "page_selection": value}
+
+
+def test_a_module_says_which_variable_backs_its_page_selection() -> None:
+    """p.81's option, in the *document* beside routing and the variables - it
+    names one of them, so a revert that restored one without the other would
+    leave the setting pointing at nothing."""
+    assert wv.page_selection(module({})) is None
+    assert wv.page_selection(_with_page_selection("v_page")) == "v_page"
+
+
+def test_an_absent_or_empty_page_selection_means_none() -> None:
+    """Both spellings, because the browser writes the key away rather than
+    storing `""` and a document can arrive from anywhere."""
+    assert wv.page_selection(_with_page_selection(None)) is None
+    assert wv.page_selection(_with_page_selection("")) is None
+    assert wv.page_selection(_with_page_selection("   ")) is None
+
+
+def test_page_selection_naming_a_variable_that_is_not_there_is_refused() -> None:
+    """The refusal that earns its keep. A setting pointing at a deleted
+    variable is page selection that silently stops working - the module opens
+    on its first page and nothing says why."""
+    with pytest.raises(wv.VariableError, match="not a variable in this module"):
+        wv.validate_module(_with_page_selection("v_gone"))
+
+
+def test_page_selection_must_name_a_string_variable() -> None:
+    """p.81: "a string variable". The value is a page ID, so any other kind
+    can only ever fail to match one."""
+    # Every kind that is declarable without further configuration. An
+    # `object_set` is refused one rule earlier - it needs an object type - so
+    # including it here would test that rule rather than this one.
+    for kind in ("number", "boolean", "date", "timestamp"):
+        with pytest.raises(wv.VariableError, match=f"is a {kind} variable"):
+            wv.validate_module(
+                _with_page_selection("v_page", {"v_page": var("v_page", kind=kind)})
+            )
+
+
+def test_page_selection_that_is_not_a_string_is_refused() -> None:
+    for bad in (True, 7, ["v_page"], {"variable": "v_page"}):
+        with pytest.raises(wv.VariableError, match="`page_selection` must be"):
+            wv.validate_module(_with_page_selection(bad))
+
+
+def test_a_valid_page_selection_saves() -> None:
+    """The positive case, so the four refusals above are not all this rule
+    can do."""
+    wv.validate_module(_with_page_selection("v_page"))
+
+
+def test_page_selection_does_not_check_the_value_against_the_pages() -> None:
+    """**Deliberately not checked**, and the asymmetry is the interesting part.
+
+    The variable's *kind* can never work if it is wrong, so the server refuses
+    it. The variable's *value* is a page ID resolved at render time, and a page
+    can be added or deleted long after a save - so refusing a value that
+    currently names no page would make a valid module stop saving because
+    somebody renamed a page. p.197's rule ("return to the default page") is a
+    rendering decision, and `page-selection.ts` is where it lives.
+    """
+    document = _with_page_selection("v_page", {"v_page": var("v_page", default="nowhere")})
+    document["layout"] = {}  # not one page in the module, let alone that one
+    wv.validate_module(document)
+
+
 def test_a_filter_control_counts_as_a_usage() -> None:
     """The Filter control declares its variable through `name`
     (`workshop_format.DECLARING_PROP`), which after the format-2 conversion

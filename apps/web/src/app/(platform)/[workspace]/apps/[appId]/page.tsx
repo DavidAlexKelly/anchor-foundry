@@ -34,7 +34,7 @@ import { seedFromQuery } from "@/components/canvas/pure";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import {
-  eventsOf, layoutOf, routingOf, stateSavingOf, variablesOf,
+  eventsOf, layoutOf, pageSelectionOf, routingOf, stateSavingOf, variablesOf,
 } from "@/lib/workshop-module";
 
 /** Craft.js's `enabled` option is what makes a node draggable, selectable and
@@ -138,6 +138,7 @@ export default function PublishedAppPage() {
                 published
                 routing={routingOf(app.data.definition)}
                 layout={definition}
+                pageSelection={pageSelectionOf(app.data.definition) || undefined}
                 stateSaving={stateSavingOf(app.data.definition)}
               >
                 <ReadOnlyFrame definition={definition} />

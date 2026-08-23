@@ -33,6 +33,8 @@ import {
 } from "./context";
 import { invalidateCanvasReads } from "./refresh";
 import type { CollapseOverride } from "./collapse";
+import { asPageId, pageState, type PageOverride } from "./page-selection";
+import { defaultPageNode, pageNodeFor } from "./routing";
 import { RoutingSync } from "./RoutingSync";
 import { StateBar } from "./StateBar";
 
@@ -48,6 +50,7 @@ export function VariableBridge({
   bound,
   routing = false,
   layout,
+  pageSelection,
   stateSaving,
   children,
 }: {
@@ -74,6 +77,13 @@ export function VariableBridge({
   routing?: boolean;
   /** The layout, for the page walk routing and state saving both need. */
   layout?: unknown;
+  /** The id of the string variable backing page selection (p.81), if any.
+   *
+   * Viewer routes only, like `routing` and for the same reason: in the builder
+   * every page is on screen at once, so a variable deciding which one shows
+   * would have nothing to decide — and an author arranging widgets on page two
+   * should not have it vanish because a filter changed. */
+  pageSelection?: string;
   /** State-saving settings (p.201, p.204). Passed by the *viewer* routes only:
    * p.200 calls this a feature for "module consumers", and an author arranging
    * widgets has no state to save. */
@@ -121,8 +131,33 @@ export function VariableBridge({
   // The current page lives here too: it is runtime state with exactly the
   // lifetime of the variable values beside it, and a separate provider would
   // be a second thing to mount in both routes and forget in one.
-  const [page, setPage] = useState<string | null>(null);
+  //
+  // **What is held is the *override*, not the page.** p.81 gives a module two
+  // instructions - a Switch-to-Page event and a backing variable - and says
+  // the event does not write the variable, so neither can be stored as "the
+  // current page" without losing the other. `page-selection.ts` combines them
+  // on every render; what state has to remember is only what the last event
+  // said and what the variable said at the time.
+  const [pageOverride, setPageOverride] = useState<PageOverride | undefined>(undefined);
   const [overlay, setOverlay] = useState<string | null>(null);
+  // `undefined` when this module has no Variable-Based Page Selection at all,
+  // which `pageState` reads differently from a variable holding "".
+  //
+  // **It is also `undefined` for the first few hundred milliseconds** of every
+  // module that *does* have one, because `resolved` starts empty and variables
+  // are computed on the server. So a backed module opens on its default page
+  // and moves to the variable's page once the first resolve lands. That is the
+  // right behaviour - the alternative is a blank frame - and it matches p.75's
+  // lazy computation, but it is worth knowing about, because during that
+  // window an event wins unconditionally and a test written without waiting
+  // for the variable will believe whatever it sees.
+  const pageVariable = pageSelection ? resolved[pageSelection] : undefined;
+  const page = pageState(
+    pageOverride,
+    pageVariable,
+    defaultPageNode(layout),
+    (id) => pageNodeFor(layout, id),
+  );
   // p.82's collapse state, by the same argument as the page above: runtime
   // state with exactly the lifetime of the variable values beside it.
   const [collapsed, setCollapsedState] = useState<Record<string, CollapseOverride>>({});
@@ -166,7 +201,11 @@ export function VariableBridge({
           // way back.
           go: (id) => {
             setOverlay(null);
-            setPage(id);
+            // The variable's value *now* is what makes "until the variable
+            // changes" checkable later. Recorded here rather than by the
+            // caller: a Tabs widget and a `navigate` effect both call this,
+            // and only one of them could reasonably know about p.81.
+            setPageOverride({ nodeId: id, against: asPageId(pageVariable) });
           },
           overlay,
           openOverlay: setOverlay,

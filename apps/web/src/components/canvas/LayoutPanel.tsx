@@ -62,6 +62,9 @@ function detailOf(displayName: string, props: Record<string, unknown>): string {
 export function LayoutPanel({
   routing,
   onRoutingChange,
+  pageSelection = "",
+  onPageSelectionChange,
+  stringVariables = [],
   stateSaving,
   onStateSavingChange,
 }: {
@@ -71,6 +74,15 @@ export function LayoutPanel({
    * never mentions pages would be a switch nobody finds. */
   routing?: boolean;
   onRoutingChange?: (next: boolean) => void;
+  /** Variable-Based Page Selection (p.81): the id of the string variable whose
+   * value is the page ID of the page showing, or "" for none. Here for
+   * routing's reason and one more — it is the second setting on this panel
+   * that decides which page a reader sees, and the two have to be read
+   * together to be understood. */
+  pageSelection?: string;
+  onPageSelectionChange?: (next: string) => void;
+  /** The module's string variables, which is all p.81 allows. */
+  stringVariables?: { id: string; label: string }[];
   /** State saving (p.201's step 1, p.204's options). Beside routing because
    * Foundry puts both in the same Settings panel, and because they are the two
    * module-wide switches an author sets once. */
@@ -149,6 +161,44 @@ export function LayoutPanel({
             onChange={(e) => onRoutingChange(e.target.checked)}
           />
           Write state to the URL
+        </label>
+      )}
+      {onPageSelectionChange && (
+        <label className="field">
+          <span className="field-label">Page from a variable</span>
+          <select
+            value={pageSelection}
+            data-testid="page-selection"
+            onChange={(e) => onPageSelectionChange(e.target.value)}
+          >
+            <option value="">Pages are chosen by events only</option>
+            {stringVariables.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+          {/* p.81's gotcha, said here rather than left to be met as a bug:
+              "the value of this variable will not be updated as a result of a
+              Switch to Page event". Somebody who wires both and expects them
+              to stay in step has no way to discover otherwise from the
+              screen. */}
+          <span className="field-hint">
+            Its value is a page ID. A Switch-to-page event moves the reader
+            without writing it back — use a Set variable value event too if
+            you need them in step.
+          </span>
+          {/* A `<select>` whose value matches no option renders blank, which
+              reads as "none" and is the opposite of the truth: the document
+              still names a variable, and the server will refuse the next save
+              for it. Named here so the refusal is not the first anyone hears
+              of it. */}
+          {pageSelection && !stringVariables.some((v) => v.id === pageSelection) && (
+            <span className="field-hint">
+              This names a variable that is gone, or one that is no longer a
+              string. Pick another, or choose none.
+            </span>
+          )}
         </label>
       )}
       {onStateSavingChange && stateSaving && (

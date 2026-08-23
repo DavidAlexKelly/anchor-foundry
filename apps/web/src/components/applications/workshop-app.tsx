@@ -49,7 +49,8 @@ import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/compon
 import { useProjectById, useWorkspaceById } from "@/components/use-workspace";
 import { ApiError, actions as actionApi, api, canvas as canvasApi } from "@/lib/api";
 import {
-  eventsOf, hasLayout, layoutOf, moduleFrom, routingOf, stateSavingOf, variablesOf,
+  eventsOf, hasLayout, layoutOf, moduleFrom, pageSelectionOf, routingOf, stateSavingOf,
+  variablesOf,
 } from "@/lib/workshop-module";
 import { useModuleTitle } from "@/components/canvas/module-title";
 import type {
@@ -453,6 +454,7 @@ function ActionBar({
   variables,
   events,
   routing,
+  pageSelection,
   stateSaving,
   onView,
   onReverted,
@@ -465,6 +467,8 @@ function ActionBar({
   variables: Record<string, WorkshopVariable>;
   events: Record<string, WorkshopEvent>;
   routing: boolean;
+  /** The variable backing page selection (p.81), or "" for none. */
+  pageSelection: string;
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
   onView: (version: number) => void;
   onReverted: () => void;
@@ -489,6 +493,7 @@ function ActionBar({
           variables,
           events,
           routing: { enabled: routing },
+          pageSelection,
           stateSaving,
         }),
         description,
@@ -585,6 +590,7 @@ function CanvasEnvBridge({
   seed,
   routing = false,
   layout,
+  pageSelection,
   stateSaving,
   children,
 }: {
@@ -602,6 +608,11 @@ function CanvasEnvBridge({
    * counts, and for the same reason: a link is a thing you hand to somebody
    * else, and it should describe the module they will open. */
   layout?: unknown;
+  /** The variable backing Variable-Based Page Selection (p.81), or "" for
+   * none. Preview only, for routing's reason: in Edit every page is on screen
+   * at once, so a variable choosing one would hide the rest from the author
+   * arranging them. */
+  pageSelection?: string;
   /** State-saving settings (p.201). Offered in Preview only, for the reason
    * routing is: p.200 calls this a feature for module *consumers*, and an
    * author arranging widgets has no reading state worth naming. */
@@ -632,6 +643,10 @@ function CanvasEnvBridge({
           // screen at once, so "the current page" has no answer.
           routing={routing && !enabled}
           layout={layout}
+          // Preview only, by the same argument as routing one line up: in
+          // edit mode every page is on screen, so a variable choosing one
+          // would hide the others from the author arranging them.
+          pageSelection={enabled ? undefined : pageSelection || undefined}
           stateSaving={enabled ? undefined : stateSaving}
         >
           {children}
@@ -652,11 +667,17 @@ function CanvasEnvBridge({
 function Toolbox({
   routing,
   onRoutingChange,
+  pageSelection,
+  onPageSelectionChange,
+  stringVariables,
   stateSaving,
   onStateSavingChange,
 }: {
   routing: boolean;
   onRoutingChange: (next: boolean) => void;
+  pageSelection: string;
+  onPageSelectionChange: (next: string) => void;
+  stringVariables: { id: string; label: string }[];
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
@@ -667,6 +688,9 @@ function Toolbox({
       <LayoutPanel
         routing={routing}
         onRoutingChange={onRoutingChange}
+        pageSelection={pageSelection}
+        onPageSelectionChange={onPageSelectionChange}
+        stringVariables={stringVariables}
         stateSaving={stateSaving}
         onStateSavingChange={onStateSavingChange}
       />
@@ -739,6 +763,9 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // the same save, for the same reason: it is part of the document, not a
   // setting on the row beside it.
   const [routing, setRouting] = useState(false);
+  // p.81's Variable-Based Page Selection: one variable id for the whole
+  // module, saved with the document beside routing and for the same reason.
+  const [pageSelection, setPageSelection] = useState("");
   const [stateSaving, setStateSaving] = useState(() => stateSavingOf(undefined));
   const savedVersion = appQuery.data?.current_version;
   useEffect(() => {
@@ -746,6 +773,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     setVariables(variablesOf(appQuery.data.definition));
     setEvents(eventsOf(appQuery.data.definition));
     setRouting(routingOf(appQuery.data.definition));
+    setPageSelection(pageSelectionOf(appQuery.data.definition));
     setStateSaving(stateSavingOf(appQuery.data.definition));
   }, [savedVersion, appQuery.data?.id]);
 
@@ -796,6 +824,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         seed={seedFromQuery(variables, search)}
         routing={routing}
         layout={layoutOf(app.definition)}
+        pageSelection={pageSelection}
         stateSaving={stateSaving}
       >
         <ActionBar
@@ -807,6 +836,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           variables={variables}
           events={events}
           routing={routing}
+          pageSelection={pageSelection}
           stateSaving={stateSaving}
           onView={setViewingVersion}
           onReverted={() => setReloadToken((n) => n + 1)}
@@ -824,6 +854,8 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           onEventsChange={setEvents}
           routing={routing}
           onRoutingChange={setRouting}
+          pageSelection={pageSelection}
+          onPageSelectionChange={setPageSelection}
           stateSaving={stateSaving}
           onStateSavingChange={setStateSaving}
           actions={actionCandidates}
@@ -846,6 +878,8 @@ function CanvasBody({
   onEventsChange,
   routing,
   onRoutingChange,
+  pageSelection,
+  onPageSelectionChange,
   stateSaving,
   onStateSavingChange,
   actions,
@@ -862,6 +896,8 @@ function CanvasBody({
   onEventsChange: (next: Record<string, WorkshopEvent>) => void;
   routing: boolean;
   onRoutingChange: (next: boolean) => void;
+  pageSelection: string;
+  onPageSelectionChange: (next: string) => void;
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
@@ -915,6 +951,15 @@ function CanvasBody({
         <Toolbox
           routing={routing}
           onRoutingChange={onRoutingChange}
+          pageSelection={pageSelection}
+          onPageSelectionChange={onPageSelectionChange}
+          // p.81 says "a string variable", so the picker offers exactly
+          // those. The server refuses the rest - offering a choice that
+          // fails on save is what this filter exists to avoid, the same
+          // argument the section picker two blocks up makes.
+          stringVariables={Object.values(variables)
+            .filter((v) => v.kind === "string")
+            .map((v) => ({ id: v.id, label: v.label }))}
           stateSaving={stateSaving}
           onStateSavingChange={onStateSavingChange}
         />

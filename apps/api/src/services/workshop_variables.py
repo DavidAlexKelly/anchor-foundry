@@ -657,6 +657,60 @@ def routing(document: Any) -> bool:
     return bool(block.get("enabled", False))
 
 
+def page_selection(document: Any, variables: dict[str, Variable] | None = None) -> str | None:
+    """The variable backing Variable-Based Page Selection, or None (p.81).
+
+    > "If the module is using a string variable for the **Variable-Based Page
+    > Selection** option, the value of this variable will not be updated as a
+    > result of a Switch to Page event." (p.81)
+
+    One setting for the whole module, in the document for `routing`'s reason:
+    it points at a variable, and variables live in the document, so a revert
+    that restored one without the other would leave the setting naming
+    something that is not there.
+
+    **A string, and refused otherwise.** p.81 says "a string variable" and the
+    kind check is the whole of what the server can usefully enforce here — the
+    value itself is a page ID resolved at render time, and a page can be added
+    or deleted long after the document was saved, so refusing a *value* that
+    names no page would make a valid module stop saving because somebody
+    renamed a page. The browser's rule for that case is p.197's ("open the
+    default page"), which is a rendering decision rather than a legality one.
+
+    The asymmetry is deliberate and is this repo's usual split: the server owns
+    what is legal, the browser owns what to offer. A variable of the wrong kind
+    can never work; a value that currently matches nothing might tomorrow.
+    """
+    if not isinstance(document, dict):
+        return None
+    block = document.get("page_selection")
+    if block is None:
+        return None
+    if not isinstance(block, str):
+        raise VariableError(
+            "`page_selection` must be the id of a string variable, or absent"
+        )
+    vid = block.strip()
+    if not vid:
+        return None
+    if variables is None:
+        return vid
+    variable = variables.get(vid)
+    if variable is None:
+        raise VariableError(
+            f"page_selection names {vid!r}, which is not a variable in this module. "
+            "It is what decides which page a reader is looking at, so it has to "
+            "point at something"
+        )
+    if variable.kind != "string":
+        raise VariableError(
+            f"page_selection names {variable.label!r}, which is a {variable.kind} "
+            "variable. p.81 backs page selection with a string, because the value "
+            "is a page ID"
+        )
+    return vid
+
+
 def _refuse_duplicate_external_ids(variables: dict[str, Variable]) -> None:
     """Two variables cannot share an external ID.
 
@@ -1527,6 +1581,10 @@ def validate_module(
     variables = parse(document.get("variables"))
     routing(document)  # shape only; raises on a `routing` block nothing can read
     state_saving(document)  # likewise
+    # Not shape-only: this one names a variable, so it is checked against the
+    # variables just parsed. A setting pointing at a deleted variable is a
+    # module whose page selection silently stops working.
+    page_selection(document, variables)
     # Events are validated against the layout and the variables, because every
     # refusal there is about a reference resolving.
     from . import workshop_events
