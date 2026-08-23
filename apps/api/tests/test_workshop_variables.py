@@ -2229,8 +2229,19 @@ def test_the_builder_offers_every_effect_the_server_accepts() -> None:
         source, re.S,
     )
     assert block, "EFFECTS not found in EventsPanel.tsx - has it been renamed?"
-    offered = set(re.findall(r'type: "([^"]+)"', block.group(1)))
+    # **Types *and* labels, and the labels are the vacuity guard.** Reading only
+    # the types lets this test be quietly turned into a comparison of the
+    # server's list with itself - which passes for any panel at all. A label is
+    # something only the panel has: an `<option>` with no text is not an offer,
+    # so requiring one is both the check and the proof that the panel was read.
+    catalogue = dict(re.findall(r'type: "([^"]+)",\s*label: "([^"]+)"', block.group(1)))
+    offered = set(catalogue)
     assert offered, "the catalogue parsed as empty - the scan broke, not the panel"
+    assert all(catalogue.values()), catalogue
+    assert catalogue.get("reset_variable") == "Reset a variable", (
+        "the scan is not reading EventsPanel.tsx - it should have found this "
+        f"entry's label, and found {catalogue.get('reset_variable')!r}"
+    )
     accepted = set(we.EFFECTS) - set(we.PLANNED_EFFECTS)
     assert offered == accepted, (
         f"the builder offers {sorted(offered)}; the server accepts "

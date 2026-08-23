@@ -4014,6 +4014,31 @@ The third is the one that improved the test: it now saves and reloads before rea
 **1457 API tests**, 1 skipped; **263 browser tests**; **383 unit tests**; 22 mutants, all killed.
 
 ---
+
+### 193. The effects an author can actually reach (this session)
+
+p.85's **Reset {variable} value**, and the gap that turned up while adding it.
+
+**`switch_tab` was legal and unreachable.** §190 added it to the server's `EFFECTS` and never to the builder's catalogue, so it could be saved and could not be created — a feature reachable only by hand-editing the raw JSON. Nothing noticed, because the two lists are in different languages and neither is derived from the other. This is §191's shape exactly, one list over: *mirroring is not completeness, and neither is having only one copy checked.* So the entry comes with the guard — the panel's catalogue must cover exactly what the server accepts minus what it refuses with a reason. Offering a refused effect is a choice that fails on save; not offering an accepted one is the gap above.
+
+**Reset is a deletion, and that is the whole design.** p.85 says "its default value, which is the value configured in the variable definition", and the obvious implementation writes that default. Writing it is wrong for a variable an embedding module has mapped, whose definition is the *parent's* (p.128) — a value the child does not have. Deleting the viewer's value is right in both cases at once:
+
+- an unbound static variable resolves as `values.get(vid, variable.default)`, so forgetting the local value **is** "back to the definition";
+- a mapped one resolves as the host's value with the child's definition skipped entirely (p.127), so forgetting the local override **is** "back to the parent's definition".
+
+One operation, and p.128's rule falls out of the existing evaluator instead of needing a case. The reset also deliberately **never forwards to the host**, unlike `set`, which does: forwarding would have a child's Reset button edit its parent's state.
+
+p.85 offers Reset "for static variables", so the server refuses it on a derived variable and on an object set with its own definition — neither has a stored value to put back. And `recompute` joins `PLANNED_EFFECTS` beside `export`: every derived variable here recomputes on every resolve, so until §3.5's other two recompute behaviours exist there is nothing for it to trigger, and saving one would save a click that does nothing.
+
+**`events.ts` had no unit tests, and could not have had any.** It imports `context.tsx`, and a `.tsx` anywhere in the import graph is a file vitest cannot parse — so `run`, which exists to enforce p.80's ordering, was reachable only through a browser. The pure half moved to `event-run.ts` and everything is re-exported, so no call site changed; the ordering rules now have ten unit tests. The case that motivated the split is the one this unit created: a Set and a Reset of the same variable are applied through *different* capabilities at the end of a run — one a write, one a deletion — so whichever came last has to win, and nothing about the code's shape makes that automatic.
+
+**Fifteen mutants: fourteen killed, one equivalent.** Writing `next[name] = undefined` instead of `delete next[name]` survives, and this time the equivalence was established rather than assumed: the only consumer of the map's *shape* is `JSON.stringify(values)` — the bridge's resolve dependency and its request body — and `JSON.stringify({a: undefined, b: 1})` is `{"b":1}`, identical to the deleted case. Every other reader accesses by key, where absent and `undefined` are the same. `delete` stays because a map that accumulates undefined keys across resets is untidy, not because anything can tell.
+
+One mutant was withdrawn rather than fixed: "make the catalogue guard compare the server's list to itself" is neutering an assertion, which any test permits and which proves nothing. Replaced by the failure that can genuinely happen — the scan quietly ceasing to match the panel's format after a reformat — which the guard's label assertion kills.
+
+**1463 API tests** (was 1457), 1 skipped; **393 unit tests**; 15 mutants, 14 killed and 1 equivalent.
+
+---
 ---
 ---
 ---
@@ -4078,6 +4103,10 @@ The third is the one that improved the test: it now saves and reloads before rea
 - **A Playwright assertion that can be satisfied by a transient state is not an assertion.** `to_be_visible` retries until it sees what it wants and then stops looking: a wrong *first* frame is forgiven, and a wrong *last* frame is never examined. §189 found a mutant that showed the correct page for 250ms and then went somewhere else, with the whole test file having run and passed inside that window. The pattern to watch for is a page whose state depends on something arriving asynchronously — a resolved variable, a fetched row — because before it arrives the state is often *legitimately* the one the test is checking for. The fix is an ordering rule rather than a longer timeout: wait for evidence the async thing has landed (a marker variable, a value drawn on screen), and only then assert the thing under test. A related trap in the same family: if the not-yet-loaded state happens to equal the expected answer, the check passes against a build that never implemented the feature at all.
 
 - **When a browser test fails, ask whether the fixture is posing the question before asking whether the code is wrong.** §192 lost three rounds to fixtures rather than to the feature: a widget bound by `{{...}}` interpolation, which nothing in this system counts as a variable usage; a `get_by_text` that also matched the Layout panel's row detail and so counted every widget twice; and a read of the Variables panel's usage counts *before* a save, when that panel is computed from the saved definition and is still describing the previous document. All three read as "the feature is broken". The tell is a failure whose number is wrong in a way the feature could not produce — four copies where the paste ran once, a variable "unused" that is visibly on screen.
+
+- **A vitest unit test cannot reach any module whose import graph touches a `.tsx`.** The parse fails on the JSX, so the failure is "cannot parse", not "module not found", and it points at a file you did not write a test for. §193 hit it on `events.ts`, which had no unit tests at all for that reason — the ordering rules it exists to enforce were only ever checked through a browser. The fix is a split: pure logic into a `.ts` with no React imports, the hook left behind in a file that re-exports it, so no call site changes. Worth doing the moment a module has arithmetic worth testing, rather than after months of browser-only coverage.
+
+- **Not every mutant is worth killing — some are sabotage rather than a plausible mistake.** §193 wrote one that rewrites a guard's comparison to read the server's own list, making the test a tautology. It survived, and the right response was to withdraw it: any assertion can be neutered, and proving so says nothing about the code. The useful version is the failure that happens by accident — a scan that quietly stops matching after a reformat — which a vacuity assertion does kill. When a mutant survives, ask whether a maintainer could have written it by mistake before treating it as a hole.
 
 - **A check that compares two copies is blind to anything missing from both.** §191's `REFERENCE_PROPS` had a drift guard asserting the API's list and the browser's matched — and they did, identically wrong, for two props across two units. Mirroring is not completeness. When a list has to be exhaustive, at least one check has to compare it against the *thing it describes* rather than against another copy of itself: here, against the props the builder's settings panels actually read. The same reasoning applies to any pair of mirrored files this repo keeps in step.
 
