@@ -45,6 +45,9 @@ EFFECTS = (
     # p.82's three, which Foundry groups with `navigate` under "Layout events":
     # they change "the on-screen display within a Workshop module".
     "expand_section", "collapse_section", "toggle_section",
+    # p.84's "Switch to {tab name}", grouped with the same Layout events - and
+    # the one of them that behaves differently, see `switch_tab` below.
+    "switch_tab",
 )
 
 # The three above, and the fact that binds them: each names a section.
@@ -88,6 +91,16 @@ HEADER_WIDGET = "CanvasHeader"
 
 # A section, which is what p.82's three effects act on.
 SECTION_WIDGET = "CanvasSection"
+
+# The section layout that has tabs (p.54). `switch_tab` is offered "for each
+# Tab section in the module", so a section arranged any other way has no tabs
+# for an event to switch between.
+TABS_DIRECTION = "tabs"
+
+# How many tabs one section may have. Not a storage limit - it is the point
+# past which a tab strip stops being one, and a module that wants forty
+# configurations wants pages or a variable, not a row of forty buttons.
+MAX_TABS = 20
 
 # What a `set_variable` may write instead of a template value.
 #
@@ -180,6 +193,53 @@ def collapsible_sections(layout: Any) -> list[str]:
     return found
 
 
+def tab_sections(layout: Any) -> dict[str, list[str]]:
+    """Every Tabs section, mapped to its tab names (p.54, p.84).
+
+    **The names, not just the ids**, because p.84's event addresses a tab by
+    name - "a Switch to {tab name} event will be added for each tab in the
+    section" - so validating one means knowing what this section's tabs are
+    called. That is a function of two props (the author's `tabs` list) and one
+    structural fact (how many children the section has), which is why it is
+    computed here rather than read off a single field.
+
+    **Mirrors `tabLabels` in `components/canvas/tab-selection.ts`**, and the
+    mirroring is deliberate rather than accidental: the server is what refuses
+    a save, so this copy decides only what is *legal*. If the two drift, the
+    browser will draw a tab the server will not let an event name - which is
+    exactly the failure `test_workshop_events.py` asserts against by walking
+    the same cases the unit test does.
+    """
+    out: dict[str, list[str]] = {}
+    if not isinstance(layout, dict):
+        return out
+    for node_id in pages(layout, widget=SECTION_WIDGET):
+        node = layout.get(node_id)
+        props = node.get("props") if isinstance(node, dict) else None
+        if not isinstance(props, dict) or props.get("direction") != TABS_DIRECTION:
+            continue
+        children = node.get("nodes") if isinstance(node, dict) else None
+        count = len(children) if isinstance(children, list) else 0
+        out[node_id] = _tab_labels(props.get("tabs"), count)
+    return out
+
+
+def _tab_labels(spec: Any, count: int) -> list[str]:
+    """One label per child, numbered where unnamed and de-duplicated."""
+    given = [name.strip() for name in str(spec or "").split(",")]
+    labels: list[str] = []
+    seen: set[str] = set()
+    for index in range(count):
+        base = (given[index] if index < len(given) else "") or f"Tab {index + 1}"
+        name, suffix = base, 2
+        while name in seen:
+            name = f"{base} {suffix}"
+            suffix += 1
+        seen.add(name)
+        labels.append(name)
+    return labels
+
+
 def headers(layout: Any) -> list[str]:
     """Node ids of every header, same reading as `pages`.
 
@@ -222,6 +282,7 @@ def parse(
     # A navigate may target either; what differs is what the browser does.
     page_ids = set(pages(layout)) | set(overlays(layout))
     collapsible = set(collapsible_sections(layout))
+    tabbed = tab_sections(layout)
     declared = variables or {}
 
     events: dict[str, Event] = {}
@@ -258,7 +319,7 @@ def parse(
         if len(raw_effects) > MAX_EFFECTS:
             raise EventError(f"event {key!r} may have at most {MAX_EFFECTS} effects")
         effects = tuple(
-            _parse_effect(eid, e, declared, nodes, page_ids, actions, collapsible)
+            _parse_effect(eid, e, declared, nodes, page_ids, actions, collapsible, tabbed)
             for e in raw_effects
         )
         events[eid] = Event(id=eid, node=node, on=on, effects=effects)
@@ -273,6 +334,7 @@ def _parse_effect(
     page_ids: set[str] | None = None,
     actions: dict[str, list[str]] | None = None,
     collapsible: set[str] | None = None,
+    tabbed: dict[str, list[str]] | None = None,
 ) -> Effect:
     if not isinstance(raw, dict):
         raise EventError(f"event {eid!r}: each effect must be an object")
@@ -411,6 +473,39 @@ def _parse_effect(
                 f"event {eid!r} {kind.split('_')[0]}s {target!r}, which is not a "
                 "collapsible section - turn on Collapsible in its settings first"
             )
+    elif kind == "switch_tab":
+        # **p.84's event, and the one Layout event that writes its variable.**
+        # That difference lives in the browser (`tab-selection.ts` and
+        # `CanvasSection`); what is checkable here is that the event names a
+        # tab that exists, which is the same class of refusal as the three
+        # above and fails the same way if it is not made: a click that does
+        # nothing.
+        target = config.get("section")
+        if not target or not isinstance(target, str):
+            raise EventError(f"event {eid!r}: switch_tab needs a section to act on")
+        if nodes is not None and target not in nodes:
+            raise EventError(
+                f"event {eid!r} switches a tab in {target!r}, which this layout "
+                "does not contain"
+            )
+        name = config.get("tab")
+        if not name or not isinstance(name, str):
+            raise EventError(f"event {eid!r}: switch_tab needs a tab to switch to")
+        if tabbed is not None and nodes is not None:
+            if target not in tabbed:
+                raise EventError(
+                    f"event {eid!r} switches a tab in {target!r}, which is not a Tabs "
+                    "section - set its layout to Tabs first"
+                )
+            if name not in tabbed[target]:
+                # Named against the tabs that *are* there, because the usual
+                # cause is a rename: the event was right when it was written
+                # and the section moved underneath it.
+                offered = ", ".join(repr(t) for t in tabbed[target]) or "none"
+                raise EventError(
+                    f"event {eid!r} switches to tab {name!r}, which {target!r} does "
+                    f"not have. Its tabs are: {offered}"
+                )
     elif kind == "open_url":
         url = config.get("url")
         if not url or not isinstance(url, str):

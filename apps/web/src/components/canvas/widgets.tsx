@@ -22,6 +22,7 @@ import {
   schemeFor, styleFor, type BorderName, type PaddingName, type StyleProps,
 } from "./style";
 import { asCollapsed, collapseState } from "./collapse";
+import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
 import {
   CanvasHeaderCollapsedContext,
@@ -4694,6 +4695,7 @@ function childList(children: React.ReactNode): React.ReactNode[] {
 const SECTION_LABELS: Record<string, string> = {
   columns: "Columns",
   rows: "Rows",
+  tabs: "Tabs",
   flow: "Flow",
   toolbar: "Toolbar",
 };
@@ -4713,6 +4715,8 @@ export function CanvasSection({
   collapsedByDefault = false,
   collapsedWhen = null,
   title = "",
+  tabs = "",
+  tabVariable = null,
   children,
 }: {
   /** p.55: "Collapsible sections, with Expand / Collapse / Toggle events".
@@ -4733,8 +4737,17 @@ export function CanvasSection({
   padding?: PaddingName | null;
   customPadding?: readonly [number, number] | null;
   border?: BorderName | null;
-  /** Foundry's section layouts (p.54). Columns, Rows and Tabs were here; Flow
-   * and Toolbar are the two that are a *section* rather than a widget.
+  /** Foundry's section layouts (p.54).
+   *
+   * - **Tabs** — "adds tabs to the top of a section and allows module builders
+   *   to configure different configurations of widgets within each tab". One
+   *   child per tab; a tab holding several widgets is a child that is itself a
+   *   section, which is p.54's own "a layout, which itself may contain one or
+   *   more sections". **This used to be the Tabs *widget*, which switches
+   *   pages** - a substitution this file's own comment called "the same idea
+   *   one level up". It is not: a module has one set of pages, so two
+   *   independent tab groups side by side could not be expressed, and p.84's
+   *   Variable-Based Tab Selection had nothing to attach to.
    *
    * - **Flow** — "turns the current section in a vertically scrolling container
    *   to allow module building to configure widgets that stretch beyond the
@@ -4745,7 +4758,15 @@ export function CanvasSection({
    *   optimized for smaller widgets like Button Groups or Metric Cards". So:
    *   columns, but children take the width they need instead of an equal share,
    *   which is what stops three buttons spreading across a whole page. */
-  direction?: "columns" | "rows" | "flow" | "toolbar";
+  direction?: "columns" | "rows" | "tabs" | "flow" | "toolbar";
+  /** Tabs only: comma-separated tab names, one per child, in the same idiom as
+   * `weights`. Blank or short entries become "Tab 3". */
+  tabs?: string;
+  /** Tabs only: p.84's Variable-Based Tab Selection - the string variable
+   * holding the selected tab's name. **Unlike `collapsedWhen` one field up,
+   * this one *is* written** when the tab changes, which is p.84's own stated
+   * difference from the page and section events. */
+  tabVariable?: string | null;
   /** Rows only: p.54's "Enable scrolling" option. */
   scroll?: boolean;
   /** How tall a **row** section is, in pixels. Blank means "as tall as its
@@ -4789,10 +4810,35 @@ export function CanvasSection({
       collapsedByDefault,
     );
   // Only Columns and Rows divide their space between children, so only they
-  // have proportions to configure or handles to drag. Flow and Toolbar are
-  // about *not* doing that.
+  // have proportions to configure or handles to drag. Tabs, Flow and Toolbar
+  // are about *not* doing that.
   const shares = direction === "columns" || direction === "rows";
   const parts = childList(children);
+
+  // p.54's Tabs layout and p.84's variable. Computed unconditionally, for the
+  // reason the collapse block above gives: a hook whose presence depends on a
+  // prop somebody can toggle is a hook-order bug waiting for the first author
+  // who changes the layout dropdown.
+  const { tabs: tabOverrides, setTab } = useCanvasPage();
+  const { set: setVariable } = useCanvasParameters();
+  const tabbed = direction === "tabs";
+  const labels = tabbed ? tabLabels(tabs, parts.length) : [];
+  const tabBacking = useCanvasVariable(tabVariable);
+  const showing = activeTab(
+    tabOverrides[nodeId],
+    tabVariable ? tabBacking : undefined,
+    labels,
+  );
+  const chooseTab = (name: string) => {
+    setTab(nodeId, { name, against: asTabName(tabBacking, labels) });
+    // **p.84's whole difference from p.81 and p.82, in one line.** "Events
+    // that change the selected tab will also update the value of the string
+    // variable configured for Variable-Based Tab Selection." The override
+    // above is still needed - the write takes a debounce and a round trip to
+    // come back, and the tab has to move now - but it retires when the
+    // variable returns agreeing with it.
+    if (tabVariable) setVariable(tabVariable, name);
+  };
   const parsed = parseWeights(weights, parts.length);
 
   const partsRef = React.useRef<HTMLDivElement>(null);
@@ -4888,6 +4934,45 @@ export function CanvasSection({
           <span aria-hidden="true">{shut ? "▸" : "▾"}</span> {title || "Section"}
         </button>
       )}
+      {tabbed && labels.length > 0 && (
+        // `tablist`/`tab`/`tabpanel` rather than a row of buttons: the roles
+        // are what make arrow keys, "tab 2 of 3" and the panel association
+        // work for anything that is not a mouse, and a tab bar is exactly the
+        // widget those roles were written for.
+        <div className="canvas-tabstrip" role="tablist" aria-label={title || "Tabs"}>
+          {labels.map((name) => (
+            <button
+              key={name}
+              type="button"
+              role="tab"
+              id={`${nodeId}-tab-${name}`}
+              aria-selected={name === showing}
+              aria-controls={`${nodeId}-panel-${name}`}
+              // Only the selected tab is in the tab order; the rest are
+              // reached with the arrow keys, which is the tablist convention
+              // and stops a five-tab section costing five presses to pass.
+              tabIndex={name === showing ? 0 : -1}
+              className={`canvas-tabstrip-tab${name === showing ? " on" : ""}`}
+              onClick={() => chooseTab(name)}
+              onKeyDown={(event) => {
+                const step = event.key === "ArrowRight" ? 1
+                  : event.key === "ArrowLeft" ? -1 : 0;
+                if (!step) return;
+                event.preventDefault();
+                // `showing` is one of `labels` whenever there is a tab at all,
+                // and this handler only exists on a rendered tab - but the
+                // index arithmetic is written so that neither fact has to be
+                // true for it to be safe.
+                const at = showing ? labels.indexOf(showing) : 0;
+                const next = labels[(at + step + labels.length) % labels.length];
+                if (next) chooseTab(next);
+              }}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
       {/* A section fills itself with its children, so in the builder there is
           otherwise nowhere to click that is the section rather than a widget
           inside it - and its settings (proportions, direction, gap) would be
@@ -4917,6 +5002,23 @@ export function CanvasSection({
           <React.Fragment key={index}>
             <div
               className="canvas-section-part"
+              {...(tabbed
+                ? {
+                  role: "tabpanel",
+                  id: `${nodeId}-panel-${labels[index]}`,
+                  "aria-labelledby": `${nodeId}-tab-${labels[index]}`,
+                  // **In the builder every tab is on screen**, stacked, for
+                  // `CanvasPage`'s reason one level up: hiding all but one
+                  // would make the other tabs uneditable without a tab
+                  // switcher in the chrome, and would hide from the author
+                  // that they exist. In the running app exactly one shows.
+                  //
+                  // `hidden` rather than unmounted, like a collapsed section:
+                  // a table in a tab nobody is looking at should not refetch
+                  // every time somebody comes back to it.
+                  hidden: mode === "run" && labels[index] !== showing,
+                }
+                : {})}
               // `flex-grow` rather than a width: the children then share
               // whatever is left after gaps, so the arithmetic does not have to
               // know how many gaps there are.
@@ -4977,6 +5079,8 @@ function SectionSettings() {
     collapsedByDefault,
     collapsedWhen,
     title,
+    tabs,
+    tabVariable,
     actions: { setProp },
   } = useNode((node) => ({
     direction: node.data.props.direction,
@@ -4989,6 +5093,8 @@ function SectionSettings() {
     collapsedByDefault: node.data.props.collapsedByDefault,
     collapsedWhen: node.data.props.collapsedWhen,
     title: node.data.props.title,
+    tabs: node.data.props.tabs,
+    tabVariable: node.data.props.tabVariable,
   }));
   const { declared } = useCanvasVariables();
   return (
@@ -5005,6 +5111,7 @@ function SectionSettings() {
         >
           <option value="columns">Columns</option>
           <option value="rows">Rows</option>
+          <option value="tabs">Tabs</option>
           <option value="flow">Flow</option>
           <option value="toolbar">Toolbar</option>
         </select>
@@ -5013,9 +5120,54 @@ function SectionSettings() {
             ? "A vertically scrolling container for content taller than the screen"
             : direction === "toolbar"
               ? "A horizontal strip; its widgets keep their own width"
-              : "Its widgets share the space by the proportions below"}
+              : direction === "tabs"
+                ? "One tab per widget in it; put a section in a tab to hold several"
+                : "Its widgets share the space by the proportions below"}
         </span>
       </label>
+      {direction === "tabs" && (
+        <>
+          <label className="field">
+            <span className="field-label">Tab names</span>
+            <input
+              value={tabs ?? ""}
+              placeholder="Tab 1, Tab 2"
+              data-testid="section-tabs"
+              onChange={(e) => setProp((p: { tabs: string }) => (p.tabs = e.target.value))}
+            />
+            <span className="field-hint">
+              One name per widget, comma separated. A name is how an event and
+              a variable address a tab, so duplicates get a number.
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">Tab from a variable</span>
+            <select
+              value={tabVariable ?? ""}
+              data-testid="section-tab-variable"
+              onChange={(e) =>
+                setProp((p: { tabVariable: string | null }) => {
+                  p.tabVariable = e.target.value || null;
+                })
+              }
+            >
+              <option value="">Tabs are chosen by clicking only</option>
+              {Object.values(declared)
+                .filter((v) => v.kind === "string")
+                .map((v) => (
+                  <option key={v.id} value={v.id}>{v.label}</option>
+                ))}
+            </select>
+            {/* p.84's difference from p.81 and p.82, said here because an
+                author who has met the other two will expect this one to
+                behave the same way and it does not. */}
+            <span className="field-hint">
+              Holds the selected tab&apos;s name. Unlike a page or a section,
+              changing the tab <strong>does</strong> write this variable back.
+            </span>
+          </label>
+        </>
+      )}
       {(direction ?? "columns") !== "flow" && direction !== "toolbar" && (
       <label className="field">
         <span className="field-label">Proportions</span>
@@ -5148,6 +5300,7 @@ CanvasSection.craft = {
     direction: "columns", weights: "", gap: 12, minHeight: 0, visibleWhen: null, scroll: false,
     background: null, padding: null, customPadding: null, border: null,
     collapsible: false, collapsedByDefault: false, collapsedWhen: null, title: "",
+    tabs: "", tabVariable: null,
   },
   isCanvas: true,
   related: { settings: SectionSettings },

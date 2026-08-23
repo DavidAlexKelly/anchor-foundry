@@ -2037,6 +2037,138 @@ def test_following_a_link_from_something_that_is_not_a_set_is_refused() -> None:
         wv.evaluate(variables, {"v_text": "north"})
 
 
+# ---- tabs sections and p.84's switch_tab (p.54, p.84) ------------------------
+def tabs_layout(*, tabs: str = "Overview,Details", children: int = 2,
+                direction: str = "tabs", tab_variable=None) -> dict:
+    kids = [f"t{i}" for i in range(children)]
+    layout = {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["sec", "btn"]},
+        "sec": {
+            "type": {"resolvedName": "CanvasSection"},
+            "props": {"direction": direction, "tabs": tabs,
+                      **({"tabVariable": tab_variable} if tab_variable is not None else {})},
+            "nodes": kids,
+        },
+        "btn": node({}),
+        **{k: {**node({}), "parent": "sec"} for k in kids},
+    }
+    return layout
+
+
+def switch_tab(tab: str = "Details", section: str = "sec") -> dict:
+    return {"type": "switch_tab", "config": {"section": section, "tab": tab}}
+
+
+def test_a_tabs_section_reports_its_tab_names() -> None:
+    """p.84 addresses a tab by name - "a Switch to {tab name} event will be
+    added for each tab in the section" - so validating one means knowing what
+    this section's tabs are called."""
+    assert we.tab_sections(tabs_layout()) == {"sec": ["Overview", "Details"]}
+
+
+def test_only_a_tabs_section_has_tabs() -> None:
+    """Same qualifier as p.82's "collapsible section", and the same refusal
+    depends on it: a Columns section has no tabs to switch between."""
+    assert we.tab_sections(tabs_layout(direction="columns")) == {}
+
+
+def test_tab_names_are_numbered_where_unnamed_and_made_unique() -> None:
+    """**Mirrors `tabLabels` in `tab-selection.ts`**, and this is the assertion
+    that keeps the two in step: if they drift, the browser draws a tab the
+    server will not let an event name."""
+    assert we.tab_sections(tabs_layout(tabs="Overview", children=3)) == {
+        "sec": ["Overview", "Tab 2", "Tab 3"],
+    }
+    assert we.tab_sections(tabs_layout(tabs="Same,Same", children=2)) == {
+        "sec": ["Same", "Same 2"],
+    }
+    assert we.tab_sections(tabs_layout(tabs="A,B,C", children=2)) == {"sec": ["A", "B"]}
+
+
+def test_switching_to_a_tab_that_exists_is_accepted() -> None:
+    events = we.parse({"e_1": event("e_1", effects=[switch_tab()])}, layout=tabs_layout())
+    assert [e.type for e in events["e_1"].effects] == ["switch_tab"]
+
+
+def test_switch_tab_needs_a_section_and_a_tab() -> None:
+    with pytest.raises(we.EventError, match="needs a section"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "switch_tab", "config": {}}])},
+                 layout=tabs_layout())
+    with pytest.raises(we.EventError, match="needs a tab"):
+        we.parse(
+            {"e_1": event("e_1", effects=[{"type": "switch_tab",
+                                           "config": {"section": "sec"}}])},
+            layout=tabs_layout(),
+        )
+
+
+def test_switching_a_tab_in_a_section_that_is_not_tabbed_is_refused() -> None:
+    """p.84 offers the event "for each Tab section", and a Columns section has
+    no tabs - so this would save a button that does nothing."""
+    with pytest.raises(we.EventError, match="not a Tabs section"):
+        we.parse({"e_1": event("e_1", effects=[switch_tab()])},
+                 layout=tabs_layout(direction="columns"))
+
+
+def test_switching_to_a_tab_the_section_does_not_have_is_refused() -> None:
+    """The usual cause is a rename: the event was right when it was written
+    and the section moved underneath it. So the refusal names the tabs that
+    *are* there."""
+    with pytest.raises(we.EventError, match="Its tabs are: 'Overview', 'Details'"):
+        we.parse({"e_1": event("e_1", effects=[switch_tab("Histroy")])},
+                 layout=tabs_layout())
+
+
+def test_switching_a_tab_in_a_node_that_is_not_there_is_refused() -> None:
+    with pytest.raises(we.EventError, match="does not contain"):
+        we.parse({"e_1": event("e_1", effects=[switch_tab("Details", "gone")])},
+                 layout=tabs_layout())
+
+
+def tabs_module(**kwargs) -> dict:
+    variables = kwargs.pop("variables", {"v_tab": var("v_tab")})
+    return {"format": 2, "layout": tabs_layout(**kwargs),
+            "variables": variables, "events": {}}
+
+
+def test_a_tab_variable_must_name_a_declared_string() -> None:
+    """The section-level twin of `page_selection`, and the argument is
+    identical: p.84 says "the string variable configured for Variable-Based
+    Tab Selection"."""
+    wv.validate_module(tabs_module(tab_variable="v_tab"))
+    with pytest.raises(wv.VariableError, match="not a variable in this module"):
+        wv.validate_module(tabs_module(tab_variable="v_gone"))
+    with pytest.raises(wv.VariableError, match="is a number variable"):
+        wv.validate_module(tabs_module(
+            tab_variable="v_tab", variables={"v_tab": var("v_tab", kind="number")},
+        ))
+
+
+def test_no_tab_variable_is_the_ordinary_case() -> None:
+    wv.validate_module(tabs_module())
+    wv.validate_module(tabs_module(tab_variable=""))
+
+
+def test_a_tab_variables_value_is_not_checked_against_the_tabs() -> None:
+    """**Deliberately not checked.** Tabs get renamed long after a save, and
+    refusing a stale value would make a valid module unsaveable because
+    somebody edited a label. `activeTab` falls back to the first tab, which is
+    the rendering answer to the same question."""
+    wv.validate_module(tabs_module(
+        tab_variable="v_tab",
+        variables={"v_tab": var("v_tab", default="a tab nobody has")},
+    ))
+
+
+def test_a_section_with_more_tabs_than_a_strip_can_hold_is_refused() -> None:
+    """Structural, unlike the value above: past `MAX_TABS` a tab strip has
+    stopped being one, and no amount of later editing makes forty buttons in a
+    row readable."""
+    with pytest.raises(wv.VariableError, match="the limit is"):
+        wv.validate_module(tabs_module(tabs="", children=we.MAX_TABS + 1))
+    wv.validate_module(tabs_module(tabs="", children=we.MAX_TABS))
+
+
 # ---- collapsible sections (p.55, p.82) ---------------------------------------
 def section_node(*, collapsible: bool = True) -> dict:
     return {

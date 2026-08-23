@@ -1992,6 +1992,43 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    cannot lose. */
 .canvas-section-parts[hidden] { display: none; }
 
+/* Same rule, one level down, for a Tabs section's panels. Belt and braces
+   today - nothing sets `display` on `.canvas-section-part` - and stated
+   anyway, because this repo has now been caught three times by a class
+   quietly outranking the `hidden` attribute, and the class that would do it
+   here is one flex tweak away. */
+.canvas-section-part[hidden] { display: none; }
+
+/* p.54's Tabs section: "adds tabs to the top of a section". A strip, not a
+   row of buttons - the bottom rule is what makes the selected tab read as
+   attached to the panel below it, which is the only thing on screen saying
+   the two belong together. */
+.canvas-tabstrip {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+.canvas-tabstrip-tab {
+  padding: 6px 12px;
+  border: 0;
+  /* Transparent rather than absent, so selecting a tab does not move the
+     strip by a pixel - a tab bar that jogs when you click it looks broken. */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.canvas-tabstrip-tab:hover { color: var(--ink); }
+.canvas-tabstrip-tab.on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
 /* p.62's custom padding: two numbers, top/bottom then left/right. Side by side
    because they are one setting - stacked, they read as two. */
 .style-padding-pair { display: flex; gap: 8px; }

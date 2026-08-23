@@ -1561,6 +1561,57 @@ def dangling_references(layout: Any, variables: dict[str, Variable]) -> list[dic
     return broken
 
 
+def _check_tab_sections(layout: Any, variables: dict[str, Variable], events_module: Any) -> None:
+    """Every Tabs section's backing variable resolves, and it is a string.
+
+    The section-level twin of `page_selection`, and the argument is identical:
+    p.84 says "the string variable configured for Variable-Based Tab
+    Selection", so a variable of another kind can never hold a tab name, and
+    one that has been deleted makes the section's tab bar silently stop
+    following anything.
+
+    **What is deliberately not checked is the variable's value**, exactly as in
+    `page_selection`: tabs can be renamed long after a save, and refusing a
+    stale value would make a valid module unsaveable because somebody edited a
+    label. `activeTab` falls back to the first tab, which is the rendering
+    answer to the same question.
+
+    The tab *count* is checked, though, because that is structural: past
+    `MAX_TABS` a tab strip has stopped being one, and no amount of later
+    editing makes forty buttons in a row readable.
+    """
+    if not isinstance(layout, dict):
+        return
+    for node_id, labels in events_module.tab_sections(layout).items():
+        if len(labels) > events_module.MAX_TABS:
+            raise VariableError(
+                f"section {node_id!r} has {len(labels)} tabs and the limit is "
+                f"{events_module.MAX_TABS} - past that a tab strip is not one, and "
+                "what the module wants is pages or a variable"
+            )
+        node = layout.get(node_id)
+        props = node.get("props") if isinstance(node, dict) else None
+        backing = props.get("tabVariable") if isinstance(props, dict) else None
+        if backing in (None, ""):
+            continue
+        if not isinstance(backing, str):
+            raise VariableError(
+                f"section {node_id!r} has a tabVariable that is not a variable id"
+            )
+        variable = variables.get(backing)
+        if variable is None:
+            raise VariableError(
+                f"section {node_id!r} takes its tab from {backing!r}, which is not a "
+                "variable in this module"
+            )
+        if variable.kind != "string":
+            raise VariableError(
+                f"section {node_id!r} takes its tab from {variable.label!r}, which is a "
+                f"{variable.kind} variable. p.84 backs tab selection with a string, "
+                "because the value is a tab name"
+            )
+
+
 def validate_module(
     document: Any, *, actions: dict[str, list[str]] | None = None
 ) -> dict[str, Variable]:
@@ -1600,6 +1651,10 @@ def validate_module(
             "the header is the toolbar above every page, so a second one has "
             "nowhere to be"
         )
+    # p.84's Variable-Based Tab Selection is per *section* rather than per
+    # module, so unlike `page_selection` it is a layout prop - but it names a
+    # variable, so the same rule applies and for the same reason.
+    _check_tab_sections(document.get("layout"), variables, workshop_events)
     try:
         workshop_events.parse(
             document.get("events"),

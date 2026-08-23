@@ -53,7 +53,7 @@ The good news, before the long tables: the hard part is done. Typed variables wi
 |---|---|---|
 | Columns | ✅ | |
 | Rows | ✅ | **Enable scrolling** (p.54) ✅ |
-| Tabs | ✅ | |
+| Tabs | ✅ §190 | (p.54) — "adds tabs to the top of a section", one child per tab, a tab holding several widgets being a child that is itself a section (p.54's own "a layout, which itself may contain one or more sections"). **This row was ✅ on a substitution and is now ✅ on the thing**: it used to mean the Tabs *widget*, which switches pages, and `CanvasSection`'s comment called that "the same idea one level up". It is not — a module has exactly one set of pages, so two independent tab groups side by side could not be expressed at all, and p.84's Variable-Based Tab Selection had nothing to attach to. Tab names are a comma-separated list in the same idiom as `weights`; unnamed ones become "Tab 3" rather than the child widget's name (a tab bar reading "Section" over a section says nothing), and duplicates are numbered because a tab name is the address p.84's event and the backing variable both use |
 | **Flow** | ✅ | vertically scrolling container for widgets that exceed the viewport (p.54) |
 | **Toolbar** | ✅ | horizontal, "optimized for smaller widgets like Button Groups or Metric Cards" (p.54); its widgets keep their own width rather than sharing the row, which is what separates it from Columns |
 | **Loop** | ◑ | over an **object set** ✅ (p.129–136); over an **array** ○ — see below |
@@ -148,7 +148,7 @@ Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `sin
 | **Object set filter variables** | ◑ | the output of every filtering widget; "captures the current filter state and can be applied to object set variables or reused in widget configurations" (p.444). Both halves of p.444 now work: **applied to object set variables** is `narrow_set`, and **reused in widget configurations** is `filter_value`, a transform that reads one property's chosen value back out of a filter's clauses (a property nobody filtered on is `None`, not an error; a multi-select is returned whole). **Default filters** need nothing new — an `array` variable's `default` is filter state that is applied on load, and `test_a_filter_can_start_with_a_default_applied` holds that. What is still missing is a dedicated `object_set_filter` variable *kind*: filter state travels as an `array` of clauses rather than as its own type, so the panel cannot tell a filter apart from any other list, and a widget cannot ask for "a filter" specifically. |
 | **Struct variables** | ○ | (p. §22 of TOC) |
 | **Time series set variables** | ◑ | "Stores a time series property of a single object, optionally allowing the application of time series transforms to it" (p.76). Built: the `time_series_set` kind, always derived by an `object_series` transform naming a `single_object` variable and a `time_series` property, with the bucket and summariser on the *variable* rather than on each widget — so two widgets reading one series agree about what a point means. It resolves to a **reference**, never to points (decision 0009), the same way an `object_set` variable holds a definition rather than rows. Consumed by **Chart XY** (p.280's third Data input, forced to a line per p.281). The other three consumers p.582 names — Map, Metric Card, Object Table — are ○, and so are the p.583–584 **time series transforms** (cumulative/periodic/rolling aggregates), which are a computation over points rather than a variable |
-| Variable-backed layouts | ◑ | a variable drives which page/tab/section state is active. **Two of the three**: sections (§185, p.82) and pages (§189, p.81), both on the same rule — the latest instruction wins, and the layout event does not write the variable back. Tabs are the one left, and they are not more of the same: p.84 says a Switch-to-tab event *does* write its variable, so the third is an inconsistency to reproduce deliberately rather than a copy of the other two (§4.2's own row says the same) |
+| Variable-backed layouts | ✅ | a variable drives which page/tab/section state is active. **All three**: sections (§185, p.82), pages (§189, p.81) and tabs (§190, p.54/p.84). One rule across them — *the latest instruction wins* — and one documented inconsistency, reproduced rather than tidied up: the page and section events leave their variable alone, the tab event writes it. The write-back does **not** remove the need for the shared arithmetic, which is the trap: the write takes a debounce and a round trip, so the event and the variable still disagree for a moment, and the difference is only that here they converge instead of staying apart |
 
 ### 3.3 Variables panel (p.72)
 
@@ -234,13 +234,13 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 |---|---|---|
 | **Layers** — Open / Close each overlay | ✅ | |
 | **Layout** — Switch to page | ✅ | |
-| **Layout** — Expand / Collapse / Toggle each collapsible section | ○ | needs collapsible sections (§1.3) |
+| **Layout** — Expand / Collapse / Toggle each collapsible section | ✅ §185 | (p.82) — see §1.3's row for the gotcha and the resolution rule |
 | Set variable value | ✅ | |
 | **Recompute {variable}** | ○ | the other half of §3.5 — without it, the two non-automatic recompute behaviours have no way to fire (p.85) |
 | **Reset {variable} value** | ○ | static variables only; restores the value in the variable *definition*, which for a mapped interface variable means the parent's (p.85, p.128) |
 | Run action | ✅ | |
 | Open URL | ✅ | |
-| **Switch to {tab}** | ○ | unlike page and section events, this one *does* write back to the variable behind Variable-Based Tab Selection (p.84) — an inconsistency to reproduce deliberately, not to tidy up |
+| **Switch to {tab}** | ✅ §190 | (p.84) — and the inconsistency is reproduced rather than tidied up: unlike Switch-to-page and the three section events, this one **does** write the variable behind Variable-Based Tab Selection, and so does an ordinary click on the tab strip ("events that change the selected tab", which a click is the most ordinary way to be). The settings panel says so beside the picker, because an author who has met the other two will expect this one to match. **The write-back does not remove the need for the override the other two use**, which is the thing p.84 might mislead you out of building: the write takes a debounce and a round trip, and the tab has to move now — so for a few hundred milliseconds the event and the variable disagree exactly as they do one row up, and the same "latest instruction wins" arithmetic applies. The difference is only that here the two *converge*: the value comes back agreeing and the override retires. The server refuses a `switch_tab` naming a section that is not tabbed or a tab it does not have, and the refusal lists the tabs that *are* there, because the usual cause is a rename |
 | **Refresh data in module** | ○ | (p.91) |
 | **Toggle light / dark mode** | ○ | (p.91) |
 | **Export** | ○ | refused with reason at §76; Foundry treats export as a first-class `On click` target alongside actions, events and URLs (p.482) |
@@ -396,7 +396,7 @@ Our generic parameter control is a defensible design, but it is *our* design, an
 | Foundry | Ours |
 |---|---|
 | Button Group — inline, menu, and two-part buttons; on-click to action, events, URL or export; colour, icon, size, fill; conditional disabled and conditional visibility | ◑ `CanvasButton` |
-| Tabs | ✅ `CanvasTabs` |
+| Tabs | ✅ `CanvasTabs` — the *widget*, which moves between the module's pages (p.53: "navigate users between the pages of a module… triggered from within widgets such as the Button Group or Tabs"). Distinct from §1.3's Tabs **section** (§190), which tabs a section's own children; Foundry has both |
 | **Inline Action** — inline action form or table on an ontology action type | ◑ `CanvasActionForm` |
 | Comments | ○ |
 | Media Uploader | ○ |

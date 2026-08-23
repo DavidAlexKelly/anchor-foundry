@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import type { CollapseOverride } from "./collapse";
+import type { TabOverride } from "./tab-selection";
 
 /** Environment a canvas widget renders in - never part of the saved
  * definition (Craft.js node props), since it's the same app rendered from
@@ -254,6 +255,16 @@ export interface CanvasPageState {
    */
   collapsed: Record<string, CollapseOverride>;
   setCollapsed: (nodeId: string, override: CollapseOverride) => void;
+  /** Which tab each Tabs section is showing, by section node id, and the
+   * backing variable value each was chosen against (p.54, p.84).
+   *
+   * Here rather than inside the section for `collapsed`'s reason - a
+   * Switch-to-tab event fires from somewhere else in the module - and kept
+   * *separate* from `collapsed` because a section can be both collapsible and
+   * tabbed, and one map keyed by node id could then hold only one of the two
+   * things that section is doing. */
+  tabs: Record<string, TabOverride>;
+  setTab: (nodeId: string, override: TabOverride) => void;
 }
 
 const PageContext = createContext<CanvasPageState>({
@@ -264,6 +275,8 @@ const PageContext = createContext<CanvasPageState>({
   closeOverlay: () => {},
   collapsed: {},
   setCollapsed: () => {},
+  tabs: {},
+  setTab: () => {},
 });
 
 export const CanvasPageProvider = PageContext.Provider;

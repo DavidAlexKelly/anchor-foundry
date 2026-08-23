@@ -28,6 +28,7 @@
 import { useEditor } from "@craftjs/core";
 
 import { collapseState, nextCollapsed } from "./collapse";
+import { asTabName, tabLabels } from "./tab-selection";
 import {
   useCanvasActions,
   useCanvasPage,
@@ -90,6 +91,10 @@ export interface EventContext {
     section: string,
     effect: "expand_section" | "collapse_section" | "toggle_section",
   ) => void;
+  /** p.84's Switch to {tab name}. Takes the tab's *name* because that is how
+   * p.84 addresses one, and returns the variable write it implies rather than
+   * performing it — see the note beside the `switch_tab` branch in `run`. */
+  setSectionTab?: (section: string, tab: string) => { variable: string } | null;
   /** Run an action against the object the trigger was about (roadmap 1.3).
    * The only effect that writes, and so the only one whose outcome anybody
    * has to be told about — see `CanvasActions`. */
@@ -144,7 +149,9 @@ export function useEventContext(
   object?: EventContext["object"],
 ): EventContext {
   const { setMany } = useCanvasParameters();
-  const { go, openOverlay, closeOverlay, collapsed, setCollapsed } = useCanvasPage();
+  const {
+    go, openOverlay, closeOverlay, collapsed, setCollapsed, tabs, setTab,
+  } = useCanvasPage();
   const { run: runAction } = useCanvasActions();
   const { resolved } = useCanvasVariables();
   const { query } = useEditor();
@@ -181,6 +188,37 @@ export function useEventContext(
         collapsed: nextCollapsed(effect, now),
         against: backing === undefined ? null : Boolean(collapseState(undefined, backing, false)),
       });
+    },
+    // p.84's event, resolved here for `setSectionCollapsed`'s reason: the
+    // section's props say which variable backs its tabs and what they are
+    // called, and `resolved` says what that variable holds, so this is the
+    // only place with both. Reading the tree rather than asking the section is
+    // what lets a button switch a tab in a section it has never met.
+    setSectionTab: (section, tab) => {
+      let bound: string | null = null;
+      let labels: string[] = [];
+      try {
+        const node = query.node(section).get();
+        const props = (node?.data?.props ?? {}) as Record<string, unknown>;
+        bound = (props.tabVariable as string | null | undefined) ?? null;
+        labels = tabLabels(
+          props.tabs as string | undefined,
+          (node?.data?.nodes ?? []).length,
+        );
+      } catch {
+        // No tree to ask - a bare render, or a section deleted since the event
+        // was saved. Same fall-through as the collapse effect above.
+      }
+      // An event naming a tab this section does not have is skipped rather
+      // than applied. The server refuses one at save, so reaching here means
+      // the tab was renamed afterwards - and moving to a tab that is not
+      // there would blank the section.
+      if (labels.length && !labels.includes(tab)) return null;
+      setTab(section, {
+        name: tab,
+        against: asTabName(bound ? resolved[bound] : undefined, labels),
+      });
+      return bound ? { variable: bound } : null;
     },
     payload,
     object,
@@ -262,6 +300,20 @@ export function run(
         // page tells the builder to add a Set Variable Value event if they
         // want the two to agree.
         if (section) context.setSectionCollapsed?.(section, effect.type);
+      } else if (effect.type === "switch_tab") {
+        const section = String(config.section ?? "");
+        const tab = String(config.tab ?? "");
+        // **And here is p.84's difference, in the line the three above do not
+        // have.** "Unlike the Switch to {page name}, and section collapse
+        // state events, events that change the selected tab will also update
+        // the value of the string variable configured for Variable-Based Tab
+        // Selection." So this one *does* add to `written`, which is what
+        // carries the write out to `setVariables` with everything else the
+        // click wrote — one render for the whole click, in order.
+        if (section && tab) {
+          const wrote = context.setSectionTab?.(section, tab);
+          if (wrote) written[wrote.variable] = tab;
+        }
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })
