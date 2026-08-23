@@ -58,6 +58,11 @@ export interface EventContext {
    * *deletion* - writing the default instead would be wrong for a variable an
    * embedding module has mapped, whose definition is the parent's (p.128). */
   resetVariables?: (names: readonly string[]) => void;
+  /** p.85's Recompute (p.76's behaviours). Distinct from `resetVariables`:
+   * that one forgets what the *viewer* set, this one forgets what the
+   * *server* computed. The two act on different halves of a module's state
+   * and p.85 offers them on exactly complementary variables. */
+  recomputeVariables?: (names: readonly string[]) => void;
   /** What the widget knows about the thing that was acted on — the clicked
    * row, the chosen option. `{{...}}` in an effect's value reads from here. */
   payload?: Record<string, unknown>;
@@ -151,6 +156,11 @@ export function run(
   // write and the other a deletion, and applied together at the end so a click
   // is one render - the same argument `setMany` makes.
   const toReset = new Set<string>();
+  // p.85's Recomputes. A third pile rather than a flag on the second: a reset
+  // forgets what the viewer set and a recompute forgets what the server
+  // computed, and applying them through one capability would need the caller
+  // to know which is which.
+  const toRecompute = new Set<string>();
 
   for (const event of events) {
     for (const effect of event.effects ?? []) {
@@ -214,6 +224,13 @@ export function run(
         // page tells the builder to add a Set Variable Value event if they
         // want the two to agree.
         if (section) context.setSectionCollapsed?.(section, effect.type);
+      } else if (effect.type === "recompute") {
+        const target = String(config.variable ?? "");
+        // **Not touched by the Set/Reset bookkeeping below.** A recompute is
+        // about a *derived* variable, and the server refuses a Set or a Reset
+        // on one of those - so the three can never name the same variable and
+        // there is no ordering to resolve between them.
+        if (target) toRecompute.add(target);
       } else if (effect.type === "reset_variable") {
         const target = String(config.variable ?? "");
         if (target) {
@@ -258,5 +275,6 @@ export function run(
   // cannot matter.
   if (Object.keys(written).length > 0) context.setVariables(written);
   if (toReset.size > 0) context.resetVariables?.([...toReset]);
+  if (toRecompute.size > 0) context.recomputeVariables?.([...toRecompute]);
   return written;
 }

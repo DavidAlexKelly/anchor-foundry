@@ -298,6 +298,13 @@ export interface CanvasPageState {
    * things that section is doing. */
   tabs: Record<string, TabOverride>;
   setTab: (nodeId: string, override: TabOverride) => void;
+  /** p.85's Recompute (p.76's behaviours). Forget what these variables last
+   * computed and resolve again, so the server computes them fresh.
+   *
+   * Here rather than on the parameter context because a held value is not a
+   * *parameter* - nobody set it, the server computed it - and mixing the two
+   * would let a widget "set" a derived variable through the back door. */
+  recompute: (names: readonly string[]) => void;
 }
 
 const PageContext = createContext<CanvasPageState>({
@@ -310,6 +317,7 @@ const PageContext = createContext<CanvasPageState>({
   setCollapsed: () => {},
   tabs: {},
   setTab: () => {},
+  recompute: () => {},
 });
 
 export const CanvasPageProvider = PageContext.Provider;

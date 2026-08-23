@@ -325,6 +325,15 @@ export interface WorkshopVariable {
    * (p.203) — but *not* interface membership, unlike routing: a state is read
    * back by this module, by name, so a stable name is the whole requirement. */
   save_state?: boolean;
+  /** When this variable recomputes (p.76). Absent means `automatic`, which is
+   * Foundry's default and what this platform did unconditionally before the
+   * other two existed.
+   *
+   * Configurable on **derived** definitions only — p.76 lists Function, Object
+   * set aggregation, Object property, Variable transformation and Object set
+   * filter, and says an Object set *definition* "does not offer recompute
+   * behavior configuration". The server refuses it anywhere else. */
+  recompute?: "automatic" | "only_on_event" | "on_load_and_event";
   /** What this was called when it was a string-keyed parameter, so a converted
    * app can still be read against the v1 document it came from. */
   legacy_name?: string;

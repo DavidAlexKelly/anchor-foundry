@@ -1267,10 +1267,17 @@ export const canvas = {
     values: Record<string, unknown>,
     /** Variable ids a host module is backing — see VariableBridge. */
     bound?: string[],
+    /** p.76's held values: what each non-automatic variable last computed, so
+     * the server uses it instead of recomputing — and so its dependants read
+     * the same number the reader is looking at. */
+    held?: Record<string, unknown>,
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/variables/evaluate`,
-      { method: "POST", body: JSON.stringify({ values, bound: bound ?? [] }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ values, bound: bound ?? [], held: held ?? {} }),
+      },
     ),
   /** The same resolve for a published app, which a workspace member may open
    * without being in its project. */
@@ -1279,10 +1286,14 @@ export const canvas = {
     appId: string,
     values: Record<string, unknown>,
     bound?: string[],
+    held?: Record<string, unknown>,
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/published-canvas-apps/${appId}/variables/evaluate`,
-      { method: "POST", body: JSON.stringify({ values, bound: bound ?? [] }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ values, bound: bound ?? [], held: held ?? {} }),
+      },
     ),
   /** Saved states (p.200–206).
    *

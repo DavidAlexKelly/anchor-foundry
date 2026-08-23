@@ -144,6 +144,15 @@ class EvaluateVariablesIn(BaseModel):
     # `/object-sets/evaluate` afterwards. What `bound` buys a hostile caller is
     # the ability to change what its own browser draws, which it has anyway.
     bound: list[str] = Field(default_factory=list)
+    # p.76's two non-automatic recompute behaviours: the value a variable last
+    # computed, sent back so it does not recompute this time. Client-supplied
+    # for the same reason `bound` is - only the browser knows what it last saw
+    # - and trusting it costs the same: a caller can change what its own
+    # browser draws, which it could already do by sending any value it liked.
+    #
+    # Ignored for any variable that is not configured to hold one; the
+    # evaluator branches on the *document's* behaviour, not on what arrived.
+    held: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvaluateVariablesOut(BaseModel):
@@ -635,7 +644,7 @@ async def evaluate_variables(
         ) from exc
     try:
         resolved = variables_service.evaluate(
-            variables, body.values, bound=frozenset(body.bound)
+            variables, body.values, bound=frozenset(body.bound), held=body.held
         )
     except variables_service.VariableError as exc:
         # Not the same failure, and not the same fault. The document is fine;
@@ -742,7 +751,7 @@ async def evaluate_published_variables(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     try:
         resolved = variables_service.evaluate(
-            variables, body.values, bound=frozenset(body.bound)
+            variables, body.values, bound=frozenset(body.bound), held=body.held
         )
     except variables_service.VariableError as exc:
         # The values, not the document - see the note on the project-scoped one.

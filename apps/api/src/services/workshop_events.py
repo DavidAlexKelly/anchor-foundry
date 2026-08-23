@@ -51,6 +51,10 @@ EFFECTS = (
     # p.85's "Reset {variable name} value", which p.85 offers "for static
     # variables" - see the refusal in `_parse_effect`.
     "reset_variable",
+    # p.85's "Recompute {variable name}", offered "for non-static variable
+    # types" - the complement of reset_variable, and the thing p.76's two
+    # non-automatic behaviours exist to be triggered by.
+    "recompute",
 )
 
 # The three above, and the fact that binds them: each names a section.
@@ -65,14 +69,12 @@ SECTION_EFFECTS = ("expand_section", "collapse_section", "toggle_section")
 # `run_action` moved out with the second half of 1.3: its parameters are bound
 # to variables, which was the design question holding it.
 #
-# `recompute` (p.85) is named here rather than left to fall through to "expected
-# one of" - it is *blocked on something real* rather than on effort. p.85 offers
-# it "for non-static variable types… particularly useful for managing recomputes
-# for variables without Automatic recompute behavior", and this platform
-# recomputes every derived variable on every resolve. Until §3.5's other two
-# recompute behaviours exist there is nothing for it to trigger, so accepting it
-# would save a click that does nothing - which is exactly what this list is for.
-PLANNED_EFFECTS = ("export", "recompute")
+# `recompute` moved out of this list once p.76's two non-automatic recompute
+# behaviours existed. It was here for precisely the right reason and for
+# precisely as long as the reason held: with every derived variable recomputing
+# on every resolve there was nothing for it to trigger, so accepting it would
+# have saved a click that does nothing.
+PLANNED_EFFECTS = ("export",)
 
 # What a `run_action` may write. A wider form is a form, not an event.
 MAX_ACTION_VALUES = 20
@@ -511,6 +513,37 @@ def _parse_effect(
                 raise EventError(
                     f"event {eid!r} resets {target!r}, which is {why} - so it has no "
                     "stored value to put back. p.85 offers Reset for static variables"
+                )
+    elif kind == "recompute":
+        target = config.get("variable")
+        if not target or not isinstance(target, str):
+            raise EventError(f"event {eid!r}: recompute needs a variable to recompute")
+        if declared and target not in declared:
+            raise EventError(
+                f"event {eid!r} recomputes {target!r}, which this module does not declare"
+            )
+        variable = declared.get(target) if declared else None
+        if variable is not None:
+            # **p.85 offers this "for non-static variable types", and p.76 adds
+            # the sharper rule**: the behaviours it triggers are configurable on
+            # derived definitions only. So a static variable is refused for the
+            # same reason Reset refuses a derived one - the two events are
+            # complements, and each is meaningless on the other's half.
+            if getattr(variable, "derivation", None) is None:
+                raise EventError(
+                    f"event {eid!r} recomputes {target!r}, which is static - there is "
+                    "nothing to recompute. p.85 offers Recompute for non-static "
+                    "variables, and Reset for static ones"
+                )
+            # And the sharper one still: a derived variable left on Automatic
+            # already recomputes whenever its inputs change (p.76), so an event
+            # aimed at one is a click with no effect - which is the whole class
+            # of thing this module refuses.
+            if getattr(variable, "recompute", "automatic") == "automatic":
+                raise EventError(
+                    f"event {eid!r} recomputes {target!r}, which is on Automatic "
+                    "recompute - it already recomputes when its inputs change. Set its "
+                    "recompute behaviour to one of the event-driven options first"
                 )
     elif kind == "switch_tab":
         # **p.84's event, and the one Layout event that writes its variable.**

@@ -31,7 +31,7 @@ export function useEventContext(
 ): EventContext {
   const { setMany, reset } = useCanvasParameters();
   const {
-    go, openOverlay, closeOverlay, collapsed, setCollapsed, tabs, setTab,
+    go, openOverlay, closeOverlay, collapsed, setCollapsed, tabs, setTab, recompute,
   } = useCanvasPage();
   const { run: runAction } = useCanvasActions();
   const { resolved } = useCanvasVariables();
@@ -39,6 +39,7 @@ export function useEventContext(
   return {
     setVariables: setMany,
     resetVariables: reset,
+    recomputeVariables: recompute,
     runAction,
     variables: resolved,
     goToPage: go,
