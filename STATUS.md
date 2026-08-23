@@ -4036,7 +4036,9 @@ p.85 offers Reset "for static variables", so the server refuses it on a derived 
 
 One mutant was withdrawn rather than fixed: "make the catalogue guard compare the server's list to itself" is neutering an assertion, which any test permits and which proves nothing. Replaced by the failure that can genuinely happen — the scan quietly ceasing to match the panel's format after a reformat — which the guard's label assertion kills.
 
-**1463 API tests** (was 1457), 1 skipped; **393 unit tests**; 15 mutants, 14 killed and 1 equivalent.
+**And the full browser run found a fourth instance of the same latent flake**, in a file this unit did not touch. `test_action_statuses.py` waits for a heading named "Actions"; `get_by_role(name=…)` matches by case-insensitive *substring*; and that file's fixture names its project **"ActionStatuses …"**, whose first seven letters are "actions". Two matching headings on the page, so a strict-mode violation the moment both have rendered — and it passed for as long as the assertion happened to resolve before the project name arrived. `exact=True`, the same one-word fix as §186's two. The tell is worth repeating because it is unmistakable once seen: a failure that says **"resolved to 2 elements"**, never "not found".
+
+**1463 API tests** (was 1457), 1 skipped; **266 browser tests**; **393 unit tests**; 15 mutants, 14 killed and 1 equivalent.
 
 ---
 ---
