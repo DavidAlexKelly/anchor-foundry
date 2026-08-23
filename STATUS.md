@@ -3870,6 +3870,34 @@ Fourteen mutations across **three** layers — API, unit, browser — all red. *
 **1410 API tests**, 1 skipped, green with the revert in place.
 
 ---
+
+### 188. One missing keyword (this session)
+
+§187 named `v_user_projects` as the prerequisite and left it. This is that unit, and it turned out to be **two `ALTER FUNCTION` statements**.
+
+**Every permission helper in this schema resolves as the owner except the two that do the work.** `rls_can_access_workspace`, `rls_can_access_project`, `rls_is_org_admin`, `rls_app_shared_with_user` and seven more are all `SECURITY DEFINER`. `effective_workspace_role` and `effective_project_role` were `SECURITY INVOKER` — and they are the ones that read `users`, `workspaces`, `workspace_members`, `group_members`, `projects` and `project_members`, every one of which carries a policy. So resolving a single role ran the whole isolation layer several times over.
+
+| `GET /workspaces/{id}/projects`, 178 projects | |
+| --- | --- |
+| `v_user_projects` as invoker | **1319ms** |
+| as definer | **23ms** |
+| the same query as the owner | **27ms** |
+
+The owner column is the tell. The work itself is ~27ms; the other 1.3 seconds were policy evaluation inside the function whose entire job is to decide policy. End to end the endpoint went **0.9s → 0.03s**.
+
+**Why this was invisible.** `rls_can_access_*` already call these two *as definer*, because those wrappers are definer — so definer-mode behaviour was already the behaviour on the path RLS takes. Only a **direct** call ran them as invoker, and `v_user_projects` is the only place in the codebase that makes one.
+
+**The correctness half, which matters more than the speed.** A permission function filtered by the permissions it is resolving can only under-report: if a policy hides a `workspace_members` row, the resolver says you have no role. Today that never bites, because the policy on that table lets a user see their own memberships — the answer comes out right because two rules happen to agree, not because anything guarantees it. Compared over 300 real (user, project) pairs across direct membership, group membership, org admin and cross-organisation denial, with 221 grants: **zero answers change**. A speedup that also closes a way for the schema to become wrong later.
+
+**Three things §187 tried and this did not need.** No new function, no rewritten policies, no query rewrite — with the resolvers fixed, the existing view at 23ms beats the LATERAL rewrite I had measured at 34ms, so `v_user_projects` is left exactly as it was. §187's whole apparatus was aimed one level above the actual cost.
+
+**The test is a property, not a behaviour**, which is why it needs its own file: `SECURITY INVOKER` here errors nothing and changes no answer on this data. `test_permission_function_security.py` asserts that every resolver is definer and pins a `search_path` — a definer function without one is a worse hole than the one being fixed — and that the list of exempt setting-only helpers is still exempt, by checking their bodies read no table. A last assertion requires the two lists to *exhaust* the helpers, so a function added later cannot quietly go unchecked. Six mutants, all red, including "a new helper is added and left as invoker" and "a setting-only helper starts reading a table".
+
+**A harness bug worth more than the mutants, and it cost a full suite run to find.** Two of the six mutants altered functions that migration 0062 does not own — `rls_can_access_project` and `rls_current_user_id` — and the restore only re-applied 0062. So the harness exited leaving both mutated, and the next full API run came back **214 failed, 375 errors**: not a regression, a poisoned database. The lesson generalises past this repo: **a mutation harness whose restore is narrower than its mutants is worse than no harness**, because its damage outlives it and lands on whatever runs next. The restore now names every function any mutant touches.
+
+**1434 API tests** (was 1410), 1 skipped.
+
+---
 ---
 ---
 ---
