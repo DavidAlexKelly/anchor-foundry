@@ -97,9 +97,28 @@ def select_widget(page):
     canvas lands on whatever is under the pointer - a table cell, a header - and
     Craft selects from the connected element, so it is a coin toss which node
     ends up selected. The tree row names the node it selects.
+
+    **And then waits for the table to have its rows**, which is not about
+    selection at all and is here because every caller needs it. `settled()`
+    returns as soon as a `.canvas-block` is visible, and the object table is
+    visible long before it has any data: it draws its frame, asks for the
+    workspace's object types, and only once *that* answers does it evaluate the
+    object set. Between those two moments the widget is 68px tall with two
+    header cells, and `header_count` and `bounding_box` will both happily read
+    that state and believe it.
+
+    Nothing here waited, and the file passed anyway - because a slow
+    `GET /projects` running in parallel delayed this click past the evaluate
+    response, every time, on every machine. §188 made permission resolution a
+    constant expression, `/projects` came back in 30ms instead of 1.1s, and two
+    tests started failing on a race that had been there since they were
+    written. The speedup did not break them; it stopped hiding them.
     """
     page.locator(".canvas-tree-row").first.click()
     expect(page.get_by_role("tab", name="Widget setup")).to_be_visible()
+    # ROWS, not ">0": a partial first paint is a state a count could be read
+    # in too, and the fixture's whole point is a table tall enough to clip.
+    expect(page.locator(".canvas-block table tbody tr")).to_have_count(ROWS)
 
 
 def header_count(page) -> int:
