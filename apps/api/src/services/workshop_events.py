@@ -48,6 +48,9 @@ EFFECTS = (
     # p.84's "Switch to {tab name}", grouped with the same Layout events - and
     # the one of them that behaves differently, see `switch_tab` below.
     "switch_tab",
+    # p.85's "Reset {variable name} value", which p.85 offers "for static
+    # variables" - see the refusal in `_parse_effect`.
+    "reset_variable",
 )
 
 # The three above, and the fact that binds them: each names a section.
@@ -61,7 +64,15 @@ SECTION_EFFECTS = ("expand_section", "collapse_section", "toggle_section")
 # `navigate` moved out of this list with item 1.4: pages exist now.
 # `run_action` moved out with the second half of 1.3: its parameters are bound
 # to variables, which was the design question holding it.
-PLANNED_EFFECTS = ("export",)
+#
+# `recompute` (p.85) is named here rather than left to fall through to "expected
+# one of" - it is *blocked on something real* rather than on effort. p.85 offers
+# it "for non-static variable types… particularly useful for managing recomputes
+# for variables without Automatic recompute behavior", and this platform
+# recomputes every derived variable on every resolve. Until §3.5's other two
+# recompute behaviours exist there is nothing for it to trigger, so accepting it
+# would save a click that does nothing - which is exactly what this list is for.
+PLANNED_EFFECTS = ("export", "recompute")
 
 # What a `run_action` may write. A wider form is a form, not an event.
 MAX_ACTION_VALUES = 20
@@ -473,6 +484,34 @@ def _parse_effect(
                 f"event {eid!r} {kind.split('_')[0]}s {target!r}, which is not a "
                 "collapsible section - turn on Collapsible in its settings first"
             )
+    elif kind == "reset_variable":
+        target = config.get("variable")
+        if not target or not isinstance(target, str):
+            raise EventError(f"event {eid!r}: reset_variable needs a variable to reset")
+        if declared and target not in declared:
+            raise EventError(
+                f"event {eid!r} resets {target!r}, which this module does not declare"
+            )
+        variable = declared.get(target) if declared else None
+        if variable is not None:
+            # **p.85 offers this "for static variables", and the qualifier is
+            # the refusal.** A derived variable is a function of its inputs, so
+            # there is no stored value to put back - "its default value, which
+            # is the value configured in the variable definition" names
+            # something a derived variable does not have. An object-set
+            # variable with its own definition is the same case by a different
+            # route: it resolves to that definition whatever the viewer does,
+            # so a reset would be a click with no effect.
+            why = None
+            if getattr(variable, "derivation", None) is not None:
+                why = "a derived variable, whose value is computed from its inputs"
+            elif getattr(variable, "object_set", None) is not None:
+                why = "an object set with its own definition, which a viewer never overrides"
+            if why:
+                raise EventError(
+                    f"event {eid!r} resets {target!r}, which is {why} - so it has no "
+                    "stored value to put back. p.85 offers Reset for static variables"
+                )
     elif kind == "switch_tab":
         # **p.84's event, and the one Layout event that writes its variable.**
         # That difference lives in the browser (`tab-selection.ts` and

@@ -44,6 +44,7 @@ import {
 } from "@/components/canvas/EventsPanel";
 import { LayoutPanel } from "@/components/canvas/LayoutPanel";
 import type { Clipping } from "@/components/canvas/clipboard";
+import { tabLabels } from "@/components/canvas/tab-selection";
 import { CanvasNode, SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
@@ -923,7 +924,7 @@ function CanvasBody({
   ) => void;
   actions: ActionCandidate[];
 }) {
-  const { enabled, triggerNodes, pageNodes, sectionNodes } = useEditor((state) => {
+  const { enabled, triggerNodes, pageNodes, sectionNodes, tabSectionNodes } = useEditor((state) => {
     // Read from the editor's own node map rather than from the saved
     // definition: a widget dropped a moment ago is wireable, and a widget
     // deleted a moment ago is not - which is what somebody wiring an event
@@ -931,6 +932,7 @@ function CanvasBody({
     const triggers: TriggerCandidate[] = [];
     const pages: PageCandidate[] = [];
     const sections: PageCandidate[] = [];
+    const tabs: { id: string; label: string; tabs: string[] }[] = [];
     for (const [id, node] of Object.entries(state.nodes)) {
       const name = node?.data?.name;
       if (!name) continue;
@@ -950,12 +952,24 @@ function CanvasBody({
       if (name === "CanvasSection" && props.collapsible) {
         sections.push({ id, label: `Section · ${String(props.title || label)}`.slice(0, 60) });
       }
+      // p.84 offers Switch-to-tab "for each Tab section", so the picker lists
+      // exactly those - and carries each one's tab names, because the event
+      // addresses a tab by name and the names are a function of the section's
+      // `tabs` prop and how many children it has.
+      if (name === "CanvasSection" && props.direction === "tabs") {
+        tabs.push({
+          id,
+          label: `Tabs · ${String(props.title || label)}`.slice(0, 60),
+          tabs: tabLabels(props.tabs as string | undefined, (node.data.nodes ?? []).length),
+        });
+      }
     }
     return {
       enabled: state.options.enabled,
       triggerNodes: triggers,
       pageNodes: pages,
       sectionNodes: sections,
+      tabSectionNodes: tabs,
     };
   });
   const showChrome = enabled && canEdit;
@@ -1028,6 +1042,7 @@ function CanvasBody({
               variables={variables}
               triggerNodes={triggerNodes}
               pages={pageNodes}
+              tabSections={tabSectionNodes}
               sections={sectionNodes}
               actions={actions}
               onChange={onEventsChange}

@@ -16,6 +16,7 @@ what `if_else` calls true, and what `cast` refuses rather than blanking.
 from __future__ import annotations
 
 import os
+import uuid
 import sys
 
 import pytest
@@ -2130,6 +2131,123 @@ def test_following_a_link_from_something_that_is_not_a_set_is_refused() -> None:
     })
     with pytest.raises(wv.VariableError, match="not an object set"):
         wv.evaluate(variables, {"v_text": "north"})
+
+
+# ---- p.85's Reset {variable} value -------------------------------------------
+def reset_effect(target: str = "v_a") -> dict:
+    return {"type": "reset_variable", "config": {"variable": target}}
+
+
+def _reset_module(variables: dict) -> dict:
+    return {"format": 2, "layout": {"btn": node({})},
+            "variables": variables, "events": {}}
+
+
+def test_resetting_a_static_variable_is_accepted() -> None:
+    """p.85: "set the value of the chosen variable to its default value, which
+    is the value configured in the variable definition"."""
+    events = we.parse(
+        {"e_1": event("e_1", effects=[reset_effect()])},
+        layout={"btn": node({})},
+        variables=wv.parse({"v_a": var("v_a", default="north")}),
+    )
+    assert [e.type for e in events["e_1"].effects] == ["reset_variable"]
+
+
+def test_reset_needs_a_variable_that_the_module_declares() -> None:
+    with pytest.raises(we.EventError, match="needs a variable"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "reset_variable", "config": {}}])},
+                 layout={"btn": node({})})
+    with pytest.raises(we.EventError, match="does not declare"):
+        we.parse({"e_1": event("e_1", effects=[reset_effect("v_gone")])},
+                 layout={"btn": node({})},
+                 variables=wv.parse({"v_a": var("v_a")}))
+
+
+def test_resetting_a_derived_variable_is_refused() -> None:
+    """**p.85 offers Reset "for static variables", and the qualifier is the
+    refusal.** A derived variable is a function of its inputs, so "the value
+    configured in the variable definition" names something it does not have -
+    and a Reset on one would be a click with no effect."""
+    variables = wv.parse({
+        "v_a": var("v_a", default="north"),
+        "v_b": var("v_b", derivation={"transform": "concat", "inputs": ["v_a"]}),
+    })
+    with pytest.raises(we.EventError, match="derived variable"):
+        we.parse({"e_1": event("e_1", effects=[reset_effect("v_b")])},
+                 layout={"btn": node({})}, variables=variables)
+
+
+def test_resetting_an_object_set_with_its_own_definition_is_refused() -> None:
+    """The same case by another route: such a variable resolves to its own
+    definition whatever the viewer does, so there is nothing to put back."""
+    variables = wv.parse({
+        "v_set": {"id": "v_set", "kind": "object_set", "label": "Set",
+                  "object_set": {"object_type_id": str(uuid.uuid4()), "filters": []}},
+    })
+    with pytest.raises(we.EventError, match="object set with its own definition"):
+        we.parse({"e_1": event("e_1", effects=[reset_effect("v_set")])},
+                 layout={"btn": node({})}, variables=variables)
+
+
+def test_recompute_is_refused_with_its_reason() -> None:
+    """**Named rather than left to fall through to "expected one of".** p.85
+    offers Recompute "for non-static variable types… particularly useful for
+    managing recomputes for variables without Automatic recompute behavior",
+    and this platform recomputes every derived variable on every resolve - so
+    until §3.5's other two behaviours exist there is nothing for it to trigger.
+    Accepting it would save a click that does nothing."""
+    assert "recompute" in we.PLANNED_EFFECTS
+    with pytest.raises(we.EventError, match="not built yet"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "recompute",
+                                                "config": {"variable": "v_a"}}])},
+                 layout={"btn": node({})})
+
+
+def test_the_builder_offers_every_effect_the_server_accepts() -> None:
+    """**The guard that would have caught §190's gap.**
+
+    `switch_tab` was added to the server's `EFFECTS` and never to the builder's
+    catalogue, so it was legal to save and impossible to create - a feature
+    reachable only by hand-editing the raw JSON. Nothing noticed, because the
+    two lists are in different languages and neither is derived from the other.
+
+    The panel's list must cover exactly what the server accepts, minus the ones
+    the server refuses with a reason: offering a refused effect is offering a
+    choice that fails on save, and *not* offering an accepted one is the gap
+    above.
+    """
+    import re
+
+    panel = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "components", "canvas", "EventsPanel.tsx",
+    )
+    source = open(panel).read()
+    block = re.search(
+        r"const EFFECTS: \{ type: string; label: string; hint: string \}\[\] = \[(.*?)\n\];",
+        source, re.S,
+    )
+    assert block, "EFFECTS not found in EventsPanel.tsx - has it been renamed?"
+    # **Types *and* labels, and the labels are the vacuity guard.** Reading only
+    # the types lets this test be quietly turned into a comparison of the
+    # server's list with itself - which passes for any panel at all. A label is
+    # something only the panel has: an `<option>` with no text is not an offer,
+    # so requiring one is both the check and the proof that the panel was read.
+    catalogue = dict(re.findall(r'type: "([^"]+)",\s*label: "([^"]+)"', block.group(1)))
+    offered = set(catalogue)
+    assert offered, "the catalogue parsed as empty - the scan broke, not the panel"
+    assert all(catalogue.values()), catalogue
+    assert catalogue.get("reset_variable") == "Reset a variable", (
+        "the scan is not reading EventsPanel.tsx - it should have found this "
+        f"entry's label, and found {catalogue.get('reset_variable')!r}"
+    )
+    accepted = set(we.EFFECTS) - set(we.PLANNED_EFFECTS)
+    assert offered == accepted, (
+        f"the builder offers {sorted(offered)}; the server accepts "
+        f"{sorted(accepted)}. An effect the server takes but the panel does not "
+        "offer can only be created by hand-editing the raw JSON"
+    )
 
 
 # ---- tabs sections and p.84's switch_tab (p.54, p.84) ------------------------

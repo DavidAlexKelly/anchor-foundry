@@ -55,8 +55,24 @@ def action(api, module):
 
 
 def open_objects(page, module) -> None:
+    """Open the project's Objects page and wait for the Actions section.
+
+    **`exact=True`, and it is load-bearing.** `get_by_role(name=…)` matches by
+    case-insensitive *substring*, and this file's fixture names its project
+    "ActionStatuses …" — whose first seven letters are "actions". So the page
+    carries two matching headings, its own `<h2>Actions</h2>` and the project
+    name, and the locator is a strict-mode violation the moment both have
+    rendered. It passed for as long as the assertion happened to resolve before
+    the project name arrived.
+
+    Third time for this exact shape (§186 twice, here once), and the tell is
+    always the same: a failure that says "resolved to 2 elements" rather than
+    "not found".
+    """
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    expect(page.get_by_role("heading", name="Actions")).to_be_visible(timeout=30000)
+    expect(
+        page.get_by_role("heading", name="Actions", exact=True)
+    ).to_be_visible(timeout=30000)
 
 
 def action_row(page, action):

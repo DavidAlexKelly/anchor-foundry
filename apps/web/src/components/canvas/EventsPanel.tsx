@@ -77,6 +77,18 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
     label: "Toggle a section",
     hint: "expands it if collapsed, collapses it if expanded",
   },
+  // p.84's, and the one Layout event that *writes* its variable.
+  {
+    type: "switch_tab",
+    label: "Switch to a tab",
+    hint: "also updates the section's tab variable, unlike the four above",
+  },
+  // p.85's, offered "for static variables".
+  {
+    type: "reset_variable",
+    label: "Reset a variable",
+    hint: "back to the value in its definition",
+  },
 ];
 
 /** Widget names that can fire something, for the caller reading the tree.
@@ -117,6 +129,7 @@ export function EventsPanel({
   variables,
   triggerNodes,
   pages,
+  tabSections,
   sections,
   actions = [],
   onChange,
@@ -129,6 +142,11 @@ export function EventsPanel({
   triggerNodes: TriggerCandidate[];
   /** Pages and overlays, which is what `navigate` accepts. */
   pages: PageCandidate[];
+  /** The module's **Tabs** sections and what each one's tabs are called
+   * (p.54, p.84). Separate from `sections` below because the two lists answer
+   * different questions - which sections can collapse, which have tabs - and a
+   * section can be both. */
+  tabSections?: { id: string; label: string; tabs: string[] }[];
   /** The module's **collapsible** sections, which is what p.82's three
    * effects accept - and only those, because the server refuses the rest. */
   sections?: PageCandidate[];
@@ -275,6 +293,7 @@ export function EventsPanel({
                     variables={writable}
                     objects={objects}
                     pages={pages}
+                    tabSections={tabSections ?? []}
                     sections={sections ?? []}
                     actions={actions}
                     readOnly={readOnly}
@@ -328,6 +347,7 @@ function EffectEditor({
   variables,
   objects,
   pages,
+  tabSections,
   sections,
   actions,
   readOnly,
@@ -341,6 +361,7 @@ function EffectEditor({
   variables: WorkshopVariable[];
   objects: WorkshopVariable[];
   pages: PageCandidate[];
+  tabSections: { id: string; label: string; tabs: string[] }[];
   sections: PageCandidate[];
   actions: ActionCandidate[];
   readOnly: boolean;
@@ -517,6 +538,76 @@ function EffectEditor({
               settings first
             </span>
           )}
+        </label>
+      )}
+
+      {effect.type === "switch_tab" && (
+        <>
+          <label className="field">
+            <span className="field-label">Section</span>
+            <select
+              disabled={readOnly}
+              data-testid="effect-tab-section"
+              value={String(config.section ?? "")}
+              // The tab is cleared with the section, not carried across: tab
+              // names are per section, so a name kept from the old one would
+              // be refused on save and would look like a bug in the picker.
+              onChange={(e) =>
+                onChange({
+                  type: effect.type,
+                  config: { section: e.target.value || undefined },
+                })}
+            >
+              <option value="">Pick a Tabs section</option>
+              {tabSections.map((t) => (
+                <option key={t.id} value={t.id}>{t.label}</option>
+              ))}
+            </select>
+            {tabSections.length === 0 && (
+              <span className="field-hint">
+                No Tabs sections yet &mdash; set a section&apos;s layout to Tabs first
+              </span>
+            )}
+          </label>
+          <label className="field">
+            <span className="field-label">Tab</span>
+            <select
+              disabled={readOnly}
+              data-testid="effect-tab"
+              value={String(config.tab ?? "")}
+              onChange={(e) => setConfig({ tab: e.target.value || undefined })}
+            >
+              <option value="">Pick a tab</option>
+              {(tabSections.find((t) => t.id === config.section)?.tabs ?? []).map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      )}
+
+      {effect.type === "reset_variable" && (
+        <label className="field">
+          <span className="field-label">Variable</span>
+          <select
+            disabled={readOnly}
+            data-testid="effect-reset-variable"
+            value={String(config.variable ?? "")}
+            onChange={(e) => setConfig({ variable: e.target.value || undefined })}
+          >
+            <option value="">Pick a variable</option>
+            {variables.map((v) => (
+              <option key={v.id} value={v.id}>{v.label || v.id}</option>
+            ))}
+          </select>
+          {/* p.85 offers Reset "for static variables", and `variables` is
+              already the settable list for `set_variable` - the same filter,
+              for the same reason: a derived variable has no stored value to
+              put back. */}
+          <span className="field-hint">
+            Back to the value in its definition &mdash; or, for a variable an
+            embedding module has mapped, back to the parent&apos;s.
+          </span>
         </label>
       )}
 
