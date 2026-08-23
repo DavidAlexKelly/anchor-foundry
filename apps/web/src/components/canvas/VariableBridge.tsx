@@ -33,6 +33,7 @@ import {
 } from "./context";
 import { invalidateCanvasReads } from "./refresh";
 import type { CollapseOverride } from "./collapse";
+import type { TabOverride } from "./tab-selection";
 import { asPageId, pageState, type PageOverride } from "./page-selection";
 import { defaultPageNode, pageNodeFor } from "./routing";
 import { RoutingSync } from "./RoutingSync";
@@ -161,6 +162,9 @@ export function VariableBridge({
   // p.82's collapse state, by the same argument as the page above: runtime
   // state with exactly the lifetime of the variable values beside it.
   const [collapsed, setCollapsedState] = useState<Record<string, CollapseOverride>>({});
+  // p.54's Tabs sections, by the same argument again. Separate from
+  // `collapsed` because one section can be both collapsible and tabbed.
+  const [tabs, setTabState] = useState<Record<string, TabOverride>>({});
 
   // And running an action (roadmap 1.3), by the same argument.
   const queryClient = useQueryClient();
@@ -213,6 +217,9 @@ export function VariableBridge({
           collapsed,
           setCollapsed: (id, override) =>
             setCollapsedState((current) => ({ ...current, [id]: override })),
+          tabs,
+          setTab: (id, override) =>
+            setTabState((current) => ({ ...current, [id]: override })),
         }}
       >
         <CanvasActionsProvider
