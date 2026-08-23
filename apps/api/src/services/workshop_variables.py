@@ -241,6 +241,16 @@ REFERENCE_PROPS = (
     "subjectVariable",
     "drilldownVariable",
     "seriesVariable",
+    # **These two were missing for as long as they existed** - `collapsedWhen`
+    # since §185, `tabVariable` since §190 - and the omission was silent both
+    # ways. A section could bind its collapse state to a variable the module
+    # never declared and save happily; and a variable backing a collapse or a
+    # tab reported *zero* usages, so the Variables panel offered to delete it
+    # and the delete refusal never fired. The guard that would have caught
+    # them is `test_every_variable_prop_is_a_known_reference`, which checks
+    # this list against the builder rather than against its own mirror.
+    "collapsedWhen",
+    "tabVariable",
     "name",
 )
 

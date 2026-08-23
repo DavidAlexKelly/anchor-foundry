@@ -146,6 +146,11 @@ export const REFERENCE_PROPS = [
   "subjectVariable",
   "drilldownVariable",
   "seriesVariable",
+  // A section's collapse backing (p.82) and its tab backing (p.84). Both hold
+  // a variable id and neither was here until §191 found them; see the note on
+  // the API's copy.
+  "collapsedWhen",
+  "tabVariable",
   "name",
 ] as const;
 

@@ -380,6 +380,101 @@ def test_the_reference_prop_list_agrees_with_the_browser_s_copy() -> None:
     )
 
 
+#: Props whose name follows the convention below but which do **not** hold a
+#: variable id of *this* module. One entry, and it earns its exemption: a Loop
+#: layout's `itemVariable` is the **child module's** external ID for the
+#: interface variable that receives each object (p.135), so it names something
+#: in a different document entirely. Listed rather than pattern-matched away,
+#: because an exemption nobody can see is how the next one gets added quietly.
+NOT_A_LOCAL_VARIABLE = ("itemVariable",)
+
+
+def test_every_variable_prop_is_a_known_reference() -> None:
+    """**The guard the drift check above could not be.**
+
+    That one asserts the two copies of `REFERENCE_PROPS` agree. It cannot
+    notice a prop missing from *both*, and twice that is exactly what happened:
+    `collapsedWhen` (§185) and `tabVariable` (§190) each shipped holding a
+    variable id that nothing counted as a usage. The failure is silent in both
+    directions - a module can bind to a variable it never declared and save
+    happily, and the Variables panel reports the backing variable as used by
+    nothing and offers to delete it.
+
+    So this checks the list against the *builder* instead of against its own
+    mirror. Every prop a settings panel reads whose name ends in `Variable`,
+    `Parameter` or `When` must be a known reference or a named exception.
+
+    **It is a naming convention, and asserting it is what makes it one.** A
+    prop holding a variable id and called `foo` still slips through; the answer
+    to that is to call it `fooVariable`, and this test is the reason to. The
+    three suffixes are the ones already in use, and the failure says so.
+    """
+    import re
+
+    widgets = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "components", "canvas", "widgets.tsx",
+    )
+    source = open(widgets).read()
+    # Every prop a settings panel *reads*. Not every identifier in the file: a
+    # local called `setVariable` is not a prop, and matching bare names would
+    # make this fail on a rename that changed nothing.
+    read_by_panels = set(re.findall(r"node\.data\.props\.([A-Za-z_]+)", source))
+    assert read_by_panels, "no settings-panel props found - has widgets.tsx moved?"
+    looks_like_a_variable = {
+        prop for prop in read_by_panels
+        if prop.endswith(("Variable", "Parameter", "When"))
+    }
+    # **The vacuity guard.** A completeness check that finds nothing passes,
+    # and this repo has now met that failure three times in one session.
+    assert len(looks_like_a_variable) >= 8, (
+        f"only {sorted(looks_like_a_variable)} match the convention - either the "
+        "scan broke or the convention did"
+    )
+    unknown = sorted(
+        looks_like_a_variable - set(wv.REFERENCE_PROPS) - set(NOT_A_LOCAL_VARIABLE)
+    )
+    assert not unknown, (
+        f"{', '.join(unknown)} look like variable references and are in neither "
+        "REFERENCE_PROPS nor NOT_A_LOCAL_VARIABLE. A prop holding a variable id "
+        "that is not a known reference cannot be counted as a usage, so the "
+        "variable it names can be deleted out from under it"
+    )
+
+
+def _bound_section(props: dict) -> dict:
+    return {
+        "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "nodes": ["sec"]},
+        "sec": {"type": {"resolvedName": "CanvasSection"}, "props": props, "nodes": []},
+    }
+
+
+def test_a_section_collapse_binding_counts_as_a_usage() -> None:
+    """p.82's "Boolean variable backing the collapse state" is a binding like
+    any other, and counted as none until §191."""
+    layout = _bound_section({"direction": "columns", "collapsible": True,
+                             "collapsedWhen": "v_b"})
+    variables = wv.parse({"v_b": var("v_b", kind="boolean")})
+    assert wv.usages(layout, variables)["v_b"] == [{"node": "sec", "prop": "collapsedWhen"}]
+
+
+def test_a_tab_selection_binding_counts_as_a_usage() -> None:
+    """p.84's tab variable, same argument. §190 checked that it *resolved* at
+    save time and not that it was *used* - so the panel would offer to delete
+    it, and the next save would be refused for an edit made earlier."""
+    layout = _bound_section({"direction": "tabs", "tabVariable": "v_s"})
+    variables = wv.parse({"v_s": var("v_s")})
+    assert wv.usages(layout, variables)["v_s"] == [{"node": "sec", "prop": "tabVariable"}]
+
+
+def test_binding_a_collapse_to_a_variable_that_is_not_declared_is_refused() -> None:
+    """The other direction, and the one that used to save happily."""
+    layout = _bound_section({"direction": "columns", "collapsible": True,
+                             "collapsedWhen": "v_gone"})
+    with pytest.raises(wv.VariableError, match="does not declare|binds to"):
+        wv.validate_module({"format": 2, "layout": layout, "variables": {}, "events": {}})
+
+
 # ---- object sets: the variable kind Workshop is actually built on -------------
 # The roadmap calls this "the item that decides whether Workshop parity is
 # real". The shape being tested is the one a person builds: a dataset becomes

@@ -3956,6 +3956,38 @@ So §190 is the Tabs *section*: `direction: "tabs"` on `CanvasSection`, one chil
 **1453 API tests** (was 1441), 1 skipped; **257 browser tests**; **357 unit tests**; 15 mutants, all killed across four layers.
 
 ---
+
+### 191. Two props that named a variable and nobody knew (this session)
+
+Found while scoping copy-and-paste, which needs a definitive answer to "which props hold a variable id". `REFERENCE_PROPS` is that answer: it decides what counts as a *usage*, which decides whether a variable can be deleted and whether a binding to a missing one is refused. **Two entries were never added to it** — `collapsedWhen` (§185) and `tabVariable` (§190) — and the omission was silent in both directions.
+
+```
+collapsedWhen    -> ACCEPTED a reference to a variable that does not exist
+tabVariable      -> refused (§190's own check, which is about the kind)
+visibleWhen      -> refused: this layout binds to v_x, which the module does not declare
+```
+
+And the other way round, asking for a variable's usages when a section binds both its visibility and its collapse to it:
+
+```
+{'v_b': [{'node': 'sec', 'prop': 'visibleWhen'}], 'v_s': []}
+```
+
+`v_b`'s collapse binding is invisible; `v_s` backs a Tabs section and has **no usages at all**. So the Variables panel would report it as used by nothing and offer to delete it — and §190's check, which only asks whether it *resolves* at save time, would then refuse the next save, blaming an edit made earlier. A refusal arriving one step late and pointing at the wrong thing is worse than no refusal.
+
+**There was already a guard, and it could not have caught this.** `test_the_reference_prop_list_agrees_with_the_browser_s_copy` asserts the API's copy and the browser's match — and they did, identically wrong. A check that compares two copies is blind to anything missing from both, which is a general shape worth naming: *mirroring is not completeness.*
+
+So the new guard checks the list against the **builder**. Every prop a settings panel reads (`node.data.props.X` in `widgets.tsx`) whose name ends in `Variable`, `Parameter` or `When` must be a known reference or a named exception. Eleven props match today; ten are references and one is exempt — a Loop layout's `itemVariable` holds the **child module's** external ID (p.135), so it names something in a different document. The exemption is a named constant rather than a pattern, because an exemption nobody can see is how the next one gets added quietly.
+
+It is a naming convention, and asserting it is what makes it one: a prop holding a variable id and called `foo` still slips through, and the failure message says the answer is to call it `fooVariable`. The guard carries its own vacuity assertion — a completeness check that finds nothing passes, which is the third time that shape has come up this session.
+
+**Eight mutants, all killed, and one of them had to be rewritten to mean anything.** "The completeness guard exempts the two props it was written for" survived, and correctly: exempting a prop that is *present* in the list changes no behaviour, so the mutant tested nothing. The version that matters removes the two props **and** exempts them at once — the guard is then genuinely blind, and the kill has to come from the usage tests. It does, which is what proves those tests stand on their own rather than being decoration around the guard.
+
+**A process note, paid for in lost work.** The sandbox rewound mid-unit and took this unit's first draft with it, because it was still uncommitted after half an hour. §188–§190 were untouched, being merged. The rule that follows is cheap: **commit and push as soon as a unit's tests are green, before the mutation harness runs**, not after the record is written. The harness is the longest phase and the one most likely to be interrupted, and a commit costs nothing to amend.
+
+**1457 API tests** (was 1453), 1 skipped; 8 mutants, all killed.
+
+---
 ---
 ---
 ---
@@ -4018,6 +4050,8 @@ So §190 is the Tabs *section*: `direction: "tabs"` on `CanvasSection`, one chil
 - **Making the server faster breaks browser tests, and the tests were always wrong.** A slow request is an accidental barrier: while it is in flight the page cannot finish rendering, so an assertion written with no wait gets one for free. Remove the slowness and every test leaning on that barrier fails in the same run, which looks exactly like the change broke the feature. Two of these landed in one session. §186 dropped `/ontology-search` from 4.5s to 0.37s and two headings that had always arrived one at a time started arriving together, making a non-`exact` `get_by_role` locator ambiguous. §188 dropped `/projects` from 1.1s to 30ms and two `test_widget_config_tabs.py` tests began reading an object table's height and header count in the ~150ms between "the widget's frame is visible" and "its rows have arrived" — a gap `settled()` does not close, because it waits for a `.canvas-block` and the frame *is* one. **The tell is that the API answers are identical**: diff the responses under both settings first, and when they match, stop looking for a permissions or data bug and get a timeline of requests versus assertions instead. The fix is always a wait for the thing actually being measured, placed in the shared helper rather than in the test that happened to fail.
 
 - **A Playwright assertion that can be satisfied by a transient state is not an assertion.** `to_be_visible` retries until it sees what it wants and then stops looking: a wrong *first* frame is forgiven, and a wrong *last* frame is never examined. §189 found a mutant that showed the correct page for 250ms and then went somewhere else, with the whole test file having run and passed inside that window. The pattern to watch for is a page whose state depends on something arriving asynchronously — a resolved variable, a fetched row — because before it arrives the state is often *legitimately* the one the test is checking for. The fix is an ordering rule rather than a longer timeout: wait for evidence the async thing has landed (a marker variable, a value drawn on screen), and only then assert the thing under test. A related trap in the same family: if the not-yet-loaded state happens to equal the expected answer, the check passes against a build that never implemented the feature at all.
+
+- **A check that compares two copies is blind to anything missing from both.** §191's `REFERENCE_PROPS` had a drift guard asserting the API's list and the browser's matched — and they did, identically wrong, for two props across two units. Mirroring is not completeness. When a list has to be exhaustive, at least one check has to compare it against the *thing it describes* rather than against another copy of itself: here, against the props the builder's settings panels actually read. The same reasoning applies to any pair of mirrored files this repo keeps in step.
 
 - **A mutation harness needs to check that its mutations landed.** A regex that matches nothing produces a run of the unmutated code, which the harness reports as a survivor — indistinguishable from a real hole in the tests, and the natural response is to go looking for the missing assertion rather than the missing backslash. §189 spent two by-hand investigations on this before §190's harness started fingerprinting every file before and after each mutation and reporting NO-OP instead. It costs four lines and it fires exactly when you would otherwise be misled.
 
