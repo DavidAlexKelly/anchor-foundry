@@ -2,7 +2,10 @@
 
 import { useEditor } from "@craftjs/core";
 
-import type { WorkshopModule } from "@/lib/types";
+import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/types";
+import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
+import { clip, paste, pasteTarget, withoutSubtree } from "./clipboard";
+import type { Clipping, PasteMode } from "./clipboard";
 
 type StateSavingSettings = NonNullable<WorkshopModule["state_saving"]>;
 
@@ -65,6 +68,12 @@ export function LayoutPanel({
   pageSelection = "",
   onPageSelectionChange,
   stringVariables = [],
+  clipboard = null,
+  onClipboardChange,
+  variables = {},
+  onVariablesChange,
+  events = {},
+  onEventsChange,
   stateSaving,
   onStateSavingChange,
 }: {
@@ -83,6 +92,20 @@ export function LayoutPanel({
   onPageSelectionChange?: (next: string) => void;
   /** The module's string variables, which is all p.81 allows. */
   stringVariables?: { id: string; label: string }[];
+  /** Cut / copy / paste (p.55). The whole document's variables and events,
+   * not just the string ones: a clipping carries the definitions of whatever
+   * the copied subtree references, and a paste can add to both.
+   *
+   * Here rather than on the widget settings panel because p.55 calls these
+   * "the controls found for duplicating sections" (p.69), and because a
+   * *paste* needs a target, which is a question about the layout tree rather
+   * than about the selected widget. */
+  clipboard?: Clipping | null;
+  onClipboardChange?: (next: Clipping | null) => void;
+  variables?: Record<string, WorkshopVariable>;
+  onVariablesChange?: (next: Record<string, WorkshopVariable>) => void;
+  events?: Record<string, WorkshopEvent>;
+  onEventsChange?: (next: Record<string, WorkshopEvent>) => void;
   /** State saving (p.201's step 1, p.204's options). Beside routing because
    * Foundry puts both in the same Settings panel, and because they are the two
    * module-wide switches an author sets once. */
@@ -122,6 +145,42 @@ export function LayoutPanel({
   });
   const { actions, query } = useEditor();
 
+  // p.55's cut / copy / paste. **Both halves go through the serialised map**,
+  // not through Craft's node-tree API: the layout *is* that map (decision
+  // 0002), the transforms are in one tested pure module, and cut is then one
+  // atomic edit rather than a copy followed by a separate delete that could
+  // land without it.
+  const clipboardEnabled = Boolean(onClipboardChange && onVariablesChange && onEventsChange);
+  const labelOf = (id: string) =>
+    rows.find((row) => row.id === id)?.label ?? "widget";
+
+  const take = (andRemove: boolean) => {
+    if (!selectedId) return;
+    const layout = query.getSerializedNodes() as Record<string, unknown>;
+    const clipping = clip(layout, variables, events, selectedId, labelOf(selectedId));
+    if (!clipping) return;
+    onClipboardChange?.(clipping);
+    if (andRemove) actions.deserialize(withoutSubtree(layout, selectedId) as never);
+  };
+
+  const drop = (mode: PasteMode) => {
+    if (!clipboard) return;
+    const layout = query.getSerializedNodes() as Record<string, unknown>;
+    const into = pasteTarget(layout, selectedId);
+    if (!into) return;
+    const next = paste(layout, variables, events, clipboard, {
+      into, mode,
+      mintNode: newNodeId, mintVariable: newVariableId, mintEvent: newEventId,
+    });
+    // Variables and events first: `deserialize` re-renders the tree, and a
+    // widget that mounted before its new variable existed would read as
+    // unbound for a frame and log a binding warning for a variable that is
+    // about to arrive.
+    onVariablesChange?.(next.variables);
+    onEventsChange?.(next.events);
+    actions.deserialize(next.layout as never);
+  };
+
   const select = (id: string) => {
     actions.selectNode(id);
     // A tree row for a node scrolled out of view would select something the
@@ -152,6 +211,52 @@ export function LayoutPanel({
           {row.detail && <span className="canvas-tree-detail">{row.detail}</span>}
         </button>
       ))}
+      {clipboardEnabled && (
+        <div className="canvas-clipboard">
+          <div className="canvas-clipboard-row">
+            <button
+              type="button" className="btn" data-testid="clip-copy"
+              disabled={!selectedId || selectedId === "ROOT"}
+              onClick={() => take(false)}
+            >
+              Copy
+            </button>
+            <button
+              type="button" className="btn" data-testid="clip-cut"
+              disabled={!selectedId || selectedId === "ROOT"}
+              onClick={() => take(true)}
+            >
+              Cut
+            </button>
+          </div>
+          {/* p.55 offers two pastes rather than a paste and a setting, and the
+              difference is worth two buttons: an author about to paste knows
+              which one they mean, and would have to go and find a toggle
+              otherwise. */}
+          <div className="canvas-clipboard-row">
+            <button
+              type="button" className="btn" data-testid="clip-paste-same"
+              disabled={!clipboard}
+              onClick={() => drop("same")}
+            >
+              Paste
+            </button>
+            <button
+              type="button" className="btn" data-testid="clip-paste-duplicate"
+              disabled={!clipboard}
+              onClick={() => drop("duplicate")}
+            >
+              Paste as a copy
+            </button>
+          </div>
+          <p className="canvas-widget-empty" data-testid="clip-state">
+            {clipboard
+              ? `Holding ${clipboard.label}. "Paste" reuses its variables; `
+                + `"Paste as a copy" makes new ones.`
+              : "Select a widget or section, then Copy."}
+          </p>
+        </div>
+      )}
       {onRoutingChange && (
         <label className="vars-toggle">
           <input

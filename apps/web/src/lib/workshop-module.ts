@@ -192,3 +192,15 @@ export function newVariableId(): string {
 export function newEventId(): string {
   return `e_${Math.random().toString(36).slice(2, 10)}`;
 }
+
+/** A fresh layout node id, for a paste (p.55).
+ *
+ * Craft.js mints its own when a widget is dragged in, and this is the same
+ * kind of thing by a different route: a paste rewrites the serialised map
+ * directly, so it has to supply ids Craft has not seen. The format is ours
+ * rather than Craft's on purpose - nothing may depend on the shape of a node
+ * id, which is exactly why a page carries an author-set `pageId` (p.197).
+ */
+export function newNodeId(): string {
+  return `n_${Math.random().toString(36).slice(2, 10)}`;
+}
