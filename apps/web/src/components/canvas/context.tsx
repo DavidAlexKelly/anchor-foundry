@@ -53,6 +53,10 @@ export interface CanvasParameters {
    * them one at a time would let a widget re-fetch against a half-applied set
    * of writes. */
   setMany: (values: Record<string, unknown>) => void;
+  /** p.85's Reset: forget the viewer's value so the definition's shows again.
+   * A deletion rather than a write of the default — see the implementation for
+   * why that is what makes p.128's precedence rule fall out. */
+  reset: (names: readonly string[]) => void;
 }
 
 const ParameterContext = createContext<CanvasParameters | null>(null);
@@ -182,6 +186,32 @@ export function CanvasParameterProvider({
     [link],
   );
 
+  /** p.85's Reset: forget what the viewer set, so the value falls back to the
+   * one in the definition.
+   *
+   * **A deletion, not a write of the default**, and that is what makes p.128
+   * fall out instead of needing a case of its own. The server resolves an
+   * unbound static variable as `values.get(vid, variable.default)`, so removing
+   * the local value *is* "back to the definition". And it resolves a variable
+   * an embedding module has mapped as the host's value with the child's
+   * definition skipped entirely (p.127) - so removing the local override there
+   * is "back to the parent's definition", which is exactly what p.128 asks for.
+   * One operation, right in both cases.
+   *
+   * **It never forwards to the host**, unlike `set`. A bound name's value is
+   * overlaid from `link.values`, so deleting the local copy leaves the host's
+   * showing - whereas forwarding would have a child's Reset button edit its
+   * parent's state, which p.128 does not say and which is a child reaching
+   * upward.
+   */
+  const reset = useCallback((names: readonly string[]) => {
+    setValues((current) => {
+      const next = { ...current };
+      for (const name of names) delete next[name];
+      return next;
+    });
+  }, []);
+
   // The host's value for every bound name, overlaid on our own. Overlaid rather
   // than merged into state so there is exactly one copy: a bound name that also
   // had a local value would drift the moment the host changed and nothing here
@@ -200,7 +230,10 @@ export function CanvasParameterProvider({
     [values, JSON.stringify(linked)],
   );
 
-  const value = useMemo(() => ({ values: merged, set, setMany }), [merged, set, setMany]);
+  const value = useMemo(
+    () => ({ values: merged, set, setMany, reset }),
+    [merged, set, setMany, reset],
+  );
   return <ParameterContext.Provider value={value}>{children}</ParameterContext.Provider>;
 }
 
