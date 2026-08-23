@@ -3988,6 +3988,32 @@ It is a naming convention, and asserting it is what makes it one: a prop holding
 **1457 API tests** (was 1453), 1 skipped; 8 mutants, all killed.
 
 ---
+
+### 192. Copy, paste, and the question p.55 asks twice (this session)
+
+The unit §191 was scoped for. p.55 offers cut, copy and paste for sections and widgets, and — the part that makes it more than an editor convenience — **two** pastes: "Paste with same input variable" reuses the copied thing's variables, "Paste with duplicate input variables" mints new ones matching them. Everything else is a subtree walk, fresh ids, and rewriting the references that point inside what moved.
+
+**One transform over the serialised layout.** Craft.js has a node-tree API, but the layout *is* the serialised map (decision 0002) and the builder already deserialises one on load, so `clipboard.ts` transforms the map and hands it back to `actions.deserialize`. Cut is then one atomic edit rather than a copy followed by a delete that could land without it — and the whole thing is testable without a browser, which matters more here than usual: *a paste that rewrote one reference too few is invisible* until somebody edits the copy and watches the original move.
+
+What travels: the subtree through both `nodes` and `linkedNodes`; the definitions of every variable it references; and every event triggered from inside it, with node ids remapped where the target came along and left alone where it did not. p.55 says nothing about events, and leaving them behind would have been defensible — but a copied Button that has lost its on-click does less than the thing it copied, silently.
+
+What does not travel: a duplicated variable's **derivation inputs**. p.55's "input variables" are the widget's own, not the whole graph behind them, and duplicating the graph would clone the object set a filter narrows — precisely the thing an author duplicating a filter wants to keep shared. The other reading is defensible and produces a different feature, so the judgement is stated in the module and asserted in a test rather than left to be inferred. A duplicate also drops the **external ID**: it is what a URL and an embedding module address, the server refuses two variables that share one, and carrying it would make the paste unsaveable for a reason pointing at the wrong variable.
+
+**Twenty-two mutants, all killed** — and unusually, none survived. That is worth a note rather than a celebration: the reason is that the interesting behaviour is all in a pure function with a fixture that names every node, so a wrong remap changes a value a test already reads. The three units before this one each had a survivor, and each survivor lived in *wiring* rather than arithmetic.
+
+**Three false starts in the browser test, all the same shape: the fixture was not asking the question.**
+
+1. The first bound its widget with `{{v_word}}` in the text. An interpolation is **not** a reference prop, so nothing in this system counts it as a usage — not the server, not the Variables panel, not the clipboard — and the clipping carried no variables at all. Three tests failed for a reason with nothing to do with pasting.
+2. The second counted `get_by_text("COPY ME")` unscoped and got four where it expected two, because the Layout panel shows a Text widget's `text` prop as the row's detail. Every widget was counted twice — once drawn, once listed.
+3. The third read the Variables panel's usage counts straight after a paste and saw the duplicate as "unused". The panel counts usages against the **saved** definition, so before a save it is answering a question about the previous document.
+
+The third is the one that improved the test: it now saves and reloads before reading the counts, which turns "did the paste repoint the props" into a question about the *document* rather than about the editor's memory. And the counts are a better readout than anything on the canvas, because they name both sides at once — a build that minted the variable and forgot to repoint the props shows "Show" used twice and "Show copy" used by nothing.
+
+**Named and not built**: p.68's *Unused widgets* area, the holding pen a Cmd+V lands in when there is nowhere to put a widget yet. It needs a place in the document for nodes outside the layout tree, which is a format change rather than a control.
+
+**1457 API tests**, 1 skipped; **263 browser tests**; **383 unit tests**; 22 mutants, all killed.
+
+---
 ---
 ---
 ---
@@ -4050,6 +4076,8 @@ It is a naming convention, and asserting it is what makes it one: a prop holding
 - **Making the server faster breaks browser tests, and the tests were always wrong.** A slow request is an accidental barrier: while it is in flight the page cannot finish rendering, so an assertion written with no wait gets one for free. Remove the slowness and every test leaning on that barrier fails in the same run, which looks exactly like the change broke the feature. Two of these landed in one session. §186 dropped `/ontology-search` from 4.5s to 0.37s and two headings that had always arrived one at a time started arriving together, making a non-`exact` `get_by_role` locator ambiguous. §188 dropped `/projects` from 1.1s to 30ms and two `test_widget_config_tabs.py` tests began reading an object table's height and header count in the ~150ms between "the widget's frame is visible" and "its rows have arrived" — a gap `settled()` does not close, because it waits for a `.canvas-block` and the frame *is* one. **The tell is that the API answers are identical**: diff the responses under both settings first, and when they match, stop looking for a permissions or data bug and get a timeline of requests versus assertions instead. The fix is always a wait for the thing actually being measured, placed in the shared helper rather than in the test that happened to fail.
 
 - **A Playwright assertion that can be satisfied by a transient state is not an assertion.** `to_be_visible` retries until it sees what it wants and then stops looking: a wrong *first* frame is forgiven, and a wrong *last* frame is never examined. §189 found a mutant that showed the correct page for 250ms and then went somewhere else, with the whole test file having run and passed inside that window. The pattern to watch for is a page whose state depends on something arriving asynchronously — a resolved variable, a fetched row — because before it arrives the state is often *legitimately* the one the test is checking for. The fix is an ordering rule rather than a longer timeout: wait for evidence the async thing has landed (a marker variable, a value drawn on screen), and only then assert the thing under test. A related trap in the same family: if the not-yet-loaded state happens to equal the expected answer, the check passes against a build that never implemented the feature at all.
+
+- **When a browser test fails, ask whether the fixture is posing the question before asking whether the code is wrong.** §192 lost three rounds to fixtures rather than to the feature: a widget bound by `{{...}}` interpolation, which nothing in this system counts as a variable usage; a `get_by_text` that also matched the Layout panel's row detail and so counted every widget twice; and a read of the Variables panel's usage counts *before* a save, when that panel is computed from the saved definition and is still describing the previous document. All three read as "the feature is broken". The tell is a failure whose number is wrong in a way the feature could not produce — four copies where the paste ran once, a variable "unused" that is visibly on screen.
 
 - **A check that compares two copies is blind to anything missing from both.** §191's `REFERENCE_PROPS` had a drift guard asserting the API's list and the browser's matched — and they did, identically wrong, for two props across two units. Mirroring is not completeness. When a list has to be exhaustive, at least one check has to compare it against the *thing it describes* rather than against another copy of itself: here, against the props the builder's settings panels actually read. The same reasoning applies to any pair of mirrored files this repo keeps in step.
 

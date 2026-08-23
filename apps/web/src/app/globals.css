@@ -2029,6 +2029,15 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   border-bottom-color: var(--accent);
 }
 
+/* p.55's cut / copy / paste controls, under the layout tree. Two rows of two
+   rather than one row of four: the pair that *takes* and the pair that
+   *places* are different decisions, and a single row would read as four
+   equivalent buttons. */
+.canvas-clipboard { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.canvas-clipboard-row { display: flex; gap: 6px; }
+.canvas-clipboard-row .btn { flex: 1; padding: 4px 8px; font-size: 12px; }
+.canvas-clipboard-row .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* p.62's custom padding: two numbers, top/bottom then left/right. Side by side
    because they are one setting - stacked, they read as two. */
 .style-padding-pair { display: flex; gap: 8px; }

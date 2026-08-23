@@ -43,6 +43,7 @@ import {
   type TriggerCandidate,
 } from "@/components/canvas/EventsPanel";
 import { LayoutPanel } from "@/components/canvas/LayoutPanel";
+import type { Clipping } from "@/components/canvas/clipboard";
 import { CanvasNode, SettingsPanel } from "@/components/canvas/SettingsPanel";
 import { VariablesPanel } from "@/components/canvas/VariablesPanel";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
@@ -670,6 +671,12 @@ function Toolbox({
   pageSelection,
   onPageSelectionChange,
   stringVariables,
+  clipboard,
+  onClipboardChange,
+  variables,
+  onVariablesChange,
+  events,
+  onEventsChange,
   stateSaving,
   onStateSavingChange,
 }: {
@@ -678,6 +685,12 @@ function Toolbox({
   pageSelection: string;
   onPageSelectionChange: (next: string) => void;
   stringVariables: { id: string; label: string }[];
+  clipboard: Clipping | null;
+  onClipboardChange: (next: Clipping | null) => void;
+  variables: Record<string, WorkshopVariable>;
+  onVariablesChange: (next: Record<string, WorkshopVariable>) => void;
+  events: Record<string, WorkshopEvent>;
+  onEventsChange: (next: Record<string, WorkshopEvent>) => void;
   stateSaving: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>;
   onStateSavingChange: (
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
@@ -691,6 +704,12 @@ function Toolbox({
         pageSelection={pageSelection}
         onPageSelectionChange={onPageSelectionChange}
         stringVariables={stringVariables}
+        clipboard={clipboard}
+        onClipboardChange={onClipboardChange}
+        variables={variables}
+        onVariablesChange={onVariablesChange}
+        events={events}
+        onEventsChange={onEventsChange}
         stateSaving={stateSaving}
         onStateSavingChange={onStateSavingChange}
       />
@@ -945,6 +964,11 @@ function CanvasBody({
   // variable list that pushed the settings below the fold would make
   // configuring a widget worse in service of a panel most edits do not touch.
   const [tab, setTab] = useState<"widget" | "variables" | "events">("widget");
+  // p.55's clipboard. **Module-scoped and never persisted**: p.68 offers copy
+  // and paste for reuse "anywhere in the module", and a clipping holds node
+  // ids and variable definitions from *this* document, so carrying one to
+  // another module would paste references to variables that are not there.
+  const [clipboard, setClipboard] = useState<Clipping | null>(null);
   return (
     <div className={showChrome ? "canvas-shell" : "canvas-shell canvas-shell--full"}>
       {showChrome && (
@@ -960,6 +984,12 @@ function CanvasBody({
           stringVariables={Object.values(variables)
             .filter((v) => v.kind === "string")
             .map((v) => ({ id: v.id, label: v.label }))}
+          clipboard={clipboard}
+          onClipboardChange={setClipboard}
+          variables={variables}
+          onVariablesChange={onVariablesChange}
+          events={events}
+          onEventsChange={onEventsChange}
           stateSaving={stateSaving}
           onStateSavingChange={onStateSavingChange}
         />
