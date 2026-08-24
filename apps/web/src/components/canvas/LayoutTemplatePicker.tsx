@@ -81,15 +81,6 @@ export function LayoutTemplatePicker({ pageId }: { pageId: string }) {
     <div
       className="canvas-template-picker"
       data-testid="layout-template-picker"
-      // **Craft's drag connector is on the page node this strip sits inside**,
-      // and it starts a drag on `mousedown`. That moves the DOM out from under
-      // the pointer, so `mouseup` lands somewhere else and the browser never
-      // synthesises a `click` at all - the button silently does nothing, with
-      // no error anywhere. Stopping the press here keeps the connector from
-      // ever seeing it; `onClick`'s own `stopPropagation` is about selection
-      // and does not help, because it runs on an event that never happens.
-      onMouseDown={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
     >
       {previewing && (
         <div className="canvas-template-preview" data-testid="layout-template-preview">

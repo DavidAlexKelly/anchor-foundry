@@ -98,6 +98,24 @@ describe("pageGroups", () => {
     expect(pageGroups(layout, "p1")).toEqual([["w0"], ["w1"]]);
   });
 
+  it("finds children hanging off linkedNodes", () => {
+    // **Craft hangs an `<Element canvas>`'s children off `linkedNodes`, not
+    // `nodes`** — `clipboard.ts` carries the same warning, and for the same
+    // reason: a walk that reads only `nodes` sees an empty page and reports
+    // that there was nothing to carry. Silent, and it looks like the page was
+    // already blank.
+    const layout = {
+      ROOT: { type: { resolvedName: "CanvasContainer" }, isCanvas: true, props: {}, nodes: ["p1"] },
+      p1: {
+        type: { resolvedName: "CanvasPage" }, isCanvas: true, props: {},
+        parent: "ROOT", nodes: [], linkedNodes: { body: "s1" },
+      },
+      ...section("s1", "p1", ["w1"]),
+      ...widget("w1", "s1"),
+    } as unknown as LayoutNodes;
+    expect(pageGroups(layout, "p1")).toEqual([["w1"]]);
+  });
+
   it("is empty for a page with nothing on it", () => {
     expect(pageGroups(doc([]), "p1")).toEqual([]);
   });
@@ -241,6 +259,20 @@ describe("applyTemplate", () => {
     const result = applyTemplate(before, "nope", single, minter());
     expect(result.layout).toBe(before);
     expect(result.sections).toEqual([]);
+  });
+
+  it("lays down each template's own direction", () => {
+    // **Every direction the catalogue uses, not just the default.** Asserting
+    // only `two-rows` passes against a build that hard-codes "columns", which
+    // is what the mutation harness found: the Rows and Toolbar templates would
+    // have laid down columns and looked nothing like the icon clicked.
+    const directionOf = (key: string) => {
+      const layout = applyTemplate(doc([]), "p1", templateFor(key)!, minter()).layout;
+      return (layout.n1 as { props: Record<string, unknown> }).props.direction;
+    };
+    expect(directionOf("stacked-rows")).toBe("rows");
+    expect(directionOf("toolbar-and-body")).toBe("toolbar");
+    expect(directionOf("single")).toBe("columns");
   });
 
   it("carries the template's weights and title through", () => {

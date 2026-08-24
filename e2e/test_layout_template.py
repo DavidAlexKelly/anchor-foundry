@@ -18,7 +18,7 @@ from __future__ import annotations
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder, settled
+from conftest import open_builder, open_module, settled
 
 
 def module_with(api, name: str, sections: int):
@@ -66,6 +66,21 @@ def test_the_picker_sits_at_the_bottom_of_the_page(page, api) -> None:
 
     expect(page.get_by_test_id("layout-template-picker")).to_be_visible()
     expect(page.get_by_test_id("layout-template-two-rows")).to_be_visible()
+
+
+def test_a_reader_never_sees_the_picker(page, api) -> None:
+    """It is an authoring control, and a reader has no layout to choose.
+
+    Written because nothing else would catch it: every other test here opens
+    the *builder*, so a picker rendered unconditionally would pass all of them
+    and ship a layout-rewriting control into the published app.
+    """
+    mod = module_with(api, "Template hidden", 1)
+    open_module(page, mod)
+
+    # `settled` inside `open_module` makes this absence honest - a count of 0
+    # passes instantly on a page that has not drawn yet.
+    expect(page.get_by_test_id("layout-template-picker")).to_have_count(0)
 
 
 def test_hovering_an_icon_previews_that_layout(page, api) -> None:
