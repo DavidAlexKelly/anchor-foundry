@@ -154,6 +154,20 @@ describe("move", () => {
     expect(move(layout, "ROOT", "h")).toBe(layout);
   });
 
+  it("refuses ROOT even when the target is detached", () => {
+    // **The case the line above cannot see.** In a well-formed document every
+    // node descends from ROOT, so the descendant check already refuses this
+    // and the explicit `id === "ROOT"` guard never fires — which makes the
+    // assertion above pass with the guard deleted. A *detached* target is not
+    // a descendant of anything, and without the guard ROOT would be moved
+    // inside it and take the whole document off the tree.
+    const detached = {
+      ...doc(),
+      orphan: node("CanvasSection", null, []),
+    } as unknown as LayoutNodes;
+    expect(move(detached, "ROOT", "orphan")).toBe(detached);
+  });
+
   it("is a no-op when the node is already in that parent", () => {
     expect(move(layout, "w1", "s1")).toBe(layout);
   });
@@ -171,6 +185,20 @@ describe("ensureUnusedNode", () => {
     expect(result.id).toBe("u1");
     expect(kidsOf(result.layout, "ROOT")).toEqual(["p1", "u1"]);
     expect(parentOf(result.layout, "u1")).toBe("ROOT");
+  });
+
+  it("writes a node that can hold children", () => {
+    // `isCanvas` and the right `resolvedName` are what make this a *holder*
+    // rather than a leaf that silently drops whatever is moved into it.
+    // Asserted here because nothing downstream would notice: Craft is
+    // forgiving enough to re-derive `isCanvas` from the component's own craft
+    // config, so a document written without it works today and is wrong the
+    // moment anything reads the map directly — which is what this whole
+    // module does.
+    const { layout } = ensureUnusedNode(doc(), minter())!;
+    const holder = layout.u1 as { isCanvas?: boolean; type?: { resolvedName?: string } };
+    expect(holder.isCanvas).toBe(true);
+    expect(holder.type?.resolvedName).toBe(UNUSED_NAME);
   });
 
   it("returns the existing one rather than a second", () => {

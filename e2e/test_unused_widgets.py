@@ -90,6 +90,15 @@ def test_parking_moves_a_widget_out_of_the_tree_and_off_the_page(page, api) -> N
     # that was selected rather than about parking in general.
     expect(page.locator(".canvas-page").get_by_text("kept-widget")).to_be_visible()
 
+    # **And it is gone from the layout tree**, not merely added to the area
+    # below it. The tree is what is on a page; a parked widget in both places
+    # reads as two widgets, and one of them cannot be found on any page.
+    # `> .canvas-tree-row` is a direct-child selector on purpose - the area's
+    # own rows use the same class one level deeper.
+    tree = page.locator(".canvas-layout-tree > .canvas-tree-row")
+    expect(tree.filter(has_text="parked-widget")).to_have_count(0)
+    expect(tree.filter(has_text="kept-widget")).to_have_count(1)
+
 
 def test_a_parked_widget_survives_a_save_and_reload(page, api) -> None:
     """**The round trip.** A holding node that Craft dropped on deserialize
