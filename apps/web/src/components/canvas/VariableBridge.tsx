@@ -35,7 +35,7 @@ import { invalidateCanvasReads } from "./refresh";
 import type { CollapseOverride } from "./collapse";
 import type { TabOverride } from "./tab-selection";
 import { asPageId, pageState, type PageOverride } from "./page-selection";
-import { forget, heldFor, remember } from "./recompute";
+import { heldFor, remember, request, requested, settled } from "./recompute";
 import { defaultPageNode, pageNodeFor } from "./routing";
 import { RoutingSync } from "./RoutingSync";
 import { StateBar } from "./StateBar";
@@ -109,22 +109,28 @@ export function VariableBridge({
   // capture again. A recompute event bumps `recomputeTick` instead, which is
   // the one thing that should cause a re-resolve.
   const heldRef = useRef<Record<string, unknown>>({});
+  // p.85's Recompute events that have not been answered yet. A ref for the same
+  // reason `heldRef` is, and cleared by the resolve that carried each ask
+  // rather than wholesale, so an event fired mid-request is not swallowed.
+  const askRef = useRef<ReadonlySet<string>>(new Set());
   const [recomputeTick, setRecomputeTick] = useState(0);
 
   const resolve = useMutation({
     mutationFn: (raw: Record<string, unknown>) => {
       const ticket = ++latest.current;
-      const held = heldFor(declared, heldRef.current);
+      const asks = requested(declared, askRef.current);
+      const held = heldFor(declared, heldRef.current, askRef.current);
       return (published
-        ? canvasApi.evaluatePublishedVariables(workspaceId, appId, raw, bound, held)
-        : canvasApi.evaluateVariables(workspaceId, projectId, appId, raw, bound, held))
-        .then((data) => ({ data, ticket, held }));
+        ? canvasApi.evaluatePublishedVariables(workspaceId, appId, raw, bound, held, asks)
+        : canvasApi.evaluateVariables(workspaceId, projectId, appId, raw, bound, held, asks))
+        .then((data) => ({ data, ticket, held, asks }));
     },
-    onSuccess: ({ data, ticket, held }) => {
+    onSuccess: ({ data, ticket, held, asks }) => {
       if (ticket !== latest.current) return;
       // Captured before the values are published, so a widget never renders a
       // held variable in the gap between the two.
       heldRef.current = remember(declared, heldRef.current, held, data.values);
+      askRef.current = settled(askRef.current, asks);
       setResolved(data.values);
       setPending(false);
     },
@@ -234,15 +240,15 @@ export function VariableBridge({
           tabs,
           setTab: (id, override) =>
             setTabState((current) => ({ ...current, [id]: override })),
-          // p.85's Recompute: forget what the named variables last computed,
-          // then ask for a resolve. The forgetting is what makes the next
-          // resolve compute them - the request simply stops carrying a held
-          // value for them - and the tick is what makes a resolve happen at
-          // all, since none of the *parameter* values changed.
+          // p.85's Recompute: record the ask, then make a resolve happen. The
+          // tick is what makes it happen at all, since none of the *parameter*
+          // values changed - and the ask travels as its own field rather than
+          // as a hole in `held`, because for `only_on_event` a hole in `held`
+          // is what a fresh page looks like.
           recompute: (names) => {
-            const next = forget(declared, heldRef.current, names);
-            if (next === heldRef.current) return;
-            heldRef.current = next;
+            const next = request(declared, askRef.current, names);
+            if (next === askRef.current) return;
+            askRef.current = next;
             setRecomputeTick((n) => n + 1);
           },
         }}

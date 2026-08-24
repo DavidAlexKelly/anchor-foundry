@@ -1271,12 +1271,21 @@ export const canvas = {
      * the server uses it instead of recomputing — and so its dependants read
      * the same number the reader is looking at. */
     held?: Record<string, unknown>,
+    /** p.85's Recompute event: ids to compute fresh this time. Its own field
+     * because for `only_on_event` an absence from `held` is what a page that
+     * has never fired the event looks like. */
+    recompute?: string[],
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/variables/evaluate`,
       {
         method: "POST",
-        body: JSON.stringify({ values, bound: bound ?? [], held: held ?? {} }),
+        body: JSON.stringify({
+          values,
+          bound: bound ?? [],
+          held: held ?? {},
+          recompute: recompute ?? [],
+        }),
       },
     ),
   /** The same resolve for a published app, which a workspace member may open
@@ -1287,12 +1296,18 @@ export const canvas = {
     values: Record<string, unknown>,
     bound?: string[],
     held?: Record<string, unknown>,
+    recompute?: string[],
   ) =>
     request<{ values: Record<string, unknown>; order: string[] }>(
       `/workspaces/${wid}/published-canvas-apps/${appId}/variables/evaluate`,
       {
         method: "POST",
-        body: JSON.stringify({ values, bound: bound ?? [], held: held ?? {} }),
+        body: JSON.stringify({
+          values,
+          bound: bound ?? [],
+          held: held ?? {},
+          recompute: recompute ?? [],
+        }),
       },
     ),
   /** Saved states (p.200–206).

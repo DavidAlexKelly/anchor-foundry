@@ -1089,6 +1089,7 @@ def evaluate(
     *,
     bound: frozenset[str] = frozenset(),
     held: dict[str, Any] | None = None,
+    recompute_now: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Resolve every variable, computing derived ones from their inputs.
 
@@ -1124,6 +1125,15 @@ def evaluate(
     is initially loaded"; `only_on_event` resolves to None, because p.76 says
     "recomputed *only* when explicitly triggered" and computing it at load
     would make the two options identical on the one occasion they differ.
+
+    `recompute_now` is p.85's event arriving: the ids the caller is explicitly
+    asking to recompute this time, whatever it is holding for them. **It is a
+    separate argument rather than an absence from `held`**, and that is not
+    tidiness - an absence cannot say it. For `only_on_event` the two states the
+    caller needs to distinguish are "never computed" and "recompute now", and
+    both are spelled "no held value"; answering one of them makes the event
+    inert. `on_load_and_event` hides the problem, because its answer to a
+    missing held value happens to be "compute" either way.
     """
     resolved: dict[str, Any] = {}
     for vid in evaluation_order(variables):
@@ -1142,9 +1152,18 @@ def evaluate(
         # one has nothing to defer, and `_parse_recompute` refuses the setting
         # on it.
         if variable.recompute in HELD_BEHAVIOURS and variable.derivation is not None:
-            if held is not None and vid in held:
+            fresh = variable.recompute == "on_load_and_event"
+            # The explicit ask wins over the held value, so the caller does not
+            # have to drop what it remembers to make an event take effect -
+            # which matters because dropping it is exactly what it cannot do
+            # unambiguously for `only_on_event`.
+            if vid in recompute_now:
+                resolved[vid] = _apply(
+                    variable, [resolved[i] for i in variable.derivation.inputs]
+                )
+            elif held is not None and vid in held:
                 resolved[vid] = held[vid]
-            elif variable.recompute == "on_load_and_event":
+            elif fresh:
                 resolved[vid] = _apply(
                     variable, [resolved[i] for i in variable.derivation.inputs]
                 )

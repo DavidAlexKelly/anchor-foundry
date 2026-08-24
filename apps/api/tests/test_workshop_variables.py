@@ -2289,6 +2289,89 @@ def test_a_held_value_is_what_downstream_variables_read() -> None:
     assert resolved["v_c"] == "held"
 
 
+# ---- p.85's event arriving: `recompute_now` -----------------------------------
+def test_only_on_event_computes_when_the_event_asks() -> None:
+    """**The whole point of `only_on_event`, and the case an absence cannot
+    express.**
+
+    Its state at load and its state the instant an event fires are both "nothing
+    held". If the ask were spelled as a missing `held` entry, this call would be
+    byte-identical to a fresh page, and the event would do nothing forever.
+    """
+    variables = wv.parse(_recompute_vars(recompute="only_on_event"))
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+
+
+def test_the_ask_wins_over_what_is_held() -> None:
+    """So the caller does not have to drop its memory to make an event land -
+    which is the thing it cannot do unambiguously for `only_on_event`."""
+    variables = wv.parse(_recompute_vars(recompute="on_load_and_event"))
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, held={"v_b": "north"},
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+
+
+def test_an_ask_recomputes_only_the_variable_it_names() -> None:
+    """A Recompute event names one variable (p.85). Everything else still holds,
+    or the event would be a page refresh wearing a variable's name."""
+    variables = wv.parse({
+        "v_a": var("v_a", default="north"),
+        "v_b": _derived("v_b", recompute="only_on_event"),
+        "v_c": {"id": "v_c", "kind": "string", "label": "C", "recompute": "only_on_event",
+                "derivation": {"transform": "concat", "inputs": ["v_a"]}},
+    })
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, held={"v_b": "held b", "v_c": "held c"},
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+    assert resolved["v_c"] == "held c"
+
+
+def test_an_ask_for_an_automatic_variable_changes_nothing() -> None:
+    """It recomputes every time anyway. Worth pinning because the effect is
+    refused at save time, so anything arriving here is a document that moved -
+    and the answer should be the ordinary one, not a special case."""
+    variables = wv.parse(_recompute_vars())
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+
+
+def test_a_recomputed_value_is_what_downstream_variables_read() -> None:
+    """The same rule as the held case, on the other side of an event: one
+    answer to one question on one page."""
+    variables = wv.parse({
+        "v_a": var("v_a", default="north"),
+        "v_b": _derived("v_b", recompute="only_on_event"),
+        "v_c": {"id": "v_c", "kind": "string", "label": "C",
+                "derivation": {"transform": "concat", "inputs": ["v_b"]}},
+    })
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, held={"v_b": "held"},
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+    assert resolved["v_c"] == "south"
+
+
+def test_a_bound_variable_ignores_an_ask_to_recompute() -> None:
+    """p.127 again: the host's value wins, and an event in the child cannot
+    reach past it - the child's derivation is skipped "derivation and all"."""
+    variables = wv.parse(_recompute_vars(recompute="only_on_event"))
+    resolved = wv.evaluate(
+        variables, {"v_b": "from the host"}, bound=frozenset({"v_b"}),
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "from the host"
+
+
 def test_a_bound_variable_ignores_its_own_recompute_behaviour() -> None:
     """p.127: the host's definition wins and the child's is skipped, "derivation
     and all" - which includes the behaviour that would have held a value."""

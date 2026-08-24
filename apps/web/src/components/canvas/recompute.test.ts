@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { behaviourOf, forget, heldFor, holds, remember } from "./recompute";
+import {
+  behaviourOf, heldFor, holds, remember, request, requested, settled,
+} from "./recompute";
 import type { WorkshopVariable } from "../../lib/types";
 
 /** p.76's recompute behaviours (Foundry `workshop` p.76, p.85).
@@ -85,6 +87,80 @@ describe("heldFor", () => {
   it("sends nothing before anything has been captured", () => {
     expect(heldFor(DECLARED, {})).toEqual({});
   });
+
+  it("leaves out a variable with a recompute pending", () => {
+    // **So the answer is the fresh value and `remember` captures it.** Left in,
+    // the server would echo the stale value straight back and the event would
+    // have changed nothing.
+    const remembered = { v_event: "one", v_load: "two" };
+    expect(heldFor(DECLARED, remembered, new Set(["v_load"])))
+      .toEqual({ v_event: "one" });
+  });
+});
+
+describe("request", () => {
+  it("records the names a recompute event fired for", () => {
+    expect([...request(DECLARED, new Set(), ["v_event"])]).toEqual(["v_event"]);
+  });
+
+  it("keeps asks that have not been answered yet", () => {
+    const pending = new Set(["v_event"]);
+    expect([...request(DECLARED, pending, ["v_load"])].sort())
+      .toEqual(["v_event", "v_load"]);
+  });
+
+  it("returns the same set when the name does not hold", () => {
+    // Identity, not just equality: the bridge compares the two to decide
+    // whether a resolve is worth making, and a fresh set every time would make
+    // a click on a stale button cost a request.
+    const pending = new Set(["v_event"]);
+    expect(request(DECLARED, pending, ["v_auto", "v_static", "v_gone"]))
+      .toBe(pending);
+    expect(request(DECLARED, pending, [])).toBe(pending);
+  });
+
+  it("returns the same set when the ask is already pending", () => {
+    const pending = new Set(["v_event"]);
+    expect(request(DECLARED, pending, ["v_event"])).toBe(pending);
+  });
+});
+
+describe("requested", () => {
+  it("sends the pending asks", () => {
+    expect(requested(DECLARED, new Set(["v_event"]))).toEqual(["v_event"]);
+  });
+
+  it("drops an ask whose variable stopped holding", () => {
+    // The author moved it to Automatic between the click and the request.
+    expect(requested(DECLARED, new Set(["v_auto", "v_gone"]))).toEqual([]);
+  });
+});
+
+describe("settled", () => {
+  it("drops the asks the resolve carried", () => {
+    expect([...settled(new Set(["v_event", "v_load"]), ["v_event"])])
+      .toEqual(["v_load"]);
+  });
+
+  it("keeps an ask fired while the request was in flight", () => {
+    // **The reason this takes `sent` rather than clearing the set**, walked
+    // through: one event fires, its request goes out, a second event fires
+    // before the answer lands. That resolve did not answer `v_load` - it did
+    // not know about it - so `v_load` has to still be pending afterwards, or
+    // the second event vanishes with nothing to show for it.
+    let pending = request(DECLARED, new Set(), ["v_event"]);
+    const sent = requested(DECLARED, pending);
+    pending = request(DECLARED, pending, ["v_load"]);
+
+    pending = settled(pending, sent);
+    expect([...pending]).toEqual(["v_load"]);
+  });
+
+  it("returns the same set when the resolve carried no asks", () => {
+    const pending = new Set(["v_event"]);
+    expect(settled(pending, [])).toBe(pending);
+    expect(settled(pending, ["v_load"])).toBe(pending);
+  });
 });
 
 describe("remember", () => {
@@ -131,25 +207,28 @@ describe("remember", () => {
   });
 });
 
-describe("forget", () => {
-  it("drops the variables a recompute event named", () => {
-    const remembered = { v_event: "one", v_load: "two" };
-    expect(forget(DECLARED, remembered, ["v_event"])).toEqual({ v_load: "two" });
-  });
+describe("a recompute, end to end", () => {
+  it("asks, captures the fresh value, and goes back to holding", () => {
+    // **The bookkeeping half of the loop the browser test walks.** Written as
+    // one sequence because the bug it guards is not in any single step: each of
+    // these calls can be right on its own while the round trip still leaves the
+    // variable recomputing forever, or pinned forever.
+    let remembered: Record<string, unknown> = { v_event: "old" };
+    let pending: ReadonlySet<string> = new Set();
 
-  it("ignores a name that does not hold", () => {
-    // The server refuses a recompute aimed at a static or Automatic variable
-    // at save time, so one arriving here means the document moved underneath
-    // the event - skipped, like every other effect whose target has gone.
-    const remembered = { v_event: "one" };
-    expect(forget(DECLARED, remembered, ["v_auto", "v_static", "v_gone"]))
-      .toBe(remembered);
-  });
+    pending = request(DECLARED, pending, ["v_event"]);
+    const asks = requested(DECLARED, pending);
+    const sent = heldFor(DECLARED, remembered, pending);
+    // Nothing held goes out for it, and the ask does - so the server computes.
+    expect(sent).toEqual({});
+    expect(asks).toEqual(["v_event"]);
 
-  it("returns the same object when there is nothing to drop", () => {
-    // Identity, not just equality: the bridge stores this in React state, and
-    // a fresh object every render would resolve in a loop.
-    const remembered = { v_event: "one" };
-    expect(forget(DECLARED, remembered, [])).toBe(remembered);
+    remembered = remember(DECLARED, remembered, sent, { v_event: "new" });
+    pending = settled(pending, asks);
+    expect(remembered.v_event).toBe("new");
+
+    // And the next resolve holds it again, rather than recomputing every time.
+    expect(requested(DECLARED, pending)).toEqual([]);
+    expect(heldFor(DECLARED, remembered, pending)).toEqual({ v_event: "new" });
   });
 });

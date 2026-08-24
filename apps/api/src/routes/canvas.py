@@ -153,6 +153,12 @@ class EvaluateVariablesIn(BaseModel):
     # Ignored for any variable that is not configured to hold one; the
     # evaluator branches on the *document's* behaviour, not on what arrived.
     held: dict[str, Any] = Field(default_factory=dict)
+    # p.85's Recompute event arriving: ids to recompute this time regardless of
+    # what `held` carries for them. Separate from an absence in `held` because
+    # an absence cannot say it - for `only_on_event`, "never computed" and
+    # "recompute now" are both spelled "nothing held", and the event has to be
+    # able to mean the second one.
+    recompute: list[str] = Field(default_factory=list)
 
 
 class EvaluateVariablesOut(BaseModel):
@@ -644,7 +650,11 @@ async def evaluate_variables(
         ) from exc
     try:
         resolved = variables_service.evaluate(
-            variables, body.values, bound=frozenset(body.bound), held=body.held
+            variables,
+            body.values,
+            bound=frozenset(body.bound),
+            held=body.held,
+            recompute_now=frozenset(body.recompute),
         )
     except variables_service.VariableError as exc:
         # Not the same failure, and not the same fault. The document is fine;
@@ -751,7 +761,11 @@ async def evaluate_published_variables(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     try:
         resolved = variables_service.evaluate(
-            variables, body.values, bound=frozenset(body.bound), held=body.held
+            variables,
+            body.values,
+            bound=frozenset(body.bound),
+            held=body.held,
+            recompute_now=frozenset(body.recompute),
         )
     except variables_service.VariableError as exc:
         # The values, not the document - see the note on the project-scoped one.

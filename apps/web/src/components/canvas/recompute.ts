@@ -25,6 +25,13 @@
  * two different answers to the same question on one page, which is exactly the
  * class of silent disagreement this repo keeps removing.
  *
+ * The wire has **two** parts, not one. `held` is memory — what each holding
+ * variable last computed. `recompute` is an ask — p.85's event, naming the ids
+ * to compute fresh this time. They cannot be collapsed into one: for
+ * `only_on_event`, "nothing remembered" is already the state at load, so an
+ * event expressed as an absence would be indistinguishable from a fresh page
+ * and would do nothing at all.
+ *
  * This module is the bookkeeping: which variables hold, what to send, and what
  * to remember afterwards. It has no opinion about *values*, which is what
  * keeps it testable without a server.
@@ -63,14 +70,19 @@ export function holds(variable: WorkshopVariable | undefined): boolean {
  * variable — are dropped rather than sent: the server ignores them, but
  * sending them would keep a stale value alive in the request forever and make
  * the wire hard to read while debugging.
+ *
+ * A variable with a recompute **pending** is left out too, so that what comes
+ * back for it is the fresh value and `remember` captures it rather than
+ * carrying the stale one.
  */
 export function heldFor(
   declared: Record<string, WorkshopVariable>,
   remembered: Record<string, unknown>,
+  pending: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [vid, value] of Object.entries(remembered)) {
-    if (holds(declared[vid])) out[vid] = value;
+    if (holds(declared[vid]) && !pending.has(vid)) out[vid] = value;
   }
   return out;
 }
@@ -108,22 +120,61 @@ export function remember(
   return out;
 }
 
-/** Forget the variables a recompute event named, so the next resolve computes
- * them.
+/** Add the variables a recompute event named to the pending set.
+ *
+ * **Why a pending set rather than forgetting the held value.** Dropping what is
+ * remembered *looks* like it says "compute this next time", and for
+ * `on_load_and_event` it accidentally does. For `only_on_event` it cannot: p.76
+ * says that one has no value until an event fires, so "nothing remembered" is
+ * already its state at load, and an event that produced the same request as a
+ * fresh page would be inert. The ask has to be sent as an ask.
  *
  * A name that is not held is ignored rather than refused: the server already
  * refuses a `recompute` aimed at a static or Automatic variable at save time,
  * so one arriving here means the document changed underneath the event, and
  * skipping it is the same rule every other effect follows.
+ *
+ * Returns the same set when nothing is added — identity, because the bridge
+ * uses the difference to decide whether a resolve is worth making.
  */
-export function forget(
+export function request(
   declared: Record<string, WorkshopVariable>,
-  remembered: Record<string, unknown>,
+  pending: ReadonlySet<string>,
   names: readonly string[],
-): Record<string, unknown> {
-  const drop = new Set(names.filter((vid) => holds(declared[vid])));
-  if (drop.size === 0) return remembered;
-  return Object.fromEntries(
-    Object.entries(remembered).filter(([vid]) => !drop.has(vid)),
-  );
+): ReadonlySet<string> {
+  const add = names.filter((vid) => holds(declared[vid]) && !pending.has(vid));
+  if (add.length === 0) return pending;
+  return new Set([...pending, ...add]);
+}
+
+/** What to send as `recompute` on the next resolve.
+ *
+ * Filtered against the document for the same reason `heldFor` is: a variable
+ * can stop holding between the event and the request.
+ */
+export function requested(
+  declared: Record<string, WorkshopVariable>,
+  pending: ReadonlySet<string>,
+): string[] {
+  return [...pending].filter((vid) => holds(declared[vid]));
+}
+
+/** Drop the asks a resolve has now answered.
+ *
+ * `sent` rather than the whole set, deliberately: a recompute fired while the
+ * request was in flight is not answered by it, and clearing the set wholesale
+ * would swallow that event with no trace.
+ *
+ * Returns the same set when nothing is dropped, so a resolve that carried no
+ * asks cannot make the bridge think something changed.
+ */
+export function settled(
+  pending: ReadonlySet<string>,
+  sent: readonly string[],
+): ReadonlySet<string> {
+  const drop = sent.filter((vid) => pending.has(vid));
+  if (drop.length === 0) return pending;
+  const next = new Set(pending);
+  for (const vid of drop) next.delete(vid);
+  return next;
 }
