@@ -4056,6 +4056,25 @@ So the ask travels as an ask: `recompute_now` beside `held`, and the ask wins ov
 
 **37 mutants, 0 survivors, 0 no-ops. 1488 API tests** (was 1463), 1 skipped; **271 browser tests** (was 266); **417 unit tests** (was 393).
 
+### 195. The layout template picker, and a preview that made it unclickable (this session)
+
+p.52's picker at the bottom of a page, its hover preview, and p.53's "the page layout will update to the one you selected".
+
+**The design question p.53 does not answer is what happens to the widgets already there.** "The page layout will update" is a sentence about layout, and the picker is documented on a page created moments earlier, so the intended use is plainly a starting point — but the control is always on screen and somebody will click it on a page they spent an hour arranging. So applying a template never loses a widget: the sections are replaced, their contents carried into the new ones positionally, and anything past the new count lands in the last section rather than nowhere. The case that is handled rather than solved — narrowing three sections to two — piles the surplus into the last, which is visible, undoable, and not a deletion.
+
+**The bug the browser test found is one CSS rule, and the symptom had no error anywhere.** The hover preview was an ordinary sibling above the icon strip, so opening it pushed the strip *down*: the icon slid out from under the pointer that was hovering it, `mouseup` landed on empty space, and the browser never synthesised a `click` at all. The button did nothing, silently. The trace is the tell and is worth keeping — **`pointerdown` and `mousedown` arrived and `mouseup` did not**, which says the element moved rather than that the handler was wrong. Floated now, so opening a preview moves nothing.
+
+**And a correction to my own first diagnosis, which the harness caught.** The first hypothesis was Craft's drag connector eating the press, and a `stopPropagation` went in to stop it. The mutant that *removes* that handler survived — every browser test still passed without it — so it was never load-bearing, and a confident comment explaining why it was essential would have been a false explanation of a real bug. Removed. The rule: when a mutant that deletes a fix survives, the fix was not the fix.
+
+**Three other survivors, all real holes in the tests.** The direction assertion only ever checked a template whose direction was the default, so a build that hard-coded `columns` passed while the Rows and Toolbar templates would have laid down something that looked nothing like the icon clicked. `pageGroups` walks `linkedNodes` as well as `nodes` — Craft hangs an `<Element canvas>`'s children off the former, and `clipboard.ts` carries the same warning — but every fixture used `nodes`, so the walk was untested. And nothing opened the module as a *reader*, so a picker rendered unconditionally would have passed the whole file and shipped a layout-rewriting control into the published app.
+
+**25 mutants, 0 survivors, 0 no-ops. 447 unit tests** (was 417); **277 browser tests** (was 271).
+
+---
+---
+---
+---
+
 ---
 ---
 ---
@@ -4129,6 +4148,12 @@ So the ask travels as an ask: `recompute_now` beside `held`, and the ask wins ov
   The corollary bit immediately: **never run the harness while a full suite is in flight.** §194 did, to save wall-clock time, and got 1 failure and 9 errors in two files it had not touched — the harness's `restore()` rewrites files (triggering a Next rebuild) and its browser layer restarts the API underneath whatever else is running. Every one of the ten passed on a clean re-run. The tell is `ApiError` in files unrelated to the unit; the cost is fifteen minutes and a moment of believing a real regression had appeared. The two are the same shared mutable environment, so they have to be serialised.
 
 - **An absence cannot carry a request when absence is already a meaningful state.** §194 encoded "recompute this variable" as *dropping* it from the map of held values, which reads as obviously equivalent to asking. It is not, whenever some variable's legitimate resting state is also "nothing held" — there, the ask and the initial condition produce identical requests and the receiver cannot answer both correctly. What makes this dangerous is that it can be **half**-working: the behaviour whose answer to the ambiguous state happens to be the right one for both readings passes every test, and hides the one that does not. Worth checking any protocol where a field's absence means "do the default": if two different callers' situations can both produce that absence and want different answers, the second one needs its own field.
+
+- **A control that reflows on hover cannot be clicked, and nothing reports it.** §195's preview panel opened as a sibling above the icon strip, pushing the strip down — so the icon moved out from under the pointer hovering it, and the browser never synthesised a `click`. No error, no warning, a button that simply did nothing. The diagnostic that settles it in one run is to log every pointer event on the element: **`pointerdown` and `mousedown` arriving with no `mouseup` means the element moved**, not that the handler is wrong, and that distinction is the difference between fixing a stylesheet and rewriting a component. Any hover-triggered panel that shares a normal-flow parent with its trigger has this shape; float it.
+
+- **The harness restores from `HEAD`, so any edit it prompts you to make is undone by its own cleanup.** §195 deleted a dead fix the harness had just exposed, re-ran the harness, and got the dead code back — `restore()` writes `git show HEAD:<path>`, and HEAD still had it. `git status` then showed the file as unmodified, which is exactly what a successful deletion and a silently reverted one both look like. Any change made in response to a harness finding has to be **committed before the next run**, or re-applied after it; checking `git status` afterwards is not enough, because the file matching HEAD is the failure, not the proof.
+
+- **When a mutant that deletes a fix survives, the fix was not the fix.** §195 first blamed Craft's drag connector for eating the press and added a `stopPropagation` to stop it. The real cause was the reflow above, and the harness proved it: removing the handler broke nothing. It would have stayed in the tree forever as dead code carrying a confident comment that explained a real bug incorrectly — worse than no comment, because the next person to hit something similar would trust it. Mutating your *own* recent fixes is worth doing for exactly this reason.
 
 - **Not every mutant is worth killing — some are sabotage rather than a plausible mistake.** §193 wrote one that rewrites a guard's comparison to read the server's own list, making the test a tautology. It survived, and the right response was to withdraw it: any assertion can be neutered, and proving so says nothing about the code. The useful version is the failure that happens by accident — a scan that quietly stops matching after a reformat — which a vacuity assertion does kill. When a mutant survives, ask whether a maintainer could have written it by mistake before treating it as a hole.
 
