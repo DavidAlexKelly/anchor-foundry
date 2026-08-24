@@ -2289,6 +2289,27 @@ def test_a_held_value_is_what_downstream_variables_read() -> None:
     assert resolved["v_c"] == "held"
 
 
+def test_a_static_variable_resolves_normally_whatever_its_behaviour_says() -> None:
+    """The guard that keeps the held branch to *derived* variables.
+
+    `parse` refuses a behaviour on a static variable, so this state cannot be
+    reached through a document - which is exactly why the guard needs a test of
+    its own. `evaluate` is a public function over `Variable` objects, and
+    without the `derivation is not None` half a static variable marked this way
+    falls into the held branch and resolves to **None** instead of its value:
+    a control that silently stops reporting what somebody typed into it.
+
+    Built by hand rather than parsed, deliberately. Going through `parse` could
+    only ever produce the refusal, which is a different test (and is above).
+    """
+    variables = {
+        "v_a": wv.Variable(id="v_a", kind="string", label="A", default="typed",
+                           recompute="only_on_event"),
+    }
+    assert wv.evaluate(variables, {})["v_a"] == "typed"
+    assert wv.evaluate(variables, {"v_a": "chosen"})["v_a"] == "chosen"
+
+
 # ---- p.85's event arriving: `recompute_now` -----------------------------------
 def test_only_on_event_computes_when_the_event_asks() -> None:
     """**The whole point of `only_on_event`, and the case an absence cannot

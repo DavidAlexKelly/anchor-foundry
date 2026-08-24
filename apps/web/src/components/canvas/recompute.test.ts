@@ -186,13 +186,17 @@ describe("remember", () => {
   });
 
   it("carries a held value rather than re-reading the echo", () => {
-    // **The hazard this avoids**: a resolve that raced a recompute would echo
-    // the old value, and re-capturing it would put the stale number straight
-    // back after the event had just cleared it.
+    // **The hazard this avoids**: a resolve that raced a recompute echoes what
+    // *that* request sent, which is not what is held any more. Re-capturing it
+    // would put the stale value straight back after the event had cleared it.
+    //
+    // So the three arguments have to differ. Written with all three the same -
+    // which is how this test started - it passes whichever way round the two
+    // branches go, and the mutation harness said so.
     const next = remember(
-      DECLARED, { v_load: "held" }, { v_load: "held" }, { v_load: "held" },
+      DECLARED, { v_load: "current" }, { v_load: "current" }, { v_load: "a stale echo" },
     );
-    expect(next.v_load).toBe("held");
+    expect(next.v_load).toBe("current");
   });
 
   it("never remembers a variable that does not hold", () => {

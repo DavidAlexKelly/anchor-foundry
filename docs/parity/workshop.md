@@ -202,12 +202,16 @@ We evaluate the whole variable graph on load. For a module with a handful of var
 | Behaviour | Meaning | Status |
 |---|---|---|
 | **Automatic** | recompute when any dependency changes — the default, and what we do unconditionally | ✅ |
-| **Only when triggered by an event** | recompute solely on a `recompute {variable}` event | ○ |
-| **On module load, and when triggered by an event** | recompute once at load, then only on the event | ○ |
+| **Only when triggered by an event** | recompute solely on a `recompute {variable}` event | ✅ |
+| **On module load, and when triggered by an event** | recompute once at load, then only on the event | ✅ |
 
-Object set definitions do not offer the choice and always behave as Automatic; the documented escape hatch is to set the behaviour on an upstream variable or use a function-backed one (p.76).
+Object set definitions do not offer the choice and always behave as Automatic; the documented escape hatch is to set the behaviour on an upstream variable or use a function-backed one (p.76). Refused at save with that reason, as is a behaviour on a static variable — p.76 offers the setting on derived definitions only.
 
-The `recompute {variable}` event is the other half of this and is missing from §5. Two caveats worth carrying into the implementation: automatic variables "may recompute even when no upstream values have changed", for instance after an action submission or an auto-refresh (p.76) — so nothing may assume recompute means dependency-changed; and a Reset event restores the value configured in the variable *definition*, which under §3.4's precedence rule means the parent's definition, not the child's (p.85, p.128).
+**Where the held value lives.** The server computes and has no memory between requests, so "do not recompute this time" can only come from the caller: the browser keeps what each holding variable last computed and sends it back, and the evaluator uses it *as the input to everything downstream* rather than merely displaying it. Freezing it in the browser instead would leave a variable showing one number while its dependants recomputed from a fresh copy — two answers to one question on one page.
+
+The wire therefore carries **two** fields, not one. `held` is memory; `recompute` is the ask. Collapsing the ask into an absence from `held` looks equivalent and is not: for **Only when triggered by an event**, "nothing held" is already the state at load, so an event spelled that way produces a request identical to a fresh page and does nothing at all. **On module load** hides the bug, because its answer to a missing held value is "compute" either way.
+
+The `recompute {variable}` event is the other half of this, in §5. Two caveats worth carrying into the implementation: automatic variables "may recompute even when no upstream values have changed", for instance after an action submission or an auto-refresh (p.76) — so nothing may assume recompute means dependency-changed; and a Reset event restores the value configured in the variable *definition*, which under §3.4's precedence rule means the parent's definition, not the child's (p.85, p.128).
 
 ---
 
@@ -236,7 +240,7 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 | **Layout** — Switch to page | ✅ | |
 | **Layout** — Expand / Collapse / Toggle each collapsible section | ✅ §185 | (p.82) — see §1.3's row for the gotcha and the resolution rule |
 | Set variable value | ✅ | |
-| **Recompute {variable}** | ○ | the other half of §3.5 — without it, the two non-automatic recompute behaviours have no way to fire (p.85). **Now refused with that reason rather than as an unknown effect** (§193): it is in `PLANNED_EFFECTS` beside `export`, so saving one says what is missing instead of listing the effects that exist |
+| **Recompute {variable}** | ✅ §194 | the other half of §3.5 — without it the two non-automatic recompute behaviours have no way to fire (p.85). p.85 offers it "for non-static variable types", and p.76 sharpens that: the behaviours it triggers are configurable on derived definitions only. So the server refuses it on a static variable (the complement of Reset, which is refused on a derived one — each event is meaningless on the other's half) and on a derived variable left on **Automatic**, which already recomputes when its inputs change, so an event aimed at one would be a click with no effect. **The ask travels as its own field on the resolve, not as a hole in `held`** — see §3.5 for why an absence cannot express it |
 | **Reset {variable} value** | ✅ §193 | (p.85, p.128) — and it is a **deletion of the viewer's value, not a write of the default**, which is what makes p.128's precedence rule fall out instead of needing a case of its own. The server resolves an unbound static variable as `values.get(vid, default)`, so forgetting the local value *is* "back to the definition"; and it resolves a variable an embedding module has mapped as the host's value with the child's definition skipped entirely (p.127), so forgetting the local override there is "back to the parent's definition". One operation, right both ways. It deliberately **never forwards to the host**, unlike a Set: that would have a child's Reset button edit its parent's state, which p.128 does not say and which is a child reaching upward. p.85 offers Reset "for static variables", so the server refuses it on a derived variable and on an object set with its own definition — neither has a stored value to put back |
 | Run action | ✅ | |
 | Open URL | ✅ | |
