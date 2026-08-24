@@ -6041,10 +6041,38 @@ CanvasButton.craft = {
   related: { settings: ButtonSettings },
 };
 
+/** p.68's *Unused widgets* holding node: in the module, on no page.
+ *
+ * **It renders nothing, in both modes, and that is the whole component.**
+ * Parked widgets are listed by the Layout panel, not drawn on the canvas -
+ * p.68 puts the area "at the bottom of the Layouts section in the left side
+ * panel", and a holding node that drew its children would put every parked
+ * widget on the page for every reader.
+ *
+ * It is a Craft canvas node all the same, because that is what lets it *hold*
+ * children through a serialise/deserialise round trip - and being in the node
+ * map is what makes `usages()` count a parked widget's variables, which is the
+ * reason this design was chosen over a sibling key on the document
+ * (`docs/decisions/0010-unused-widgets.md`).
+ *
+ * The `children` prop is deliberately accepted and deliberately not rendered.
+ * Craft passes it; dropping it on the floor is the behaviour.
+ */
+export function CanvasUnused({ children: _children }: { children?: React.ReactNode }) {
+  return null;
+}
+
+CanvasUnused.craft = {
+  displayName: "Unused widgets",
+  props: {},
+  isCanvas: true,
+};
+
 export const CANVAS_RESOLVER = {
   CanvasHeader,
   CanvasPage,
   CanvasOverlay,
+  CanvasUnused,
   CanvasSection,
   CanvasTabs,
   CanvasButton,

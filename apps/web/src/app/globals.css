@@ -2125,3 +2125,11 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   margin-left: auto; padding-left: 6px; flex: 0 0 auto;
   font-size: 11px; line-height: 1; color: var(--accent, #4b7bec); cursor: help;
 }
+
+/* p.68's Unused widgets area, at the bottom of the Layout panel. */
+.canvas-unused { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.canvas-unused-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.canvas-unused-head .btn { padding: 3px 8px; font-size: 12px; }
+.canvas-unused-row { display: flex; align-items: center; gap: 6px; }
+.canvas-unused-row .canvas-tree-row { flex: 1; }
+.canvas-unused-row .btn { padding: 3px 8px; font-size: 11px; white-space: nowrap; }

@@ -4084,6 +4084,28 @@ Worth noting how close that came to shipping: every unit test passed either way,
 
 **16 mutants, 0 survivors, 0 no-ops. 464 unit tests** (was 447); **282 browser tests** (was 277).
 
+### 197. Where a parked widget lives (this session)
+
+p.68's *Unused widgets* area — a widget that is in the module but on no page. The last `○` on the Workshop layout rows, and the first thing this session to touch the saved format, so it got a decision record (`docs/decisions/0010-unused-widgets.md`) before any code.
+
+**The decision turns on one function, and the two candidate homes are not equivalent.** `usages()` decides whether a variable may be deleted, and it *iterates the node map* rather than walking the tree. So parked widgets kept in the map are counted for free, and parked widgets kept in a sibling key on the document are not. Under the sibling key: park a Filter List bound to `v_region` → the Variables panel reports `v_region` unused → an author deletes it → the server allows it → the widget comes back bound to nothing. **No error at any step.**
+
+That is the same shape §190, §191 and §193 were each caught by — a list that had to be complete with nothing checking it against the thing it described. The sibling key could be made correct by scanning both places, and that is precisely the second scan that keeps not getting written. So the design removes the possibility instead: parked widgets are children of a `CanvasUnused` node under ROOT.
+
+Two properties the record names as the ones this design will lose first, both now held by a mutant:
+
+- **`CanvasUnused` renders nothing, in both modes.** A version that drew its children would put parked widgets on the page for every reader, and nothing in the builder tests would notice. The guard is a browser test that opens the module as a *reader*.
+- **Placing is a move, not a copy.** Ids survive, so bindings and the events triggered from the widget come along. A version that minted new ids would look identical on screen and be wrong the moment a variable changed.
+
+**All three survivors were real holes, and the first looked equivalent.** `move: ROOT may be moved` passed with the guard deleted, because in a well-formed document everything descends from ROOT and `isDescendant` already refuses it — the explicit clause never fires. Only a *detached* target separates the two, and this module explicitly reads documents that can arrive from anywhere. The other two: `isCanvas` on the minted holder was unasserted (Craft re-derives it, so a document written without it works today and is wrong the moment anything reads the map directly), and nothing checked that a parked widget had *left the layout tree* — the panel comment said a widget in both places reads as two widgets, and no test said so.
+
+**22 mutants, 0 survivors, 0 no-ops. 491 unit tests** (was 464); **289 browser tests** (was 282).
+
+---
+---
+---
+---
+
 ---
 ---
 ---
@@ -4170,6 +4192,10 @@ Worth noting how close that came to shipping: every unit test passed either way,
 - **When a mutant that deletes a fix survives, the fix was not the fix.** §195 first blamed Craft's drag connector for eating the press and added a `stopPropagation` to stop it. The real cause was the reflow above, and the harness proved it: removing the handler broke nothing. It would have stayed in the tree forever as dead code carrying a confident comment that explained a real bug incorrectly — worse than no comment, because the next person to hit something similar would trust it. Mutating your *own* recent fixes is worth doing for exactly this reason.
 
 - **A value read inside a framework's selector is only as fresh as what that selector watches.** §196 computed a tooltip inside Craft's node-map selector using data from a React prop; the selector re-runs on node-map changes, so renaming a variable left the tooltip showing the old name until something unrelated touched the layout. No unit test can see this — both functions were correct, and the bug was in *which hook re-runs when*. The rule that falls out: inside a selector, read only what the selector subscribes to, and do every other lookup at render. The tell is a value that is right on first paint and stale after an edit somewhere else on the page.
+
+- **A mutant can be caught by a *hang*, and a harness that treats that as a crash loses the run and leaves the bug on disk.** §197's cycle-guard mutant makes `isParked` loop forever, so vitest spun rather than failed; `subprocess.run(timeout=…)` raised, the exception escaped, and the run died at mutant 6 of 22 — **skipping the `restore()` at the end**, so a planted bug sat in the working tree afterwards. A hang is a suite that did not pass, which is what "caught" means: catch `TimeoutExpired` and return False. And restore inside an exception handler as well as at the end, because the failure mode of not doing so is a mutation-testing harness turning into the thing it was written to catch.
+
+- **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 
 - **Not every mutant is worth killing — some are sabotage rather than a plausible mistake.** §193 wrote one that rewrites a guard's comparison to read the server's own list, making the test a tautology. It survived, and the right response was to withdraw it: any assertion can be neutered, and proving so says nothing about the code. The useful version is the failure that happens by accident — a scan that quietly stops matching after a reformat — which a vacuity assertion does kill. When a mutant survives, ask whether a maintainer could have written it by mistake before treating it as a hole.
 

@@ -6,6 +6,7 @@ import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/type
 import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
 import { clip, paste, pasteTarget, withoutSubtree } from "./clipboard";
 import { conditionsOf, markerOf, type Condition } from "./conditions";
+import { canPark, move as moveNode, park, UNUSED_NAME } from "./unused";
 import type { Clipping, PasteMode } from "./clipboard";
 
 type StateSavingSettings = NonNullable<WorkshopModule["state_saving"]>;
@@ -119,10 +120,13 @@ export function LayoutPanel({
   stateSaving?: StateSavingSettings;
   onStateSavingChange?: (next: StateSavingSettings) => void;
 } = {}) {
-  const { rows, selectedId } = useEditor((state) => {
+  const { rows, parked, selectedId } = useEditor((state) => {
     const walk = (id: string, depth: number, out: Row[]): Row[] => {
       const node = state.nodes[id];
       if (!node) return out;
+      // See the note below the walk: the holding node's subtree is listed
+      // separately, so the tree stops here rather than descending into it.
+      if ((node.data?.name ?? "") === UNUSED_NAME) return out;
       // ROOT is the document itself; it has no settings anybody edits and a
       // row for it would only add an indent level to everything below.
       if (id !== "ROOT") {
@@ -153,8 +157,35 @@ export function LayoutPanel({
       for (const child of node.data.nodes ?? []) walk(child, id === "ROOT" ? 0 : depth + 1, out);
       return out;
     };
+    // p.68's holding node and everything in it are listed *below* the tree, in
+    // their own area. A parked widget appearing in both places would read as
+    // two widgets, and the tree is supposed to be what is on a page.
+    //
+    // Skipped at the **walk**, not filtered out of the result: a parked
+    // *section* has children of its own, and filtering by row id would drop
+    // the section while leaving its contents in the tree as orphan rows.
+    const isHolder = (id: string) =>
+      (state.nodes[id]?.data?.name ?? "") === UNUSED_NAME;
+    const tree = walk("ROOT", 0, []);
+    const holder = (state.nodes.ROOT?.data?.nodes ?? []).find(isHolder) ?? null;
+    const parkedIds: string[] = holder
+      ? [...(state.nodes[holder]?.data?.nodes ?? [])]
+      : [];
+    const parked: Row[] = parkedIds.map((id) => {
+      const n = state.nodes[id];
+      const props = (n?.data?.props ?? {}) as Record<string, unknown>;
+      const renamed = (n?.data?.custom as { displayName?: string } | undefined)?.displayName;
+      return {
+        id,
+        depth: 0,
+        label: renamed || n?.data?.displayName || n?.data?.name || "Widget",
+        detail: detailOf(n?.data?.displayName || "", props),
+        conditions: conditionsOf(props),
+      };
+    });
     return {
-      rows: walk("ROOT", 0, []),
+      rows: tree,
+      parked,
       selectedId: [...state.events.selected][0] ?? null,
     };
   });
@@ -194,6 +225,31 @@ export function LayoutPanel({
     onVariablesChange?.(next.variables);
     onEventsChange?.(next.events);
     actions.deserialize(next.layout as never);
+  };
+
+  // p.68's Unused widgets. **A move, not a copy** - the subtree keeps its ids,
+  // so the variables it reads and the events triggered from it come along
+  // untouched. That is the whole reason parking is a different operation from
+  // cut-and-paste, which mints fresh ids in `duplicate` mode and would leave a
+  // re-added widget bound to variables nobody had asked for.
+  const parkSelected = () => {
+    if (!selectedId) return;
+    const layout = query.getSerializedNodes() as Record<string, unknown>;
+    const next = park(layout, selectedId, newNodeId);
+    if (next === layout) return;
+    actions.deserialize(next as never);
+  };
+
+  // p.68's "+ Add widget": put a parked widget back on a page. The target is
+  // the same one a paste would use, so "where does it land" has one answer in
+  // this panel rather than two.
+  const place = (id: string) => {
+    const layout = query.getSerializedNodes() as Record<string, unknown>;
+    const into = pasteTarget(layout, selectedId);
+    if (!into) return;
+    const next = moveNode(layout, id, into);
+    if (next === layout) return;
+    actions.deserialize(next as never);
   };
 
   const select = (id: string) => {
@@ -243,6 +299,53 @@ export function LayoutPanel({
         </button>
         );
       })}
+      {/* p.68's Unused widgets area, "located at the bottom of the Layouts
+          section in the left side panel". Rendered whenever something is
+          parked *or* something can be parked, so the control that fills it and
+          the list it fills are never separated. */}
+      <div className="canvas-unused" data-testid="unused-area">
+        <div className="canvas-unused-head">
+          <span className="field-label">Unused widgets</span>
+          <button
+            type="button"
+            className="btn"
+            data-testid="unused-park"
+            disabled={!selectedId || !canPark(
+              query.getSerializedNodes() as Record<string, unknown>, selectedId,
+            )}
+            onClick={parkSelected}
+          >
+            Park
+          </button>
+        </div>
+        {parked.length === 0 ? (
+          <p className="canvas-widget-empty">
+            Nothing parked. A parked widget stays in the module, on no page.
+          </p>
+        ) : (
+          parked.map((row) => (
+            <div key={row.id} className="canvas-unused-row" data-testid="unused-row">
+              <button
+                type="button"
+                className={`canvas-tree-row${row.id === selectedId ? " on" : ""}`}
+                aria-current={row.id === selectedId}
+                onClick={() => select(row.id)}
+              >
+                <span className="canvas-tree-label">{row.label}</span>
+                {row.detail && <span className="canvas-tree-detail">{row.detail}</span>}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                data-testid="unused-add"
+                onClick={() => place(row.id)}
+              >
+                + Add widget
+              </button>
+            </div>
+          ))
+        )}
+      </div>
       {clipboardEnabled && (
         <div className="canvas-clipboard">
           <div className="canvas-clipboard-row">
