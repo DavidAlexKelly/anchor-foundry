@@ -5,6 +5,7 @@ import { useEditor } from "@craftjs/core";
 import type { WorkshopEvent, WorkshopModule, WorkshopVariable } from "@/lib/types";
 import { newEventId, newNodeId, newVariableId } from "@/lib/workshop-module";
 import { clip, paste, pasteTarget, withoutSubtree } from "./clipboard";
+import { conditionsOf, markerOf, type Condition } from "./conditions";
 import type { Clipping, PasteMode } from "./clipboard";
 
 type StateSavingSettings = NonNullable<WorkshopModule["state_saving"]>;
@@ -41,6 +42,12 @@ interface Row {
    * section's direction. Without it a page of four sections is four
    * identical rows. */
   detail: string;
+  /** p.55's conditional-visibility conditions: which of this node's props make
+   * its state a function of a variable. The *ids* only — what each is called
+   * is looked up at render, because this walk runs inside Craft's node-map
+   * selector and that does not re-run when the variable list changes. Reading
+   * labels here left a tooltip saying a variable's old name after a rename. */
+  conditions: Condition[];
 }
 
 /** The prop worth showing beside a node's type, by node type. Widgets that
@@ -133,6 +140,14 @@ export function LayoutPanel({
           // thing this is ("Section, 2 columns"), and reading a custom name
           // there would make it say nothing at all once one was set.
           detail: detailOf(node.data.displayName || "", node.data.props ?? {}),
+          // p.55: "The layout panel displays icons and tooltips to indicate
+          // which sections have conditional visibility enabled, making it
+          // easier to identify and manage conditionally visible sections even
+          // when they are currently hidden in the module view." Driven by the
+          // *document*, never by what the variable currently resolves to - an
+          // indicator that went out when the condition was false would vanish
+          // in exactly the case the sentence is about.
+          conditions: conditionsOf(node.data.props as Record<string, unknown>),
         });
       }
       for (const child of node.data.nodes ?? []) walk(child, id === "ROOT" ? 0 : depth + 1, out);
@@ -198,7 +213,9 @@ export function LayoutPanel({
       {rows.length === 0 && (
         <p className="canvas-widget-empty">Nothing here yet — drag a widget in.</p>
       )}
-      {rows.map((row) => (
+      {rows.map((row) => {
+        const marker = markerOf(row.conditions, variables);
+        return (
         <button
           key={row.id}
           type="button"
@@ -209,8 +226,23 @@ export function LayoutPanel({
         >
           <span className="canvas-tree-label">{row.label}</span>
           {row.detail && <span className="canvas-tree-detail">{row.detail}</span>}
+          {marker && (
+            <span
+              className="canvas-tree-condition"
+              data-testid="tree-condition"
+              title={marker.tooltip}
+              // The tooltip is the whole of what this says, and a `title` is
+              // not reachable by anything that is not a pointer - so it is the
+              // accessible name too rather than a decoration beside one.
+              aria-label={marker.tooltip}
+              role="img"
+            >
+              {marker.icon}
+            </span>
+          )}
         </button>
-      ))}
+        );
+      })}
       {clipboardEnabled && (
         <div className="canvas-clipboard">
           <div className="canvas-clipboard-row">
