@@ -26,11 +26,16 @@
  */
 
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEditor } from "@craftjs/core";
 import { useEffect, useMemo, useState } from "react";
 import { canvas as canvasApi, objects as objectsApi } from "@/lib/api";
 import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "@/lib/types";
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
 import { ROUTABLE_KINDS } from "./routing";
+import {
+  apply, DEFINITION_TYPES, partition,
+  SETTINGS, type DefinitionType, type SettingName,
+} from "./variable-finder";
 
 /** Mirrors `SAVABLE_KINDS` in `services/workshop_variables.py` (p.205). */
 const SAVABLE_KINDS = [
@@ -57,6 +62,65 @@ const KINDS: WorkshopVariableKind[] = [
  * fields, and offering a choice that fails on save is the thing these lists
  * exist to avoid. */
 const ARRAY_ELEMENTS = ["string", "number", "boolean", "date", "timestamp"] as const;
+
+/** p.72's filter options, with their labels. Derived from the module's own
+ * catalogue so an option can never name a type nothing reports. */
+const TYPE_LABELS: Record<DefinitionType, string> = {
+  static: "Static",
+  object_set_definition: "Object set definition",
+  object_property: "Object property",
+  object_set_aggregation: "Object set aggregation",
+  variable_transformation: "Variable transformation",
+  function: "Function",
+};
+
+const SETTING_LABELS: Record<SettingName, string> = {
+  interface: "Module interface",
+  routing: "Routing",
+  state_saving: "State saving",
+};
+
+interface ListEntry {
+  heading?: string;
+  count?: number;
+  variable?: WorkshopVariable;
+}
+
+/** The panel's list, as headings and rows in the order they are drawn.
+ *
+ * Separate from the render so the *ordering* is one expression rather than
+ * three nested ternaries in JSX - and so a partition with no items still
+ * contributes its heading, which is the case a `map` over the items alone
+ * silently drops.
+ */
+function listEntries(shown: ReturnType<typeof partition>): ListEntry[] {
+  if (!shown.by) return shown.rest.map((variable) => ({ variable }));
+  const heading = shown.by === "widget"
+    ? "Used by the selected widget"
+    : "Used on this page";
+  return [
+    { heading, count: shown.relevant.length },
+    ...shown.relevant.map((variable) => ({ variable })),
+    { heading: "Everything else", count: shown.rest.length },
+    ...shown.rest.map((variable) => ({ variable })),
+  ];
+}
+
+/** Every node in the subtree under `id`, so a page partition covers what is on
+ * the page rather than only the page node itself. */
+function subtreeOf(nodes: Record<string, { data?: { nodes?: string[] } }>, id: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const stack = [id];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    out.push(current);
+    for (const child of nodes[current]?.data?.nodes ?? []) stack.push(child);
+  }
+  return out;
+}
 
 /** Matches `TRANSFORMS` in the service. `object_set_aggregation` is
  * deliberately absent - it reads the ontology, so the API refuses it until it
@@ -148,6 +212,42 @@ export function VariablesPanel({
 
   const ids = useMemo(() => Object.keys(variables), [variables]);
 
+  // p.72's three finding controls. Local state: they narrow what is *shown*
+  // and change nothing in the document, so nothing here is saved.
+  const [query, setQuery] = useState("");
+  const [type, setType] = useState<DefinitionType | "">("");
+  const [setting, setSetting] = useState<SettingName | "">("");
+
+  // p.72's partitions. **Our builder draws every page at once**, so "the active
+  // page" has no answer the way p.72 assumes - the page an author is working in
+  // is the one holding their selection. So: a widget selected partitions by the
+  // widget, a *page* selected partitions by that page, and nothing selected
+  // partitions by nothing. The divergence is in `docs/parity/workshop.md`.
+  const { selectedNode, pageNodes } = useEditor((state) => {
+    const id = [...state.events.selected][0] ?? null;
+    if (!id || id === "ROOT") return { selectedNode: null, pageNodes: null };
+    const name = state.nodes[id]?.data?.name ?? "";
+    if (name === "CanvasPage" || name === "CanvasOverlay") {
+      return { selectedNode: null, pageNodes: subtreeOf(state.nodes as never, id) };
+    }
+    return { selectedNode: id, pageNodes: null };
+  });
+
+  const shown = useMemo(() => {
+    const all = ids.map((id) => variables[id]!);
+    const filtered = apply(all, {
+      query,
+      types: type ? [type] : [],
+      settings: setting ? [setting] : [],
+    });
+    const document = { format: 2, layout, variables };
+    return partition(
+      filtered,
+      (vid) => usagesOf(document, vid).map((u) => u.node),
+      { widget: selectedNode, pageNodes },
+    );
+  }, [ids, variables, layout, query, type, setting, selectedNode, pageNodes]);
+
   // Evaluated values, from the server. Refreshed when the set of variables
   // changes, not on every keystroke: this reads the *saved* document, so it
   // cannot show a derivation that has not been saved yet, and pretending
@@ -213,14 +313,69 @@ export function VariablesPanel({
 
       {failure && <p className="state error">{failure}</p>}
 
+      {/* p.72's search and filter. Hidden below a handful of variables: three
+          controls over a list of two is chrome, and the panel is narrow. */}
+      {ids.length > 3 && (
+        <div className="vars-find">
+          <input
+            type="search"
+            data-testid="variable-search"
+            placeholder="Search by name or ID"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <div className="vars-find-row">
+            <select
+              data-testid="variable-type-filter"
+              value={type}
+              onChange={(e) => setType(e.target.value as DefinitionType | "")}
+            >
+              <option value="">Any type</option>
+              {DEFINITION_TYPES.map((t) => (
+                <option key={t} value={t}>{TYPE_LABELS[t]}</option>
+              ))}
+            </select>
+            <select
+              data-testid="variable-setting-filter"
+              value={setting}
+              onChange={(e) => setSetting(e.target.value as SettingName | "")}
+            >
+              <option value="">Any setting</option>
+              {(Object.keys(SETTINGS) as SettingName[]).map((name) => (
+                <option key={name} value={name}>{SETTING_LABELS[name]}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
       {ids.length === 0 ? (
         <p className="state">
           No variables yet. A variable is what wires widgets to each other — a
           filter sets one, a table reads it.
         </p>
+      ) : shown.relevant.length + shown.rest.length === 0 ? (
+        <p className="state" data-testid="variable-none-found">
+          No variable matches. {ids.length} in this module.
+        </p>
       ) : (
         <ul className="vars-list">
-          {ids.map((id) => {
+          {/* One flat list of headings and rows, so a heading sits above the
+              variables it names rather than in a block of its own. A partition
+              with nothing in it still draws its heading: "Used by the selected
+              widget · 0" is the answer to the question, and an absent heading
+              would read as the panel not having partitioned at all. */}
+          {listEntries(shown).map((entry) => {
+            if (entry.heading !== undefined) {
+              return (
+                <li key={`h:${entry.heading}`} className="vars-partition">
+                  <p className="field-label" data-testid="variable-partition">
+                    {entry.heading} · {entry.count}
+                  </p>
+                </li>
+              );
+            }
+            const id = entry.variable!.id;
             const variable = variables[id]!; // ids came from variables
             const usages = usagesOf({ format: 2, layout, variables }, id);
             const open = openId === id;
