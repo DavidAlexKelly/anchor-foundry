@@ -4070,6 +4070,20 @@ p.52's picker at the bottom of a page, its hover preview, and p.53's "the page l
 
 **25 mutants, 0 survivors, 0 no-ops. 447 unit tests** (was 417); **277 browser tests** (was 271).
 
+### 196. Conditional-visibility indicators in the Layout panel (this session)
+
+p.55's icons and tooltips marking which sections have conditional visibility, which closes the open half of a ◑ row.
+
+**The second half of p.55's sentence is the requirement.** "…making it easier to identify and manage conditionally visible sections **even when they are currently hidden in the module view**." That is not a note about the feature's benefit, it is a constraint on what the indicator may read: a marker driven by the condition's *current value* would go out exactly when the sentence says it should be useful. So it reads the document — does this node carry a condition — and never the resolved values.
+
+Which puts two markers on screen that deliberately disagree. The canvas already writes "hidden unless <label>" on a node whose condition is false, and that one **is** value-driven, because it answers "what is happening now". The panel answers "what is configured". A browser test asserts both are present at once on the same section, which is the only place that distinction is visible.
+
+**The split in `conditions.ts` is a bug fix wearing the clothes of a refactor.** The first version computed the whole marker — icon, verb, and the variable's *label* — inside the tree walk. That walk runs inside Craft's node-map selector, which re-runs when the node map changes and not when the variable list does, so renaming a variable left the tooltip reading the old name until something unrelated touched the layout. Now the walk reads only which conditions a node carries, and the label is looked up at render.
+
+Worth noting how close that came to shipping: every unit test passed either way, because the bug is not in either function but in **which React hook re-runs when**. The mutant that reverts the split is the one this unit's harness exists for, and the browser test kills it — so the fix is verified rather than asserted, which is the standard §195 set when a deleted fix turned out not to have been the fix.
+
+**16 mutants, 0 survivors, 0 no-ops. 464 unit tests** (was 447); **282 browser tests** (was 277).
+
 ---
 ---
 ---
@@ -4154,6 +4168,8 @@ p.52's picker at the bottom of a page, its hover preview, and p.53's "the page l
 - **The harness restores from `HEAD`, so any edit it prompts you to make is undone by its own cleanup.** §195 deleted a dead fix the harness had just exposed, re-ran the harness, and got the dead code back — `restore()` writes `git show HEAD:<path>`, and HEAD still had it. `git status` then showed the file as unmodified, which is exactly what a successful deletion and a silently reverted one both look like. Any change made in response to a harness finding has to be **committed before the next run**, or re-applied after it; checking `git status` afterwards is not enough, because the file matching HEAD is the failure, not the proof.
 
 - **When a mutant that deletes a fix survives, the fix was not the fix.** §195 first blamed Craft's drag connector for eating the press and added a `stopPropagation` to stop it. The real cause was the reflow above, and the harness proved it: removing the handler broke nothing. It would have stayed in the tree forever as dead code carrying a confident comment that explained a real bug incorrectly — worse than no comment, because the next person to hit something similar would trust it. Mutating your *own* recent fixes is worth doing for exactly this reason.
+
+- **A value read inside a framework's selector is only as fresh as what that selector watches.** §196 computed a tooltip inside Craft's node-map selector using data from a React prop; the selector re-runs on node-map changes, so renaming a variable left the tooltip showing the old name until something unrelated touched the layout. No unit test can see this — both functions were correct, and the bug was in *which hook re-runs when*. The rule that falls out: inside a selector, read only what the selector subscribes to, and do every other lookup at render. The tell is a value that is right on first paint and stale after an edit somewhere else on the page.
 
 - **Not every mutant is worth killing — some are sabotage rather than a plausible mistake.** §193 wrote one that rewrites a guard's comparison to read the server's own list, making the test a tautology. It survived, and the right response was to withdraw it: any assertion can be neutered, and proving so says nothing about the code. The useful version is the failure that happens by accident — a scan that quietly stops matching after a reformat — which a vacuity assertion does kill. When a mutant survives, ask whether a maintainer could have written it by mistake before treating it as a hole.
 

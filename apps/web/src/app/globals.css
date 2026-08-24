@@ -2119,3 +2119,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-template-preview .canvas-template-shape { width: 64px; height: 44px; flex: 0 0 auto; }
 .canvas-template-preview div { display: flex; flex-direction: column; gap: 2px; }
 .canvas-template-preview span { font-size: 12px; color: var(--muted); }
+
+/* p.55's conditional-visibility indicator on a Layout panel row. */
+.canvas-tree-condition {
+  margin-left: auto; padding-left: 6px; flex: 0 0 auto;
+  font-size: 11px; line-height: 1; color: var(--accent, #4b7bec); cursor: help;
+}
