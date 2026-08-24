@@ -22,6 +22,7 @@ import {
   schemeFor, styleFor, type BorderName, type PaddingName, type StyleProps,
 } from "./style";
 import { asCollapsed, collapseState } from "./collapse";
+import { arrayEntries, pageOf } from "./loop-array";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -2752,6 +2753,8 @@ CanvasEmbeddedModule.craft = {
  * even without the control.
  */
 export function CanvasLoopSection({
+  source = "object_set",
+  arrayVariable = null,
   objectSetVariable = null,
   moduleId = null,
   itemVariable = null,
@@ -2763,6 +2766,12 @@ export function CanvasLoopSection({
   maxColumns = 3,
   minCardWidth = 220,
 }: {
+  /** p.133's two sources. An older document has no `source` at all, which is
+   * why the default is the arm that already existed rather than a required
+   * choice — adding this setting must not change what a saved module does. */
+  source?: "object_set" | "array";
+  /** p.133: "the first configuration is the array to loop through". */
+  arrayVariable?: string | null;
   objectSetVariable?: string | null;
   moduleId?: string | null;
   /** The child's interface variable, by external ID, that receives each object. */
@@ -2812,34 +2821,56 @@ export function CanvasLoopSection({
     variablesPending: host.pending,
   });
 
+  // p.133's array arm. Its entries are already resolved and in memory, so
+  // paging is a slice - see `loop-array.ts` for why position is the key.
+  const overArray = source === "array";
+  const [arrayPage, setArrayPage] = useState(0);
+  const entries = arrayEntries(overArray ? host.resolved[arrayVariable ?? ""] : undefined);
+  const arraySlice = pageOf(entries, { paging, maxItems, pageSize, page: arrayPage });
+
   const layout = child.data?.definition ? layoutOf(child.data.definition) : null;
-  const ready = !!moduleId && !!itemTarget && !!layout;
+  const sourceChosen = overArray ? !!arrayVariable : !!objectSetVariable;
+  const ready = sourceChosen && !!moduleId && !!itemTarget && !!layout;
 
   if (mode === "edit" && !ready) {
     return (
       <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
         <p className="canvas-widget-empty">
-          {!objectSetVariable
-            ? "Loop — choose an object set in Settings"
+          {!sourceChosen
+            ? overArray
+              ? "Loop — choose an array in Settings"
+              : "Loop — choose an object set in Settings"
             : !moduleId
               ? "Loop — choose a module to repeat"
               : !itemTarget
-                ? "Loop — choose which of that module's interface variables receives each object"
+                ? `Loop — choose which of that module's interface variables receives each ${overArray ? "entry" : "object"}`
                 : "Loading…"}
         </p>
       </div>
     );
   }
 
-  const rows = page.rows ?? [];
+  // One list for both arms, so everything below this line is written once.
+  // The key is the object's id for a set and the entry's **position** for an
+  // array (p.133 orders copies by position, and an array may hold the same
+  // value twice - keying by value would collapse two copies into one).
+  const copies: { key: string; seed: unknown }[] = overArray
+    ? arraySlice.rows.map((row) => ({ key: `entry-${row.index}`, seed: row.value }))
+    : (page.rows ?? []).map((instance) => ({
+        key: instance.id,
+        seed: selectionOf(instance, page.typeId).object,
+      }));
+  const rows = copies;
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
-      {page.unresolved && <p className="canvas-widget-empty">Loading…</p>}
-      {page.isError && (
+      {!overArray && page.unresolved && <p className="canvas-widget-empty">Loading…</p>}
+      {!overArray && page.isError && (
         <p className="canvas-widget-empty">Couldn&apos;t load the objects to loop over.</p>
       )}
-      {ready && !page.unresolved && rows.length === 0 && !page.isError && (
-        <p className="canvas-widget-empty">Nothing in that set.</p>
+      {ready && rows.length === 0 && (overArray || (!page.unresolved && !page.isError)) && (
+        <p className="canvas-widget-empty">
+          {overArray ? "Nothing in that array." : "Nothing in that set."}
+        </p>
       )}
       {ready && (
         <div
@@ -2859,15 +2890,15 @@ export function CanvasLoopSection({
               : undefined
           }
         >
-          {rows.map((instance) => (
-            <div className="canvas-loop-item" key={instance.id}>
+          {rows.map((copy) => (
+            <div className="canvas-loop-item" key={copy.key}>
               {/* Keyed by the object's id, so each object gets its own provider
                   and its own layout state - p.129: each instance "functions
                   independently from other embedded module instances, and has
                   its own variable scope and layout state". A shared provider
                   would make selecting a row in one card select it in all. */}
               <CanvasParameterProvider
-                seed={{ [itemTarget!.id]: selectionOf(instance, page.typeId).object }}
+                seed={{ [itemTarget!.id]: copy.seed }}
                 link={{ bindings: shared, values: host.resolved, set: hostParams.set }}
               >
                 <VariableBridge
@@ -2887,7 +2918,30 @@ export function CanvasLoopSection({
           ))}
         </div>
       )}
-      {ready && paging === "paged" && (page.total ?? 0) > size && (
+      {ready && overArray && paging === "paged" && arraySlice.pageCount > 1 && (
+        <div className="canvas-loop-pager">
+          <button
+            type="button"
+            className="btn quiet"
+            disabled={arrayPage === 0}
+            onClick={() => setArrayPage((n) => Math.max(0, n - 1))}
+          >
+            Previous
+          </button>
+          <span className="soft">
+            Page {Math.min(arrayPage, arraySlice.pageCount - 1) + 1} of {arraySlice.pageCount}
+          </span>
+          <button
+            type="button"
+            className="btn quiet"
+            disabled={arrayPage >= arraySlice.pageCount - 1}
+            onClick={() => setArrayPage((n) => n + 1)}
+          >
+            Next
+          </button>
+        </div>
+      )}
+      {ready && !overArray && paging === "paged" && (page.total ?? 0) > size && (
         <div className="canvas-loop-pager">
           <button
             type="button"
@@ -2917,10 +2971,13 @@ export function CanvasLoopSection({
 function LoopSectionSettings() {
   const { workspaceId, projectId } = useCanvasEnv();
   const {
+    source, arrayVariable,
     objectSetVariable, moduleId, itemVariable, mapping,
     paging, maxItems, pageSize, display, maxColumns, minCardWidth,
     actions: { setProp },
   } = useNode((node) => ({
+    source: node.data.props.source ?? "object_set",
+    arrayVariable: node.data.props.arrayVariable,
     objectSetVariable: node.data.props.objectSetVariable,
     moduleId: node.data.props.moduleId,
     itemVariable: node.data.props.itemVariable,
@@ -2948,7 +3005,18 @@ function LoopSectionSettings() {
   // p.134: the child "must have a module interface object set variable if
   // configured to loop over an object set". Ours is `single_object`, which is
   // the kind that actually describes one object - see the spec note.
-  const candidates = published.filter((v) => v.kind === "single_object");
+  // p.134: the child needs "a module interface object set variable if
+  // configured to loop over an object set, or a variable typed to the array
+  // type if configured to loop over an array" - and p.134 settles what "the
+  // array type" means two sentences later, where the struct-typed variable
+  // renders *each entry*. So the candidates are the elements' kind, and an
+  // untyped array offers none, which is what the server refuses at save.
+  const overArray = source === "array";
+  const looped = overArray
+    ? Object.values(declared).find((v) => v.id === arrayVariable) ?? null
+    : null;
+  const itemKind = overArray ? looped?.element ?? null : "single_object";
+  const candidates = itemKind ? published.filter((v) => v.kind === itemKind) : [];
 
   // **The widget that needs `requires` in its original all-of form.** §179
   // taught it a choice for the Object table, which takes an object set *or* an
@@ -2957,28 +3025,92 @@ function LoopSectionSettings() {
   // interface (p.134) and the paging options count items from the set.
   return (
     <WidgetSetup
-      bindings={{ objectSetVariable, moduleId }}
-      requires={["objectSetVariable", "moduleId"]}
-      labels={{ objectSetVariable: "an object set", moduleId: "a module" }}
+      bindings={overArray ? { arrayVariable, moduleId } : { objectSetVariable, moduleId }}
+      requires={overArray ? ["arrayVariable", "moduleId"] : ["objectSetVariable", "moduleId"]}
+      labels={{
+        objectSetVariable: "an object set",
+        arrayVariable: "an array",
+        moduleId: "a module",
+      }}
       inputs={<>
+      {/* p.133's two sources. First, because everything below it depends on
+          which one is chosen - the thing being looped, and then which of the
+          child's variables can receive an entry. */}
       <label className="field">
-        <span className="field-label">Object set to loop through</span>
+        <span className="field-label">Loop over</span>
         <select
-          value={objectSetVariable ?? ""}
-          data-testid="loop-set"
-          onChange={(e) =>
-            setProp((p: { objectSetVariable: string | null }) =>
-              (p.objectSetVariable = e.target.value || null))
-          }
+          value={source}
+          data-testid="loop-source"
+          onChange={(e) => {
+            const next = e.target.value;
+            setProp((p: Record<string, unknown>) => {
+              p.source = next;
+              // The old source's binding is cleared, and so is the item
+              // variable: it was chosen to match the *other* kind, and a
+              // stale one would be a mapping the server refuses at save with
+              // a message about the child rather than about this switch.
+              p.objectSetVariable = null;
+              p.arrayVariable = null;
+              p.itemVariable = null;
+            });
+          }}
         >
-          <option value="">Choose…</option>
-          {Object.values(declared)
-            .filter((v) => v.kind === "object_set")
-            .map((v) => (
-              <option key={v.id} value={v.id}>{v.label}</option>
-            ))}
+          <option value="object_set">An object set</option>
+          <option value="array">An array</option>
         </select>
       </label>
+
+      {overArray ? (
+        <label className="field">
+          <span className="field-label">Array to loop through</span>
+          <select
+            value={arrayVariable ?? ""}
+            data-testid="loop-array"
+            onChange={(e) =>
+              setProp((p: { arrayVariable: string | null }) =>
+                (p.arrayVariable = e.target.value || null))
+            }
+          >
+            <option value="">Choose…</option>
+            {Object.values(declared)
+              .filter((v) => v.kind === "array")
+              .map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label}{v.element ? ` (${v.element})` : " — untyped"}
+                </option>
+              ))}
+          </select>
+          {/* Named rather than hidden: an untyped array is offered because it
+              is a real variable an author may have meant to type, and saying
+              why it cannot be used beats leaving it off the list with no
+              explanation. */}
+          {looped && !looped.element && (
+            <span className="field-hint">
+              That array has no entry type, so nothing can receive an entry. Set one
+              on the variable first (p.132).
+            </span>
+          )}
+        </label>
+      ) : (
+        <label className="field">
+          <span className="field-label">Object set to loop through</span>
+          <select
+            value={objectSetVariable ?? ""}
+            data-testid="loop-set"
+            onChange={(e) =>
+              setProp((p: { objectSetVariable: string | null }) =>
+                (p.objectSetVariable = e.target.value || null))
+            }
+          >
+            <option value="">Choose…</option>
+            {Object.values(declared)
+              .filter((v) => v.kind === "object_set")
+              .map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+          </select>
+        </label>
+      )}
 
       <label className="field">
         <span className="field-label">Module to repeat</span>
@@ -3001,7 +3133,9 @@ function LoopSectionSettings() {
           `requires` is satisfied, and a module is half of that. Two spellings
           of one rule, and §170's precedent says delete the redundant one. */}
       <label className="field">
-        <span className="field-label">Receives each object</span>
+        <span className="field-label">
+          Receives each {overArray ? "entry" : "object"}
+        </span>
         <select
           value={itemVariable ?? ""}
           data-testid="loop-item"
@@ -3116,6 +3250,7 @@ function LoopSectionSettings() {
 CanvasLoopSection.craft = {
   displayName: "Loop",
   props: {
+    source: "object_set", arrayVariable: null,
     objectSetVariable: null, moduleId: null, itemVariable: null, interface: {},
     paging: "limit", maxItems: 12, pageSize: 12,
     display: "list", maxColumns: 3, minCardWidth: 220,

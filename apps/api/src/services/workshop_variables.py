@@ -283,6 +283,10 @@ REFERENCE_PROPS = (
     # this list against the builder rather than against its own mirror.
     "collapsedWhen",
     "tabVariable",
+    # p.133's array to loop through. Added *because §191's guard refused the
+    # save* - the first time that check has fired on new work rather than on a
+    # hole that had been open for weeks, which is what it was written for.
+    "arrayVariable",
     "name",
 )
 

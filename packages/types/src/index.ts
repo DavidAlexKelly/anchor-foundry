@@ -334,6 +334,16 @@ export interface WorkshopVariable {
    * filter, and says an Object set *definition* "does not offer recompute
    * behavior configuration". The server refuses it anywhere else. */
   recompute?: "automatic" | "only_on_event" | "on_load_and_event";
+  /** `array` variables only: what the entries are (p.132).
+   *
+   * **Optional, and absent is not a default.** Every array written before this
+   * existed carries none, and an untyped array stays perfectly valid — it
+   * simply cannot be looped over, because p.134 requires the child module's
+   * variable to match a type an untyped array does not have.
+   *
+   * p.132 also lists `struct`, which this platform refuses with that reason:
+   * a struct element needs a kind carrying named fields and there is none. */
+  element?: "string" | "number" | "boolean" | "date" | "timestamp";
   /** What this was called when it was a string-keyed parameter, so a converted
    * app can still be read against the v1 document it came from. */
   legacy_name?: string;
