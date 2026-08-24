@@ -392,10 +392,23 @@ async def _check_interface(
                 f"{embed.item_external_id!r} to receive each object. Its interface "
                 f"offers: {offered}"
             )
-        if target.kind != "single_object":
+        # p.134: the child must have "a module interface object set variable if
+        # configured to loop over an object set, or a variable typed to the
+        # array type if configured to loop over an array". `item_kind` is that
+        # requirement, computed from what the loop is looping - see `Embed`.
+        #
+        # `None` means the loop is misconfigured in a way the layout check
+        # already refuses with a sharper message (an array arm naming nothing,
+        # or an untyped array). Checking it again here would report the child's
+        # variable as wrong when the fault is on the host.
+        if embed.item_kind is not None and target.kind != embed.item_kind:
+            one_of = (
+                "one object at a time" if embed.item_kind == "single_object"
+                else "one array entry at a time"
+            )
             raise variables_service.VariableError(
-                f"a loop gives {child_name!r} one object at a time, so "
-                f"{embed.item_external_id!r} has to be a single_object and it is a "
+                f"a loop gives {child_name!r} {one_of}, so "
+                f"{embed.item_external_id!r} has to be a {embed.item_kind} and it is a "
                 f"{target.kind}"
             )
 

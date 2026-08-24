@@ -218,6 +218,24 @@ RECOMPUTE_BEHAVIOURS = ("automatic", "only_on_event", "on_load_and_event")
 #: one computes at load and one does not.
 HELD_BEHAVIOURS = ("only_on_event", "on_load_and_event")
 
+#: What an `array` variable's entries are (p.132).
+#:
+#: > "Loop layouts support looping over various array types, including string,
+#: > Boolean, number, date, timestamp, and struct arrays." (p.132)
+#:
+#: **`struct` is missing on purpose.** A struct element is a record with named
+#: fields, and this system has no kind that carries a field schema - p.134's
+#: "the struct-typed module interface variable will contain a variable
+#: transform, rendering the fields of each struct entry" needs one before it
+#: can mean anything. Refused with that reason rather than accepted and ignored,
+#: which would let somebody configure a loop that renders nothing.
+ARRAY_ELEMENTS = ("string", "number", "boolean", "date", "timestamp")
+
+#: p.133's two loop sources. The object-set arm is older than this constant;
+#: naming both is what lets the builder's toggle and the server's refusals be
+#: checked against one list rather than against each other.
+LOOP_SOURCES = ("object_set", "array")
+
 SAVABLE_KINDS = (
     "string", "number", "boolean", "date", "timestamp",
     "array", "single_object", "object_set",
@@ -336,6 +354,14 @@ class Variable:
     #: `automatic` for everything that has not asked otherwise, which is both
     #: Foundry's default and what this platform did unconditionally before.
     recompute: str = "automatic"
+    #: What an `array` variable's entries are (p.132), or None for one that
+    #: never said. **Optional rather than defaulted**, and the distinction
+    #: carries weight: every array written before this existed has no element,
+    #: and picking one for them would be inventing a fact about somebody's
+    #: document. An untyped array stays perfectly valid — it simply cannot be
+    #: looped over, because p.134 requires the child's variable to match a type
+    #: an untyped array does not have.
+    element: str | None = None
 
     @property
     def derived(self) -> bool:
@@ -408,6 +434,7 @@ def parse(raw: Any) -> dict[str, Variable]:
             url_behavior=url_behavior,
             save_state=save_state,
             recompute=recompute,
+            element=_parse_element(label, value.get("element"), kind),
         )
 
     _refuse_duplicate_external_ids(variables)
@@ -742,6 +769,39 @@ def page_selection(document: Any, variables: dict[str, Variable] | None = None) 
             "is a page ID"
         )
     return vid
+
+
+def _parse_element(label: str, raw: Any, kind: str) -> str | None:
+    """p.132's array element type, and the two shapes it is not offered on.
+
+    Only an `array` has entries, so an element on anything else is a setting
+    with no effect - the shape this module refuses everywhere else.
+
+    **`struct` is refused with its own reason** rather than lumped in with a
+    typo. p.132 lists it among the array types Foundry loops over, so somebody
+    reading the spec will try it, and "expected one of string, number…" would
+    read as the spec being wrong rather than as this platform being behind.
+    """
+    if raw is None:
+        return None
+    if kind != "array":
+        raise VariableError(
+            f"variable {label!r} is a {kind}, which has no entries - an element "
+            "type belongs on an array"
+        )
+    if raw == "struct":
+        raise VariableError(
+            f"variable {label!r} is an array of structs, which p.132 lists and this "
+            "platform does not carry yet: a struct element needs a kind with named "
+            "fields, and there is none. Use an array of a scalar type, or loop over "
+            "an object set"
+        )
+    if not isinstance(raw, str) or raw not in ARRAY_ELEMENTS:
+        raise VariableError(
+            f"variable {label!r} has element {raw!r}; expected one of "
+            f"{', '.join(ARRAY_ELEMENTS)}"
+        )
+    return raw
 
 
 def _parse_recompute(
@@ -1581,6 +1641,21 @@ class Embed:
     # variable - the loop supplies one object per copy, so its source is the set
     # being looped rather than anything the host declares.
     item_external_id: str | None = None
+    #: The kind the child's item variable has to be, which p.134 makes a
+    #: function of what is being looped: "a module interface object set variable
+    #: if configured to loop over an object set, or a variable typed to the
+    #: array type if configured to loop over an array".
+    #:
+    #: **"the array type" means the array's *element* type, not `array`.** p.134
+    #: settles it two sentences later - "the struct-typed module interface
+    #: variable will contain a variable transform, rendering the fields of each
+    #: struct entry" - so the child receives one entry, and its variable is
+    #: typed like an entry. Reading it the other way would hand the whole array
+    #: to every copy, which is not a loop.
+    #:
+    #: Computed here rather than at the check, because it needs the host's
+    #: variables and this is the last place that has the whole document.
+    item_kind: str | None = None
 
 
 def embeds(document: Any) -> list[Embed]:
@@ -1592,6 +1667,14 @@ def embeds(document: Any) -> list[Embed]:
     same module with different mappings, and a set would lose one of them.
     """
     layout = document.get("layout") if isinstance(document, dict) else None
+    # The host's own variables, for the loop element lookup below. Parsed
+    # leniently: `embeds` is also called on *other* modules' documents during
+    # the cycle walk, and refusing one there would blame this save for a fault
+    # in a document nobody is editing.
+    try:
+        declared = parse(document.get("variables") if isinstance(document, dict) else None)
+    except VariableError:
+        declared = {}
     out: list[Embed] = []
     for node_id, node in (layout or {}).items():
         if not isinstance(node, dict):
@@ -1623,12 +1706,23 @@ def embeds(document: Any) -> list[Embed]:
                 )
             mapping[str(external_id)] = host_vid
         item = props.get("itemVariable") if kind == "CanvasLoopSection" else None
+        item_kind: str | None = None
+        if kind == "CanvasLoopSection":
+            if props.get("source") == "array":
+                looped = declared.get(str(props.get("arrayVariable") or ""))
+                # A loop whose array is missing or untyped is refused by
+                # `_check_loop_sections` with a sharper message; leaving the
+                # kind as None here keeps this scan from guessing.
+                item_kind = looped.element if looped is not None else None
+            else:
+                item_kind = "single_object"
         out.append(
             Embed(
                 node=str(node_id),
                 module_id=module_id,
                 mapping=mapping,
                 item_external_id=item if isinstance(item, str) and item else None,
+                item_kind=item_kind,
             )
         )
     return out
@@ -1689,6 +1783,69 @@ def dangling_references(layout: Any, variables: dict[str, Variable]) -> list[dic
             if isinstance(ref, str) and ref.startswith("v_") and ref not in variables:
                 broken.append({"node": str(node_id), "prop": prop, "variable": ref})
     return broken
+
+
+def _check_loop_sections(layout: Any, variables: dict[str, Variable]) -> None:
+    """A Loop's source, and the array it names (p.132-133).
+
+    p.133: "If the array option is selected, the first configuration is the
+    array to loop through variable input." So the array arm needs a variable,
+    it has to be an array, and — the part that is this platform's rather than
+    Foundry's — that array has to carry an **element type**.
+
+    That last refusal is the one worth explaining. p.134 requires the child
+    module's interface variable to be "typed to the array type", and an untyped
+    array has no type to match. Rather than skip the check for untyped arrays
+    (which would let a loop pass any entry to any variable and render whatever
+    happened to fit), the loop is refused with a message that says which
+    setting is missing.
+
+    The object-set arm is not checked here: `objectSetVariable` is a reference
+    prop, so an absent variable is already refused, and its kind is checked by
+    the widget's own setup rather than being loop-specific.
+    """
+    if not isinstance(layout, dict):
+        return
+    for node_id, node in layout.items():
+        if not isinstance(node, dict):
+            continue
+        # A node's `type` is `{"resolvedName": …}` from the builder and a bare
+        # string from a hand-written document, which `_embedding_node` already
+        # knows - reading `.get("resolvedName")` off it directly is what made
+        # this crash on every object-view fixture.
+        if _embedding_node(node) != "CanvasLoopSection":
+            continue
+        props = node.get("props") or {}
+        source = props.get("source")
+        if source in (None, "", "object_set"):
+            continue
+        if source not in LOOP_SOURCES:
+            raise VariableError(
+                f"loop {node_id!r} loops over {source!r}; p.133 offers "
+                f"{' and '.join(LOOP_SOURCES)}"
+            )
+        vid = props.get("arrayVariable")
+        if not isinstance(vid, str) or not vid:
+            raise VariableError(
+                f"loop {node_id!r} is set to loop over an array and names none - "
+                "p.133 makes the array to loop through the first configuration"
+            )
+        variable = variables.get(vid)
+        if variable is None:
+            raise VariableError(
+                f"loop {node_id!r} loops over {vid!r}, which this module does not declare"
+            )
+        if variable.kind != "array":
+            raise VariableError(
+                f"loop {node_id!r} loops over {variable.label!r}, which is a "
+                f"{variable.kind} and not an array"
+            )
+        if variable.element is None:
+            raise VariableError(
+                f"loop {node_id!r} loops over {variable.label!r}, which has no element "
+                f"type - p.134 needs the child's variable to match it. Set the array's "
+                f"element to one of {', '.join(ARRAY_ELEMENTS)}"
+            )
 
 
 def _check_tab_sections(layout: Any, variables: dict[str, Variable], events_module: Any) -> None:
@@ -1784,6 +1941,7 @@ def validate_module(
     # p.84's Variable-Based Tab Selection is per *section* rather than per
     # module, so unlike `page_selection` it is a layout prop - but it names a
     # variable, so the same rule applies and for the same reason.
+    _check_loop_sections(document.get("layout"), variables)
     _check_tab_sections(document.get("layout"), variables, workshop_events)
     try:
         workshop_events.parse(
