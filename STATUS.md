@@ -4101,6 +4101,33 @@ Two properties the record names as the ones this design will lose first, both no
 
 **22 mutants, 0 survivors, 0 no-ops. 491 unit tests** (was 464); **289 browser tests** (was 282).
 
+### 198. Loops over arrays, and a console check that had never worked (this session)
+
+p.132–133's loop over an array. `workshop.md` had recorded the blocker exactly — the `array` kind had no element type, so p.134's "a variable typed to the array type" could not be expressed or checked — so the unit is the element type first, then the loop arm.
+
+**p.134's sentence is ambiguous and p.134 settles it.** "A variable typed to the array type" could mean the child receives the whole array. Two sentences later it says the struct-typed interface variable "renders the fields of each struct **entry**" — so the child receives one entry, and its variable is typed like an entry. Handing every copy the whole array would not be a loop. `Embed` carries `item_kind`, computed from what is being looped, and the cross-module check compares against that rather than a hardcoded `single_object`. The mutant implementing the *other* reading is the one the harness exists for: an argued reading with no test is a comment.
+
+**§191's guard fired on new work for the first time.** `arrayVariable` names a variable and was not in `REFERENCE_PROPS`; the save was refused before the feature could ship with a variable deletable out from under a configured loop. That check has been archaeology since §191 and this is the first time it caught something on the way in.
+
+---
+
+**But the finding that outlives the unit is in `e2e/conftest.py`.** A mutant keying loop copies by *value* instead of position makes React log "Encountered two children with the same key"; the test asserted no console errors and passed anyway.
+
+`DEV_SERVER_NOISE` contained `hot-reloader-client`. It went in to silence one benign Next prefetch message that *names that file as its source* — and in Next's dev build React's own `console.error` is routed through the same client, so **every React error in the whole browser suite carried the string and was filtered out**. The fixture's docstring says the check "is not decoration". It was, for as long as that line existed.
+
+The rule: **match a noise filter to the message, never to its source.** A source is shared with the things worth failing on. The comment beside that list had already warned that matching too broadly "would swallow a real API call that did not come back", and the next line did exactly that in a different way.
+
+**Removing it unmasked a second bug**, in a test §192 wrote. `settled()` waits for the *canvas*; the Layout panel paints after it, so `before = tree_rows(page).count()` read **0**, turning `n == before * 2` into `n == 0` — an assertion nothing can satisfy once a paste adds rows. It passed on luck until §196 and §197 each added work to the panel's first paint. **The failure blamed the wrong half**: "still 4" reads as the paste producing the wrong number, when the paste was right and the baseline was zero. A probe with identical steps printed 2 and 4; only printing `before` itself found it.
+
+**Four survivors, none of them what they looked like.** Two were harness scoping (`test_canvas.py` covers the cross-module check and the api layer did not run it). One was mutating dead code (`craft.props` supersedes a component's parameter default, so the default never fires for a saved document). One was the real hole above. A fifth mutant is **withdrawn as equivalent**, with the reasoning recorded: `validate_module` returns 422 before `_check_embeds` is reached, one call site, unconditionally preceded — checked for a reachable path the way §197's ROOT survivor turned out to have one, and this does not.
+
+**26 mutants, 25 caught, 0 survivors, 0 no-ops, 1 withdrawn. 1510 API tests** (was 1488); **507 unit tests** (was 491); **296 browser tests** (was 289).
+
+---
+---
+---
+---
+
 ---
 ---
 ---
@@ -4196,6 +4223,10 @@ Two properties the record names as the ones this design will lose first, both no
 - **A mutant can be caught by a *hang*, and a harness that treats that as a crash loses the run and leaves the bug on disk.** §197's cycle-guard mutant makes `isParked` loop forever, so vitest spun rather than failed; `subprocess.run(timeout=…)` raised, the exception escaped, and the run died at mutant 6 of 22 — **skipping the `restore()` at the end**, so a planted bug sat in the working tree afterwards. A hang is a suite that did not pass, which is what "caught" means: catch `TimeoutExpired` and return False. And restore inside an exception handler as well as at the end, because the failure mode of not doing so is a mutation-testing harness turning into the thing it was written to catch.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
+
+- **Match a noise filter to the message, never to its source.** §198 found `hot-reloader-client` in the browser suite's `DEV_SERVER_NOISE`, added to silence one benign Next prefetch message that names that file. React's `console.error` is routed through the same client in dev, so *every* React error was being filtered out and the console assertion had never once worked. A source is shared with the things worth failing on; a message is not. The tell is an assertion that has never failed in the whole life of a test suite — and the way to check one is to make it fail on purpose, which is what a mutation harness is.
+
+- **A baseline captured with no wait is an assertion against zero, and its failure blames the wrong half.** §192's clipboard test read `before = tree_rows(page).count()` after `settled()`, which waits for the canvas rather than the Layout panel — so `before` was 0 and `n == before * 2` could never match. It passed on luck for four units. What makes this worth a rule is the *message*: "still 4" points at the value being compared, not at the thing it is compared against, so the obvious reading is that the operation misbehaved. When a comparison against a captured baseline fails, print the baseline before investigating the operation.
 
 - **Not every mutant is worth killing — some are sabotage rather than a plausible mistake.** §193 wrote one that rewrites a guard's comparison to read the server's own list, making the test a tautology. It survived, and the right response was to withdraw it: any assertion can be neutered, and proving so says nothing about the code. The useful version is the failure that happens by accident — a scan that quietly stops matching after a reformat — which a vacuity assertion does kill. When a mutant survives, ask whether a maintainer could have written it by mistake before treating it as a hole.
 
