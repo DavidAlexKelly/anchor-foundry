@@ -68,6 +68,25 @@ def tree_rows(page):
     return page.locator(".canvas-tree-row")
 
 
+def rows_once_drawn(page) -> int:
+    """The tree's row count, once the tree has drawn.
+
+    **`settled()` is not enough for this**, and the difference cost a full
+    browser run to find: it waits for the *canvas*, and the Layout panel paints
+    after it. A baseline captured immediately reads **0**, which turns
+    `n == before * 2` into `n == 0` - an assertion nothing can satisfy once a
+    paste has added rows.
+
+    The failure that produces is worse than the race, because it blames the
+    wrong half: the message reads "still 4", which sounds like the paste
+    produced the wrong number when the paste was right and the baseline was
+    zero. This test passed on luck until §196 and §197 both added work to the
+    Layout panel's first paint.
+    """
+    return eventually(lambda: tree_rows(page).count(), lambda n: n > 0,
+                      what="the layout tree to draw")
+
+
 def copies(page):
     """The pasted text, **on the canvas only**.
 
@@ -112,7 +131,7 @@ def test_copy_and_paste_adds_a_second_copy_of_the_section(page, api) -> None:
     open_builder(page, mod)
     settled(page)
 
-    before = tree_rows(page).count()
+    before = rows_once_drawn(page)
     select_section(page)
     page.get_by_test_id("clip-copy").click()
     expect(page.get_by_test_id("clip-state")).to_contain_text("Holding")

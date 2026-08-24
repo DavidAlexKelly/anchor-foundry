@@ -2710,3 +2710,134 @@ def test_a_section_effect_aimed_at_a_widget_is_refused_for_the_same_reason() -> 
             {"e_1": event("e_1", effects=[section_effect("toggle_section", "btn")])},
             layout=collapse_layout(),
         )
+
+
+# ---- p.132's array element type -----------------------------------------------
+@pytest.mark.parametrize("element", wv.ARRAY_ELEMENTS)
+def test_every_element_type_p132_lists_parses(element: str) -> None:
+    variables = wv.parse({
+        "v_a": {"id": "v_a", "kind": "array", "label": "A", "element": element},
+    })
+    assert variables["v_a"].element == element
+
+
+def test_an_array_may_carry_no_element_at_all() -> None:
+    """**Optional rather than defaulted.** Every array written before this
+    existed has none, and picking one for them would be inventing a fact about
+    somebody's document. It stays valid; it simply cannot be looped over."""
+    assert wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A"}})["v_a"].element is None
+
+
+def test_a_struct_element_is_refused_with_its_own_reason() -> None:
+    """p.132 lists struct arrays, so somebody reading the spec will try it -
+    and "expected one of string, number…" would read as the spec being wrong
+    rather than as this platform being behind."""
+    with pytest.raises(wv.VariableError, match="named fields"):
+        wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A", "element": "struct"}})
+
+
+def test_an_unknown_element_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="expected one of"):
+        wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A", "element": "widget"}})
+
+
+def test_an_element_on_a_non_array_is_refused() -> None:
+    """A setting with no effect is the shape this module refuses everywhere."""
+    with pytest.raises(wv.VariableError, match="has no entries"):
+        wv.parse({"v_a": {"id": "v_a", "kind": "string", "label": "A", "element": "string"}})
+
+
+# ---- p.133's loop source -------------------------------------------------------
+def _loop(**props: Any) -> dict[str, Any]:
+    return {"loop": {"type": {"resolvedName": "CanvasLoopSection"}, "props": props}}
+
+
+def _module(layout: dict[str, Any], variables: dict[str, Any]) -> dict[str, Any]:
+    return {"format": 2, "layout": layout, "variables": variables, "events": {}}
+
+
+ARR = {"v_arr": {"id": "v_arr", "kind": "array", "label": "Names", "element": "string"}}
+
+
+def test_a_loop_over_a_typed_array_is_accepted() -> None:
+    wv.validate_module(_module(_loop(source="array", arrayVariable="v_arr"), ARR))
+
+
+def test_an_object_set_loop_is_untouched_by_the_new_check() -> None:
+    """The arm that already worked. Worth pinning because the check reads a
+    prop that older documents do not carry at all."""
+    wv.validate_module(_module(_loop(objectSetVariable="v_set"), {
+        "v_set": {"id": "v_set", "kind": "object_set", "label": "Set",
+                  "object_set": {"object_type_id": str(uuid.uuid4()), "filters": []}},
+    }))
+
+
+def test_an_array_loop_naming_nothing_is_refused() -> None:
+    """p.133 makes the array to loop through the first configuration."""
+    with pytest.raises(wv.VariableError, match="names none"):
+        wv.validate_module(_module(_loop(source="array"), ARR))
+
+
+def test_an_array_loop_naming_an_undeclared_variable_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="does not declare"):
+        wv.validate_module(_module(_loop(source="array", arrayVariable="v_gone"), ARR))
+
+
+def test_an_array_loop_over_a_non_array_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="not an array"):
+        wv.validate_module(_module(_loop(source="array", arrayVariable="v_s"), {
+            "v_s": {"id": "v_s", "kind": "string", "label": "S"},
+        }))
+
+
+def test_an_array_loop_over_an_untyped_array_is_refused() -> None:
+    """**The refusal that makes p.134 checkable.**
+
+    An untyped array has no type for the child's variable to match, so the
+    alternative to refusing is a loop that passes any entry to any variable and
+    renders whatever happens to fit.
+    """
+    with pytest.raises(wv.VariableError, match="no element type"):
+        wv.validate_module(_module(_loop(source="array", arrayVariable="v_arr"), {
+            "v_arr": {"id": "v_arr", "kind": "array", "label": "Names"},
+        }))
+
+
+def test_an_unknown_loop_source_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="p.133 offers"):
+        wv.validate_module(_module(_loop(source="sideways", arrayVariable="v_arr"), ARR))
+
+
+# ---- what the child's item variable has to be (p.134) --------------------------
+def test_an_array_loop_asks_for_the_elements_kind_not_array() -> None:
+    """**p.134's sentence, read the way p.134 settles it.**
+
+    "a variable typed to the array type" could mean the child receives the
+    whole array. Two sentences later p.134 says the struct-typed variable
+    "renders the fields of each struct entry", so the child receives one
+    *entry* - and handing every copy the whole array would not be a loop.
+    """
+    embeds = wv.embeds(_module(
+        _loop(source="array", arrayVariable="v_arr", moduleId="m1", itemVariable="each"),
+        ARR,
+    ))
+    assert [e.item_kind for e in embeds] == ["string"]
+
+
+def test_an_object_set_loop_still_asks_for_a_single_object() -> None:
+    embeds = wv.embeds(_module(
+        _loop(objectSetVariable="v_set", moduleId="m1", itemVariable="each"),
+        {"v_set": {"id": "v_set", "kind": "object_set", "label": "Set",
+                   "object_set": {"object_type_id": str(uuid.uuid4()), "filters": []}}},
+    ))
+    assert [e.item_kind for e in embeds] == ["single_object"]
+
+
+def test_an_untyped_array_leaves_the_item_kind_unknown() -> None:
+    """So the cross-module check stays quiet and the layout check gets to
+    report the real fault - which is on the host, not on the child."""
+    embeds = wv.embeds(_module(
+        _loop(source="array", arrayVariable="v_arr", moduleId="m1", itemVariable="each"),
+        {"v_arr": {"id": "v_arr", "kind": "array", "label": "Names"}},
+    ))
+    assert [e.item_kind for e in embeds] == [None]

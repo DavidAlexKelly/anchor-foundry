@@ -50,6 +50,14 @@ const KINDS: WorkshopVariableKind[] = [
   "time_series_set",
 ];
 
+/** p.132's array element types, mirroring `ARRAY_ELEMENTS` in the service.
+ *
+ * `struct` is absent for the reason `object_set_aggregation` is absent from
+ * `TRANSFORMS` below: the API refuses it until there is a kind carrying named
+ * fields, and offering a choice that fails on save is the thing these lists
+ * exist to avoid. */
+const ARRAY_ELEMENTS = ["string", "number", "boolean", "date", "timestamp"] as const;
+
 /** Matches `TRANSFORMS` in the service. `object_set_aggregation` is
  * deliberately absent - it reads the ontology, so the API refuses it until it
  * is built, and offering it here would be offering a choice that fails on
@@ -295,6 +303,39 @@ export function VariablesPanel({
                         ))}
                       </select>
                     </label>
+
+                    {/* p.132's array element type. Shown only for an array,
+                        because an element on anything else is a setting with
+                        no effect and the server refuses it. **"—" is a real
+                        choice, not a placeholder**: an untyped array is valid
+                        and is what every array written before this is, so the
+                        picker has to be able to say so and to go back to it. */}
+                    {variable.kind === "array" && (
+                      <label>
+                        Entries
+                        <select
+                          data-testid="variable-element"
+                          value={variable.element ?? ""}
+                          disabled={readOnly}
+                          onChange={(e) => {
+                            const element = e.target.value;
+                            const { element: _drop, ...rest } = variable;
+                            update(id, (element
+                              ? { ...rest, element }
+                              : rest) as Partial<WorkshopVariable>);
+                          }}
+                        >
+                          <option value="">— untyped</option>
+                          {ARRAY_ELEMENTS.map((el) => (
+                            <option key={el} value={el}>{el}</option>
+                          ))}
+                        </select>
+                        <span className="field-hint">
+                          A loop can only iterate an array whose entries have a type
+                          (p.132).
+                        </span>
+                      </label>
+                    )}
 
                     {variable.kind === "object_set" ? (
                       <ObjectSetEditor

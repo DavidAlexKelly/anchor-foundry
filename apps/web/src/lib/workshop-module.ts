@@ -151,6 +151,8 @@ export const REFERENCE_PROPS = [
   // the API's copy.
   "collapsedWhen",
   "tabVariable",
+  // p.133's array to loop through — see the note on the API's copy.
+  "arrayVariable",
   "name",
 ] as const;
 

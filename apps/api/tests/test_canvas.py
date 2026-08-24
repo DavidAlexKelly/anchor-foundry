@@ -938,6 +938,69 @@ def test_a_loop_refuses_an_item_variable_that_is_not_a_single_object(client: Tes
     assert "has to be a single_object and it is a string" in r.json()["detail"]
 
 
+def _looping_array(module_id: str, element: str | None = "string", item: str = "obj") -> dict:
+    """A host looping over an array rather than an object set (p.133)."""
+    variable: dict = {"id": "v_arr", "kind": "array", "label": "Names"}
+    if element is not None:
+        variable["element"] = element
+    return {
+        "format": 2, "events": {},
+        "variables": {"v_arr": variable},
+        "layout": {
+            "ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                     "props": {}, "nodes": ["l0"], "linkedNodes": {}},
+            "l0": {"type": {"resolvedName": "CanvasLoopSection"},
+                   "props": {"moduleId": module_id, "source": "array",
+                             "arrayVariable": "v_arr", "itemVariable": item},
+                   "parent": "ROOT", "nodes": []},
+        },
+    }
+
+
+def test_an_array_loop_wants_the_elements_kind_on_the_child(client: TestClient, fx: Fixture) -> None:
+    """**p.134's sentence, end to end.**
+
+    "a variable typed to the array type" - and p.134 settles what that means two
+    sentences later, where the struct-typed interface variable renders the
+    fields of each struct *entry*. So a string array wants a **string** on the
+    child, not an array and not a single_object.
+    """
+    host, child = _embed_app(client, fx, f"LoopA {fx.tag}"), _embed_app(client, fx, f"CardA {fx.tag}")
+    assert _put_definition(client, fx, child, _loop_child(kind="string")).status_code == 200
+    r = _put_definition(client, fx, host, _looping_array(child))
+    assert r.status_code == 200, r.text
+
+
+def test_an_array_loop_refuses_a_child_variable_of_the_wrong_kind(client: TestClient, fx: Fixture) -> None:
+    """The refusal the reading above earns. A `single_object` on the child was
+    right for the object-set arm and is wrong here, which is exactly the
+    mistake somebody converting a loop would make."""
+    host, child = _embed_app(client, fx, f"LoopB {fx.tag}"), _embed_app(client, fx, f"CardB {fx.tag}")
+    assert _put_definition(client, fx, child, _loop_child(kind="single_object")).status_code == 200
+    r = _put_definition(client, fx, host, _looping_array(child))
+    assert r.status_code == 422
+    assert "one array entry at a time" in r.json()["detail"]
+    assert "has to be a string" in r.json()["detail"]
+
+
+def test_an_untyped_array_is_refused_on_the_host_not_blamed_on_the_child(
+    client: TestClient, fx: Fixture,
+) -> None:
+    """**Which document gets blamed matters.**
+
+    An untyped array leaves the required kind unknown, and checking it anyway
+    would report the *child's* variable as wrong when the fault is a setting on
+    the host. The message has to name the array.
+    """
+    host, child = _embed_app(client, fx, f"LoopC {fx.tag}"), _embed_app(client, fx, f"CardC {fx.tag}")
+    assert _put_definition(client, fx, child, _loop_child(kind="string")).status_code == 200
+    r = _put_definition(client, fx, host, _looping_array(child, element=None))
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "no element type" in detail
+    assert "Names" in detail
+
+
 def test_a_loop_cannot_close_a_cycle(client: TestClient, fx: Fixture) -> None:
     """The refusal that would otherwise be found by a viewer's browser. A loop
     node the embed walk could not see would be a hole in a rule enforced

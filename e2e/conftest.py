@@ -230,7 +230,21 @@ def open_builder(page, module) -> None:
 DEV_SERVER_NOISE = (
     "favicon",
     "Failed to fetch RSC payload",
-    "hot-reloader-client",
+    # **`hot-reloader-client` used to be here, and it was swallowing everything.**
+    # It was added because the prefetch message above names that file as its
+    # source - but in Next's dev build *React's own `console.error` is routed
+    # through the same client*, so every React error carried the string and
+    # every one of them was filtered out. This assertion was decoration for as
+    # long as that line existed.
+    #
+    # Found by §198's mutation harness: a mutant keying loop copies by value
+    # instead of by position makes React log "Encountered two children with the
+    # same key", the test asserted no console errors, and it passed anyway.
+    #
+    # The rule: **match a noise filter to the message, never to its source.** A
+    # source is shared with the things worth failing on. The prefetch message is
+    # matched by its own text one line up, which is what it should have been
+    # matched by all along.
 )
 
 
