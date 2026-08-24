@@ -89,6 +89,13 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
     label: "Reset a variable",
     hint: "back to the value in its definition",
   },
+  // p.85's other one, offered "for non-static variable types" - the
+  // complement of the row above.
+  {
+    type: "recompute",
+    label: "Recompute a variable",
+    hint: "for a derived variable that does not recompute automatically",
+  },
 ];
 
 /** Widget names that can fire something, for the caller reading the tree.
@@ -161,6 +168,13 @@ export function EventsPanel({
   // set_variable: "the object this other variable computed" is a reasonable
   // thing to act on.
   const objects = Object.values(variables).filter((v) => v.kind === "single_object");
+  // p.85's Recompute, narrowed the way `writable` narrows Set: derived, and
+  // not on Automatic - a variable on Automatic already recomputes when its
+  // inputs change (p.76), so an event aimed at one is a click with no effect
+  // and the server refuses it.
+  const recomputable = Object.values(variables).filter(
+    (v) => v.derivation && (v.recompute ?? "automatic") !== "automatic",
+  );
 
   function update(id: string, next: WorkshopEvent) {
     onChange({ ...events, [id]: next });
@@ -291,6 +305,7 @@ export function EventsPanel({
                     index={index}
                     count={effects.length}
                     variables={writable}
+                    recomputable={recomputable}
                     objects={objects}
                     pages={pages}
                     tabSections={tabSections ?? []}
@@ -345,6 +360,7 @@ function EffectEditor({
   index,
   count,
   variables,
+  recomputable,
   objects,
   pages,
   tabSections,
@@ -359,6 +375,10 @@ function EffectEditor({
   index: number;
   count: number;
   variables: WorkshopVariable[];
+  /** p.85's Recompute list: derived and not on Automatic. Separate from
+   * `variables` because that one is narrowed for Set, which wants the exact
+   * complement — static variables only. */
+  recomputable: WorkshopVariable[];
   objects: WorkshopVariable[];
   pages: PageCandidate[];
   tabSections: { id: string; label: string; tabs: string[] }[];
@@ -584,6 +604,31 @@ function EffectEditor({
             </select>
           </label>
         </>
+      )}
+
+      {effect.type === "recompute" && (
+        <label className="field">
+          <span className="field-label">Variable</span>
+          <select
+            disabled={readOnly}
+            data-testid="effect-recompute-variable"
+            value={String(config.variable ?? "")}
+            onChange={(e) => setConfig({ variable: e.target.value || undefined })}
+          >
+            <option value="">Pick a variable</option>
+            {recomputable.map((v) => (
+              <option key={v.id} value={v.id}>{v.label || v.id}</option>
+            ))}
+          </select>
+          {/* The list is already narrowed to the ones this can act on, so the
+              hint says what is missing rather than what is wrong. */}
+          <span className="field-hint">
+            {recomputable.length === 0
+              ? "No variables are set to recompute on an event — set one's "
+                + "recompute behaviour in the Variables panel first"
+              : "Only derived variables not on Automatic recompute"}
+          </span>
+        </label>
       )}
 
       {effect.type === "reset_variable" && (

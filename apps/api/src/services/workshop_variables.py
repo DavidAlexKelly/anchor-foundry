@@ -204,6 +204,20 @@ ROUTABLE_KINDS = ("string", "number", "boolean", "date", "timestamp")
 # variable is savable at all (see `_parse_state_saving`): a state holding a
 # computed value would restore an answer rather than the question, and the two
 # disagree the moment the data behind them moves.
+#: p.76's three recompute behaviours, in the order the page lists them.
+#:
+#: `automatic` is Foundry's default and was this platform's only behaviour: a
+#: derived variable was recomputed on every resolve. The other two are what
+#: make the `recompute {variable}` event mean anything - without them there is
+#: nothing for it to trigger, which is why the event was refused as planned
+#: until they existed.
+RECOMPUTE_BEHAVIOURS = ("automatic", "only_on_event", "on_load_and_event")
+
+#: The two that hold a value between recomputes. Named rather than written as
+#: `!= "automatic"` because the *evaluator* branches on which of the two it is:
+#: one computes at load and one does not.
+HELD_BEHAVIOURS = ("only_on_event", "on_load_and_event")
+
 SAVABLE_KINDS = (
     "string", "number", "boolean", "date", "timestamp",
     "array", "single_object", "object_set",
@@ -318,6 +332,10 @@ class Variable:
     #: Whether this variable's value is preserved in a saved state (p.201-202).
     #: Off unless asked for, the same as routing and for the same reason.
     save_state: bool = False
+    #: When this variable recomputes (p.76). One of `RECOMPUTE_BEHAVIOURS`.
+    #: `automatic` for everything that has not asked otherwise, which is both
+    #: Foundry's default and what this platform did unconditionally before.
+    recompute: str = "automatic"
 
     @property
     def derived(self) -> bool:
@@ -374,6 +392,10 @@ def parse(raw: Any) -> dict[str, Variable]:
         save_state = _parse_state_saving(
             label, str(kind), value.get("save_state"), external_id, derivation
         )
+        recompute = _parse_recompute(
+            label, value.get("recompute"), derivation,
+            _parse_object_set(vid, kind, label, value.get("object_set"), derivation),
+        )
         variables[vid] = Variable(
             id=vid,
             kind=str(kind),
@@ -385,6 +407,7 @@ def parse(raw: Any) -> dict[str, Variable]:
             interface=interface,
             url_behavior=url_behavior,
             save_state=save_state,
+            recompute=recompute,
         )
 
     _refuse_duplicate_external_ids(variables)
@@ -721,6 +744,55 @@ def page_selection(document: Any, variables: dict[str, Variable] | None = None) 
     return vid
 
 
+def _parse_recompute(
+    label: str, raw: Any, derivation: Derivation | None, object_set: dict[str, Any] | None
+) -> str:
+    """p.76's recompute behaviour, and the two shapes it is not offered on.
+
+    > "Workshop offers the following configurable recompute behavior options
+    > for variable definition types: Function, Object set aggregation, Object
+    > property, Variable transformation, Object set filter." (p.76)
+
+    Every one of those is a *derived* variable here, so the rule is: derived
+    variables may configure it, and nothing else may. A static variable has no
+    computation to defer - it holds what somebody typed - so a behaviour on one
+    would be a setting with no effect, which is the shape this module refuses
+    everywhere else.
+
+    > "The Object set definition variable definition type does not offer
+    > recompute behavior configuration, and functions similarly to Automatic."
+    > (p.76)
+
+    So an object-set variable carrying its own definition is excluded too, by
+    the same argument and p.76's own words. **This is the second rule to land
+    on exactly that pair** - §193's Reset is refused on a derived variable and
+    on an object-set definition, and this one is refused on everything *except*
+    a derived variable. The two are complements, which is p.85's own division:
+    Reset "is offered for static variables", Recompute "for non-static".
+    """
+    if raw is None:
+        return "automatic"
+    if not isinstance(raw, str) or raw not in RECOMPUTE_BEHAVIOURS:
+        raise VariableError(
+            f"variable {label!r} has recompute {raw!r}; expected one of "
+            f"{', '.join(RECOMPUTE_BEHAVIOURS)}"
+        )
+    if raw == "automatic":
+        return raw
+    if object_set is not None:
+        raise VariableError(
+            f"variable {label!r} is an object set definition, which p.76 says does not "
+            "offer recompute behaviour - set it on the variables it reads instead, or "
+            "use a derived variable"
+        )
+    if derivation is None:
+        raise VariableError(
+            f"variable {label!r} is static, so it has nothing to recompute - p.76 "
+            "offers recompute behaviour on derived definitions only"
+        )
+    return raw
+
+
 def _refuse_duplicate_external_ids(variables: dict[str, Variable]) -> None:
     """Two variables cannot share an external ID.
 
@@ -1016,6 +1088,8 @@ def evaluate(
     values: dict[str, Any],
     *,
     bound: frozenset[str] = frozenset(),
+    held: dict[str, Any] | None = None,
+    recompute_now: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Resolve every variable, computing derived ones from their inputs.
 
@@ -1037,6 +1111,29 @@ def evaluate(
     and the child's recompute behaviour is not used. Downstream variables in the
     child still recompute normally - they read the bound value as their input,
     which is the entire point of passing one in.
+
+    `held` carries p.76's two non-automatic recompute behaviours. A variable
+    configured with either does not recompute on every resolve; it keeps the
+    value it last computed, and the browser sends that value back here so
+    downstream variables read **the held value** rather than a fresh one. That
+    last part is why this lives in the evaluator rather than in the browser:
+    freezing a value on screen while its dependants recomputed from a fresh
+    copy would show two different answers to the same question on one page.
+
+    The two behaviours differ only in what happens with nothing held yet:
+    `on_load_and_event` computes, which is p.76's "recomputed when the module
+    is initially loaded"; `only_on_event` resolves to None, because p.76 says
+    "recomputed *only* when explicitly triggered" and computing it at load
+    would make the two options identical on the one occasion they differ.
+
+    `recompute_now` is p.85's event arriving: the ids the caller is explicitly
+    asking to recompute this time, whatever it is holding for them. **It is a
+    separate argument rather than an absence from `held`**, and that is not
+    tidiness - an absence cannot say it. For `only_on_event` the two states the
+    caller needs to distinguish are "never computed" and "recompute now", and
+    both are spelled "no held value"; answering one of them makes the event
+    inert. `on_load_and_event` hides the problem, because its answer to a
+    missing held value happens to be "compute" either way.
     """
     resolved: dict[str, Any] = {}
     for vid in evaluation_order(variables):
@@ -1049,6 +1146,29 @@ def evaluate(
             # is genuinely unset - and answering that with the child's default
             # would be the child's definition winning after all.
             resolved[vid] = values.get(vid)
+            continue
+        # p.76's two non-automatic behaviours. Checked before the static
+        # branch, because only a *derived* variable can carry one - a static
+        # one has nothing to defer, and `_parse_recompute` refuses the setting
+        # on it.
+        if variable.recompute in HELD_BEHAVIOURS and variable.derivation is not None:
+            fresh = variable.recompute == "on_load_and_event"
+            # The explicit ask wins over the held value, so the caller does not
+            # have to drop what it remembers to make an event take effect -
+            # which matters because dropping it is exactly what it cannot do
+            # unambiguously for `only_on_event`.
+            if vid in recompute_now:
+                resolved[vid] = _apply(
+                    variable, [resolved[i] for i in variable.derivation.inputs]
+                )
+            elif held is not None and vid in held:
+                resolved[vid] = held[vid]
+            elif fresh:
+                resolved[vid] = _apply(
+                    variable, [resolved[i] for i in variable.derivation.inputs]
+                )
+            else:
+                resolved[vid] = None
             continue
         if variable.derivation is None:
             # An object-set variable resolves to its *definition*, not to rows.

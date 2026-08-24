@@ -516,6 +516,41 @@ function InterfaceEditor({
         </>
       )}
 
+      {/* p.76's recompute behaviour. Offered only on a derived variable
+          without its own object-set definition, which is exactly p.76's list
+          ("Function, Object set aggregation, Object property, Variable
+          transformation, Object set filter") and its exclusion ("The Object
+          set definition variable definition type does not offer recompute
+          behavior configuration"). Absent rather than disabled on the rest:
+          a static variable has nothing to recompute, so the control would be
+          a question with no answer. */}
+      {variable.derivation && !variable.object_set && (
+        <label>
+          Recompute
+          <select
+            value={variable.recompute ?? "automatic"}
+            disabled={readOnly}
+            data-testid="variable-recompute"
+            onChange={(e) =>
+              onChange({
+                recompute: e.target.value === "automatic"
+                  ? undefined
+                  : (e.target.value as WorkshopVariable["recompute"]),
+              })
+            }
+          >
+            <option value="automatic">Automatically</option>
+            <option value="only_on_event">Only when an event says so</option>
+            <option value="on_load_and_event">On load, and when an event says so</option>
+          </select>
+          <span className="field-hint">
+            {(variable.recompute ?? "automatic") === "automatic"
+              ? "Recomputes whenever an input changes."
+              : "Holds its value until a Recompute event fires. Wire one in Events."}
+          </span>
+        </label>
+      )}
+
       {/* Outside the interface block, unlike routing: a state is read back by
           this module, by name, so an external ID is the whole requirement and
           interface membership is not one (p.202-203). Offering it only to

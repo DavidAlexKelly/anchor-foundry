@@ -2190,18 +2190,271 @@ def test_resetting_an_object_set_with_its_own_definition_is_refused() -> None:
                  layout={"btn": node({})}, variables=variables)
 
 
-def test_recompute_is_refused_with_its_reason() -> None:
-    """**Named rather than left to fall through to "expected one of".** p.85
-    offers Recompute "for non-static variable types… particularly useful for
-    managing recomputes for variables without Automatic recompute behavior",
-    and this platform recomputes every derived variable on every resolve - so
-    until §3.5's other two behaviours exist there is nothing for it to trigger.
-    Accepting it would save a click that does nothing."""
-    assert "recompute" in we.PLANNED_EFFECTS
-    with pytest.raises(we.EventError, match="not built yet"):
-        we.parse({"e_1": event("e_1", effects=[{"type": "recompute",
-                                                "config": {"variable": "v_a"}}])},
+# ---- p.76's recompute behaviours, and p.85's Recompute event ------------------
+def _derived(vid: str = "v_b", **extra) -> dict:
+    return {"id": vid, "kind": "string", "label": vid,
+            "derivation": {"transform": "concat", "inputs": ["v_a"]}, **extra}
+
+
+def _recompute_vars(**extra) -> dict:
+    return {"v_a": var("v_a", default="north"), "v_b": _derived(**extra)}
+
+
+@pytest.mark.parametrize("behaviour", ["automatic", "only_on_event", "on_load_and_event"])
+def test_p76s_three_recompute_behaviours_parse(behaviour: str) -> None:
+    parsed = wv.parse(_recompute_vars(recompute=behaviour))
+    assert parsed["v_b"].recompute == behaviour
+
+
+def test_an_absent_behaviour_means_automatic() -> None:
+    """A stored "automatic" and a missing field have to mean the same thing, or
+    upgrading the platform would change what every module written before this
+    existed does."""
+    assert wv.parse(_recompute_vars())["v_b"].recompute == "automatic"
+
+
+def test_an_unknown_behaviour_is_refused() -> None:
+    with pytest.raises(wv.VariableError, match="expected one of"):
+        wv.parse(_recompute_vars(recompute="sometimes"))
+
+
+def test_a_static_variable_cannot_configure_recompute() -> None:
+    """p.76 offers it on derived definitions only - a static variable holds
+    what somebody typed, so there is nothing to defer."""
+    with pytest.raises(wv.VariableError, match="is static, so it has nothing to recompute"):
+        wv.parse({"v_a": var("v_a", recompute="only_on_event")})
+
+
+def test_an_object_set_definition_cannot_configure_recompute() -> None:
+    """p.76 says so in its own words: "The Object set definition variable
+    definition type does not offer recompute behavior configuration"."""
+    with pytest.raises(wv.VariableError, match="does not offer recompute behaviour"):
+        wv.parse({
+            "v_set": {"id": "v_set", "kind": "object_set", "label": "Set",
+                      "recompute": "only_on_event",
+                      "object_set": {"object_type_id": str(uuid.uuid4()), "filters": []}},
+        })
+
+
+def test_automatic_is_accepted_on_anything_because_it_changes_nothing() -> None:
+    """The one behaviour that is not a *setting*: it is what every variable
+    already does, so refusing it on a static variable would refuse a document
+    that says nothing."""
+    wv.parse({"v_a": var("v_a", recompute="automatic")})
+
+
+# ---- what the evaluator does with a held value --------------------------------
+def test_an_automatic_variable_recomputes_every_time() -> None:
+    variables = wv.parse(_recompute_vars())
+    resolved = wv.evaluate(variables, {"v_a": "south"}, held={"v_b": "stale"})
+    # The held value is ignored: this variable did not ask to hold one.
+    assert resolved["v_b"] == "south"
+
+
+def test_a_held_variable_keeps_what_it_last_computed() -> None:
+    variables = wv.parse(_recompute_vars(recompute="on_load_and_event"))
+    resolved = wv.evaluate(variables, {"v_a": "south"}, held={"v_b": "north"})
+    assert resolved["v_b"] == "north"
+
+
+def test_on_load_and_event_computes_when_nothing_is_held() -> None:
+    """p.76: "recomputed when the module is initially loaded"."""
+    variables = wv.parse(_recompute_vars(recompute="on_load_and_event"))
+    assert wv.evaluate(variables, {"v_a": "south"})["v_b"] == "south"
+
+
+def test_only_on_event_does_not_compute_at_load() -> None:
+    """**The one place the two behaviours differ**, and the reason they are two
+    options rather than one. p.76: recomputed "only when explicitly triggered"
+    - so computing it at load would make this identical to the other."""
+    variables = wv.parse(_recompute_vars(recompute="only_on_event"))
+    assert wv.evaluate(variables, {"v_a": "south"})["v_b"] is None
+
+
+def test_a_held_value_is_what_downstream_variables_read() -> None:
+    """**The reason the held value goes to the server at all.**
+
+    Freezing it in the browser would leave the variable showing one number
+    while its dependants recomputed from a fresh copy - two different answers
+    to the same question on one page.
+    """
+    variables = wv.parse({
+        "v_a": var("v_a", default="north"),
+        "v_b": _derived("v_b", recompute="only_on_event"),
+        "v_c": {"id": "v_c", "kind": "string", "label": "C",
+                "derivation": {"transform": "concat", "inputs": ["v_b"]}},
+    })
+    resolved = wv.evaluate(variables, {"v_a": "south"}, held={"v_b": "held"})
+    assert resolved["v_b"] == "held"
+    assert resolved["v_c"] == "held"
+
+
+def test_a_static_variable_resolves_normally_whatever_its_behaviour_says() -> None:
+    """The guard that keeps the held branch to *derived* variables.
+
+    `parse` refuses a behaviour on a static variable, so this state cannot be
+    reached through a document - which is exactly why the guard needs a test of
+    its own. `evaluate` is a public function over `Variable` objects, and
+    without the `derivation is not None` half a static variable marked this way
+    falls into the held branch and resolves to **None** instead of its value:
+    a control that silently stops reporting what somebody typed into it.
+
+    Built by hand rather than parsed, deliberately. Going through `parse` could
+    only ever produce the refusal, which is a different test (and is above).
+    """
+    variables = {
+        "v_a": wv.Variable(id="v_a", kind="string", label="A", default="typed",
+                           recompute="only_on_event"),
+    }
+    assert wv.evaluate(variables, {})["v_a"] == "typed"
+    assert wv.evaluate(variables, {"v_a": "chosen"})["v_a"] == "chosen"
+
+
+# ---- p.85's event arriving: `recompute_now` -----------------------------------
+def test_only_on_event_computes_when_the_event_asks() -> None:
+    """**The whole point of `only_on_event`, and the case an absence cannot
+    express.**
+
+    Its state at load and its state the instant an event fires are both "nothing
+    held". If the ask were spelled as a missing `held` entry, this call would be
+    byte-identical to a fresh page, and the event would do nothing forever.
+    """
+    variables = wv.parse(_recompute_vars(recompute="only_on_event"))
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+
+
+def test_the_ask_wins_over_what_is_held() -> None:
+    """So the caller does not have to drop its memory to make an event land -
+    which is the thing it cannot do unambiguously for `only_on_event`."""
+    variables = wv.parse(_recompute_vars(recompute="on_load_and_event"))
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, held={"v_b": "north"},
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+
+
+def test_an_ask_recomputes_only_the_variable_it_names() -> None:
+    """A Recompute event names one variable (p.85). Everything else still holds,
+    or the event would be a page refresh wearing a variable's name."""
+    variables = wv.parse({
+        "v_a": var("v_a", default="north"),
+        "v_b": _derived("v_b", recompute="only_on_event"),
+        "v_c": {"id": "v_c", "kind": "string", "label": "C", "recompute": "only_on_event",
+                "derivation": {"transform": "concat", "inputs": ["v_a"]}},
+    })
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, held={"v_b": "held b", "v_c": "held c"},
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+    assert resolved["v_c"] == "held c"
+
+
+def test_an_ask_for_an_automatic_variable_changes_nothing() -> None:
+    """It recomputes every time anyway. Worth pinning because the effect is
+    refused at save time, so anything arriving here is a document that moved -
+    and the answer should be the ordinary one, not a special case."""
+    variables = wv.parse(_recompute_vars())
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+
+
+def test_a_recomputed_value_is_what_downstream_variables_read() -> None:
+    """The same rule as the held case, on the other side of an event: one
+    answer to one question on one page."""
+    variables = wv.parse({
+        "v_a": var("v_a", default="north"),
+        "v_b": _derived("v_b", recompute="only_on_event"),
+        "v_c": {"id": "v_c", "kind": "string", "label": "C",
+                "derivation": {"transform": "concat", "inputs": ["v_b"]}},
+    })
+    resolved = wv.evaluate(
+        variables, {"v_a": "south"}, held={"v_b": "held"},
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "south"
+    assert resolved["v_c"] == "south"
+
+
+def test_a_bound_variable_ignores_an_ask_to_recompute() -> None:
+    """p.127 again: the host's value wins, and an event in the child cannot
+    reach past it - the child's derivation is skipped "derivation and all"."""
+    variables = wv.parse(_recompute_vars(recompute="only_on_event"))
+    resolved = wv.evaluate(
+        variables, {"v_b": "from the host"}, bound=frozenset({"v_b"}),
+        recompute_now=frozenset({"v_b"}),
+    )
+    assert resolved["v_b"] == "from the host"
+
+
+def test_a_bound_variable_ignores_its_own_recompute_behaviour() -> None:
+    """p.127: the host's definition wins and the child's is skipped, "derivation
+    and all" - which includes the behaviour that would have held a value."""
+    variables = wv.parse(_recompute_vars(recompute="only_on_event"))
+    resolved = wv.evaluate(
+        variables, {"v_b": "from the host"}, bound=frozenset({"v_b"}), held={"v_b": "held"},
+    )
+    assert resolved["v_b"] == "from the host"
+
+
+# ---- p.85's Recompute event ---------------------------------------------------
+def test_recomputing_a_held_variable_is_accepted() -> None:
+    variables = wv.parse(_recompute_vars(recompute="only_on_event"))
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "recompute", "config": {"variable": "v_b"}}])},
+        layout={"btn": node({})}, variables=variables,
+    )
+    assert [e.type for e in events["e_1"].effects] == ["recompute"]
+
+
+def test_recompute_needs_a_declared_variable() -> None:
+    with pytest.raises(we.EventError, match="needs a variable"):
+        we.parse({"e_1": event("e_1", effects=[{"type": "recompute", "config": {}}])},
                  layout={"btn": node({})})
+    with pytest.raises(we.EventError, match="does not declare"):
+        we.parse(
+            {"e_1": event("e_1",
+                          effects=[{"type": "recompute", "config": {"variable": "v_x"}}])},
+            layout={"btn": node({})}, variables=wv.parse(_recompute_vars()),
+        )
+
+
+def test_recomputing_a_static_variable_is_refused() -> None:
+    """p.85 offers Recompute "for non-static variable types" - the exact
+    complement of Reset, which it offers for static ones."""
+    with pytest.raises(we.EventError, match="which is static"):
+        we.parse(
+            {"e_1": event("e_1",
+                          effects=[{"type": "recompute", "config": {"variable": "v_a"}}])},
+            layout={"btn": node({})}, variables=wv.parse(_recompute_vars()),
+        )
+
+
+def test_recomputing_an_automatic_variable_is_refused() -> None:
+    """**The sharper refusal, and the one p.85 only implies.** A variable on
+    Automatic already recomputes when its inputs change (p.76), so an event
+    aimed at one is a click with no effect - the whole class of thing this
+    module refuses."""
+    with pytest.raises(we.EventError, match="on Automatic recompute"):
+        we.parse(
+            {"e_1": event("e_1",
+                          effects=[{"type": "recompute", "config": {"variable": "v_b"}}])},
+            layout={"btn": node({})}, variables=wv.parse(_recompute_vars()),
+        )
+
+
+def test_recompute_is_no_longer_a_planned_effect() -> None:
+    """It was in `PLANNED_EFFECTS` for precisely the right reason and for
+    precisely as long as the reason held: with every derived variable
+    recomputing on every resolve there was nothing for it to trigger."""
+    assert "recompute" not in we.PLANNED_EFFECTS
+    assert "recompute" in we.EFFECTS
 
 
 def test_the_builder_offers_every_effect_the_server_accepts() -> None:

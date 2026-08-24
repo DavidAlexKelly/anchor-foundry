@@ -66,6 +66,50 @@ describe("reset_variable (p.85)", () => {
   });
 });
 
+describe("recompute (p.85)", () => {
+  const recompute = (variable: string) => ({ type: "recompute", config: { variable } });
+
+  it("asks for the variable to be recomputed", () => {
+    const recomputeVariables = vi.fn();
+    const { context } = contextWith({ recomputeVariables });
+    run([event(recompute("v_a"))], context);
+    expect(recomputeVariables).toHaveBeenCalledWith(["v_a"]);
+  });
+
+  it("collects several recomputes into one call", () => {
+    const recomputeVariables = vi.fn();
+    const { context } = contextWith({ recomputeVariables });
+    run([event(recompute("v_a"), recompute("v_b"))], context);
+    expect(recomputeVariables).toHaveBeenCalledTimes(1);
+    expect(recomputeVariables.mock.calls[0]![0]).toEqual(["v_a", "v_b"]);
+  });
+
+  it("does not route a recompute through the reset capability", () => {
+    // **The two forget different things.** A reset forgets what the *viewer*
+    // set; a recompute forgets what the *server* computed. Sending one down
+    // the other's path would clear a viewer's filter selection when they
+    // clicked a refresh button.
+    const recomputeVariables = vi.fn();
+    const { context, resetVariables, setVariables } = contextWith({ recomputeVariables });
+    run([event(recompute("v_a"))], context);
+    expect(resetVariables).not.toHaveBeenCalled();
+    expect(setVariables).not.toHaveBeenCalled();
+  });
+
+  it("skips a recompute with no variable rather than throwing", () => {
+    const recomputeVariables = vi.fn();
+    const { context } = contextWith({ recomputeVariables });
+    run([event({ type: "recompute", config: {} }, set("v_a", "x"))], context);
+    expect(recomputeVariables).not.toHaveBeenCalled();
+  });
+
+  it("is skipped when the runtime has no recompute capability", () => {
+    // A widget rendered outside a `VariableBridge` - a Craft preview, a test.
+    const context: EventContext = { setVariables: vi.fn() };
+    expect(() => run([event(recompute("v_a"))], context)).not.toThrow();
+  });
+});
+
 describe("a Set and a Reset of the same variable (p.80's ordering)", () => {
   it("lets a Reset that comes second win", () => {
     const { context, setVariables, resetVariables } = contextWith();
