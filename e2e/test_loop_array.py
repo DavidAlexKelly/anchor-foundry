@@ -18,7 +18,7 @@ from __future__ import annotations
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_builder, open_module
+from conftest import no_console_errors, open_builder, open_module
 
 
 def child_module(api, name: str):
@@ -99,14 +99,21 @@ def test_each_copy_gets_its_own_entry_in_order(page, api) -> None:
 
 
 def test_a_repeated_entry_still_gets_its_own_copy(page, api) -> None:
-    """**Why position is the key rather than the value.** An array may hold the
-    same entry twice, and two copies sharing a React key is a tree that renders
-    one of them."""
+    """**Why position is the key rather than the value.**
+
+    An array may hold the same entry twice. Keying by value gives two copies
+    the same React key — and the count alone does not catch it, because React
+    renders both children anyway and only *complains*. So the console is the
+    assertion: `no_console_errors` is what turns "React warned about duplicate
+    keys" into a failing test, and without it this passed against a build that
+    keyed by value.
+    """
     child = child_module(api, "Loop array child dupes")
     mod = host_module(api, "Loop array dupes", child, ["same", "same", "other"])
     open_module(page, mod)
 
     expect(copies(page)).to_have_count(3, timeout=20000)
+    assert not no_console_errors(page)
 
 
 def test_limit_shows_only_the_first_x(page, api) -> None:
