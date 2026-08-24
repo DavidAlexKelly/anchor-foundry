@@ -22,6 +22,7 @@ import {
   schemeFor, styleFor, type BorderName, type PaddingName, type StyleProps,
 } from "./style";
 import { asCollapsed, collapseState } from "./collapse";
+import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
 import {
@@ -5618,6 +5619,9 @@ export function CanvasPage({
         </p>
       )}
       {children}
+      {/* p.52's picker, "at the bottom of the page" and only while editing:
+          it is an authoring control, and a reader has no layout to choose. */}
+      {mode === "edit" && <LayoutTemplatePicker pageId={nodeId} />}
     </section>
   );
 }
