@@ -122,7 +122,7 @@ Applied through one `<Editor onRender>` wrapper rather than in each of the twent
 
 | Other | Status | Notes |
 |---|---|---|
-| Copy a widget with Cmd+C / Cmd+V into an **Unused widgets** area, re-addable from the widget selector | ○ | (p.68) |
+| Copy a widget with Cmd+C / Cmd+V into an **Unused widgets** area, re-addable from the widget selector | ◑ §197 | (p.68) — the area, parking, and **+ Add widget** to put one back are built; see §1.3's row and `docs/decisions/0010-unused-widgets.md`. **The keyboard half is not**: p.68 names Cmd+C/Cmd+V, and this uses the panel's own controls, which p.69 offers as the alternative ("the controls found for duplicating sections may be used to copy, cut, and paste widgets"). Neither is p.68's widget-selector modal, which is a second surface for the same list |
 | Widget selector modal with categories | ◑ | we have a palette; not a modal with Foundry's grouping |
 
 ---
@@ -156,10 +156,10 @@ Ours: 9 kinds (`string`, `number`, `boolean`, `date`, `timestamp`, `array`, `sin
 | Feature | Status |
 |---|---|
 | List, add, select-to-configure | ✅ |
-| Search by name or unique ID | ○ |
-| **Variable lineage graph** | ○ |
-| Filter by definition type or by enabled settings | ○ |
-| **Partitions** — variables used by the selected widget; variables used on the active page | ○ |
+| Search by name or unique ID | ✅ §199 | (p.72) — matches the label, the **external ID** and the internal id. p.72 says "unique ID" and this system has two things that could be called one, so picking either would be right half the time and silently wrong the other half; an author pasting an id out of a URL or an error message expects to find it. Substring and case-insensitive, because a search needing the whole name is one that needs you to already know the answer |
+| **Variable lineage graph** | ○ | (p.72) — in the same sentence as the search and the filter and deliberately not built with them (§199): it is a different kind of thing, a view of how variables feed each other rather than a way of shortening a list |
+| Filter by definition type or by enabled settings | ✅ §199 | (p.72, p.73) — both filters, or-ed within themselves and and-ed with each other and with the search: "an object set OR a function" is a question somebody asks, "an object set AND a function" is one with no answers. **The definition type is derived, never stored** — p.73's list is a presentation of what a variable already carries, and a second field saying which one it is could disagree with the derivation beside it |
+| **Partitions** — variables used by the selected widget; variables used on the active page | ✅ §199 | (p.72) — **a partition is an ordering, not a filter**: everything stays in the list and the relevant ones come first under a heading, because hiding the rest would make the panel lie about what the module contains and p.72's word is "find", not "restrict". A partition with nothing in it still draws its heading, which is the answer to the question rather than the absence of one. **Divergence**: p.72's page partition is "variables used in the active page", and our builder draws every page at once — so the page an author is working in is the one holding their selection, and selecting a *page* partitions by it. Nothing selected draws no partition, since a partition of everything is not one |
 | Duplicate variable | ○ |
 | **New variable from current** (object sets) — new variable taking the current set as input | ○ |
 | Refuse deletion of a variable in use | ✅ | §1.2a |

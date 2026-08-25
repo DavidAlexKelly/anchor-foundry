@@ -2133,3 +2133,11 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-unused-row { display: flex; align-items: center; gap: 6px; }
 .canvas-unused-row .canvas-tree-row { flex: 1; }
 .canvas-unused-row .btn { padding: 3px 8px; font-size: 11px; white-space: nowrap; }
+
+/* p.72's search and filter above the variable list. */
+.vars-find { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.vars-find input[type="search"] { width: 100%; }
+.vars-find-row { display: flex; gap: 6px; }
+.vars-find-row select { flex: 1; min-width: 0; font-size: 12px; }
+.vars-partition { list-style: none; margin-top: 8px; }
+.vars-partition .field-label { margin: 0; opacity: 0.75; }

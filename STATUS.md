@@ -4103,6 +4103,41 @@ Two properties the record names as the ones this design will lose first, both no
 
 ### 198. Loops over arrays, and a console check that had never worked (this session)
 
+p.132-133's loop over an array. The parity doc had recorded the blocker exactly — the `array` kind had no element type, so p.134's "a variable typed to the array type" could not be expressed or checked.
+
+**p.134's sentence is ambiguous and p.134 settles it.** It could mean the child receives the whole array; two sentences later it says the struct-typed interface variable renders the fields of each struct *entry*, so the child receives one entry and its variable is typed like an entry. `Embed` carries `item_kind`, computed from what is being looped. An argued reading with no test is a comment, so the mutant implementing the other reading is the one that harness exists for.
+
+**§191's drift guard fired on new work for the first time.** `arrayVariable` names a variable and was not in `REFERENCE_PROPS`; the save was refused before this could ship with a variable deletable out from under a configured loop. That check had been archaeology since §191.
+
+**And the finding that outlives the unit: the browser suite's console-error assertion had never worked.** A mutant keying loop copies by *value* makes React log "Encountered two children with the same key"; the test asserted no console errors and passed. `DEV_SERVER_NOISE` contained `hot-reloader-client`, added to silence one benign Next prefetch message that *names that file as its source* — and React's own `console.error` routes through the same client in dev, so **every React error in the whole suite was filtered out**. The fixture's docstring says the check "is not decoration". It was.
+
+Removing it unmasked a second bug, in a test §192 wrote: `settled()` waits for the canvas and the Layout panel paints after it, so a baseline read **0** and `n == before * 2` became `n == 0`. It passed on luck until §196 and §197 each added work to the panel's first paint.
+
+**26 mutants, 25 caught, 0 survivors, 1 withdrawn as equivalent. 1510 API tests** (was 1488), 1 skipped; **507 unit tests** (was 491); **297 browser tests** (was 289).
+
+### 199. Finding a variable (this session)
+
+p.72's search, filter and partitions — the three controls that exist because a module with forty variables has a Variables panel nobody can read.
+
+**p.72 says "search by name or unique ID" and this system has two things that could be called one**: the opaque generated `id` and the author-chosen `external_id`. Picking either would be right half the time and silently wrong the other half, so the search matches all three fields.
+
+**A partition is an ordering, not a filter.** Everything stays in the list and the relevant ones come first under a heading; hiding the rest would make the panel lie about what the module contains, and p.72's word is "find", not "restrict". A partition with nothing in it still draws its heading, which is the answer to the question rather than the absence of one.
+
+**A divergence, stated rather than papered over.** p.72's page partition is "variables used in the active page", and our builder draws every page at once — so "the active page" has no answer the way p.72 assumes. The page an author is working in is the one holding their selection.
+
+Two things caught before they shipped, both by writing the test first. A unit test found a distinction I had not drawn — `pageNodes: null` is "the caller does not know" and `[]` is "the page is empty", which are different answers, and there the code was right and the test was wrong. And the first render emitted both partition headings in a block above the whole list rather than interleaving them, which `listEntries` now makes impossible by building headings and rows as one sequence.
+
+**28 mutants, 0 survivors, 0 no-ops, first run.** Every browser assertion names the variables it expects rather than counting rows, because three controls that each narrow a list all look like they work if you only assert "fewer than before" — the mutants are chosen to keep counts right while changing which variables survive.
+
+**533 unit tests** (was 507); **306 browser tests** (was 297).
+
+---
+---
+---
+---
+
+### 198. Loops over arrays, and a console check that had never worked (this session)
+
 p.132–133's loop over an array. `workshop.md` had recorded the blocker exactly — the `array` kind had no element type, so p.134's "a variable typed to the array type" could not be expressed or checked — so the unit is the element type first, then the loop arm.
 
 **p.134's sentence is ambiguous and p.134 settles it.** "A variable typed to the array type" could mean the child receives the whole array. Two sentences later it says the struct-typed interface variable "renders the fields of each struct **entry**" — so the child receives one entry, and its variable is typed like an entry. Handing every copy the whole array would not be a loop. `Embed` carries `item_kind`, computed from what is being looped, and the cross-module check compares against that rather than a hardcoded `single_object`. The mutant implementing the *other* reading is the one the harness exists for: an argued reading with no test is a comment.
@@ -4227,6 +4262,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **Match a noise filter to the message, never to its source.** §198 found `hot-reloader-client` in the browser suite's `DEV_SERVER_NOISE`, added to silence one benign Next prefetch message that names that file. React's `console.error` is routed through the same client in dev, so *every* React error was being filtered out and the console assertion had never once worked. A source is shared with the things worth failing on; a message is not. The tell is an assertion that has never failed in the whole life of a test suite — and the way to check one is to make it fail on purpose, which is what a mutation harness is.
 
 - **A baseline captured with no wait is an assertion against zero, and its failure blames the wrong half.** §192's clipboard test read `before = tree_rows(page).count()` after `settled()`, which waits for the canvas rather than the Layout panel — so `before` was 0 and `n == before * 2` could never match. It passed on luck for four units. What makes this worth a rule is the *message*: "still 4" points at the value being compared, not at the thing it is compared against, so the obvious reading is that the operation misbehaved. When a comparison against a captured baseline fails, print the baseline before investigating the operation.
+
+- **Match a noise filter to the message, never to its source.** §198's harness produced a survivor that should have been impossible, and the cause was one entry in the browser suite's `DEV_SERVER_NOISE`: `hot-reloader-client`, added because a benign Next prefetch message names that file. React's `console.error` routes through the same client in dev, so the filter had been discarding **every React error in the whole suite** since the day it was written — an assertion whose own docstring insists it "is not decoration". A source is shared with the things worth failing on; the message is not. The comment beside that list had already warned that matching too broadly "would swallow a real API call that did not come back", and the next line did exactly that in a different way.
+
+- **A baseline captured with no wait is an assertion against zero, and its failure blames the wrong half.** §198's console fix unmasked a clipboard test failing on "still 4". That reads as the paste producing the wrong number; the paste was right, and `before` was **0** because `settled()` waits for the canvas while the Layout panel paints after it — turning `n == before * 2` into `n == 0`. It passed on luck for four units until §196 and §197 each added work to the panel's first paint. A probe with identical steps printed 2 and 4 and looked fine; only printing `before` found it. Capture a baseline through a wait, and when a comparison fails, check *both* sides before believing the one the message names.
 
 - **Not every mutant is worth killing — some are sabotage rather than a plausible mistake.** §193 wrote one that rewrites a guard's comparison to read the server's own list, making the test a tautology. It survived, and the right response was to withdraw it: any assertion can be neutered, and proving so says nothing about the code. The useful version is the failure that happens by accident — a scan that quietly stops matching after a reformat — which a vacuity assertion does kill. When a mutant survives, ask whether a maintainer could have written it by mistake before treating it as a hole.
 
