@@ -32,6 +32,7 @@ import { canvas as canvasApi, objects as objectsApi } from "@/lib/api";
 import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "@/lib/types";
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
 import { ROUTABLE_KINDS } from "./routing";
+import { VariableLineage } from "./VariableLineage";
 import {
   apply, DEFINITION_TYPES, partition,
   SETTINGS, type DefinitionType, type SettingName,
@@ -209,6 +210,10 @@ export function VariablesPanel({
   const [openId, setOpenId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [failure, setFailure] = useState<string | null>(null);
+  // p.77: "the Variable lineage graph option found in the header of the
+  // Variables panel". Local, and not persisted: it is a way of looking at the
+  // module, not part of it.
+  const [lineage, setLineage] = useState(false);
 
   const ids = useMemo(() => Object.keys(variables), [variables]);
 
@@ -304,12 +309,29 @@ export function VariablesPanel({
     <div className="vars-panel">
       <div className="vars-head">
         <h3>Variables</h3>
-        {!readOnly && (
-          <button type="button" className="btn quiet" onClick={add}>
-            New
+        <div className="vars-head-actions">
+          <button
+            type="button" className="btn quiet" data-testid="open-lineage"
+            onClick={() => setLineage(true)}
+          >
+            Lineage
           </button>
-        )}
+          {!readOnly && (
+            <button type="button" className="btn quiet" onClick={add}>
+              New
+            </button>
+          )}
+        </div>
       </div>
+
+      {lineage && (
+        <VariableLineage
+          variables={variables}
+          layout={layout}
+          focus={openId}
+          onClose={() => setLineage(false)}
+        />
+      )}
 
       {failure && <p className="state error">{failure}</p>}
 

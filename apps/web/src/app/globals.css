@@ -1510,6 +1510,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .vars-panel { display: grid; gap: 8px; }
 .vars-head { display: flex; align-items: center; justify-content: space-between; }
 .vars-head h3 { margin: 0; font-size: 13px; }
+.vars-head-actions { display: flex; gap: 6px; }
 .vars-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .vars-item { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .vars-item.on { border-color: var(--line-strong); }
@@ -1556,6 +1557,37 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   border-left: 2px solid var(--brass); background: var(--surface-2, rgba(0, 0, 0, 0.02));
 }
 .btn.danger { color: var(--danger); }
+
+/* ---- the variable lineage graph (workshop parity 3.3, p.77) --------------- */
+/* Over the whole builder rather than inside the Variables panel: the panel is
+   240px wide and the thing it opens is a graph. It reuses `.canvas-scrim`. */
+.lineage {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  width: min(920px, 94vw); max-height: 84vh;
+  display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; padding: 14px;
+}
+.lineage-head { display: flex; align-items: center; gap: 12px; }
+.lineage-head h3 { margin: 0; font-size: 13px; }
+.lineage-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.lineage-canvas { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.lineage-edge { stroke: var(--line-strong); stroke-width: 1.25; }
+.lineage-node {
+  fill: var(--panel); stroke: var(--line-strong); stroke-width: 1; cursor: pointer;
+}
+.lineage-node.is-variable { fill: var(--accent-wash); stroke: var(--accent); }
+.lineage-node.on { stroke: var(--accent); stroke-width: 2.5; }
+.lineage-label { font-size: 12px; font-weight: 600; fill: var(--ink); pointer-events: none; }
+.lineage-kind {
+  font-size: 10px; fill: var(--ink-soft); font-family: var(--font-mono);
+  pointer-events: none;
+}
+.lineage-chevron { cursor: pointer; }
+.lineage-chevron rect { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1; }
+.lineage-chevron text {
+  font-size: 13px; fill: var(--accent-deep); text-anchor: middle;
+  dominant-baseline: middle; pointer-events: none;
+}
 
 /* ---- metric card (ROADMAP phase 2, 1.5) ----------------------------------- */
 .metric-card { display: grid; gap: 2px; padding: 4px 2px; }
