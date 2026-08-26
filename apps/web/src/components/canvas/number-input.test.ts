@@ -38,6 +38,24 @@ describe("toStored", () => {
     expect(toStored("Infinity")).toBeNull();
   });
 
+  it("refuses the number literals JavaScript accepts and a numeric field does not", () => {
+    // **This is what the shape check is for**, and §202's harness found it by
+    // deleting the check and surviving: `Number("0x10")` is `16`, quite
+    // finitely, so the `isFinite` guard below lets it through. Somebody typing
+    // `0x10` into a field labelled "Amount" has not entered sixteen.
+    expect(toStored("0x10")).toBeNull();
+    expect(toStored("0b11")).toBeNull();
+    expect(toStored("0o17")).toBeNull();
+  });
+
+  it("refuses an exponent that overflows to infinity", () => {
+    // **And this is what the finite check is for.** `1e999` passes the shape
+    // check — it is digits, an `e`, and more digits — and `Number` turns it
+    // into `Infinity`. Stored, it would poison every derivation reading it.
+    expect(toStored("1e999")).toBeNull();
+    expect(toStored("-1e999")).toBeNull();
+  });
+
   it("accepts grouping separators back", () => {
     // The field shows them, so the field has to be editable with them in
     // place — otherwise turning grouping on makes the widget reject what it

@@ -119,17 +119,24 @@ export function toDisplay(value: unknown, format: NumberFormat = {}): string {
  * `toLocaleString` follows the *viewer's* locale, so the same app would show
  * `1,234.5` to one reader and `1.234,5` to another while the variable held one
  * number. p.468 says "comma style", which is a format, not a localisation.
+ *
+ * **Two guards that used to be here are gone, because neither could ever
+ * fire** — §202's harness caught both by producing survivors, and a branch
+ * nothing can reach is a branch no test can hold:
+ *
+ *   - *A minus sign left inside the digits.* `\B` is a non-word boundary, and
+ *     the position between `-` and the first digit **is** a boundary, so no
+ *     comma is ever inserted there. Splitting the sign off first changed
+ *     nothing.
+ *   - *Exponent form.* JavaScript only renders a number as `1e+21` when the
+ *     mantissa has exactly one digit before the point, so the integer part of
+ *     an exponent string is a single character and has no thousands to
+ *     separate. Checking for `e` first changed nothing either.
  */
 function group(value: number): string {
-  const text = String(value);
-  // Exponent form has no thousands to separate, and inserting commas into one
-  // produces something that is not a number at all.
-  if (text.includes("e") || text.includes("E")) return text;
-  const [whole, fraction] = text.split(".");
-  const sign = whole!.startsWith("-") ? "-" : "";
-  const digits = sign ? whole!.slice(1) : whole!;
-  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return fraction === undefined ? `${sign}${grouped}` : `${sign}${grouped}.${fraction}`;
+  const [whole, fraction] = String(value).split(".");
+  const grouped = whole!.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return fraction === undefined ? grouped : `${grouped}.${fraction}`;
 }
 
 /** p.468's "Include option to reset to default value… a button on the widget

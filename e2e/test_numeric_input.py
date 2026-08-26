@@ -24,6 +24,49 @@ from api import Module, layout
 from conftest import open_builder, open_module, settled
 
 
+def module_with_button(api, name: str, effects: list[dict], props: dict | None = None):
+    """The same module plus a button wired to `effects`, and a marker variable.
+
+    Two things need it. One is p.468's field following a variable changed from
+    *somewhere else* — an event, another widget — which is the half of the
+    binding that typing into the field can never exercise.
+
+    The other is a **clock**. Asserting that something did *not* happen needs a
+    point after which it definitely would have, and `expect` passes on its first
+    successful poll, so "still 5" is satisfied by reading before the change
+    lands. The marker is set by the same click, so once it appears a full
+    write-and-resolve cycle has demonstrably completed — the idiom
+    `test_collapsible_sections.py` established for exactly this.
+    """
+    mod = Module(api, name)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "num": {"resolvedName": "CanvasNumericInput",
+                    "props": {"name": "v_amount", "label": "Amount",
+                              "grouping": False, "allowReset": False,
+                              "prefix": "", "suffix": "none", "suffixText": "",
+                              **(props or {})}},
+            "btn": {"resolvedName": "CanvasButton", "props": {"label": "Go"}},
+            "echo": {"resolvedName": "CanvasText",
+                     "props": {"tag": "p", "text": "stored: {{v_amount}} mark: {{v_mark}}"}},
+        }),
+        "variables": {
+            "v_amount": {"id": "v_amount", "kind": "number", "label": "Amount"},
+            "v_mark": {"id": "v_mark", "kind": "string", "label": "Mark", "default": "no"},
+        },
+        "events": {
+            "e_1": {"id": "e_1", "trigger": {"node": "btn", "on": "click"},
+                    "effects": [
+                        *effects,
+                        {"type": "set_variable",
+                         "config": {"variable": "v_mark", "value": "yes"}},
+                    ]},
+        },
+    })
+    return mod
+
+
 def module_with(api, name: str, props: dict | None = None):
     """One numeric input over one number variable, plus a Text widget showing
     the variable's value so what the widget *stored* is visible on screen.
@@ -141,19 +184,71 @@ def test_grouping_formats_the_field_without_rejecting_what_it_typed(page, api) -
 def test_the_field_does_not_fight_a_half_typed_number(page, api) -> None:
     """`-` and `1.` are states of typing, not values. A field that committed
     them would clear the variable or commit a different number on the keystroke
-    between `1` and `1.5`."""
-    mod = module_with(api, "Numeric partial")
+    between `1` and `1.5`.
+
+    **Asserted against a clock, not against a moment.** The claim is that
+    nothing happened, and `expect` passes on its first successful poll — so
+    "still 5" read immediately is satisfied before a mutant's write would have
+    landed. The button's marker gives a point after which it definitely would
+    have.
+    """
+    mod = module_with_button(api, "Numeric partial", [])
     open_module(page, mod)
     settled(page)
 
     field(page).fill("5")
     expect(echo(page)).to_contain_text("stored: 5")
-    # Mid-entry: the text stays as typed and the variable keeps its last value.
+
+    # Mid-entry: the text stays as typed…
     field(page).fill("1.")
     expect(field(page)).to_have_value("1.")
-    expect(echo(page)).to_contain_text("stored: 5")
+    # …and after a full write-and-resolve cycle has demonstrably completed, the
+    # variable still holds what it held. Asserted as one string so the two
+    # cannot be read apart.
+    page.get_by_role("button", name="Go", exact=True).click()
+    expect(echo(page)).to_contain_text("stored: 5 mark: yes")
+
     field(page).fill("1.5")
     expect(echo(page)).to_contain_text("stored: 1.5")
+
+
+def test_the_field_follows_a_variable_changed_from_elsewhere(page, api) -> None:
+    """**The half of the binding typing can never exercise.**
+
+    p.468's widget owns the field, not the variable: an event, another widget or
+    a recompute can move the value underneath it, and a field that only ever
+    wrote would sit there showing a number nothing holds any more. The mutant
+    that deletes the re-seed passes every other test in this file.
+    """
+    mod = module_with_button(api, "Numeric external", [
+        {"type": "set_variable", "config": {"variable": "v_amount", "value": "99"}},
+    ])
+    open_module(page, mod)
+    settled(page)
+
+    field(page).fill("5")
+    expect(echo(page)).to_contain_text("stored: 5")
+
+    page.get_by_role("button", name="Go", exact=True).click()
+    expect(echo(page)).to_contain_text("stored: 99 mark: yes")
+    expect(field(page)).to_have_value("99")
+
+
+def test_a_variable_changed_elsewhere_arrives_formatted(page, api) -> None:
+    """And it arrives through the same formatting the field applies to its own
+    values — otherwise a percentage set by an event would show as `0.25` in a
+    field whose every other value reads as a percentage."""
+    mod = module_with_button(
+        api, "Numeric external percent",
+        [{"type": "set_variable", "config": {"variable": "v_amount", "value": "0.25"}}],
+        {"suffix": "percent"},
+    )
+    open_module(page, mod)
+    settled(page)
+
+    page.get_by_role("button", name="Go", exact=True).click()
+    expect(echo(page)).to_contain_text("mark: yes")
+    expect(field(page)).to_have_value("25")
 
 
 def test_a_unit_prefix_and_suffix_are_shown(page, api) -> None:
