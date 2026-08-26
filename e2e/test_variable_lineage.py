@@ -175,9 +175,24 @@ def test_a_node_with_nothing_behind_a_chevron_draws_none(page, api) -> None:
     open_variable(page, "Region")
     open_lineage(page)
 
+    # Nothing on screen but the focused variable, so there is nothing to fold
+    # away in either direction. **The collapse arrows have to be absent too**,
+    # and asserting only on the expand ones leaves half the rule untested: a
+    # panel that always drew the inverse would pass, and every node would carry
+    # an arrow claiming there was something to put away.
+    expect(page.get_by_test_id("lineage-collapse-parents-v_region")).to_have_count(0)
+    expect(page.get_by_test_id("lineage-collapse-children-v_region")).to_have_count(0)
+
     page.get_by_test_id("lineage-parents-v_region").click()
     expect(page.get_by_test_id("lineage-parents-ctl")).to_have_count(0)
     expect(page.get_by_test_id("lineage-children-ctl")).to_have_count(0)
+    # The Filter has no parents at all, so no arrow of either kind on that
+    # side. It *does* get a downstream fold, and that is the rule working
+    # rather than a slip: collapse asks whether any other visible node is
+    # holding the neighbour, not which node reached it first, and nothing else
+    # on screen depends on `Region`.
+    expect(page.get_by_test_id("lineage-collapse-parents-ctl")).to_have_count(0)
+    expect(page.get_by_test_id("lineage-collapse-children-ctl")).to_have_count(1)
 
 
 def test_collapsing_removes_what_expanding_added(page, api) -> None:

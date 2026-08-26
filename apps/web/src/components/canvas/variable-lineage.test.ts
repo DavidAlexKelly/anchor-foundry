@@ -15,13 +15,44 @@ const v = (id: string, extra: Partial<WorkshopVariable> = {}): WorkshopVariable 
 const widget = (name: string, props: Record<string, unknown>) =>
   ({ type: { resolvedName: name }, props });
 
+/** **Every prop, pinned by hand — and by hand is the whole point.**
+ *
+ * The obvious test walks `PROP_DIRECTION` and checks each entry against itself,
+ * which agrees with whatever the module happens to say. This is a second
+ * opinion written out separately, so flipping one entry in the module makes
+ * exactly one line here disagree. §200's harness needed this: with only three
+ * spot checks, `drilldownVariable: "write" → "read"` survived, and a survivor
+ * there points an arrow the wrong way in the one view whose purpose is being
+ * trusted while debugging.
+ *
+ * The reasoning per prop is on `PROP_DIRECTION` itself; p.69's split is the
+ * rule — an *output variable* is a write, an *input variable* a read.
+ */
+const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
+  name: "write",
+  filterParameter: "write",
+  searchParameter: "write",
+  drilldownVariable: "write",
+  variable: "read",
+  objectSetVariable: "read",
+  enabledVariable: "read",
+  visibleWhen: "read",
+  subjectVariable: "read",
+  seriesVariable: "read",
+  collapsedWhen: "read",
+  tabVariable: "read",
+  arrayVariable: "read",
+};
+
 describe("PROP_DIRECTION", () => {
   it("classifies every reference prop", () => {
     // **The guard this catalogue exists for.** A prop missing here is an edge
     // the graph silently omits: the widget and the variable both appear,
     // unconnected, and nothing says why. Fourth instance of the shape §190,
     // §191 and §193 were each caught by — so it is checked against
-    // `REFERENCE_PROPS` rather than against a second copy of itself.
+    // `REFERENCE_PROPS` rather than against a second copy of itself. The type
+    // now refuses this too; the test stays because a type can be loosened in
+    // one edit and this says out loud what the loosening would cost.
     const unclassified = REFERENCE_PROPS.filter((p) => !(p in PROP_DIRECTION));
     expect(unclassified).toEqual([]);
   });
@@ -35,15 +66,19 @@ describe("PROP_DIRECTION", () => {
     expect(extra).toEqual([]);
   });
 
-  it("calls a parameter control's output a write", () => {
-    // p.69: "Output variables define the data passed out of a given widget".
-    expect(PROP_DIRECTION.name).toBe("write");
-    expect(PROP_DIRECTION.filterParameter).toBe("write");
+  it("has a hand-written expectation for every reference prop", () => {
+    // Otherwise a new prop would be classified in the module and pinned
+    // nowhere, and the table below would quietly stop being complete.
+    expect(Object.keys(EXPECTED_DIRECTION).sort())
+      .toEqual([...REFERENCE_PROPS].sort());
   });
 
-  it("calls the set a table draws a read", () => {
-    expect(PROP_DIRECTION.objectSetVariable).toBe("read");
-  });
+  it.each(Object.entries(EXPECTED_DIRECTION))(
+    "calls %s a %s",
+    (prop, direction) => {
+      expect(PROP_DIRECTION[prop as keyof typeof PROP_DIRECTION]).toBe(direction);
+    },
+  );
 });
 
 describe("buildGraph", () => {
@@ -154,6 +189,19 @@ describe("expand and collapse (p.78's chevrons)", () => {
     expect([...down].sort()).toEqual(["table", "v_out"]);
   });
 
+  it("expands every missing neighbour, not just the first", () => {
+    // **One chevron, one step, all of it.** p.78's arrow expands "a node's
+    // parents", plural — revealing one of two would draw a graph that is not
+    // wrong so much as incomplete, and the missing edge is invisible: the
+    // chevron stays, so it reads as a node with more behind it rather than as
+    // a node whose expansion dropped something.
+    const two = buildGraph({ a: v("a"), b: v("b") }, {
+      w: widget("CanvasObjectTable", { objectSetVariable: "a", visibleWhen: "b" }),
+    });
+    expect([...expand(two, new Set(["w"]), "w", "parents")].sort())
+      .toEqual(["a", "b", "w"]);
+  });
+
   it("returns the same set when there is nothing left to reveal", () => {
     // Identity, so a click that reveals nothing costs no history entry - undo
     // would otherwise step through actions that changed nothing.
@@ -185,6 +233,24 @@ describe("expand and collapse (p.78's chevrons)", () => {
   it("never removes the node being collapsed", () => {
     const shown = new Set(["v_in", "v_out"]);
     expect(collapse(graph, shown, "v_out", "parents").has("v_out")).toBe(true);
+  });
+
+  it("never removes the node being collapsed when it is its own neighbour", () => {
+    // **The case that separates the guard from the rest of the filter**, and
+    // the reason it is a case at all: `layers` already carries a cycle guard
+    // whose comment says a document can arrive with a loop in it. The server
+    // refuses a cyclic *derivation* at save, but `buildGraph` is handed
+    // whatever document reaches the browser, and a variable listing itself as
+    // an input makes a node its own parent. Collapsing then has to keep it —
+    // dropping it would leave a lineage graph that erased the node the author
+    // clicked, with nothing on screen to say why.
+    const looped = buildGraph(
+      { v_self: v("v_self", { derivation: { transform: "concat", inputs: ["v_self"] } } as never) },
+      {},
+    );
+    expect(parentsOf(looped, "v_self")).toEqual(["v_self"]);
+    const shown = new Set(["v_self"]);
+    expect(collapse(looped, shown, "v_self", "parents")).toBe(shown);
   });
 });
 
@@ -224,6 +290,19 @@ describe("undo and redo (p.78)", () => {
     h = step(h, { selected: "a" });
     expect(h.present.selected).toBe("a");
     expect(undo(h).present.selected).toBeNull();
+  });
+
+  it("tells an explicit deselection apart from no opinion", () => {
+    // **`undefined` and `null` are different answers here**, and Clear is what
+    // makes the difference reachable: it steps with `{ shown: clear(),
+    // selected: null }`, meaning *nothing is selected any more*. Read as "no
+    // opinion", the selection survives an emptied graph and the next node to
+    // land in that id lights up as selected — a highlight nobody asked for, on
+    // a node nobody has clicked.
+    let h = initial(new Set(["a"]));
+    h = step(h, { selected: "a" });
+    expect(step(h, { shown: new Set(["a", "b"]) }).present.selected).toBe("a");
+    expect(step(h, { selected: null }).present.selected).toBeNull();
   });
 
   it("drops a step that changed nothing", () => {

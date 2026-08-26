@@ -22,12 +22,14 @@
  * worse than not drawing it, because the feature exists to be trusted while
  * debugging.
  *
- * So every entry in `REFERENCE_PROPS` is classified here, and a test compares
- * the two lists. A prop missing from this catalogue is an edge the graph
- * silently omits: the widget and the variable both appear, unconnected, and
- * nothing says why. That is the fourth instance of the shape §190, §191 and
- * §193 were each caught by, so it gets its guard on the way in rather than
- * after somebody notices a missing arrow.
+ * So every entry in `REFERENCE_PROPS` is classified here. A prop missing from
+ * this catalogue is an edge the graph silently omits: the widget and the
+ * variable both appear, unconnected, and nothing says why. That is the fourth
+ * instance of the shape §190, §191 and §193 were each caught by, so it gets its
+ * guard on the way in rather than after somebody notices a missing arrow — and
+ * here the guard is the **type**: `PROP_DIRECTION` is keyed by `REFERENCE_PROPS`
+ * itself, so an unclassified prop does not compile. The test beside this module
+ * pins each direction by hand, which the type cannot do.
  *
  * **This module is the graph and the expansion state, not the drawing.** p.78's
  * chevrons, Show all, Clear and undo/redo are all operations on a set of
@@ -51,7 +53,7 @@ import type { WorkshopVariable } from "../../lib/types";
  * - everything else names something the widget *displays or obeys*: the set it
  *   draws, the boolean that hides it, the tab it follows. Reads.
  */
-export const PROP_DIRECTION: Record<string, "read" | "write"> = {
+export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "write"> = {
   // Writes — p.69's "output variables… data passed out of a given widget".
   name: "write",
   filterParameter: "write",
@@ -149,10 +151,12 @@ export function buildGraph(
       const value = props[prop];
       if (typeof value !== "string" || !value || !variables[value]) continue;
       referenced = true;
-      // An unclassified prop defaults to `read`, which is the safer of the two
-      // to guess — but the test beside this module refuses the drift outright,
-      // so the default should never fire.
-      const direction = PROP_DIRECTION[prop] ?? "read";
+      // No fallback, and that is the point: `PROP_DIRECTION` is keyed by
+      // `REFERENCE_PROPS` itself, so a prop added there without a direction is
+      // a **compile** error rather than an arrow this code has to guess at. A
+      // `?? "read"` here would be a branch nothing could ever reach — and a
+      // branch nothing can reach is a branch no test can hold.
+      const direction = PROP_DIRECTION[prop];
       edges.push(
         direction === "write"
           ? { from: nodeId, to: value, via: prop }
