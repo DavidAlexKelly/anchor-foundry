@@ -4163,6 +4163,28 @@ One assertion written while closing those holes was wrong and the panel was righ
 
 `workshop.md` §3.3's lineage row goes ○ → ◑. The remaining half is p.78's per-node detail — "the pages and overlays where a variable is used and the time at which a variable was computed" — which needs the evaluator to report a computation time it does not currently record.
 
+### 201. What a copy of a variable cannot carry (this session)
+
+p.73's two creation actions, and the last two ○ rows in `workshop.md` §3.3. Small buttons; the interesting part is what they are not allowed to do.
+
+**A duplicate is not `{ ...variable, id: newId }`.** Three things on a variable are unique within the module — the id, the label, and the **external ID** — and the third one is not a matter of taste: `_refuse_duplicate_external_ids` rejects two variables sharing one. So the copy cannot have it, and **dropping it cascades**, because the external ID is §3.4's one mechanism behind three features. A routed variable without one is refused (p.198, "the URL addresses a variable by its external ID"); interface membership without one is refused; a saved state without one has no key (p.203). A copy that kept those three flags is a copy the module cannot save — and the 422 would name a variable the author never edited.
+
+So `duplicate` returns **what it had to drop** and the panel says so. That line is the feature, not a courtesy: it is three checkboxes' worth of difference between two rows that otherwise look identical, and an author who is not told spends an afternoon on a saved state that never appears.
+
+`legacy_name` goes with them, and it is the one that could be argued either way. It records what this variable was called when the app was a v1 document with string-keyed parameters — a fact about one variable's history. A copy made today was never that parameter, and a second variable claiming to be it makes the conversion record ambiguous in the one direction it exists to keep clear.
+
+**The contrast with the button beside it is the point of the pair.** p.73's New-variable-from-current "takes the current object set as its input… while **maintaining a reference to the source variable**" — a reference, not a copy. The new set gets a `filter_set` derivation with the source in the first slot and no object set definition of its own, so changing the source's filters moves it too. It lands half configured on purpose: the value to filter on is the author's next decision, the same state the panel's own "Is another set, narrowed" option produces. Guessing a property to make it savable on the click would invent a filter nobody asked for, and the browser test asserts the *refusal* rather than a save.
+
+Offered on object sets only, and **absent rather than disabled** elsewhere — p.73's "object set variables only" is a fact about the kind, not a condition that will pass later.
+
+**The one assertion the unit tests could not make** is that the server accepts what the panel produces. A duplicate carrying the external ID passes everything that does not think to look. So one browser test saves and reads the document back from the API — which needed a `Module.definition()` helper, because reading the panel back only ever confirms the panel. Its first version read straight after the click and reported "the copy was never made" when what had happened was that the read was early; `save()` now waits for the header's "· saved".
+
+**32 mutants, 32 caught, 0 survivors, 0 no-ops.** The single survivor of the first run was **not a hole and not a mutant**: `return null` → `return null as never` is a type assertion, compiled away, with the same runtime value. A runtime suite cannot catch a change that has no runtime. Replaced with one that deletes the guard outright, which the same test catches. The rule for writing these: **mutate behaviour, not types.**
+
+**609 unit tests** (was 578); **322 browser tests** (was 314); 1510 API tests, 1 skipped, unchanged — like §200, this unit adds nothing to the server, and both of its refusals were already there.
+
+With these two, `workshop.md` §3.3 has no ○ rows left.
+
 ---
 ---
 ---
@@ -4290,6 +4312,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A mutant can be caught by a *hang*, and a harness that treats that as a crash loses the run and leaves the bug on disk.** §197's cycle-guard mutant makes `isParked` loop forever, so vitest spun rather than failed; `subprocess.run(timeout=…)` raised, the exception escaped, and the run died at mutant 6 of 22 — **skipping the `restore()` at the end**, so a planted bug sat in the working tree afterwards. A hang is a suite that did not pass, which is what "caught" means: catch `TimeoutExpired` and return False. And restore inside an exception handler as well as at the end, because the failure mode of not doing so is a mutation-testing harness turning into the thing it was written to catch.
 
 - **The harness's `restore()` reads `git show HEAD:`, so running it over uncommitted source reverts that source — silently, on the first mutant.** §200 fixed six survivors, then started the re-run with the fixes on disk and unpushed. `restore()` put the file back to HEAD before the first mutation went in; killing the run left a planted mutant on top of the reverted file, so `git status` showed one small unexpected diff and gave no hint that the real work had gone. Nothing was lost only because two of the three edited files were outside the restore set and the third was still in context. The rule is one line — **commit before every run, including a re-run** — and it is §197's "restore inside the exception handler" seen from the other end: a harness that guarantees a clean tree guarantees it against *you* as well. The tell is a `git status` after a killed run that is shorter than it should be.
+
+- **Mutate behaviour, not types — a mutant with no runtime cannot be caught by a runtime suite, and its survival means nothing.** §201 wrote `return null` → `return null as never` and duly got a survivor. The assertion compiles away; the value is the same `null`; there was nothing for vitest to see. It reads exactly like a real hole in the report, which is the cost: an hour spent looking for the missing test. The tell is a mutant whose diff is entirely inside a type annotation, an `as`, a generic parameter, or an `interface`. If the change would vanish under `tsc`'s emit, it is not a mutant — and §200's opposite case is the pair to it: a branch nothing can reach is a branch no test can hold, so remove the branch rather than record an exception.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 
