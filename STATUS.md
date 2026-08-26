@@ -4185,6 +4185,42 @@ Offered on object sets only, and **absent rather than disabled** elsewhere — p
 
 With these two, `workshop.md` §3.3 has no ○ rows left.
 
+### 202. Splitting the input widgets, and one sentence that settles it (this session)
+
+Top of `workshop.md`'s widget build order, and a decision that had been sitting in the spec unanswered: split the generic parameter control into Foundry's named input widgets, or keep it and accept the divergence. Five rows of the filtering table read `◑ via generic CanvasParameterControl`.
+
+**Decision 0011: split.** The argument for keeping one control is real — the five share a label, an output variable, and a value the viewer edits, and a `control` prop switching costumes is not a hack. It loses on what p.459–468 actually specifies. Read past the category overview and the five diverge in *configuration*: String Selector has static-or-dynamic options, three display modes and per-mode placeholders; Text Input has a format with a whole rich-text mode behind it; Date and Time Picker has time precision and timezone handling. A shared control would grow a union of roughly twenty props of which each mode reads a quarter, and a panel showing "time precision" beside "show grouping" is a panel nobody can read.
+
+**One sentence settles it on its own.** p.468: "If the percent sign is selected, the output variable of the widget will be the user-entered value divided by 100." That is not a display option. It changes the relationship between what the viewer types and what the variable holds, for one suffix value, on one of the five. A shared control would carry that rule permanently and apply it never.
+
+The record also fixes what happens to `CanvasParameterControl`: **it stays.** Craft resolves a node by `resolvedName`, so deleting the component does not degrade an existing module — it stops the module rendering at all. And it cannot be silently converted either: `control: "select"` fed by a dataset column does what no named widget does, since p.461's options come from a static list or a string array variable and never from a query. Named widgets land beside it; its palette entry goes when all four exist. No migration, for decision 0002's reason — a document that changes when you open it is a document whose history stops meaning anything.
+
+**Numeric Input is the first**, chosen because the percent rule makes it the one that proves the split was necessary rather than cosmetic. `number-input.ts` holds what the viewer types and what the variable holds in one place, because the percent case makes them different numbers and the drift is silent: a field showing `8.2` over a variable holding `0.082` looks correct from either side alone.
+
+Three things it gets right that `Number(text)` does not. Empty is `null`, not `0` — different answers. A half-typed entry is `undefined`, a **third** answer: `null` clears the variable, `undefined` writes nothing yet, and collapsing them makes the field clear itself on the keystroke between `1` and `1.5`. And dividing by 100 is not exact in binary, so both directions round to fixed significant digits and the round trip is asserted as a property.
+
+In the widget, the field is **uncontrolled while it is being typed into**, which is not laziness: driving `value` from the variable on every keystroke reformats the text mid-entry, and with grouping on the caret jumps as a comma appears under it.
+
+---
+
+**Seven survivors, splitting three ways — and the split is the useful part.**
+
+**Two were dead code.** `group()` guarded against a minus sign being grouped with the digits and against exponent form being grouped, and neither can fire: `\B` is a *non-word* boundary, so the position between `-` and the first digit **is** a boundary and no comma goes there; and JavaScript renders exponent form only with one digit before the point, so there are no thousands to separate. Both checked against the runtime rather than argued. §200's rule applied — the branches are gone and the reasoning is in the comment.
+
+**Two were real holes, and they were the two guards that *do* fire** — each survived because its neighbour covered every case I had written down. The shape check exists for the literals `Number` accepts and a numeric field should not: `Number("0x10")` is `16`, quite finitely, so `isFinite` lets it through. The finite check exists for `1e999`, which passes the shape check and becomes `Infinity`. **A redundant-looking guard beside a real one is worth a mutant precisely because the tests that cover one usually cover the other.**
+
+**Two were real holes in the browser tests**, both about the half of the binding typing cannot reach: nothing exercised the field following a variable changed from *elsewhere*, and a field that only ever wrote would sit showing a number nothing holds any more.
+
+And one of those was **an assertion against a moment rather than a clock**. The half-typed test claimed nothing happened, but `expect` passes on its first successful poll — so "still 5" was satisfied before a mutant's write would have landed. It now waits on a marker variable set by the same click, the idiom `test_collapsible_sections.py` established. *The way to check that nothing happened is to find a point after which it definitely would have.*
+
+The seventh survivor was mine and was not a mutant: `void text;` beside a state declaration changes nothing. Same class as §201's `as never`, one turn later, which is how a rule earns a second entry rather than a first.
+
+**37 mutants, 37 caught, 0 survivors, 0 no-ops** after the fixes.
+
+**685 unit tests** (was 609); **335 browser tests** (was 322); 1510 API tests, 1 skipped, unchanged — `name` was already in `REFERENCE_PROPS` and classified `write` in `PROP_DIRECTION`, so the new widget's output variable is refused for deletion and drawn upstream in the lineage graph with no new server code at all.
+
+`workshop.md` §10 goes from 13 of ~52 widgets to 14.
+
 ---
 ---
 ---
@@ -4314,6 +4350,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **The harness's `restore()` reads `git show HEAD:`, so running it over uncommitted source reverts that source — silently, on the first mutant.** §200 fixed six survivors, then started the re-run with the fixes on disk and unpushed. `restore()` put the file back to HEAD before the first mutation went in; killing the run left a planted mutant on top of the reverted file, so `git status` showed one small unexpected diff and gave no hint that the real work had gone. Nothing was lost only because two of the three edited files were outside the restore set and the third was still in context. The rule is one line — **commit before every run, including a re-run** — and it is §197's "restore inside the exception handler" seen from the other end: a harness that guarantees a clean tree guarantees it against *you* as well. The tell is a `git status` after a killed run that is shorter than it should be.
 
 - **Mutate behaviour, not types — a mutant with no runtime cannot be caught by a runtime suite, and its survival means nothing.** §201 wrote `return null` → `return null as never` and duly got a survivor. The assertion compiles away; the value is the same `null`; there was nothing for vitest to see. It reads exactly like a real hole in the report, which is the cost: an hour spent looking for the missing test. The tell is a mutant whose diff is entirely inside a type annotation, an `as`, a generic parameter, or an `interface`. If the change would vanish under `tsc`'s emit, it is not a mutant — and §200's opposite case is the pair to it: a branch nothing can reach is a branch no test can hold, so remove the branch rather than record an exception.
+
+- **A guard that looks redundant beside a real one is exactly where a hole hides, because the tests covering one usually cover the other.** §202's `toStored` checks the *shape* of the text and then that the result is *finite*, and each survived being deleted. Every "not a number" case written down — `abc`, `1.2.3`, `Infinity` — is caught by both, so neither guard was load-bearing for the suite. They separate on two inputs nobody thinks of: `Number("0x10")` is `16`, quite finitely, so only the shape check refuses it; and `1e999` is digits-e-digits, so only the finite check refuses that. The tell is two adjacent validations whose test cases are the same list — and the fix is to find the input each one alone rejects, which is also the fastest way to discover one of them really is dead.
+
+- **To assert that nothing happened, find a point after which it definitely would have.** §202's half-typed-entry test claimed a variable kept its value, and passed against a mutant that cleared it: Playwright's `expect` succeeds on its *first* matching poll, so "still 5" was read before the write landed. A timeout is the wrong fix — it is slow and it is tuned to one machine. The right one is a second observable changed by the same action, so waiting for that proves the first had its chance: §202 clicks a button that also sets a marker variable and asserts both in one string. `test_collapsible_sections.py` had already invented this and called it "the clock".
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 
