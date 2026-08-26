@@ -4131,6 +4131,38 @@ Two things caught before they shipped, both by writing the test first. A unit te
 
 **533 unit tests** (was 507); **306 browser tests** (was 297).
 
+### 200. The variable lineage graph (this session)
+
+p.77–78's lineage graph — the row §199 deliberately left open, because a view of how variables feed each other is a different kind of thing from a way of shortening a list.
+
+**One sentence in p.77 is the whole design**: "trace which widgets **read or write** a variable". A widget that reads a variable is downstream of it; a widget that writes one is upstream. So every prop in `REFERENCE_PROPS` carries a direction, and getting one backwards points an arrow the wrong way in the one view whose entire purpose is being trusted while debugging. Four of the thirteen are writes — a Filter's `name`, a Filter List's `filterParameter`, a Search's `searchParameter`, a chart's `drilldownVariable` — and they are exactly p.69's "output variables… data passed out of a given widget".
+
+That is the **fourth instance** of the shape §190, §191 and §193 were each caught by: a list that must stay complete with nothing checking it against its subject. This one is guarded on the way in and in both directions — and by the end of the unit the completeness half is not a test at all but a **type**: `PROP_DIRECTION` is keyed by `REFERENCE_PROPS` itself, so an unclassified prop does not compile.
+
+**A divergence, stated in the file and in the parity doc.** p.78 puts the chevrons "on the top and bottom edges", which is a vertical graph. This draws left to right, because `pipeline-graph.tsx` already draws the dataset lineage graph that way — two directions for two dependency graphs in one product is a worse divergence than one direction that differs from Foundry's.
+
+---
+
+**The harness found six survivors, and five of them were the same mistake in five places: a rule stated in a comment and checked at one point.**
+
+- The direction table had three spot checks over thirteen props, so **ten entries could be flipped silently**. The fix is a hand-written expectation per prop — written out separately rather than derived from `PROP_DIRECTION`, because a test that reads its expectation out of the thing under test agrees with whatever that thing says.
+- `expand` returning only the *first* missing neighbour survived: no case had a node with two. That failure is invisible on screen — the chevron stays, so it reads as a node with more behind it rather than one whose expansion dropped something.
+- `collapse` dropping the node it was asked about survived, because no node was ever its own neighbour. `layers` already carries a cycle guard whose comment says a document can arrive with a loop in it; the test now builds that loop. **Same shape as §197's ROOT survivor** — a guard that looks unreachable until you ask what document could reach it.
+- Reading an explicit `selected: null` as "no opinion" survived. Clear is what makes `undefined` and `null` different answers: under `??` the selection outlives the graph, and the next node to take that id lights up as selected.
+- In the browser, a collapse chevron drawn where it would do nothing survived — the test asserted the *expand* arrows were absent and said nothing about their inverses.
+
+**The sixth was not a hole but dead code.** `PROP_DIRECTION[prop] ?? "read"` survived being changed to `?? "write"` because the loop iterates `REFERENCE_PROPS` and every entry is classified, so the branch cannot be reached. Rather than withdraw it as equivalent, the branch is gone and the type replaces it: **a branch nothing can reach is a branch no test can hold**, and the honest response to one is to remove the possibility, not to record an exception.
+
+One assertion written while closing those holes was wrong and the panel was right: a Filter whose only child is the variable somebody expanded *from* still offers to fold it away, because collapse asks whether another visible node is holding the neighbour, not which node reached it first.
+
+**And a rough edge paid for in full: the harness restores from `git show HEAD:`, so running it over uncommitted source silently reverts that source.** The re-run of the six survivors was started with the fixes on disk and unpushed; the first `restore()` put the file back to HEAD, and killing the run left a planted mutant behind on top of it. Nothing was lost — the fixes were still in context and the two test files were outside the restore set — but the rule is now explicit: **commit before re-running, every time.** It is the same rule as §197's "restore inside the exception handler", seen from the other end.
+
+**42 mutants, 42 caught, 0 survivors, 0 no-ops** after the fixes.
+
+**578 unit tests** (was 533); **314 browser tests** (was 306); 1510 API tests, 1 skipped, unchanged — this unit adds nothing to the server.
+
+`workshop.md` §3.3's lineage row goes ○ → ◑. The remaining half is p.78's per-node detail — "the pages and overlays where a variable is used and the time at which a variable was computed" — which needs the evaluator to report a computation time it does not currently record.
+
 ---
 ---
 ---
@@ -4256,6 +4288,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A value read inside a framework's selector is only as fresh as what that selector watches.** §196 computed a tooltip inside Craft's node-map selector using data from a React prop; the selector re-runs on node-map changes, so renaming a variable left the tooltip showing the old name until something unrelated touched the layout. No unit test can see this — both functions were correct, and the bug was in *which hook re-runs when*. The rule that falls out: inside a selector, read only what the selector subscribes to, and do every other lookup at render. The tell is a value that is right on first paint and stale after an edit somewhere else on the page.
 
 - **A mutant can be caught by a *hang*, and a harness that treats that as a crash loses the run and leaves the bug on disk.** §197's cycle-guard mutant makes `isParked` loop forever, so vitest spun rather than failed; `subprocess.run(timeout=…)` raised, the exception escaped, and the run died at mutant 6 of 22 — **skipping the `restore()` at the end**, so a planted bug sat in the working tree afterwards. A hang is a suite that did not pass, which is what "caught" means: catch `TimeoutExpired` and return False. And restore inside an exception handler as well as at the end, because the failure mode of not doing so is a mutation-testing harness turning into the thing it was written to catch.
+
+- **The harness's `restore()` reads `git show HEAD:`, so running it over uncommitted source reverts that source — silently, on the first mutant.** §200 fixed six survivors, then started the re-run with the fixes on disk and unpushed. `restore()` put the file back to HEAD before the first mutation went in; killing the run left a planted mutant on top of the reverted file, so `git status` showed one small unexpected diff and gave no hint that the real work had gone. Nothing was lost only because two of the three edited files were outside the restore set and the third was still in context. The rule is one line — **commit before every run, including a re-run** — and it is §197's "restore inside the exception handler" seen from the other end: a harness that guarantees a clean tree guarantees it against *you* as well. The tell is a `git status` after a killed run that is shorter than it should be.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 
