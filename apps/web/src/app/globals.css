@@ -1511,6 +1511,9 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .vars-head { display: flex; align-items: center; justify-content: space-between; }
 .vars-head h3 { margin: 0; font-size: 13px; }
 .vars-head-actions { display: flex; gap: 6px; }
+/* p.73's creation actions sit with Delete: three things that act on the open
+   variable, in one row rather than scattered down the editor. */
+.vars-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .vars-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .vars-item { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .vars-item.on { border-color: var(--line-strong); }

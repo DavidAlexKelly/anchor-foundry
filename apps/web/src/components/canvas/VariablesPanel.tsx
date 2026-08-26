@@ -34,6 +34,9 @@ import { newVariableId, usagesOf } from "@/lib/workshop-module";
 import { ROUTABLE_KINDS } from "./routing";
 import { VariableLineage } from "./VariableLineage";
 import {
+  canCreateFrom, duplicate, fromCurrent, UNIQUE_SETTINGS,
+} from "./variable-create";
+import {
   apply, DEFINITION_TYPES, partition,
   SETTINGS, type DefinitionType, type SettingName,
 } from "./variable-finder";
@@ -210,6 +213,9 @@ export function VariablesPanel({
   const [openId, setOpenId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [failure, setFailure] = useState<string | null>(null);
+  /** Not a failure: the copy was made. It says what the copy could not bring
+   * with it, which is the thing an author cannot see for themselves. */
+  const [notice, setNotice] = useState<string | null>(null);
   // p.77: "the Variable lineage graph option found in the header of the
   // Variables panel". Local, and not persisted: it is a way of looking at the
   // module, not part of it.
@@ -283,6 +289,39 @@ export function VariablesPanel({
     setFailure(null);
   }
 
+  /** p.73's duplicate button.
+   *
+   * The **note is not optional decoration**: an external ID is unique in the
+   * module, so a copy cannot carry it, and three settings hang off it. Without
+   * a line saying so, the copy's settings tab quietly differs from the
+   * original's and nothing on screen explains why.
+   */
+  function copy(id: string) {
+    const made = duplicate(variables, id, newVariableId());
+    if (!made) return;
+    onChange({ ...variables, [made.variable.id]: made.variable });
+    setOpenId(made.variable.id);
+    setNotice(
+      made.dropped.length === 0
+        ? null
+        : `${made.variable.label} does not carry ${made.dropped
+            .map((s) => UNIQUE_SETTINGS[s])
+            .join(", ")} — those are keyed by the external ID, which is unique ` +
+          "in a module. Give this one its own ID to turn them back on.",
+    );
+    setFailure(null);
+  }
+
+  /** p.73's New variable from current, object sets only. */
+  function deriveFrom(id: string) {
+    const made = fromCurrent(variables, id, newVariableId());
+    if (!made) return;
+    onChange({ ...variables, [made.id]: made });
+    setOpenId(made.id);
+    setNotice(null);
+    setFailure(null);
+  }
+
   function remove(id: string) {
     const variable = variables[id];
     if (!variable) return;
@@ -334,6 +373,9 @@ export function VariablesPanel({
       )}
 
       {failure && <p className="state error">{failure}</p>}
+      {notice && (
+        <p className="state" data-testid="variable-notice">{notice}</p>
+      )}
 
       {/* p.72's search and filter. Hidden below a handful of variables: three
           controls over a list of two is chrome, and the panel is narrow. */}
@@ -573,9 +615,34 @@ export function VariablesPanel({
                     </p>
 
                     {!readOnly && (
-                      <button type="button" className="btn danger" onClick={() => remove(id)}>
-                        Delete
-                      </button>
+                      <div className="vars-actions">
+                        {/* p.73 puts these beside the trash icon, in the open
+                            variable's window rather than in the list header:
+                            both act on *this* variable, and a header button
+                            would have to ask which one first. */}
+                        <button
+                          type="button" className="btn quiet"
+                          data-testid="duplicate-variable"
+                          onClick={() => copy(id)}
+                        >
+                          Duplicate
+                        </button>
+                        {/* Absent, not disabled, for every other kind — p.73's
+                            "object set variables only" is a fact about the
+                            kind, not a condition that will pass later. */}
+                        {canCreateFrom(variable) && (
+                          <button
+                            type="button" className="btn quiet"
+                            data-testid="new-from-current"
+                            onClick={() => deriveFrom(id)}
+                          >
+                            New from current
+                          </button>
+                        )}
+                        <button type="button" className="btn danger" onClick={() => remove(id)}>
+                          Delete
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}

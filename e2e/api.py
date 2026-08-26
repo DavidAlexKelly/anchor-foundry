@@ -275,6 +275,16 @@ class Module:
         )
         return self.app_id
 
+    def definition(self) -> dict[str, Any]:
+        """This module's document as the **server** currently holds it.
+
+        For the assertions that are about what a save produced rather than what
+        the panel drew. A builder can be made to show anything; the question
+        that matters for a document is whether the server took it and what it
+        took, and reading the panel back only ever confirms the panel.
+        """
+        return self.api.call("GET", f"{self.base}/canvas-apps/{self.app_id}")["definition"]
+
     @property
     def url(self) -> str:
         """Where a module opens, which is the resource id and nothing else.
