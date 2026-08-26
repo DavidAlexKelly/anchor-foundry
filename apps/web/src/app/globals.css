@@ -1561,6 +1561,31 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .btn.danger { color: var(--danger); }
 
+/* ---- Numeric input (p.468, decision 0011) --------------------------------- */
+/* The affixes sit *inside* the field's border rather than beside it, because
+   p.468 calls them "in the left-hand side of the widget's input field" - a unit
+   floating next to a box reads as a caption, not as part of the value. */
+.canvas-number-row {
+  display: flex; align-items: stretch; gap: 0;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); overflow: hidden;
+}
+.canvas-number-row:focus-within { border-color: var(--accent); outline: 2px solid var(--accent-wash); }
+.canvas-number-row input {
+  border: 0; border-radius: 0; flex: 1; min-width: 0; background: transparent;
+}
+.canvas-number-row input:focus { outline: none; }
+.canvas-number-affix {
+  display: flex; align-items: center; padding: 0 8px;
+  font-size: 12px; color: var(--ink-soft); background: var(--accent-wash);
+  white-space: nowrap;
+}
+.canvas-number-reset { border: 0; border-radius: 0; border-left: 1px solid var(--line); }
+/* Settings-panel checkbox rows, shared by every named input widget's panel. */
+.canvas-toggle { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.canvas-toggle input { width: auto; }
+.canvas-toggle .field-hint { flex-basis: 100%; }
+
 /* ---- the variable lineage graph (workshop parity 3.3, p.77) --------------- */
 /* Over the whole builder rather than inside the Variables panel: the panel is
    240px wide and the thing it opens is a graph. It reuses `.canvas-scrim`. */

@@ -9,7 +9,7 @@
 
 import { Editor, Frame, useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   actions as actionApi, ApiError, canvas as canvasApi, datasets as dsApi,
   objects as objApi,
@@ -23,6 +23,9 @@ import {
 } from "./style";
 import { asCollapsed, collapseState } from "./collapse";
 import { arrayEntries, pageOf } from "./loop-array";
+import {
+  canReset, suffixText as suffixTextOf, toDisplay, toStored, type SuffixKind,
+} from "./number-input";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -789,6 +792,247 @@ CanvasParameterControl.craft = {
   displayName: "Filter",
   props: { name: "", label: "Filter", control: "select", datasetId: null, column: null },
   related: { settings: ParameterSettings },
+};
+
+// ---- Numeric Input (p.468) ------------------------------------------------------
+/** p.468's Numeric Input, the first of decision 0011's named input widgets.
+ *
+ * The arithmetic is in `number-input.ts` and tested without a browser — which
+ * matters most for p.468's percent suffix, where what the viewer types and what
+ * the variable holds are different numbers.
+ *
+ * **The field is uncontrolled while it is being typed into**, and that is not
+ * laziness. Driving `value` from the variable on every keystroke means the text
+ * is reformatted mid-entry: turn grouping on, type `1234`, and the caret jumps
+ * as a comma appears under it. So the text is local state, the variable is
+ * written on every recognised value, and the text is re-derived from the
+ * variable only when the variable changes from somewhere else.
+ */
+export function CanvasNumericInput({
+  name = "",
+  label = "",
+  grouping = false,
+  allowReset = false,
+  prefix = "",
+  suffix = "none",
+  suffixText: suffixLabel = "",
+}: {
+  name?: string;
+  label?: string;
+  grouping?: boolean;
+  allowReset?: boolean;
+  prefix?: string;
+  suffix?: SuffixKind;
+  suffixText?: string;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { values, set } = useCanvasParameters();
+  const stored = name ? values[name] : undefined;
+  const format = useMemo(() => ({ grouping, suffix }), [grouping, suffix]);
+
+  // The text the field shows. Seeded from the variable and re-seeded whenever
+  // the variable changes underneath - an event, another widget, a recompute -
+  // but not on our own writes, which is what `settled` compares against.
+  const settled = toDisplay(stored, format);
+  const [text, setText] = useState(settled);
+  const [lastSeen, setLastSeen] = useState(settled);
+  if (settled !== lastSeen) {
+    setLastSeen(settled);
+    setText(settled);
+  }
+
+  const { events: moduleEvents } = useCanvasVariables();
+  const changed = eventsFor(moduleEvents, nodeId, "change");
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+
+  function write(next: string) {
+    setText(next);
+    const value = toStored(next, format);
+    // `undefined` is "still typing" and writes nothing - see `number-input.ts`.
+    if (value === undefined) return;
+    setLastSeen(toDisplay(value, format));
+    set(name, value);
+    // Not while arranging the page: an event fired by touching a control in
+    // the builder would move the builder off the page being edited.
+    if (mode === "run" && changed.length > 0) {
+      runEvents(changed, { ...eventContext, payload: { value: value === null ? "" : String(value) } });
+    }
+  }
+
+  const unit = suffixTextOf(format, suffixLabel);
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!name ? (
+        <p className="canvas-widget-empty">
+          Numeric input - bind a number variable in Settings
+        </p>
+      ) : (
+        <label className="field canvas-number" style={{ maxWidth: 320 }}>
+          {label && <span className="field-label">{label}</span>}
+          <span className="canvas-number-row">
+            {prefix.trim() && (
+              <span className="canvas-number-affix" aria-hidden="true">{prefix.trim()}</span>
+            )}
+            <input
+              // `text`, not `number`: a number input hides what was typed when
+              // the browser considers it invalid, so `toStored`'s "still
+              // typing" state would be invisible to it - and p.468's grouping
+              // separators are not valid in one at all.
+              type="text"
+              inputMode="decimal"
+              aria-label={label || "Numeric input"}
+              data-testid="numeric-input"
+              value={text}
+              onChange={(e) => write(e.target.value)}
+            />
+            {unit && (
+              <span className="canvas-number-affix" aria-hidden="true">{unit}</span>
+            )}
+            {allowReset && canReset(stored) && (
+              <button
+                type="button"
+                className="btn quiet canvas-number-reset"
+                data-testid="numeric-reset"
+                onClick={() => write("")}
+              >
+                Clear
+              </button>
+            )}
+          </span>
+        </label>
+      )}
+    </div>
+  );
+}
+
+function NumericInputSettings() {
+  const {
+    name, label, grouping, allowReset, prefix, suffix, suffixText: suffixLabel,
+    actions: { setProp },
+  } = useNode((node) => ({
+    name: node.data.props.name,
+    label: node.data.props.label,
+    grouping: node.data.props.grouping,
+    allowReset: node.data.props.allowReset,
+    prefix: node.data.props.prefix,
+    suffix: node.data.props.suffix,
+    suffixText: node.data.props.suffixText,
+  }));
+  const { declared } = useCanvasVariables();
+  // p.468's "Numeric value" output. Only `number` variables are offered: the
+  // widget writes a number, and binding it to a string would produce a
+  // document the server accepts and a value nothing downstream can use.
+  const numbers = Object.values(declared).filter((v) => v.kind === "number");
+
+  return (
+    <WidgetSetup
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Numeric value</span>
+        <select
+          value={name || ""}
+          data-testid="numeric-variable"
+          onChange={(e) => setProp((p: { name: string }) => (p.name = e.target.value))}
+        >
+          <option value="">Choose…</option>
+          {numbers.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {numbers.length === 0
+            ? "Declare a number variable in the Variables panel first"
+            : "Where the number the viewer types is stored"}
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={!!grouping}
+          data-testid="numeric-grouping"
+          onChange={(e) => setProp((p: { grouping: boolean }) => (p.grouping = e.target.checked))}
+        />
+        <span className="field-label">Show grouping</span>
+        <span className="field-hint">A comma every three digits</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={!!allowReset}
+          data-testid="numeric-allow-reset"
+          onChange={(e) => setProp((p: { allowReset: boolean }) => (p.allowReset = e.target.checked))}
+        />
+        <span className="field-label">Include option to reset</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Unit prefix</span>
+        <input
+          type="text"
+          value={prefix || ""}
+          placeholder="$"
+          data-testid="numeric-prefix"
+          onChange={(e) => setProp((p: { prefix: string }) => (p.prefix = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Unit suffix</span>
+        <select
+          value={suffix || "none"}
+          data-testid="numeric-suffix"
+          onChange={(e) => setProp((p: { suffix: string }) => (p.suffix = e.target.value))}
+        >
+          <option value="none">None</option>
+          <option value="text">Text</option>
+          <option value="percent">Percent sign</option>
+        </select>
+        {/* p.468 is explicit that this is not a display option, so it is said
+            here rather than discovered by an author whose numbers are all a
+            hundred times too small. */}
+        {suffix === "percent" && (
+          <span className="field-hint">
+            The variable holds what was typed divided by 100 — typing 25 stores 0.25
+          </span>
+        )}
+      </label>
+      {suffix === "text" && (
+        <label className="field">
+          <span className="field-label">Suffix text</span>
+          <input
+            type="text"
+            value={suffixLabel || ""}
+            placeholder="kg"
+            data-testid="numeric-suffix-text"
+            onChange={(e) => setProp((p: { suffixText: string }) => (p.suffixText = e.target.value))}
+          />
+        </label>
+      )}
+      </>}
+    />
+  );
+}
+
+CanvasNumericInput.craft = {
+  displayName: "Numeric input",
+  props: {
+    name: "", label: "", grouping: false, allowReset: false,
+    prefix: "", suffix: "none", suffixText: "",
+  },
+  related: { settings: NumericInputSettings },
 };
 
 // ---- Dataset table --------------------------------------------------------------
@@ -6215,6 +6459,7 @@ export const CANVAS_RESOLVER = {
   CanvasText,
   CanvasFilterList,
   CanvasParameterControl,
+  CanvasNumericInput,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -6241,6 +6486,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
+  { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

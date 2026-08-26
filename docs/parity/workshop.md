@@ -330,7 +330,7 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 
 Foundry's inventory, compiled from the category Overview pages and the per-widget page headers. Some widgets appear in one and not the other; the union is the target.
 
-Ours in the right-hand column. **We have 13 of ~52.**
+Ours in the right-hand column. **We have 14 of ~52.**
 
 ### Filtering (p.444) — 13
 
@@ -344,13 +344,13 @@ Ours in the right-hand column. **We have 13 of ~52.**
 | Date and Time Picker | ○ |
 | **Date Input** — single date or range | ◑ via `CanvasParameterControl` |
 | **Text Input** | ◑ via `CanvasParameterControl` |
-| **Numeric Input** | ◑ via `CanvasParameterControl` |
+| **Numeric Input** | ✅ §202 `CanvasNumericInput` | (p.468) — label, show grouping, reset-to-default, unit prefix, unit suffix as text or percent sign, and the numeric value output, which offers **`number` variables only**. **p.468's percent rule is the reason decision 0011 splits this out at all**: "if the percent sign is selected, the output variable of the widget will be the user-entered value divided by 100" — not a display option but a change to what the variable holds, for one suffix value, on one of the five widgets. The arithmetic is in `number-input.ts`, where empty is `null` and not `0`, a half-typed entry is a **third** answer that writes nothing, and both directions round to fixed significant digits because `8.2 / 100` is `0.08199999999999999`. Foundry's icon suffix is ○ — this platform has no icon picker |
 | Exploration Filter Pills | ○ |
 | Exploration Search Bar | ◑ `CanvasSearch` |
 | Prominent Terms | ○ |
 | User Select | ○ |
 
-Our generic parameter control is a defensible design, but it is *our* design, and the ask was that Workshop feel like Workshop. **Decision needed:** split it into the four named widgets, or keep it and accept the divergence. This spec assumes splitting.
+Our generic parameter control was a defensible design, but it was *our* design, and the ask was that Workshop feel like Workshop. **Decided in `docs/decisions/0011`: split.** Reading p.459–468 rather than the category overview, the five diverge in configuration rather than appearance, and p.468's percent rule changes what a variable holds — a shared control would carry that rule permanently and apply it never. The named widgets land beside `CanvasParameterControl` rather than replacing it: Craft resolves a node by `resolvedName`, so removing the component does not degrade an existing module, it stops the module rendering. Its palette entry goes when all four exist. Built so far: **Numeric Input** (§202).
 
 ### Core display (p.220) — 7
 
