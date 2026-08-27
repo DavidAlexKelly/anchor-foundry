@@ -69,6 +69,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   collapsedWhen: "read",
   tabVariable: "read",
   arrayVariable: "read",
+  // p.461: the selector *reads* its options from this variable.
+  optionsVariable: "read",
 };
 
 export interface LineageNode {

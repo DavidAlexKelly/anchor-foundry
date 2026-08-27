@@ -42,6 +42,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   collapsedWhen: "read",
   tabVariable: "read",
   arrayVariable: "read",
+  optionsVariable: "read",
 };
 
 describe("PROP_DIRECTION", () => {

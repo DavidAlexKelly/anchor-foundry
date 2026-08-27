@@ -4258,6 +4258,38 @@ That is a sharper version of §202's rule than §202 stated it. §202 said: to a
 
 `workshop.md` §10 goes from 14 of ~52 widgets to 15.
 
+### 204. The String Selector, and a test that could not see through a correction (this session)
+
+Decision 0011's third named input widget, and the biggest of the four: p.459–461 is not one widget with options but a **two-by-two matrix**, and both axes have consequences.
+
+**The selection changes what the variable holds.** p.461: "If the selection is set to Single, the output variable will be a string variable. If the selection is set to Multiple, the output variable will be a string array variable." That is the *second* setting in this family to do that, after §202's percent suffix — and two of four is no longer a coincidence but the clearest evidence yet that decision 0011 was right. A binding made under one selection is **invalid** under the other, so changing the selection clears it.
+
+**The display axis is not free either.** Radio buttons exist only under Single, checkboxes only under Multiple. So `display` is a setting *within* a selection, and one click in the panel leaves a document naming a pair p.461 does not have. Every read goes through `displayOf`, which resolves it; trusting it draws radio buttons over a variable holding a list.
+
+Three smaller decisions, each with the reason in the file. **Empty is `null` for single and `[]` for multiple** — an `array` variable with no value is an empty list, and a derivation reading it breaks on `null` where it handles `[]` fine. **Blank options are dropped and duplicates collapse** — two identical options are one choice drawn twice, indistinguishable in a `<select>`, and as radio buttons they share a name and fight over which is checked. **`chosenOf` returns a list for both selections**, so the checkbox arm cannot drift from the radio arm.
+
+p.444's *Checkbox* row closes here rather than as its own widget, because p.461 shows what it is.
+
+---
+
+**The finding that outlives the unit: a test cannot see through a normalising read.**
+
+Two mutants survived, each deleting one of the two corrections the panel makes when the selection changes — the variable clear and the display reset. Both had tests. Both tests were incapable of failing.
+
+The widget defends itself by **correcting on read**. The variable picker lists only variables of the selection's kind, so a `<select>` still bound to a string variable renders with value `""` the moment the options no longer contain it — identical to having been cleared. The display select's value goes through `displayOf`, so it reads `dropdown` whether or not the prop was reset. **The render shows the corrected value; the prop keeps the stale one; and the prop is what gets saved.**
+
+The defences are right and stay. What was wrong is where the tests looked. Both now save and read the document back from the server, the way §201's duplicate test does. The rule: **where code defends itself by normalising what it reads, a test has to look at what was written.** It is the mirror of §203's clock — there the test could not see a change because something erased it; here it could not see one because something corrected it.
+
+A third survivor is **withdrawn as equivalent**, with the reasoning recorded in the model rather than in a note nobody will find: `chosenOf` always allocates, so `pick`'s copy is never the caller's array and mutating it is unobservable.
+
+**§191's drift guard fired on new work for the second time.** `optionsVariable` holds a variable id — p.461's dynamic option generation — and was in neither copy of `REFERENCE_PROPS`, so the option list could have been deleted out from under a configured selector. It is the same widget family as §198's `arrayVariable`, and for the same reason: a widget whose *options* come from a variable is exactly the shape that gets missed, because the obvious reference is the output one. `PROP_DIRECTION` being keyed by `REFERENCE_PROPS` since §200 then refused to compile until the direction was stated too — the guard-as-a-type doing its job one layer down.
+
+**43 mutants, 43 caught, 0 survivors, 0 no-ops, 1 withdrawn.**
+
+**756 unit tests** (was 711); **365 browser tests** (was 348); 1512 API tests, 1 skipped, unchanged.
+
+`workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
+
 ---
 ---
 ---
@@ -4393,6 +4425,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **To assert that nothing happened, find a point after which it definitely would have.** §202's half-typed-entry test claimed a variable kept its value, and passed against a mutant that cleared it: Playwright's `expect` succeeds on its *first* matching poll, so "still 5" was read before the write landed. A timeout is the wrong fix — it is slow and it is tuned to one machine. The right one is a second observable changed by the same action, so waiting for that proves the first had its chance: §202 clicks a button that also sets a marker variable and asserts both in one string. `test_collapsible_sections.py` had already invented this and called it "the clock".
 
 - **The clock must not be able to overwrite the thing it is timing.** §202 established that asserting "nothing happened" needs a point after which it definitely would have, and §203 promptly built one wrong: the button that proved a cycle had completed set the *same* variable the event under test would have set, so "did not fire" passed because the click had erased the evidence. The mutant it was written to catch sailed through. The clock has to be a **second, independent** observable — and the tell that it is not is a test where the waiting step writes anything the assertion reads. This and the two entries above are one family: an expectation derived from its own subject, a guard tested only by its neighbour, a clock that clears its own evidence. In each, the test and the thing it checks are not actually two.
+
+- **A test cannot see through a normalising read: where code corrects on the way out, assert on what was written.** §204's panel resets two props when the selection changes, and both resets had tests that could not fail. The variable picker lists only variables of the selection's kind, so a `<select>` still bound to a stale one renders `""` — identical to cleared. The display select's value goes through the resolver, so it reads the legal value whether or not the prop was fixed. **The render shows the corrected value; the prop keeps the stale one; the prop is what gets saved.** The defence is right and the assertion was in the wrong place — read the document back from the server instead. The tell is a control whose displayed value is computed rather than stored, which is exactly the controls worth defending, so this will keep happening. It completes the family two entries up: §203's clock could not see a change because something *erased* it; this one could not because something *corrected* it.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 

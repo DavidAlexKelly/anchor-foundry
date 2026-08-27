@@ -30,6 +30,12 @@ import {
   formatOf, MAX_ROWS, MIN_ROWS, rowsOf, settingsOf, TEXT_FORMATS,
   toDisplay as toTextDisplay, toStored as toTextStored,
 } from "./text-input";
+import {
+  chosenOf, columnsOf, DISPLAYS, displayOf, displaysFor, LAYOUTS,
+  layoutOf as optionLayoutOf, layoutStyle, MAX_COLUMNS, MIN_COLUMNS, modeOf,
+  optionsOf, outputKind, pick, placeholderOf, SELECTIONS,
+  selectionOf as pickModeOf, sourceOf,
+} from "./string-selector";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -1238,6 +1244,372 @@ CanvasTextInput.craft = {
   displayName: "Text input",
   props: { name: "", label: "", placeholder: "", format: "line", rows: 4 },
   related: { settings: TextInputSettings },
+};
+
+// ---- String Selector (p.459-461) ------------------------------------------------
+/** p.461's String Selector, decision 0011's third named input widget.
+ *
+ * The selection/display matrix, the option list and what a pick means are all
+ * in `string-selector.ts` and tested without a browser. What is here is the
+ * four render arms and the panel.
+ *
+ * **Nothing branches on the raw props.** Every read goes through `displayOf` /
+ * `modeOf`, so a document naming a pair p.461 does not have - `multiple` with
+ * `radio`, which is one click in the panel away - draws something that can
+ * express the value rather than radio buttons over a list.
+ */
+export function CanvasStringSelector({
+  name = "",
+  label = "",
+  selection = "single",
+  display = "dropdown",
+  optionSource = "static",
+  options: staticOptions = [],
+  optionsVariable = "",
+  placeholder = "",
+  allowClearing = true,
+  layout = "vertical",
+  columns = 3,
+}: {
+  name?: string;
+  label?: string;
+  selection?: string;
+  display?: string;
+  optionSource?: string;
+  options?: string[];
+  optionsVariable?: string;
+  placeholder?: string;
+  allowClearing?: boolean;
+  layout?: string;
+  columns?: number;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { values, set } = useCanvasParameters();
+  const { resolved, events: moduleEvents } = useCanvasVariables();
+
+  const shown = displayOf(selection, display);
+  const shape = modeOf(selection, display);
+  const stored = name ? values[name] : undefined;
+  const chosen = chosenOf(selection, stored);
+  const options = optionsOf(
+    optionSource, staticOptions, optionsVariable ? resolved[optionsVariable] : undefined,
+  );
+
+  const changed = eventsFor(moduleEvents, nodeId, "change");
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+
+  function choose(option: string) {
+    const next = pick(selection, stored, option);
+    set(name, next);
+    if (mode === "run" && changed.length > 0) {
+      runEvents(changed, {
+        ...eventContext,
+        payload: { value: Array.isArray(next) ? next.join(", ") : next ?? "" },
+      });
+    }
+  }
+
+  const text = placeholderOf(selection, display, placeholder);
+  const listId = `sel-${nodeId}`;
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!name ? (
+        <p className="canvas-widget-empty">
+          String selector - bind a {outputKind(selection)} variable in Settings
+        </p>
+      ) : (
+        <div className="field canvas-selector" style={{ maxWidth: 420 }}>
+          {label && <span className="field-label">{label}</span>}
+
+          {shown === "dropdown" && pickModeOf(selection) === "single" && (
+            <select
+              aria-label={label || "String selector"}
+              data-testid="selector-dropdown"
+              value={chosen[0] ?? ""}
+              onChange={(e) => set(name, e.target.value || null)}
+            >
+              {/* p.461's "Disable clearing of the selected dropdown option":
+                  the empty row *is* the clearing affordance, so forbidding one
+                  removes the other. */}
+              {(allowClearing || chosen.length === 0) && <option value="">{text}</option>}
+              {options.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          )}
+
+          {shown === "dropdown" && pickModeOf(selection) === "multiple" && (
+            // p.461's multiple dropdown. A native `<select multiple>` rather
+            // than a token field: it is the control a browser already gives
+            // keyboard and screen-reader support for, and a hand-rolled one
+            // would be a second thing to get those right in.
+            <select
+              multiple
+              aria-label={label || "String selector"}
+              data-testid="selector-dropdown"
+              size={Math.min(6, Math.max(2, options.length))}
+              value={chosen}
+              onChange={(e) =>
+                set(name, [...e.target.selectedOptions].map((o) => o.value))}
+            >
+              {options.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          )}
+
+          {shape.hasLayout && (
+            <div
+              className="canvas-selector-options"
+              data-testid="selector-options"
+              style={layoutStyle(layout, columns)}
+              role={shown === "radio" ? "radiogroup" : "group"}
+              aria-label={label || "String selector"}
+            >
+              {options.map((o) => (
+                <label key={o} className="canvas-selector-option">
+                  <input
+                    type={shown === "radio" ? "radio" : "checkbox"}
+                    name={listId}
+                    value={o}
+                    checked={chosen.includes(o)}
+                    onChange={() => choose(o)}
+                  />
+                  <span>{o}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {options.length === 0 && (
+            <span className="field-hint">
+              {sourceOf(optionSource) === "dynamic"
+                ? "No options yet — the array variable this reads is empty"
+                : "No options yet — add some in Settings"}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StringSelectorSettings() {
+  const {
+    name, label, selection, display, optionSource, options, optionsVariable,
+    placeholder, allowClearing, layout, columns,
+    actions: { setProp },
+  } = useNode((node) => ({
+    name: node.data.props.name,
+    label: node.data.props.label,
+    selection: node.data.props.selection,
+    display: node.data.props.display,
+    optionSource: node.data.props.optionSource,
+    options: node.data.props.options,
+    optionsVariable: node.data.props.optionsVariable,
+    placeholder: node.data.props.placeholder,
+    allowClearing: node.data.props.allowClearing,
+    layout: node.data.props.layout,
+    columns: node.data.props.columns,
+  }));
+  const { declared } = useCanvasVariables();
+  const kind = outputKind(selection);
+  // p.461's "the output variable will be a string variable… will be a string
+  // array variable" - so which variables are offered *depends on the
+  // selection*, and changing it invalidates the binding below.
+  const targets = Object.values(declared).filter((v) => v.kind === kind);
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const shape = modeOf(selection, display);
+  const list: string[] = Array.isArray(options) ? options : [];
+
+  return (
+    <WidgetSetup
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Selected value</span>
+        <select
+          value={name || ""}
+          data-testid="selector-variable"
+          onChange={(e) => setProp((p: { name: string }) => (p.name = e.target.value))}
+        >
+          <option value="">Choose…</option>
+          {targets.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {targets.length === 0
+            ? `Declare a ${kind} variable in the Variables panel first`
+            : `A ${kind} variable, because the selection is ${SELECTIONS[pickModeOf(selection)].label.toLowerCase()}`}
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Selection</span>
+        <select
+          value={pickModeOf(selection)}
+          data-testid="selector-selection"
+          onChange={(e) =>
+            setProp((p: {
+              selection: string; display: string; name: string;
+            }) => {
+              p.selection = e.target.value;
+              // **Both are cleared, and neither is optional.** The display may
+              // not exist under the new selection (p.461 gives radio buttons to
+              // Single and checkboxes to Multiple), and the bound variable is
+              // now the wrong *kind* - so keeping it would save a document the
+              // server refuses, naming a widget the author did not touch.
+              p.display = displayOf(e.target.value, undefined);
+              p.name = "";
+            })}
+        >
+          {Object.entries(SELECTIONS).map(([key, s]) => (
+            <option key={key} value={key}>{s.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">Changing this clears the bound variable — the kind differs</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Display as</span>
+        <select
+          value={displayOf(selection, display)}
+          data-testid="selector-display"
+          onChange={(e) => setProp((p: { display: string }) => (p.display = e.target.value))}
+        >
+          {displaysFor(selection).map((d) => (
+            <option key={d} value={d}>
+              {DISPLAYS[pickModeOf(selection)][d]!.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="field">
+        <span className="field-label">Options from</span>
+        <select
+          value={sourceOf(optionSource)}
+          data-testid="selector-source"
+          onChange={(e) =>
+            setProp((p: { optionSource: string }) => (p.optionSource = e.target.value))}
+        >
+          <option value="static">A list I type</option>
+          <option value="dynamic">A string array variable</option>
+        </select>
+      </label>
+      {sourceOf(optionSource) === "dynamic" ? (
+        <label className="field">
+          <span className="field-label">Options variable</span>
+          <select
+            value={optionsVariable || ""}
+            data-testid="selector-options-variable"
+            onChange={(e) =>
+              setProp((p: { optionsVariable: string }) => (p.optionsVariable = e.target.value))}
+          >
+            <option value="">Choose…</option>
+            {arrays.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <label className="field">
+          <span className="field-label">Options</span>
+          {/* One per line, which is the shortest thing that also lets p.461's
+              "reorder option values" happen by editing. A row of inputs with
+              up/down buttons is more chrome for the same edit. */}
+          <textarea
+            rows={4}
+            value={list.join("\n")}
+            data-testid="selector-options-list"
+            onChange={(e) =>
+              setProp((p: { options: string[] }) => (p.options = e.target.value.split("\n")))}
+          />
+          <span className="field-hint">One per line, in the order they appear</span>
+        </label>
+      )}
+
+      {shape.placeholder !== null && (
+        <label className="field">
+          <span className="field-label">Placeholder</span>
+          <input
+            type="text"
+            value={placeholder || ""}
+            placeholder={shape.placeholder}
+            data-testid="selector-placeholder"
+            onChange={(e) =>
+              setProp((p: { placeholder: string }) => (p.placeholder = e.target.value))}
+          />
+        </label>
+      )}
+      {shape.hasClearing && (
+        <label className="field canvas-toggle">
+          <input
+            type="checkbox"
+            checked={allowClearing !== false}
+            data-testid="selector-allow-clearing"
+            onChange={(e) =>
+              setProp((p: { allowClearing: boolean }) => (p.allowClearing = e.target.checked))}
+          />
+          <span className="field-label">Allow clearing the selection</span>
+        </label>
+      )}
+      {shape.hasLayout && (
+        <>
+          <label className="field">
+            <span className="field-label">Layout</span>
+            <select
+              value={optionLayoutOf(layout)}
+              data-testid="selector-layout"
+              onChange={(e) => setProp((p: { layout: string }) => (p.layout = e.target.value))}
+            >
+              {Object.entries(LAYOUTS).map(([key, l]) => (
+                <option key={key} value={key}>{l}</option>
+              ))}
+            </select>
+          </label>
+          {optionLayoutOf(layout) === "grid" && (
+            <label className="field">
+              <span className="field-label">Columns</span>
+              <input
+                type="number"
+                min={MIN_COLUMNS}
+                max={MAX_COLUMNS}
+                value={columnsOf(columns)}
+                data-testid="selector-columns"
+                onChange={(e) =>
+                  setProp((p: { columns: number }) => (p.columns = Number(e.target.value)))}
+              />
+            </label>
+          )}
+        </>
+      )}
+      </>}
+    />
+  );
+}
+
+CanvasStringSelector.craft = {
+  displayName: "String selector",
+  props: {
+    name: "", label: "", selection: "single", display: "dropdown",
+    optionSource: "static", options: [], optionsVariable: "",
+    placeholder: "", allowClearing: true, layout: "vertical", columns: 3,
+  },
+  related: { settings: StringSelectorSettings },
 };
 
 // ---- Dataset table --------------------------------------------------------------
@@ -6666,6 +7038,7 @@ export const CANVAS_RESOLVER = {
   CanvasParameterControl,
   CanvasNumericInput,
   CanvasTextInput,
+  CanvasStringSelector,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -6694,6 +7067,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
   { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
+  { key: "CanvasStringSelector", label: "String selector", hint: "Pick one or many from a list of strings" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

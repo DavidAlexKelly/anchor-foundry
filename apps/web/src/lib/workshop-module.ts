@@ -153,6 +153,9 @@ export const REFERENCE_PROPS = [
   "tabVariable",
   // p.133's array to loop through — see the note on the API's copy.
   "arrayVariable",
+  // p.461's dynamic option generation - a String Selector's options come from
+  // a string array variable, so that variable is in use. See the API's copy.
+  "optionsVariable",
   "name",
 ] as const;
 

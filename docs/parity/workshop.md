@@ -330,7 +330,7 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 
 Foundry's inventory, compiled from the category Overview pages and the per-widget page headers. Some widgets appear in one and not the other; the union is the target.
 
-Ours in the right-hand column. **We have 15 of ~52.**
+Ours in the right-hand column. **We have 16 of ~52.**
 
 ### Filtering (p.444) — 13
 
@@ -339,8 +339,8 @@ Ours in the right-hand column. **We have 15 of ~52.**
 | Filter List — histograms, distribution charts, keyword search, single/multi-select, default criteria, user-addable filters | ◑ `CanvasFilterList` — no histograms or distribution charts |
 | Object Dropdown — select one object | ○ |
 | Object Selector — select many objects | ○ |
-| **String Selector** | ◑ via generic `CanvasParameterControl` |
-| **Checkbox** | ◑ via `CanvasParameterControl` |
+| **String Selector** | ◑ §204 `CanvasStringSelector` | (p.459–461) — p.461's whole selection/display matrix: Single writes a **string** and offers a dropdown or radio buttons; Multiple writes an **array** and offers a dropdown or checkboxes. **The selection changes what the variable holds**, so changing it clears the bound variable and resets the display — a binding legal a moment ago is now the wrong kind, and keeping it would save a document the server refuses naming a widget the author did not touch. Radio buttons and checkboxes carry p.461's layout (vertical, horizontal, or a grid with a column count); the two dropdowns carry different default placeholders ("Select an option..." and "Search options..."), which is p.461 being precise rather than inconsistent — one picks, the other searches. Options are static or from a string array variable (`optionsVariable`, which §191's drift guard caught missing from `REFERENCE_PROPS` on the way in). **Every read of the pair goes through `displayOf`**, because one click in the panel can leave `multiple`/`radio` in a document and trusting it would draw radio buttons over a list. ◑ for p.461's "allow creating new options", which changes the option list at runtime and raises where user-created options live |
+| **Checkbox** | ✅ §204 | (p.444 lists it; p.461 shows what it is) — **not a widget of its own**. p.461 describes checkboxes as a *display mode of a multiple selection* on the String Selector, so that is where they live |
 | Date and Time Picker | ○ |
 | **Date Input** — single date or range | ◑ via `CanvasParameterControl` |
 | **Text Input** | ◑ §203 `CanvasTextInput` | (p.465–466) — label, string value output (offering **`string` variables only**), placeholder, and p.465's format. **The format decides which other settings exist**, which is the asymmetry p.465 states and does not explain: "event on enter" belongs to Single line, "initial height" to Text area, and in a text area the enter key *inserts a newline* — so a widget that also fired an event on it would be fighting the person typing. Enter fires through the new **`submit` trigger** (p.465's "Event on enter"), distinct from `change` because `change` fires per keystroke and this fires once, when the entry is finished. Height is in **rows, not pixels** — a divergence, since p.465 names no unit and a pixel height is wrong the moment a viewer's font size differs from the author's. ◑ for p.466's **Markdown** format, which is a rich-text editor with a toolbar and a raw/rich toggle rather than a format flag, and belongs to the Markdown row of the build order |
@@ -350,7 +350,7 @@ Ours in the right-hand column. **We have 15 of ~52.**
 | Prominent Terms | ○ |
 | User Select | ○ |
 
-Our generic parameter control was a defensible design, but it was *our* design, and the ask was that Workshop feel like Workshop. **Decided in `docs/decisions/0011`: split.** Reading p.459–468 rather than the category overview, the five diverge in configuration rather than appearance, and p.468's percent rule changes what a variable holds — a shared control would carry that rule permanently and apply it never. The named widgets land beside `CanvasParameterControl` rather than replacing it: Craft resolves a node by `resolvedName`, so removing the component does not degrade an existing module, it stops the module rendering. Its palette entry goes when all four exist. Built so far: **Numeric Input** (§202) and **Text Input** (§203).
+Our generic parameter control was a defensible design, but it was *our* design, and the ask was that Workshop feel like Workshop. **Decided in `docs/decisions/0011`: split.** Reading p.459–468 rather than the category overview, the five diverge in configuration rather than appearance, and p.468's percent rule changes what a variable holds — a shared control would carry that rule permanently and apply it never. The named widgets land beside `CanvasParameterControl` rather than replacing it: Craft resolves a node by `resolvedName`, so removing the component does not degrade an existing module, it stops the module rendering. Its palette entry goes when all four exist. Built so far: **Numeric Input** (§202), **Text Input** (§203) and **String Selector** (§204). Only the Date and Time Picker is left.
 
 ### Core display (p.220) — 7
 

@@ -287,6 +287,11 @@ REFERENCE_PROPS = (
     # save* - the first time that check has fired on new work rather than on a
     # hole that had been open for weeks, which is what it was written for.
     "arrayVariable",
+    # p.461's dynamic option generation: "a string array variable to be used to
+    # generate options for the widget". Found by §191's drift guard on the way
+    # in, for the second time (§198's `arrayVariable` was the first) - so a
+    # selector's option list cannot be deleted out from under it.
+    "optionsVariable",
     "name",
 )
 
