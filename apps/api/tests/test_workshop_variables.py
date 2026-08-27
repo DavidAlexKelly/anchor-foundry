@@ -1249,6 +1249,33 @@ def test_a_row_click_may_write_the_whole_object() -> None:
     assert events["e_1"].effects[0].config["from"] == "object"
 
 
+def test_an_entry_may_be_committed_with_the_enter_key() -> None:
+    """p.465's "Event on enter: set event(s) to be triggered when the enter key
+    is pressed", as a trigger of its own.
+
+    Distinct from `change`, which fires per keystroke. The whole point of
+    p.465's setting is to run something **once**, when the entry is finished,
+    and a widget that could only announce `change` could not express it.
+    """
+    events = we.parse(
+        {"e_1": event("e_1", node="txt", on="submit", effects=[set_var("v_a", "x")])},
+        layout={"txt": node({})},
+        variables=wv.parse({"v_a": var("v_a", label="A")}),
+    )
+    assert events["e_1"].on == "submit"
+
+
+def test_a_trigger_this_platform_does_not_have_is_refused() -> None:
+    """Including the one `submit` was nearly called. The vocabulary is closed so
+    a document cannot carry a trigger nothing will ever fire — which would be a
+    wiring that looks configured and never runs."""
+    with pytest.raises(we.EventError, match="expected one of"):
+        we.parse(
+            {"e_1": event("e_1", node="txt", on="enter")},
+            layout={"txt": node({})},
+        )
+
+
 def test_writing_from_an_unknown_source_is_refused() -> None:
     with pytest.raises(we.EventError, match="expected one of"):
         we.parse(

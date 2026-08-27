@@ -26,6 +26,10 @@ import { arrayEntries, pageOf } from "./loop-array";
 import {
   canReset, suffixText as suffixTextOf, toDisplay, toStored, type SuffixKind,
 } from "./number-input";
+import {
+  formatOf, MAX_ROWS, MIN_ROWS, rowsOf, settingsOf, TEXT_FORMATS,
+  toDisplay as toTextDisplay, toStored as toTextStored,
+} from "./text-input";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -1033,6 +1037,207 @@ CanvasNumericInput.craft = {
     prefix: "", suffix: "none", suffixText: "",
   },
   related: { settings: NumericInputSettings },
+};
+
+// ---- Text Input (p.465) ---------------------------------------------------------
+/** p.465's Text Input, decision 0011's second named input widget.
+ *
+ * Which settings each format has is in `text-input.ts` and tested without a
+ * browser — including the rule that makes the asymmetry more than editorial:
+ * **enter submits on a single line and not in a text area**, because in a text
+ * area the enter key inserts a newline and a widget that also fired an event on
+ * it would be fighting the person typing.
+ *
+ * Uncontrolled while being typed into, for §202's reason: the variable is
+ * written on every keystroke, and the text is re-derived from the variable only
+ * when it changes from somewhere else.
+ */
+export function CanvasTextInput({
+  name = "",
+  label = "",
+  placeholder = "",
+  format = "line",
+  rows = 4,
+}: {
+  name?: string;
+  label?: string;
+  placeholder?: string;
+  format?: string;
+  rows?: number;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { values, set } = useCanvasParameters();
+  const stored = name ? values[name] : undefined;
+  const shape = settingsOf(format);
+
+  const settled = toTextDisplay(stored);
+  const [text, setText] = useState(settled);
+  const [lastSeen, setLastSeen] = useState(settled);
+  if (settled !== lastSeen) {
+    setLastSeen(settled);
+    setText(settled);
+  }
+
+  const { events: moduleEvents } = useCanvasVariables();
+  const changed = eventsFor(moduleEvents, nodeId, "change");
+  const submitted = eventsFor(moduleEvents, nodeId, "submit");
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+
+  function write(next: string) {
+    setText(next);
+    const value = toTextStored(next);
+    setLastSeen(toTextDisplay(value));
+    set(name, value);
+    if (mode === "run" && changed.length > 0) {
+      runEvents(changed, { ...eventContext, payload: { value: next } });
+    }
+  }
+
+  /** p.465's "Event on enter". Asked of the catalogue rather than compared
+   * against `"line"` here — a second place that knows which formats submit is
+   * a second place to get it wrong when Markdown lands. */
+  function keyDown(e: React.KeyboardEvent) {
+    if (e.key !== "Enter" || !shape.submitsOnEnter) return;
+    // Stopped so the keypress does not also reach a form or a parent handler
+    // that would do something else with it.
+    e.preventDefault();
+    if (mode === "run" && submitted.length > 0) {
+      runEvents(submitted, { ...eventContext, payload: { value: text } });
+    }
+  }
+
+  const shared = {
+    "aria-label": label || "Text input",
+    "data-testid": "text-input",
+    value: text,
+    placeholder,
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      write(e.target.value),
+    onKeyDown: keyDown,
+  };
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!name ? (
+        <p className="canvas-widget-empty">
+          Text input - bind a string variable in Settings
+        </p>
+      ) : (
+        <label className="field" style={{ maxWidth: 420 }}>
+          {label && <span className="field-label">{label}</span>}
+          {shape.multiline
+            ? <textarea {...shared} rows={rowsOf(rows)} />
+            : <input type="text" {...shared} />}
+        </label>
+      )}
+    </div>
+  );
+}
+
+function TextInputSettings() {
+  const {
+    name, label, placeholder, format, rows,
+    actions: { setProp },
+  } = useNode((node) => ({
+    name: node.data.props.name,
+    label: node.data.props.label,
+    placeholder: node.data.props.placeholder,
+    format: node.data.props.format,
+    rows: node.data.props.rows,
+  }));
+  const { declared } = useCanvasVariables();
+  // p.465's "String value" output.
+  const strings = Object.values(declared).filter((v) => v.kind === "string");
+  const shape = settingsOf(format);
+
+  return (
+    <WidgetSetup
+      outputs={<>
+      <label className="field">
+        <span className="field-label">String value</span>
+        <select
+          value={name || ""}
+          data-testid="text-variable"
+          onChange={(e) => setProp((p: { name: string }) => (p.name = e.target.value))}
+        >
+          <option value="">Choose…</option>
+          {strings.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {strings.length === 0
+            ? "Declare a string variable in the Variables panel first"
+            : "Where the text the viewer types is stored"}
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Placeholder</span>
+        <input
+          type="text"
+          value={placeholder || ""}
+          data-testid="text-placeholder"
+          onChange={(e) =>
+            setProp((p: { placeholder: string }) => (p.placeholder = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Format</span>
+        <select
+          value={formatOf(format)}
+          data-testid="text-format"
+          onChange={(e) => setProp((p: { format: string }) => (p.format = e.target.value))}
+        >
+          {/* Rendered from the catalogue, so an option can never name a format
+              the widget does not draw - and p.466's Markdown editor stays out
+              until it exists. */}
+          {Object.entries(TEXT_FORMATS).map(([key, f]) => (
+            <option key={key} value={key}>{f.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {shape.submitsOnEnter
+            ? "Enter fires this widget's Submitted events"
+            : "Enter inserts a new line, so there is no Submitted event here"}
+        </span>
+      </label>
+      {shape.hasHeight && (
+        <label className="field">
+          <span className="field-label">Initial height</span>
+          <input
+            type="number"
+            min={MIN_ROWS}
+            max={MAX_ROWS}
+            value={rowsOf(rows)}
+            data-testid="text-rows"
+            onChange={(e) => setProp((p: { rows: number }) => (p.rows = Number(e.target.value)))}
+          />
+          <span className="field-hint">In rows, so it scales with the viewer&apos;s text</span>
+        </label>
+      )}
+      </>}
+    />
+  );
+}
+
+CanvasTextInput.craft = {
+  displayName: "Text input",
+  props: { name: "", label: "", placeholder: "", format: "line", rows: 4 },
+  related: { settings: TextInputSettings },
 };
 
 // ---- Dataset table --------------------------------------------------------------
@@ -6460,6 +6665,7 @@ export const CANVAS_RESOLVER = {
   CanvasFilterList,
   CanvasParameterControl,
   CanvasNumericInput,
+  CanvasTextInput,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -6487,6 +6693,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
   { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
+  { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
