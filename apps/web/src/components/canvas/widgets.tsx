@@ -36,6 +36,11 @@ import {
   optionsOf, outputKind, pick, placeholderOf, SELECTIONS,
   selectionOf as pickModeOf, sourceOf,
 } from "./string-selector";
+import {
+  COMMON_ZONES, DATE_FORMATS, DEFAULT_DATE_FORMAT, DEFAULT_PRECISION,
+  PRECISIONS, TIME_FORMATS, ZONE_MODES, formatDisplay, fromLocalInput, isZone,
+  toLocalInput, zoneLabel, zoneOf, type Precision,
+} from "./date-time";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -798,6 +803,13 @@ function ParameterSettings() {
   );
 }
 
+/** **Not in the palette any more** (decision 0011, completed in §205): all four
+ * of p.459–468's named input widgets exist, so this is no longer what an author
+ * should reach for. It stays in the resolver because saved documents contain it
+ * — Craft maps a node's `resolvedName` to a component, and a document naming one
+ * the resolver lacks does not degrade, it fails to render. It also keeps the one
+ * capability no named widget has: p.461's options are static or from a string
+ * array variable, never from a dataset query. */
 CanvasParameterControl.craft = {
   displayName: "Filter",
   props: { name: "", label: "Filter", control: "select", datasetId: null, column: null },
@@ -1610,6 +1622,285 @@ CanvasStringSelector.craft = {
     placeholder: "", allowClearing: true, layout: "vertical", columns: 3,
   },
   related: { settings: StringSelectorSettings },
+};
+
+// ---- Date and Time Picker (p.463-464) -------------------------------------------
+/** p.463-464's Date and Time Picker, decision 0011's fourth and last named
+ * input widget.
+ *
+ * Everything about instants and zones is in `date-time.ts` and tested without a
+ * browser. **The rule this widget exists to keep** is that the zone changes how
+ * the value is read and written and never what the variable holds — the mirror
+ * of p.468's percent suffix, and the inversion is why both needed splitting out.
+ *
+ * The control is one `<input type="datetime-local">` whose value is the wall
+ * clock *in the chosen zone*, with `step` from the precision — which is also
+ * what makes the browser show the seconds and milliseconds boxes.
+ */
+export function CanvasDateTimePicker({
+  name = "",
+  label = "",
+  dateFormat = "iso",
+  timeFormat = "h24",
+  precision = "minute",
+  zoneMode = "local",
+  timezone = "UTC",
+  timezoneVariable = "",
+  zoneEditable = false,
+}: {
+  name?: string;
+  label?: string;
+  dateFormat?: string;
+  timeFormat?: string;
+  precision?: string;
+  zoneMode?: string;
+  timezone?: string;
+  timezoneVariable?: string;
+  zoneEditable?: boolean;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { values, set } = useCanvasParameters();
+  const { resolved, events: moduleEvents } = useCanvasVariables();
+
+  const shape = PRECISIONS[precision as Precision] ?? PRECISIONS[DEFAULT_PRECISION];
+  const step = shape.step;
+  const grain = (Object.hasOwn(PRECISIONS, precision) ? precision : DEFAULT_PRECISION) as Precision;
+  const configured = zoneOf(
+    zoneMode, timezone, timezoneVariable ? resolved[timezoneVariable] : undefined,
+  );
+  // p.464's "Timezone user editable". The viewer's choice lives here rather
+  // than in a variable: it changes how *this* reader sees the value, and
+  // writing it to the document would change it for everybody.
+  const [chosenZone, setChosenZone] = useState<string | null>(null);
+  const zone = zoneEditable && chosenZone && isZone(chosenZone) ? chosenZone : configured;
+
+  const stored = name ? values[name] : undefined;
+  const shown = toLocalInput(stored, zone, grain);
+
+  const changed = eventsFor(moduleEvents, nodeId, "change");
+  const overlayIds = useOverlayIds();
+  const eventContext = useEventContext(undefined, overlayIds);
+
+  function write(text: string) {
+    const instant = fromLocalInput(text, zone, grain);
+    set(name, instant);
+    if (mode === "run" && changed.length > 0) {
+      runEvents(changed, { ...eventContext, payload: { value: instant ?? "" } });
+    }
+  }
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!name ? (
+        <p className="canvas-widget-empty">
+          Date and time - bind a timestamp variable in Settings
+        </p>
+      ) : (
+        <div className="field canvas-datetime" style={{ maxWidth: 420 }}>
+          {label && <span className="field-label">{label}</span>}
+          <input
+            type="datetime-local"
+            aria-label={label || "Date and time"}
+            data-testid="datetime-input"
+            step={step}
+            value={shown}
+            onChange={(e) => write(e.target.value)}
+          />
+          {zoneEditable ? (
+            <select
+              aria-label="Timezone"
+              data-testid="datetime-zone"
+              value={zone}
+              onChange={(e) => setChosenZone(e.target.value)}
+            >
+              {/* The configured zone is always present, even when it is not one
+                  of the common ones - otherwise a module pinned to a zone this
+                  list omits would silently move the viewer somewhere else. */}
+              {[...new Set([configured, ...COMMON_ZONES])].map((z) => (
+                <option key={z} value={z}>{zoneLabel(z, stored)}</option>
+              ))}
+            </select>
+          ) : (
+            // **Named even when it cannot be changed.** Two viewers in
+            // different zones otherwise see different times in a field that
+            // looks identical, and neither can tell why.
+            <span className="field-hint" data-testid="datetime-zone-label">
+              {zoneLabel(zone, stored)}
+            </span>
+          )}
+          {shown && (
+            <span className="field-hint" data-testid="datetime-display">
+              {formatDisplay(stored, zone, dateFormat, timeFormat, grain)}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DateTimePickerSettings() {
+  const {
+    name, label, dateFormat, timeFormat, precision, zoneMode, timezone,
+    timezoneVariable, zoneEditable,
+    actions: { setProp },
+  } = useNode((node) => ({
+    name: node.data.props.name,
+    label: node.data.props.label,
+    dateFormat: node.data.props.dateFormat,
+    timeFormat: node.data.props.timeFormat,
+    precision: node.data.props.precision,
+    zoneMode: node.data.props.zoneMode,
+    timezone: node.data.props.timezone,
+    timezoneVariable: node.data.props.timezoneVariable,
+    zoneEditable: node.data.props.zoneEditable,
+  }));
+  const { declared } = useCanvasVariables();
+  // p.463's "Selected timestamp" output.
+  const timestamps = Object.values(declared).filter((v) => v.kind === "timestamp");
+  const strings = Object.values(declared).filter((v) => v.kind === "string");
+
+  return (
+    <WidgetSetup
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Selected timestamp</span>
+        <select
+          value={name || ""}
+          data-testid="datetime-variable"
+          onChange={(e) => setProp((p: { name: string }) => (p.name = e.target.value))}
+        >
+          <option value="">Choose…</option>
+          {timestamps.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {timestamps.length === 0
+            ? "Declare a timestamp variable in the Variables panel first"
+            : "Holds the instant, not the wall clock — the timezone below only changes how it reads"}
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label || ""}
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Date format</span>
+        <select
+          value={dateFormat || DEFAULT_DATE_FORMAT}
+          data-testid="datetime-date-format"
+          onChange={(e) => setProp((p: { dateFormat: string }) => (p.dateFormat = e.target.value))}
+        >
+          {Object.entries(DATE_FORMATS).map(([key, f]) => (
+            <option key={key} value={key}>{f.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Time format</span>
+        <select
+          value={timeFormat || "h24"}
+          data-testid="datetime-time-format"
+          onChange={(e) => setProp((p: { timeFormat: string }) => (p.timeFormat = e.target.value))}
+        >
+          {Object.entries(TIME_FORMATS).map(([key, l]) => (
+            <option key={key} value={key}>{l}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Time precision</span>
+        <select
+          value={precision || DEFAULT_PRECISION}
+          data-testid="datetime-precision"
+          onChange={(e) => setProp((p: { precision: string }) => (p.precision = e.target.value))}
+        >
+          {Object.entries(PRECISIONS).map(([key, p]) => (
+            <option key={key} value={key}>{p.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">Anything finer is dropped from the stored value, not just hidden</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Default timezone</span>
+        <select
+          value={zoneMode || "local"}
+          data-testid="datetime-zone-mode"
+          onChange={(e) => setProp((p: { zoneMode: string }) => (p.zoneMode = e.target.value))}
+        >
+          {Object.entries(ZONE_MODES).map(([key, l]) => (
+            <option key={key} value={key}>{l}</option>
+          ))}
+        </select>
+      </label>
+      {zoneMode === "fixed" && (
+        <label className="field">
+          <span className="field-label">Timezone</span>
+          <select
+            value={timezone || "UTC"}
+            data-testid="datetime-timezone"
+            onChange={(e) => setProp((p: { timezone: string }) => (p.timezone = e.target.value))}
+          >
+            {COMMON_ZONES.map((z) => (
+              <option key={z} value={z}>{z}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {zoneMode === "variable" && (
+        <label className="field">
+          <span className="field-label">Timezone variable</span>
+          <select
+            value={timezoneVariable || ""}
+            data-testid="datetime-timezone-variable"
+            onChange={(e) =>
+              setProp((p: { timezoneVariable: string }) => (p.timezoneVariable = e.target.value))}
+          >
+            <option value="">Choose…</option>
+            {strings.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            An IANA name like Europe/London. Anything else falls back to the viewer&apos;s own zone
+          </span>
+        </label>
+      )}
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={!!zoneEditable}
+          data-testid="datetime-zone-editable"
+          onChange={(e) =>
+            setProp((p: { zoneEditable: boolean }) => (p.zoneEditable = e.target.checked))}
+        />
+        <span className="field-label">Timezone user editable</span>
+        <span className="field-hint">Changes what this reader sees, never the stored instant</span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasDateTimePicker.craft = {
+  displayName: "Date and time",
+  props: {
+    name: "", label: "", dateFormat: "iso", timeFormat: "h24",
+    precision: "minute", zoneMode: "local", timezone: "UTC",
+    timezoneVariable: "", zoneEditable: false,
+  },
+  related: { settings: DateTimePickerSettings },
 };
 
 // ---- Dataset table --------------------------------------------------------------
@@ -7039,6 +7330,7 @@ export const CANVAS_RESOLVER = {
   CanvasNumericInput,
   CanvasTextInput,
   CanvasStringSelector,
+  CanvasDateTimePicker,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -7064,10 +7356,10 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
-  { key: "CanvasParameterControl", label: "Filter", hint: "A dropdown or search box other widgets filter by" },
   { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
   { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
   { key: "CanvasStringSelector", label: "String selector", hint: "Pick one or many from a list of strings" },
+  { key: "CanvasDateTimePicker", label: "Date and time", hint: "A single date and time, in a chosen timezone" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

@@ -4290,6 +4290,34 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 205. The Date and Time Picker, and the rule that runs the other way (this session)
+
+p.463–464's widget, decision 0011's fourth — and with it the generic parameter control's **palette entry is gone**, as that record said it would be. The component stays in the resolver: Craft maps a node's `resolvedName` to a component, and a document naming one it lacks does not degrade, it fails to render.
+
+**The timezone is p.468's percent rule inverted, and the inversion is the whole argument for the split.** Percent *changes what the variable holds* — type 25, store 0.25. The timezone must **not**: a `timestamp` variable holds one instant, and the zone only decides how it is written down and how a typed wall clock is read back. Two settings in the same widget family pulling in opposite directions is the strongest evidence decision 0011 could have had, and neither rule would have survived in a shared control without being applied in the wrong place.
+
+Three things worth naming. **Reading a wall clock back needs two passes**, because the offset depends on the instant and the instant is what is being solved for — one pass is wrong for exactly the hour either side of a DST change, which is the hour somebody will pick the day it happens. **Precision truncates the stored instant**, not just the display, and truncates with `Math.floor` because a remainder subtraction rounds *up* before 1970. **An unknown zone falls back to the viewer's own** rather than throwing: the zone can come from a variable, a variable holds whatever a derivation put in it, and `Intl` throwing inside a render is a blank module rather than a wrong time.
+
+No timezone library. `Intl.DateTimeFormat` already knows every offset and every DST rule; what this adds is the arithmetic to get an offset *out* of it.
+
+**`timezoneVariable` went into all four reference lists on the way in.** §191's guard caught a missing one in §198 and again in §204, both times on a widget whose *configuration* came from a variable rather than its output. Third time, stated before the check had to say it.
+
+---
+
+**Four survivors, and three of them were the same instinct: write the obvious precondition, then find the general check already covered it.**
+
+The parse validation compared six fields, of which the day comparison could never fail alone — any day overflow also rolls the month. `asInstant` special-cased `null`, `undefined` and `""`, and `new Date` makes an Invalid Date of all three. `partsIn` corrected midnight rendered as hour 24. Each is gone rather than excused: the six comparisons became one string comparison with nothing unreachable in it, and `hourCycle: "h23"` replaces `hour12: false` so a 24 is impossible by construction rather than patched afterwards.
+
+**The fourth is a new shape, and a sharp one.** `vitest.config.ts` deliberately runs the suite in `America/New_York` — there is a note there explaining that on a UTC container a test of UTC formatting proves nothing. My `zoneOf` fallback test then used `America/New_York` as the zone that should *not* come back. It is the suite's own local zone, so the fallback and the wrong answer were the same string, and a mutant returning the fixed zone in local mode sailed through.
+
+**A test whose "wrong" value is the environment's default cannot fail.** The fix computes a zone the suite is provably not running in rather than naming one, so it stays true if the config's `TZ` changes. And it is the fifth member of a family these units keep finding: an expectation derived from its own subject (§201), a guard tested only by its neighbour (§202), a clock that erases its own evidence (§203), a read that corrects what it is asked about (§204), and now a control value that coincides with the environment's default. **In each, two things that had to differ were the same thing.**
+
+**41 mutants, 41 caught, 0 survivors, 0 no-ops** after the fixes.
+
+**862 unit tests** (was 756); **379 browser tests** (was 365); 1512 API tests, 1 skipped, unchanged.
+
+`workshop.md` §10 goes from 16 of ~52 widgets to 17, and decision 0011 is complete.
+
 ---
 ---
 ---
@@ -4427,6 +4455,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **The clock must not be able to overwrite the thing it is timing.** §202 established that asserting "nothing happened" needs a point after which it definitely would have, and §203 promptly built one wrong: the button that proved a cycle had completed set the *same* variable the event under test would have set, so "did not fire" passed because the click had erased the evidence. The mutant it was written to catch sailed through. The clock has to be a **second, independent** observable — and the tell that it is not is a test where the waiting step writes anything the assertion reads. This and the two entries above are one family: an expectation derived from its own subject, a guard tested only by its neighbour, a clock that clears its own evidence. In each, the test and the thing it checks are not actually two.
 
 - **A test cannot see through a normalising read: where code corrects on the way out, assert on what was written.** §204's panel resets two props when the selection changes, and both resets had tests that could not fail. The variable picker lists only variables of the selection's kind, so a `<select>` still bound to a stale one renders `""` — identical to cleared. The display select's value goes through the resolver, so it reads the legal value whether or not the prop was fixed. **The render shows the corrected value; the prop keeps the stale one; the prop is what gets saved.** The defence is right and the assertion was in the wrong place — read the document back from the server instead. The tell is a control whose displayed value is computed rather than stored, which is exactly the controls worth defending, so this will keep happening. It completes the family two entries up: §203's clock could not see a change because something *erased* it; this one could not because something *corrected* it.
+
+- **A test whose "wrong" value is the environment's default cannot fail.** §205's `zoneOf` fallback test asserted that a bad configuration falls back to the viewer's own timezone, using `America/New_York` as the zone that should *not* come back — and `vitest.config.ts` deliberately runs the suite in `America/New_York`. The fallback and the wrong answer were the same string. Worse, the config's own comment explains it chose a non-UTC zone precisely so UTC assumptions would show up, which is exactly the trap it then set for anything naming that zone as a contrast. The fix is to **compute** a value the environment provably is not using rather than naming one, so it survives the config changing. The tell is a constant in a test that also appears in a config, a fixture, or a default — and this is the same family as the four entries above: two things that had to differ turning out to be the same thing.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 

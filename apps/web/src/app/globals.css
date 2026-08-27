@@ -1586,6 +1586,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-toggle input { width: auto; }
 .canvas-toggle .field-hint { flex-basis: 100%; }
 
+/* ---- Date and time picker (p.463-464, decision 0011) --------------------- */
+/* The zone label sits under the control rather than beside it: it is the answer
+   to "why does this say 07:00", which is a question asked after reading the
+   value, not before. */
+.canvas-datetime { display: grid; gap: 4px; }
+.canvas-datetime select { max-width: 100%; }
+
 /* ---- String selector (p.461, decision 0011) ------------------------------- */
 .canvas-selector { display: grid; gap: 6px; }
 /* The grid template comes from the widget, because p.461's "grid formation with

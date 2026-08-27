@@ -1,7 +1,8 @@
 # 0011 — Splitting the generic parameter control into Foundry's named input widgets
 
-**Status:** accepted; Numeric Input built in `STATUS.md` §202, Text Input in §203, String
-Selector in §204. Date and Time Picker outstanding.
+**Status:** accepted and **complete**. Numeric Input in `STATUS.md` §202, Text Input in §203,
+String Selector in §204, Date and Time Picker in §205 — and with the fourth built, the generic
+control's palette entry is gone, as this record said it would be.
 **Context:** `docs/parity/workshop.md` §10's filtering table, and the note under it that had
 been sitting there unanswered:
 
@@ -97,8 +98,12 @@ meaning anything.
    split was necessary. "Allow creating new options" is deferred: it changes the option list
    at runtime and raises where user-created options live, which is a different question from
    choosing among options.
-4. **Date and Time Picker** — subsumes *Date Input*; needs timezone handling that nothing
-   else in this platform has yet.
+4. **Date and Time Picker** (§205) — subsumes *Date Input*. The timezone handling turned out to
+   be the **inverse** of item 1's percent rule: percent changes what the variable holds, the
+   timezone must not. Two settings in the same family pulling in opposite directions is the
+   strongest argument this record could have had for splitting, and neither would have been
+   expressible in a shared control without the other applying it in the wrong place. A date
+   *range* is still ○ — two instants in one variable, which no kind expresses.
 
 Each lands with its own settings panel and its own parity row. The palette entry for the
 generic control goes when 4 is done.

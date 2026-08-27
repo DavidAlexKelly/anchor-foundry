@@ -43,6 +43,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   tabVariable: "read",
   arrayVariable: "read",
   optionsVariable: "read",
+  timezoneVariable: "read",
 };
 
 describe("PROP_DIRECTION", () => {
