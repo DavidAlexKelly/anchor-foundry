@@ -1586,6 +1586,19 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-toggle input { width: auto; }
 .canvas-toggle .field-hint { flex-basis: 100%; }
 
+/* ---- String selector (p.461, decision 0011) ------------------------------- */
+.canvas-selector { display: grid; gap: 6px; }
+/* The grid template comes from the widget, because p.461's "grid formation with
+   a specified number of columns" needs the count, which a stylesheet cannot
+   know. Everything else about the arrangement is here. */
+.canvas-selector-options { display: grid; gap: 4px 14px; align-items: start; }
+.canvas-selector-option {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; cursor: pointer; min-width: 0;
+}
+.canvas-selector-option input { width: auto; margin: 0; }
+.canvas-selector-option span { overflow-wrap: anywhere; }
+
 /* ---- the variable lineage graph (workshop parity 3.3, p.77) --------------- */
 /* Over the whole builder rather than inside the Variables panel: the panel is
    240px wide and the thing it opens is a graph. It reuses `.canvas-scrim`. */

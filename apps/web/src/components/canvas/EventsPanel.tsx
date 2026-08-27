@@ -62,7 +62,7 @@ const TRIGGERS: {
     // firing nothing could offer. Both are invisible from inside one half.
     widgets: [
       "CanvasParameterControl", "CanvasFilterList",
-      "CanvasNumericInput", "CanvasTextInput",
+      "CanvasNumericInput", "CanvasTextInput", "CanvasStringSelector",
     ],
   },
   {
