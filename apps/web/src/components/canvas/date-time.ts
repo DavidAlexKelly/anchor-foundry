@@ -278,9 +278,12 @@ export function fromLocalInput(text: unknown, zone: string, precision: Precision
  * document can carry anything at all.
  */
 function asInstant(value: unknown): Date | null {
-  // `""` is not listed here: `new Date("")` is already an Invalid Date, so the
-  // check below covers it. §205's harness proved the extra clause unreachable.
-  if (value === null || value === undefined) return null;
+  // **No early return for the empty cases**, and §205's harness proved each one
+  // unreachable in turn: `String(null)` is `"null"`, `String(undefined)` is
+  // `"undefined"` and `""` is empty, and `new Date` makes an Invalid Date of
+  // all three. The single check below is the whole contract — anything that
+  // does not parse to a real instant has no instant — and a guard that can
+  // never be the reason for an answer is a guard no test can hold.
   const date = value instanceof Date ? value : new Date(String(value));
   return Number.isNaN(date.getTime()) ? null : date;
 }
