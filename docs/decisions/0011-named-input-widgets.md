@@ -1,6 +1,7 @@
 # 0011 — Splitting the generic parameter control into Foundry's named input widgets
 
-**Status:** accepted; Numeric Input built in `STATUS.md` §202, Text Input in §203.
+**Status:** accepted; Numeric Input built in `STATUS.md` §202, Text Input in §203, String
+Selector in §204. Date and Time Picker outstanding.
 **Context:** `docs/parity/workshop.md` §10's filtering table, and the note under it that had
 been sitting there unanswered:
 
@@ -89,8 +90,13 @@ meaning anything.
    which is its own build-order item and its own editor; p.466 describes a formatting toolbar
    and a raw/rich toggle, which is not a format flag. This one also added the `submit` trigger
    to the server's vocabulary, for p.465's "Event on enter".
-3. **String Selector** — subsumes p.444's *Checkbox* row, which p.459–461 shows is a
-   *display mode of a multiple selection* rather than a widget of its own.
+3. **String Selector** (§204) — subsumes p.444's *Checkbox* row, which p.461 shows is a
+   *display mode of a multiple selection* rather than a widget of its own. p.461's selection
+   axis turned out to be the second setting in this family that changes what the output
+   variable *holds* (after §202's percent suffix), which is the clearest evidence yet that the
+   split was necessary. "Allow creating new options" is deferred: it changes the option list
+   at runtime and raises where user-created options live, which is a different question from
+   choosing among options.
 4. **Date and Time Picker** — subsumes *Date Input*; needs timezone handling that nothing
    else in this platform has yet.
 
