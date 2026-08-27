@@ -46,18 +46,24 @@ def module_with(api, name: str, props: dict | None = None, *, submit_events: boo
                               "format": "line", "rows": 4, **(props or {})}},
             "btn": {"resolvedName": "CanvasButton", "props": {"label": "Go"}},
             "echo": {"resolvedName": "CanvasText",
-                     "props": {"tag": "p", "text": "stored: [{{v_note}}] mark: {{v_mark}}"}},
+                     "props": {"tag": "p",
+                               "text": "stored: [{{v_note}}] mark: {{v_mark}} clock: {{v_clock}}"}},
         }),
         "variables": {
             "v_note": {"id": "v_note", "kind": "string", "label": "Note"},
             "v_mark": {"id": "v_mark", "kind": "string", "label": "Mark", "default": "no"},
+            # **A separate variable from the marker, and that is the whole
+            # point.** The first version had the button overwrite `v_mark`, so
+            # "did not fire" passed because the click had erased the evidence
+            # rather than because nothing wrote it. §203's harness caught it.
+            "v_clock": {"id": "v_clock", "kind": "string", "label": "Clock", "default": "no"},
             "v_count": {"id": "v_count", "kind": "number", "label": "Count"},
         },
         "events": {
             **events,
             "e_go": {"id": "e_go", "trigger": {"node": "btn", "on": "click"},
                      "effects": [{"type": "set_variable",
-                                  "config": {"variable": "v_mark", "value": "clicked"}}]},
+                                  "config": {"variable": "v_clock", "value": "ticked"}}]},
         },
     })
     return mod
@@ -108,7 +114,8 @@ def test_the_field_follows_a_variable_changed_from_elsewhere(page, api) -> None:
                               "format": "line", "rows": 4}},
             "btn": {"resolvedName": "CanvasButton", "props": {"label": "Go"}},
             "echo": {"resolvedName": "CanvasText",
-                     "props": {"tag": "p", "text": "stored: [{{v_note}}] mark: {{v_mark}}"}},
+                     "props": {"tag": "p",
+                               "text": "stored: [{{v_note}}] mark: {{v_mark}} clock: {{v_clock}}"}},
         }),
         "variables": {
             "v_note": {"id": "v_note", "kind": "string", "label": "Note"},
@@ -192,6 +199,9 @@ def test_enter_fires_the_submitted_events_on_a_single_line(page, api) -> None:
     expect(echo(page)).to_contain_text("stored: [done]")
     field(page).press("Enter")
     expect(echo(page)).to_contain_text("mark: fired")
+    # And the newline was not also inserted: p.465's single line commits the
+    # entry rather than growing it.
+    expect(field(page)).to_have_value("done")
 
 
 def test_enter_does_not_fire_in_a_text_area(page, api) -> None:
@@ -208,11 +218,11 @@ def test_enter_does_not_fire_in_a_text_area(page, api) -> None:
 
     field(page).fill("line one")
     field(page).press("Enter")
+    # The clock is a *different* variable from the marker, so ticking it proves
+    # a full write-and-resolve cycle completed without disturbing the evidence.
     page.get_by_role("button", name="Go", exact=True).click()
-    expect(echo(page)).to_contain_text("mark: clicked")
-    # `fired` would have overwritten `clicked` only if enter had triggered it
-    # before the click; the click is what proves a full cycle completed.
-    expect(echo(page)).not_to_contain_text("mark: fired")
+    expect(echo(page)).to_contain_text("clock: ticked")
+    expect(echo(page)).to_contain_text("mark: no")
 
 
 def test_the_settings_panel_offers_only_string_variables(page, api) -> None:

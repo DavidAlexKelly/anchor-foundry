@@ -60,16 +60,26 @@ describe("formatOf", () => {
     expect(formatOf("area")).toBe("area");
   });
 
-  it("falls back to a single line for anything it does not know", () => {
+  it("falls back to the single line specifically", () => {
+    // **Named, not compared to `DEFAULT_FORMAT`.** §203's harness moved the
+    // constant to `"area"` and survived, because every assertion below read
+    // its expectation out of the thing under test. The fallback matters *as a
+    // single line*: a document whose format this build does not know gets the
+    // narrower of the two, so a module does not silently acquire paragraph
+    // fields where it had one-line ones.
+    expect(DEFAULT_FORMAT).toBe("line");
+    expect(formatOf("markdown")).toBe("line");
+  });
+
+  it("falls back for anything it does not know", () => {
     // A saved document can name a format this build does not have - an app
     // authored against a later version, or one whose Markdown format arrives
     // before its editor. A field the viewer can type into is the failure worth
     // having; a widget that draws nothing leaves a hole where a field was.
-    expect(formatOf("markdown")).toBe(DEFAULT_FORMAT);
-    expect(formatOf(undefined)).toBe(DEFAULT_FORMAT);
-    expect(formatOf(null)).toBe(DEFAULT_FORMAT);
-    expect(formatOf(7)).toBe(DEFAULT_FORMAT);
-    expect(formatOf("")).toBe(DEFAULT_FORMAT);
+    expect(formatOf(undefined)).toBe("line");
+    expect(formatOf(null)).toBe("line");
+    expect(formatOf(7)).toBe("line");
+    expect(formatOf("")).toBe("line");
   });
 
   it("does not treat an inherited property name as a format", () => {
