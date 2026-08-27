@@ -71,6 +71,8 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   arrayVariable: "read",
   // p.461: the selector *reads* its options from this variable.
   optionsVariable: "read",
+  // p.464: the picker *reads* its timezone from this variable.
+  timezoneVariable: "read",
 };
 
 export interface LineageNode {

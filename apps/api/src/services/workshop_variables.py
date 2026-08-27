@@ -292,6 +292,11 @@ REFERENCE_PROPS = (
     # in, for the second time (§198's `arrayVariable` was the first) - so a
     # selector's option list cannot be deleted out from under it.
     "optionsVariable",
+    # p.464's Default timezone "dynamically using a variable". Added on the way
+    # in rather than after the guard caught it, which is what §198 and §204 each
+    # had to learn: a widget whose *configuration* comes from a variable is the
+    # shape that gets missed, because the obvious reference is the output one.
+    "timezoneVariable",
     "name",
 )
 

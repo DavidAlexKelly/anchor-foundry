@@ -156,6 +156,8 @@ export const REFERENCE_PROPS = [
   // p.461's dynamic option generation - a String Selector's options come from
   // a string array variable, so that variable is in use. See the API's copy.
   "optionsVariable",
+  // p.464's Default timezone read from a variable. See the API's copy.
+  "timezoneVariable",
   "name",
 ] as const;
 
