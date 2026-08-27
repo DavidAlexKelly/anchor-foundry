@@ -73,6 +73,26 @@ def echo(page):
     return page.locator(".canvas-block", has_text="one:").first
 
 
+def save(page):
+    """Click Save and wait for it, not for a moment (§201)."""
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator(".ws-actions .sub")).to_contain_text("saved")
+
+
+def selector_props(mod) -> dict:
+    """The selector's props **as the server holds them**.
+
+    Needed because this widget defends itself by *normalising on read*:
+    `displayOf` resolves an illegal pair, and the variable picker only lists
+    variables of the selection's kind. Both are deliberate, and both mean the
+    rendered control shows the corrected value whether or not the underlying
+    prop was corrected — so a test that reads the control cannot tell a fixed
+    prop from a hidden one. §204's harness found exactly that: two mutants
+    deleting the corrections survived assertions on the selects.
+    """
+    return mod.definition()["layout"]["sel"]["props"]
+
+
 def tick(page):
     """A completed write-and-resolve cycle, for asserting that something did
     *not* happen (§202, §203)."""
@@ -248,7 +268,16 @@ def test_changing_the_selection_clears_the_bound_variable(page, api) -> None:
     page.locator(".canvas-tree-row").filter(has_text="String selector").first.click()
     expect(page.get_by_test_id("selector-variable")).to_have_value("v_pick")
     page.get_by_test_id("selector-selection").select_option("multiple")
-    expect(page.get_by_test_id("selector-variable")).to_have_value("")
+
+    # **Asserted on the saved document, not on the select.** The picker only
+    # lists variables of the selection's kind, so a `<select>` still bound to
+    # `v_pick` renders with value "" once the options no longer contain it —
+    # which looks identical to having been cleared. The prop is what gets
+    # saved, and a stale one is what the server refuses.
+    save(page)
+    props = selector_props(mod)
+    assert props["selection"] == "multiple", props
+    assert not props["name"], props
 
 
 def test_changing_the_selection_moves_the_display_to_a_legal_one(page, api) -> None:
@@ -261,7 +290,12 @@ def test_changing_the_selection_moves_the_display_to_a_legal_one(page, api) -> N
     page.locator(".canvas-tree-row").filter(has_text="String selector").first.click()
     expect(page.get_by_test_id("selector-display")).to_have_value("radio")
     page.get_by_test_id("selector-selection").select_option("multiple")
-    expect(page.get_by_test_id("selector-display")).to_have_value("dropdown")
+
+    # Again on the saved document: the select's value goes through `displayOf`,
+    # which resolves `multiple`/`radio` to `dropdown` for rendering — so the
+    # control reads "dropdown" whether or not the prop was reset.
+    save(page)
+    assert selector_props(mod)["display"] == "dropdown", selector_props(mod)
 
     options = page.get_by_test_id("selector-display").locator("option")
     labels = sorted(options.nth(i).inner_text() for i in range(options.count()))

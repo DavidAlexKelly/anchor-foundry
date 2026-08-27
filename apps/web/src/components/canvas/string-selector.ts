@@ -185,6 +185,11 @@ export function optionsOf(source: unknown, staticList: unknown, dynamic: unknown
  * One shape for the render: a single selection is a list of nought or one. The
  * alternative is every drawing branch asking the selection again, and the
  * checkbox arm and the radio arm differing in a way nothing checks.
+ *
+ * **It always returns a fresh array** — `filter` and `[value]` both allocate —
+ * and `pick` below relies on that: nothing downstream can reach the caller's
+ * list, so the copy in `pick` is clarity rather than defence. §204's harness
+ * proved it by mutating that copy into a `push` and finding nothing could tell.
  */
 export function chosenOf(selection: unknown, value: unknown): string[] {
   if (selectionOf(selection) === "multiple") {
