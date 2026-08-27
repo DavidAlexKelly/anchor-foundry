@@ -9,10 +9,22 @@ import {
 /** p.463–464's Date and Time Picker. */
 
 const UTC = "UTC";
+/** **This is also the zone `vitest.config.ts` runs the suite in**, deliberately
+ * (see the note there). That makes it the right zone for the DST cases, which
+ * assert exact instants — and the *wrong* zone for any assertion whose point is
+ * that a value differs from the viewer's own, because there the two coincide
+ * and the assertion cannot fail. §205's harness found one such test. */
 const NY = "America/New_York";
 /** A half-hour offset, which is where an implementation that stores offsets as
  * whole hours falls over. */
 const KOLKATA = "Asia/Kolkata";
+
+/** A zone the suite is provably not running in, whatever it is running in.
+ * Computed rather than named, so this stays true if the config's `TZ` changes. */
+function notLocal(): string {
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return local === "Asia/Tokyo" ? "Europe/Berlin" : "Asia/Tokyo";
+}
 
 describe("the catalogues", () => {
   it("has p.464's two time formats", () => {
@@ -83,11 +95,17 @@ describe("zoneOf", () => {
     // makes `Intl` throw, which in a render is a blank module rather than a
     // wrong time — so a bad value shows the viewer's own time, which is wrong
     // in a way they can see and correct.
+    // **Every zone passed in here has to be one the suite is not running in.**
+    // The first version used `NY`, which *is* the suite's own zone — so a
+    // mutant that returned the fixed zone in local mode returned the same
+    // answer as the fallback, and the assertion could not fail.
     const local = zoneOf("local", null, null);
+    const other = notLocal();
     expect(isZone(local)).toBe(true);
-    expect(zoneOf("variable", NY, "Mars/Olympus")).toBe(local);
-    expect(zoneOf("fixed", "Mars/Olympus", null)).toBe(local);
-    expect(zoneOf("something else", NY, "Asia/Tokyo")).toBe(local);
+    expect(other).not.toBe(local);
+    expect(zoneOf("variable", other, "Mars/Olympus")).toBe(local);
+    expect(zoneOf("fixed", "Mars/Olympus", other)).toBe(local);
+    expect(zoneOf("something else", other, other)).toBe(local);
   });
 });
 
@@ -159,9 +177,11 @@ describe("toLocalInput", () => {
   });
 
   it("does not roll the day back at midnight", () => {
-    // `hour12: false` renders midnight as 24 in some ICU versions, which would
-    // make the day one too small when read back.
+    // `hour12: false` is the option that historically resolved to `h24` in some
+    // engines, rendering midnight as 24 and making the day one too small when
+    // read back. `hourCycle: "h23"` makes that impossible by construction.
     expect(toLocalInput("2026-03-01T00:00:00.000Z", UTC, "minute")).toBe("2026-03-01T00:00");
+    expect(toLocalInput("2026-03-01T05:00:00.000Z", NY, "minute")).toBe("2026-03-01T00:00");
   });
 });
 

@@ -162,15 +162,19 @@ function partsIn(instant: Date, zone: string): Record<string, number> {
     timeZone: zone,
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
-    hour12: false,
+    // **`hourCycle: "h23"`, not `hour12: false`.** The latter is the option
+    // that historically resolved to `h24` in some engines, which renders
+    // midnight as 24 and would make the day one too small when read back. This
+    // makes that impossible rather than correcting it afterwards — §205's
+    // harness showed the correction was unreachable in this ICU, and an
+    // unreachable guard against an engine difference is a guard nobody can
+    // trust either way.
+    hourCycle: "h23",
   }).formatToParts(instant);
   const out: Record<string, number> = {};
   for (const part of parts) {
     if (part.type !== "literal") out[part.type] = Number(part.value);
   }
-  // `hour12: false` still renders midnight as 24 in some ICU versions, which
-  // would make the day one too small when read back.
-  if (out.hour === 24) out.hour = 0;
   return out;
 }
 
@@ -246,13 +250,17 @@ export function fromLocalInput(text: unknown, zone: string, precision: Precision
   // document or a variable can. Reading the parts back is the check that also
   // catches the 31st of February, which no range test would.
   const back = new Date(guess);
-  if (
-    back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1
-    || back.getUTCDate() !== day || back.getUTCHours() !== hour
-    || back.getUTCMinutes() !== minute || back.getUTCSeconds() !== second
-  ) {
-    return null;
-  }
+  // **One comparison, not six.** The field-by-field version had disjuncts that
+  // could never fail on their own — any day overflow also rolls the *month*, so
+  // the day comparison was unreachable, which §205's harness duly proved by
+  // deleting it and surviving. Rebuilding the string and comparing it whole has
+  // the same behaviour with nothing in it that no test can hold.
+  const rebuilt = `${pad(back.getUTCFullYear(), 4)}-${pad(back.getUTCMonth() + 1)}-`
+    + `${pad(back.getUTCDate())}T${pad(back.getUTCHours())}:${pad(back.getUTCMinutes())}`
+    + `:${pad(back.getUTCSeconds())}`;
+  const asked = `${pad(year, 4)}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}`
+    + `:${pad(second)}`;
+  if (rebuilt !== asked) return null;
   // Two passes. The offset depends on the instant, and the instant is what we
   // are solving for - so the first pass uses the offset at the *guess*, and the
   // second corrects it. One pass is wrong for exactly the hour on each side of
@@ -270,7 +278,9 @@ export function fromLocalInput(text: unknown, zone: string, precision: Precision
  * document can carry anything at all.
  */
 function asInstant(value: unknown): Date | null {
-  if (value === null || value === undefined || value === "") return null;
+  // `""` is not listed here: `new Date("")` is already an Invalid Date, so the
+  // check below covers it. §205's harness proved the extra clause unreachable.
+  if (value === null || value === undefined) return null;
   const date = value instanceof Date ? value : new Date(String(value));
   return Number.isNaN(date.getTime()) ? null : date;
 }
