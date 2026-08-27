@@ -35,7 +35,15 @@ from typing import Any
 # What a widget can announce. Deliberately short and named after the user's
 # act rather than the widget's implementation: `row_select` means the same
 # thing whether it came from an object table or a dataset table.
-TRIGGERS = ("click", "row_select", "change")
+#
+# `submit` is p.465's "Event on enter: set event(s) to be triggered when the
+# enter key is pressed". Named for the act rather than the key for the reason
+# above - a viewer pressing enter in a field is *committing what they typed*,
+# and a trigger called `enter` would have to be renamed the first time anything
+# else commits an entry. It is distinct from `change`, which fires per
+# keystroke: the whole point of p.465's setting is to run something **once**,
+# when the entry is finished, rather than on every character of it.
+TRIGGERS = ("click", "row_select", "change", "submit")
 
 # Effects the browser runs. `run_action` is the only one that *writes* - the
 # rest move the reader around - which is why it is the only one whose outcome

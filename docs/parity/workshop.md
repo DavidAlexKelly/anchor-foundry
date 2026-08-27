@@ -330,7 +330,7 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 
 Foundry's inventory, compiled from the category Overview pages and the per-widget page headers. Some widgets appear in one and not the other; the union is the target.
 
-Ours in the right-hand column. **We have 14 of ~52.**
+Ours in the right-hand column. **We have 15 of ~52.**
 
 ### Filtering (p.444) — 13
 
@@ -343,14 +343,14 @@ Ours in the right-hand column. **We have 14 of ~52.**
 | **Checkbox** | ◑ via `CanvasParameterControl` |
 | Date and Time Picker | ○ |
 | **Date Input** — single date or range | ◑ via `CanvasParameterControl` |
-| **Text Input** | ◑ via `CanvasParameterControl` |
+| **Text Input** | ◑ §203 `CanvasTextInput` | (p.465–466) — label, string value output (offering **`string` variables only**), placeholder, and p.465's format. **The format decides which other settings exist**, which is the asymmetry p.465 states and does not explain: "event on enter" belongs to Single line, "initial height" to Text area, and in a text area the enter key *inserts a newline* — so a widget that also fired an event on it would be fighting the person typing. Enter fires through the new **`submit` trigger** (p.465's "Event on enter"), distinct from `change` because `change` fires per keystroke and this fires once, when the entry is finished. Height is in **rows, not pixels** — a divergence, since p.465 names no unit and a pixel height is wrong the moment a viewer's font size differs from the author's. ◑ for p.466's **Markdown** format, which is a rich-text editor with a toolbar and a raw/rich toggle rather than a format flag, and belongs to the Markdown row of the build order |
 | **Numeric Input** | ✅ §202 `CanvasNumericInput` | (p.468) — label, show grouping, reset-to-default, unit prefix, unit suffix as text or percent sign, and the numeric value output, which offers **`number` variables only**. **p.468's percent rule is the reason decision 0011 splits this out at all**: "if the percent sign is selected, the output variable of the widget will be the user-entered value divided by 100" — not a display option but a change to what the variable holds, for one suffix value, on one of the five widgets. The arithmetic is in `number-input.ts`, where empty is `null` and not `0`, a half-typed entry is a **third** answer that writes nothing, and both directions round to fixed significant digits because `8.2 / 100` is `0.08199999999999999`. Foundry's icon suffix is ○ — this platform has no icon picker |
 | Exploration Filter Pills | ○ |
 | Exploration Search Bar | ◑ `CanvasSearch` |
 | Prominent Terms | ○ |
 | User Select | ○ |
 
-Our generic parameter control was a defensible design, but it was *our* design, and the ask was that Workshop feel like Workshop. **Decided in `docs/decisions/0011`: split.** Reading p.459–468 rather than the category overview, the five diverge in configuration rather than appearance, and p.468's percent rule changes what a variable holds — a shared control would carry that rule permanently and apply it never. The named widgets land beside `CanvasParameterControl` rather than replacing it: Craft resolves a node by `resolvedName`, so removing the component does not degrade an existing module, it stops the module rendering. Its palette entry goes when all four exist. Built so far: **Numeric Input** (§202).
+Our generic parameter control was a defensible design, but it was *our* design, and the ask was that Workshop feel like Workshop. **Decided in `docs/decisions/0011`: split.** Reading p.459–468 rather than the category overview, the five diverge in configuration rather than appearance, and p.468's percent rule changes what a variable holds — a shared control would carry that rule permanently and apply it never. The named widgets land beside `CanvasParameterControl` rather than replacing it: Craft resolves a node by `resolvedName`, so removing the component does not degrade an existing module, it stops the module rendering. Its palette entry goes when all four exist. Built so far: **Numeric Input** (§202) and **Text Input** (§203).
 
 ### Core display (p.220) — 7
 

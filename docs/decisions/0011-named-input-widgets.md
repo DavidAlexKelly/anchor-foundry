@@ -1,6 +1,6 @@
 # 0011 — Splitting the generic parameter control into Foundry's named input widgets
 
-**Status:** accepted; first widget built in `STATUS.md` §202.
+**Status:** accepted; Numeric Input built in `STATUS.md` §202, Text Input in §203.
 **Context:** `docs/parity/workshop.md` §10's filtering table, and the note under it that had
 been sitting there unanswered:
 
@@ -85,8 +85,10 @@ meaning anything.
 
 1. **Numeric Input** (§202) — the smallest surface with the most behaviour, and the percent
    rule makes it the one that proves the split was necessary rather than cosmetic.
-2. **Text Input** — Markdown format deferred to the Markdown row, which is its own build-order
-   item and its own editor.
+2. **Text Input** (§203) — single line and text area. Markdown deferred to the Markdown row,
+   which is its own build-order item and its own editor; p.466 describes a formatting toolbar
+   and a raw/rich toggle, which is not a format flag. This one also added the `submit` trigger
+   to the server's vocabulary, for p.465's "Event on enter".
 3. **String Selector** — subsumes p.444's *Checkbox* row, which p.459–461 shows is a
    *display mode of a multiple selection* rather than a widget of its own.
 4. **Date and Time Picker** — subsumes *Date Input*; needs timezone handling that nothing

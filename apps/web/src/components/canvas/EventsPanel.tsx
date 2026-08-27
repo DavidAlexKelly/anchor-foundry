@@ -55,7 +55,23 @@ const TRIGGERS: {
   {
     on: "change",
     label: "Changed",
-    widgets: ["CanvasParameterControl", "CanvasFilterList"],
+    // **`CanvasNumericInput` was missing here and the widget fired `change`
+    // anyway** — §202 built the firing and not the offer, so an author could
+    // not wire the event that the widget was already announcing. Exactly
+    // §194's shape from the other side: there, an offer nothing fired; here, a
+    // firing nothing could offer. Both are invisible from inside one half.
+    widgets: [
+      "CanvasParameterControl", "CanvasFilterList",
+      "CanvasNumericInput", "CanvasTextInput",
+    ],
+  },
+  {
+    // p.465's "Event on enter". Separate from `Changed` because that fires per
+    // keystroke and this fires once, when the entry is finished - which is the
+    // whole reason p.465 offers it.
+    on: "submit",
+    label: "Submitted",
+    widgets: ["CanvasTextInput"],
   },
 ];
 
