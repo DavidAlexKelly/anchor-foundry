@@ -39,8 +39,8 @@ describe("the selection/display matrix", () => {
   });
 
   it("has a hand-written expectation for every cell", () => {
-    for (const selection of Object.keys(DISPLAYS)) {
-      expect(Object.keys(DISPLAYS[selection]!).sort(), selection)
+    for (const selection of Object.keys(DISPLAYS) as (keyof typeof DISPLAYS)[]) {
+      expect(Object.keys(DISPLAYS[selection]).sort(), selection)
         .toEqual(Object.keys(EXPECTED[selection]!).sort());
     }
   });
