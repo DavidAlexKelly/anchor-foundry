@@ -4221,6 +4221,43 @@ The seventh survivor was mine and was not a mutant: `void text;` beside a state 
 
 `workshop.md` §10 goes from 13 of ~52 widgets to 14.
 
+### 203. The Text Input, and the trigger the enter key needed (this session)
+
+Decision 0011's second named input widget, and the first thing on this platform to fire a `submit` event.
+
+**p.465 states an asymmetry and does not explain it**, and the explanation is the design. "Event on enter" is listed under Single line; "initial height" under Text area. The reason is that in a text area the enter key *inserts a newline* — so a widget that also fired an event on it would be fighting the person typing. `text-input.ts` therefore carries a catalogue of what each format has, the settings panel renders from it, and the widget's keydown handler asks it rather than comparing against `"line"` at the call site. A second place that knows which formats submit is a second place to get it wrong when Markdown lands.
+
+**`submit` joins the server's trigger vocabulary**, next to `click`, `row_select` and `change`. Named for the act rather than the key, following the rule already written beside that tuple: a viewer pressing enter is *committing what they typed*, and a trigger called `enter` would need renaming the first time anything else commits an entry. It is distinct from `change` because `change` fires per keystroke and this fires once — which is the whole reason p.465 offers it.
+
+**Markdown is absent, deliberately.** p.466 describes "a rich text editing experience powered by the same editor used in Notepad", with a formatting toolbar and a raw/rich toggle. That is an editor, not a format flag. A third dropdown option that drew a plain textarea is precisely what every catalogue in this codebase exists to prevent, so the row stays ◑ and the format stays out of the list.
+
+Height is in **rows rather than pixels**, stated as a divergence: p.465 names no unit, and a pixel height set by an author is wrong the moment a viewer's font size differs from theirs.
+
+---
+
+**And a §202 gap, found while adding the catalogue entry rather than by the harness.** `CanvasNumericInput` fires `change` but was never added to the events panel's `change` widget list — so an author could not wire the event the widget was already announcing. That is §194's shape seen from the other side: there an offer nothing fired, here a firing nothing could offer. **Both are invisible from inside one half**, which is why the browser test now asserts the panel offers exactly "Changed" and "Submitted" on a text input.
+
+**Two bugs caught by writing the unit tests first**, both in code that reads fine:
+
+- `Number(null)` and `Number("")` are `0`, which is finite — so `rowsOf` coerced before deciding absence and read "not set" as "no rows at all", clamping it to the minimum instead of defaulting.
+- `"constructor" in TEXT_FORMATS` is true for a plain object, so a document naming it resolved to a "format" that is a function, and the widget would read `.multiline` off it and get `undefined`. `Object.hasOwn` now.
+
+---
+
+**Two survivors, and both were the same mistake in shapes I did not recognise as the same one** — §201's lesson arriving twice more.
+
+**The fallback format was compared to its own constant.** Every assertion said `formatOf(x)` equals `DEFAULT_FORMAT`, so moving the constant to `"area"` moved the expectation with it. The fallback matters *as a single line*: a document naming a format this build does not know gets the narrower of the two, so a module does not silently acquire paragraph fields where it had one-line ones.
+
+**The clock and the marker were the same variable.** The test for "enter does not fire in a text area" pressed Enter, then clicked a button whose effect set the *same* `v_mark` — so the assertion passed because the click had erased the evidence, not because nothing wrote it. A mutant firing submit in every format sailed through.
+
+That is a sharper version of §202's rule than §202 stated it. §202 said: to assert that nothing happened, find a point after which it definitely would have. §203 adds the other half — **the clock must not be able to overwrite the thing being checked.** A second observable is the fix; the *same* observable is a test that cannot fail.
+
+**35 mutants, 35 caught, 0 survivors, 0 no-ops** after the fixes. Four layers this time, since the trigger vocabulary is server-side.
+
+**1512 API tests** (was 1510), 1 skipped; **711 unit tests** (was 685); **348 browser tests** (was 335).
+
+`workshop.md` §10 goes from 14 of ~52 widgets to 15.
+
 ---
 ---
 ---
@@ -4354,6 +4391,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard that looks redundant beside a real one is exactly where a hole hides, because the tests covering one usually cover the other.** §202's `toStored` checks the *shape* of the text and then that the result is *finite*, and each survived being deleted. Every "not a number" case written down — `abc`, `1.2.3`, `Infinity` — is caught by both, so neither guard was load-bearing for the suite. They separate on two inputs nobody thinks of: `Number("0x10")` is `16`, quite finitely, so only the shape check refuses it; and `1e999` is digits-e-digits, so only the finite check refuses that. The tell is two adjacent validations whose test cases are the same list — and the fix is to find the input each one alone rejects, which is also the fastest way to discover one of them really is dead.
 
 - **To assert that nothing happened, find a point after which it definitely would have.** §202's half-typed-entry test claimed a variable kept its value, and passed against a mutant that cleared it: Playwright's `expect` succeeds on its *first* matching poll, so "still 5" was read before the write landed. A timeout is the wrong fix — it is slow and it is tuned to one machine. The right one is a second observable changed by the same action, so waiting for that proves the first had its chance: §202 clicks a button that also sets a marker variable and asserts both in one string. `test_collapsible_sections.py` had already invented this and called it "the clock".
+
+- **The clock must not be able to overwrite the thing it is timing.** §202 established that asserting "nothing happened" needs a point after which it definitely would have, and §203 promptly built one wrong: the button that proved a cycle had completed set the *same* variable the event under test would have set, so "did not fire" passed because the click had erased the evidence. The mutant it was written to catch sailed through. The clock has to be a **second, independent** observable — and the tell that it is not is a test where the waiting step writes anything the assertion reads. This and the two entries above are one family: an expectation derived from its own subject, a guard tested only by its neighbour, a clock that clears its own evidence. In each, the test and the thing it checks are not actually two.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 
