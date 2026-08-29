@@ -63,6 +63,26 @@ def test_typed_markdown_becomes_elements(page, api) -> None:
     expect(body(page).locator("code")).to_have_text("code")
 
 
+def test_each_heading_level_gets_its_own_element(page, api) -> None:
+    """p.317: "Markdown supports subheaders ranging from level 1 to level 6."
+
+    **The test above cannot see this**, and the harness said so: it renders one
+    level-1 heading, so a widget that emitted `h1` for everything passed it.
+    The level is read from the source in the model and then handed to
+    `createElement`, and only a browser can say which tag came out.
+    """
+    mod = module_with(api, "Markdown heading levels", {
+        "text": "# One\n\n## Two\n\n### Three\n\n###### Six",
+    })
+    open_module(page, mod)
+    settled(page)
+
+    expect(body(page).locator("h1")).to_have_text("One")
+    expect(body(page).locator("h2")).to_have_text("Two")
+    expect(body(page).locator("h3")).to_have_text("Three")
+    expect(body(page).locator("h6")).to_have_text("Six")
+
+
 def test_raw_html_in_the_source_is_shown_as_text(page, api) -> None:
     """**The claim the hand-rolled parser exists to make.**
 
@@ -235,6 +255,10 @@ def test_the_display_toggles_reach_the_widget(page, api) -> None:
     settled(page)
     assert "mono" not in body(page).evaluate("e => getComputedStyle(e).fontFamily").lower()
     assert body(page).evaluate("e => getComputedStyle(e).overflowY") != "auto"
+    # **Both directions**, because only asserting the "off" side passes against a
+    # rule that does nothing in either. The harness caught exactly that: gutting
+    # the wrap rule left every assertion here happy.
+    assert body(page).evaluate("e => getComputedStyle(e).overflowWrap") == "anywhere"
 
     fancy = module_with(api, "Markdown styled", {
         "text": "words", "monospace": True, "scrolling": True, "wordWrap": False,

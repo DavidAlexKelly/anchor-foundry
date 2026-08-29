@@ -106,4 +106,5 @@ meaning anything.
    *range* is still ○ — two instants in one variable, which no kind expresses.
 
 Each lands with its own settings panel and its own parity row. The palette entry for the
-generic control goes when 4 is done.
+generic control went when 4 landed, in §205; the component stays in the resolver, with a
+comment beside it saying why.
