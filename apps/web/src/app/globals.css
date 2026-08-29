@@ -604,10 +604,20 @@ button { font: inherit; cursor: pointer; }
 .data-grid td {
   font-family: var(--font-mono);
   font-size: 12px;
+  /* The number `LINE_HEIGHT` in widgets.tsx is a multiple of, for p.224's
+     "Number of lines to display per row". A test pins the two together. */
+  line-height: 18px;
   padding: 4px 10px;
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
+  /* A frozen cell has to paint over the ones it scrolls past, so it cannot be
+     transparent (`object-table-display.ts`, p.224's frozen columns). */
+  background: var(--panel);
 }
+/* p.225's "Enable narrow headers": "table headers will narrow from 50 pixels to
+   30 pixels". Ours were never 50, so what is kept is the relation rather than
+   the measurement — copying the numbers would be copying a different design. */
+.data-grid--narrow th { padding-top: 1px; padding-bottom: 1px; line-height: 1.1; }
 .sql-box {
   width: 100%;
   font-family: var(--font-mono);
@@ -668,6 +678,13 @@ button { font: inherit; cursor: pointer; }
   border-radius: var(--radius);
   padding: 16px;
   min-height: 480px;
+  /* **A grid item's default `min-width: auto` lets it grow to its content**, so
+     a table wider than the page pushed the whole module out instead of
+     scrolling inside its own `.data-grid` — which has had `overflow: auto` for
+     exactly this since it was written, and never once got to use it. Found
+     while building p.224's frozen columns, which are meaningless if the grid
+     never scrolls; the bug was older and applied to every wide table. */
+  min-width: 0;
 }
 .canvas-block {
   border: 1px dashed transparent;

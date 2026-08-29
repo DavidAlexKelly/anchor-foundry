@@ -134,9 +134,16 @@ def expect_set(page, index: int, keys: list[str]) -> None:
     list means "empty, or not loaded yet", and an assertion that cannot tell
     those apart passes for the wrong reason on every one of these tests (§202).
     """
-    expect(table(page, index).locator(".canvas-widget-empty").first).to_have_text(
-        re.compile(rf"^{len(keys)}\b")
-    )
+    if keys:
+        expect(table(page, index).locator(".canvas-widget-empty").first).to_have_text(
+            re.compile(rf"^{len(keys)}\b")
+        )
+    else:
+        # An empty table shows p.224's empty state in place of the count line
+        # (§208), and that paragraph is the clock for zero: it is only rendered
+        # once the fetch has come back, where an empty row list also means "not
+        # loaded yet".
+        expect(table(page, index).get_by_test_id("table-empty-state")).to_be_visible()
     rows = rows_of(page, index)
     expect(rows).to_have_count(len(keys))
     for position, key in enumerate(keys):
