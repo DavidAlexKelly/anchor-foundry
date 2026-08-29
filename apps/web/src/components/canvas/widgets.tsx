@@ -3595,6 +3595,9 @@ export function CanvasPropertyList({
     enabled: !!setPage.typeId,
   });
 
+  // `[0]` and `[length - 1]` are the same expression here, because the fetch
+  // above asks for one row: p.265's "only the first object will be displayed"
+  // is kept by the *page size*, not by the index.
   const instance = setPage.rows?.[0];
   const shown = visibleProperties({
     all: type.data?.properties ?? [],
