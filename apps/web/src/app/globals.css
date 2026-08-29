@@ -1610,6 +1610,22 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-datetime { display: grid; gap: 4px; }
 .canvas-datetime select { max-width: 100%; }
 
+/* ---- Property list (p.265-266) ------------------------------------------- */
+.canvas-property-list { display: grid; gap: 8px 18px; margin: 0; }
+/* p.265's Layout: the value beside its label, or under it. Adjacent uses a
+   two-track grid per property so the values line up across rows — laid out with
+   `align-items: baseline` so a long wrapped value keeps its label at the top. */
+.canvas-property {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 2px 10px; align-items: baseline; min-width: 0;
+}
+.canvas-property-list--stacked .canvas-property { grid-template-columns: minmax(0, 1fr); }
+.canvas-property dt {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.canvas-property dd { margin: 0; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+
 /* ---- Object set title (p.274) -------------------------------------------- */
 .canvas-set-title {
   display: flex; align-items: center; gap: 8px;
