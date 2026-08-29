@@ -33,6 +33,18 @@ class Api:
     def __init__(self, base: str, token: str) -> None:
         self.base = base.rstrip("/")
         self.token = token
+        # **Every object type this run creates, so the run can take them away
+        # again.** The suite had no cleanup at all, and a shared dev workspace
+        # accumulated about 1,400 of them across one session - enough that the
+        # Ontology Manager's listing, which fetches and renders every type in
+        # the workspace, took seven seconds to open a dialog and a test leaning
+        # on Playwright's five-second default went red. The suite had aged into
+        # failing on its own leftovers.
+        #
+        # Recorded here rather than in each test because `call` is the one
+        # funnel every test's writes go through: a per-test list would be
+        # correct for the tests that remembered and silently wrong for the rest.
+        self.created_object_types: list[str] = []  # delete paths, not bare ids
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -52,9 +64,50 @@ class Api:
         try:
             with urllib.request.urlopen(request) as response:
                 raw = response.read()
-                return json.loads(raw) if raw else None
+                parsed = json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
             raise ApiError(f"{method} {path} -> {exc.code} {exc.read().decode()[:500]}") from exc
+        self._remember(method, path, parsed)
+        return parsed
+
+    def _remember(self, method: str, path: str, parsed: Any) -> None:
+        """Note an object type that was just created, for `cleanup` to remove.
+
+        Matched on the *path* rather than on the shape of the response, because
+        several endpoints return something with an `id` and only this one
+        creates a row that outlives the run.
+        """
+        if method != "POST" or not path.endswith("/object-types"):
+            return
+        if isinstance(parsed, dict) and isinstance(parsed.get("id"), str):
+            # The *delete path*, built from the create path, so this needs no
+            # workspace id of its own - the one that created the type is right
+            # there and cannot disagree with it.
+            self.created_object_types.append(f"{path}/{parsed['id']}")
+
+    def cleanup(self) -> tuple[int, int]:
+        """Delete what this run created. Returns (removed, left behind).
+
+        **Best effort, and that is a decision rather than laziness.** The API
+        refuses to delete an `active` or `promoted` object type (p.256) and
+        refuses one whose cascade would take an active action type with it -
+        both are rules the suite itself exercises, so a cleanup that insisted
+        would fail on precisely the tests that prove those rules work. What it
+        cannot remove it leaves, and says how many.
+
+        It also must never fail a run: this happens after the last assertion,
+        so an exception here would turn a green suite red for tidying up.
+        """
+        removed = 0
+        for delete_path in reversed(self.created_object_types):
+            try:
+                self.call("DELETE", delete_path)
+                removed += 1
+            except Exception:
+                pass
+        left = len(self.created_object_types) - removed
+        self.created_object_types.clear()
+        return removed, left
 
     def upload_file(
         self, path: str, data: bytes, *, filename: str, content_type: str
