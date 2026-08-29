@@ -141,16 +141,37 @@ def test_an_empty_set_removes_the_widget(page, api) -> None:
     expect(title(page)).to_have_count(0)
 
 
+def other_type(api, mod, label: str) -> str:
+    """A second object type, named differently from the module's own.
+
+    **The placeholder tests are worthless without it.** The first version used
+    the module's own type as the placeholder, so "used the placeholder" and
+    "ignored it" produced the same string — the harness killed nothing, which
+    is §205's shape: the control value coincided with what it was contrasted
+    against. It needs no dataset; a placeholder is only ever a name.
+    """
+    declared = api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/object-types",
+        {
+            "api_name": f"{label}_{mod.tag}",
+            "display_name": f"{label.title()} {mod.tag}",
+            "properties": [{"api_name": "id", "display_name": "Id",
+                            "data_type": "string"}],
+            "title_property": "id",
+        },
+    )
+    return declared["id"]
+
+
 def test_an_empty_set_can_be_kept_with_a_placeholder(page, api) -> None:
     """p.274's Yes: "Allows selection of an object type to display as a
     placeholder if the inputted object set is empty"."""
     mod = build(api, "Set title placeholder",
                 filters=[{"property": "region", "op": "eq", "value": "nowhere"}])
-    # The placeholder is the module's own type, which is the only one this
-    # module knows about and is what an author would reach for.
+    stand_in = other_type(api, mod, "placeholder")
     definition = mod.definition()
     definition["layout"]["title"]["props"]["renderWhenEmpty"] = True
-    definition["layout"]["title"]["props"]["placeholderTypeId"] = mod.type_id
+    definition["layout"]["title"]["props"]["placeholderTypeId"] = stand_in
     mod.define(definition)
 
     open_module(page, mod)
@@ -158,6 +179,32 @@ def test_an_empty_set_can_be_kept_with_a_placeholder(page, api) -> None:
 
     expect(title(page)).to_be_visible()
     expect(title(page)).to_contain_text("0")
+    # **The placeholder type's name, not the set's** — which is the whole point
+    # of naming one, and is invisible unless the two differ.
+    expect(title(page)).to_contain_text("Placeholder")
+    expect(title(page)).not_to_contain_text("Seed")
+
+
+def test_a_placeholder_does_not_stand_in_for_a_set_that_has_objects(page, api) -> None:
+    """p.274 offers the placeholder "if the inputted object set is empty".
+
+    A placeholder that applied always would rename every non-empty set to
+    whatever type an author once picked as the stand-in — and it would look
+    entirely deliberate.
+    """
+    mod = build(api, "Set title placeholder unused")
+    stand_in = other_type(api, mod, "placeholder")
+    definition = mod.definition()
+    definition["layout"]["title"]["props"]["renderWhenEmpty"] = True
+    definition["layout"]["title"]["props"]["placeholderTypeId"] = stand_in
+    mod.define(definition)
+
+    open_module(page, mod)
+    settled(page)
+
+    expect(title(page)).to_contain_text("Seed")
+    expect(title(page)).not_to_contain_text("Placeholder")
+    expect(title(page)).to_contain_text("3")
 
 
 def test_the_builder_says_why_a_hidden_widget_is_missing(page, api) -> None:
