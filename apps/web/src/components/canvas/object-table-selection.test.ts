@@ -83,6 +83,24 @@ describe("reading a selection back", () => {
     // `eq` on the key is a legal set — a traversal writes one — and it is not
     // a selection this widget made.
     expect(keysOf([{ property: PRIMARY_KEY, op: "eq", value: "a" }])).toEqual([]);
+    // **With a list value, so the operator check is what refuses it.** The
+    // line above is refused by the *shape* check below it either way, so on
+    // its own it says nothing about the operator — the harness caught exactly
+    // that, and it is §202's shape: a guard tested only by its neighbour. A
+    // variable can hold this: an `array` variable takes whatever a
+    // `set_variable` effect puts there, and the refusal happens later, at the
+    // server, long after these checkboxes have been drawn.
+    expect(keysOf([{ property: PRIMARY_KEY, op: "eq", value: ["a"] }])).toEqual([]);
+    expect(keysOf([{ property: PRIMARY_KEY, op: "starts_with", value: ["a"] }])).toEqual([]);
+  });
+
+  it("ignores a key clause whose value is not a list", () => {
+    // The other half of the pair above, and the one that would *throw* rather
+    // than answer wrongly: `"S1".map` is a TypeError, and a widget that throws
+    // during render takes the module with it.
+    expect(keysOf([{ property: PRIMARY_KEY, op: "in", value: "S1" }])).toEqual([]);
+    expect(keysOf([{ property: PRIMARY_KEY, op: "in", value: 7 }])).toEqual([]);
+    expect(keysOf([{ property: PRIMARY_KEY, op: "in" }])).toEqual([]);
   });
 
   it("reads keys as strings, because a primary key can look numeric", () => {
