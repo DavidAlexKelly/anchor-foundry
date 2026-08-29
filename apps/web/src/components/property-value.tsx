@@ -11,7 +11,7 @@
  * type mean something" that a user can actually see.
  */
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { mediaKind } from "@/components/media-kind";
 import type {
@@ -96,6 +96,7 @@ export function PropertyValue({
   value,
   valueFormat,
   style: conditional,
+  emptyText = "∅",
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -108,13 +109,22 @@ export function PropertyValue({
    * evaluated: the rule may read a *different* property, so only a caller
    * holding the whole instance can work it out. */
   style?: PropertyStyle | null;
+  /** What to show where there is no value.
+   *
+   * **Optional, with the platform's own marker as the default.** Foundry
+   * `workshop` p.224 gives the Object Table a "Custom 'No value' display" and
+   * says the default there is the words "No value" — so that widget passes its
+   * own text and every other caller keeps the `∅` this platform uses
+   * everywhere. A page about one widget does not get to restyle the rest.
+   */
+  emptyText?: ReactNode;
 }) {
   // Applied to the empty marker too. A rule whose whole purpose is "colour it
   // grey when the value is null" (p.106) would otherwise be invisible on
   // precisely the values it is about.
   const paint = styleOf(conditional);
   if (value === null || value === undefined || value === "") {
-    return <span style={{ color: "var(--ink-soft)", ...paint }}>∅</span>;
+    return <span style={{ color: "var(--ink-soft)", ...paint }}>{emptyText}</span>;
   }
   if (valueFormat) {
     const formatted = formatValue(value, valueFormat);

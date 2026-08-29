@@ -4290,7 +4290,84 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
-### 207. The Object Table's selection outputs, and a set that could not be empty (this session)
+### 208. The Object Table's display options, and a grid that never scrolled (this session)
+
+p.224-225's Display & formatting block: lines per row, value wrapping, frozen columns, the
+empty state message, a custom "No value" display, fit columns horizontally, narrow headers,
+and conditional formatting colouring the whole cell. On paper a list of CSS one-liners.
+
+---
+
+**The grid has never scrolled sideways, and nothing had noticed.**
+
+`.canvas-frame-area` is a grid item, and a grid item's default `min-width: auto` lets it grow
+to fit its content — so a table wider than the page pushed the *whole module* out instead of
+scrolling inside its own `.data-grid`, which has carried `overflow: auto` since the day it was
+written and never once got to use it. The bug predates this unit and applies to every wide
+table; frozen columns are only the feature that made it impossible to ignore, because a column
+pinned against a grid that cannot scroll has nothing to stay put against.
+
+**A control test is what found it.** "The frozen column did not move" passes perfectly against
+a table that cannot move at all, so the test beside it asks whether an *unfrozen* column
+scrolls away. That one failed. The frozen one had been green the whole time, for the wrong
+reason — the same shape as §207's container off-by-one, and the second unit running where a
+passing assertion was the one to distrust.
+
+**One more thing only a browser could settle**: `display: -webkit-box` stops a `<td>` being a
+table cell at all, taking the column widths with it, so the line clamp lives on an inner
+element. That is an implementation which passes every unit test there is and is visibly wrong
+on screen, which is what the browser layer is for.
+
+**And one thing the harness took back.** The row height uses a cell's `height` rather than
+`min-height`, and the comment beside it claimed a table cell *ignores* `min-height` — so the
+choice read as a bug the browser had caught. It had not: the harness planted the swap and it
+survived, because Chromium honours `min-height` on a table cell even though the property is
+undefined there. `height` stays, since the defined behaviour is the one to rely on, but it is a
+difference that would only show in another engine and this suite cannot see it. The claim was
+corrected and the mutant dropped rather than left standing as a permanent false survivor.
+
+**And the clamp was clipping rather than widening.** A clamped, overflow-hidden box does not
+report the width its content needs, so an unwrapped value inside one was cut off where it
+should have widened its column and let the grid scroll. The clamp now applies only when
+wrapping is on — the only time it has anything to do.
+
+---
+
+**The harness's two survivors are §203 read backwards.**
+
+`linesOf` and `frozenOf` each guarded against `null`/`""` before coercing, and deleting both
+guards changed nothing. §203's `rowsOf` needed exactly that guard, because `Number(null)` is a
+finite `0` and zero rows was a genuinely different answer from "not set". Here it is not: the
+default is the clamp floor in both, so a coerced `0` lands on precisely the answer absence
+gives. **Same coercion fact, opposite conclusion, and what decides it is whether the default
+coincides with the clamp.** Both guards are gone rather than excused.
+
+**Two divergences, both stated.** `∅` becomes p.224's "No value" **in this widget only** —
+`PropertyValue` grew an optional `emptyText` so a page about one widget does not restyle the
+rest of the platform. And Fit columns defaults **on**, against p.225's wording, because every
+table this platform has drawn is full-width and a new setting must not change how documents
+that predate it are drawn.
+
+**28 model mutants and 18 widget mutants, 0 survivors, 0 no-ops** after the fixes (one
+mutant removed as equivalent in Chromium, verified rather than assumed).
+
+**980 unit tests** (was 958); **423 browser tests** (was 408); 1515 API tests, 2 skipped.
+
+**One browser test is red and it is not this unit's**, which is worth writing down rather than
+leaving as a number that does not add up: `test_required_properties.py`'s Ontology Manager test
+fails against `origin/main` in this environment exactly as it does here, and it passed earlier
+in the same session with no code change in between. The difference is *data*. The browser suite
+creates object types and never removes them, and the shared `operations` workspace has
+accumulated **1,230** of them; past roughly that many, the Objects page's Edit dialog stops
+producing the checkbox the test clicks for. So it is fixture accumulation showing up as a
+feature failure — the environment aged into it.
+
+---
+---
+---
+---
+
+### 207. The Object Table's selection outputs, and a set that could not be empty
 
 p.224's Selection block, and the fourth item of `workshop.md`'s library build order started:
 the **Active object** output, auto-selection of the first row with p.224's setting to disable
@@ -4634,6 +4711,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A test cannot see through a normalising read: where code corrects on the way out, assert on what was written.** §204's panel resets two props when the selection changes, and both resets had tests that could not fail. The variable picker lists only variables of the selection's kind, so a `<select>` still bound to a stale one renders `""` — identical to cleared. The display select's value goes through the resolver, so it reads the legal value whether or not the prop was fixed. **The render shows the corrected value; the prop keeps the stale one; the prop is what gets saved.** The defence is right and the assertion was in the wrong place — read the document back from the server instead. The tell is a control whose displayed value is computed rather than stored, which is exactly the controls worth defending, so this will keep happening. It completes the family two entries up: §203's clock could not see a change because something *erased* it; this one could not because something *corrected* it.
 
 - **A test whose "wrong" value is the environment's default cannot fail.** §205's `zoneOf` fallback test asserted that a bad configuration falls back to the viewer's own timezone, using `America/New_York` as the zone that should *not* come back — and `vitest.config.ts` deliberately runs the suite in `America/New_York`. The fallback and the wrong answer were the same string. Worse, the config's own comment explains it chose a non-UTC zone precisely so UTC assumptions would show up, which is exactly the trap it then set for anything naming that zone as a contrast. The fix is to **compute** a value the environment provably is not using rather than naming one, so it survives the config changing. The tell is a constant in a test that also appears in a config, a fixture, or a default — and this is the same family as the four entries above: two things that had to differ turning out to be the same thing.
+
+- **A browser suite that creates fixtures and never removes them eventually fails on its own history.** §208's verification run went red on an Ontology Manager test that had passed hours earlier with no code change between — and the same failure reproduces on `main`, so it was never about the diff. Every browser test file creates object types in one shared workspace and none deletes them; after a session's worth of runs there were **1,230**, and past roughly that point the Objects page's Edit dialog stops behaving. The failure reads as a broken feature and is really a full cupboard. The tell is a test that fails now, passed this morning, and fails identically on a commit that predates everything you have written — check the *volume* of whatever the fixtures create before reading the diff again.
+
+- **A default that coincides with a clamp makes the guard in front of it unreachable.** §208's `linesOf` and `frozenOf` both checked for `null`/`""` before coercing, and deleting both changed no test. §203 needed exactly that guard — `Number(null)` is a finite `0`, and zero rows was a different answer from "not set" — but here the default *is* the clamp floor, so a coerced `0` already lands on the answer absence gives. Same coercion fact, opposite conclusion. The tell is a defensive check whose two branches return the same value for every input that reaches it; the question to ask is not "is this input possible" but "does this guard change the answer".
 
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 

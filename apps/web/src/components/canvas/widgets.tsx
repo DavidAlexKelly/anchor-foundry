@@ -9,7 +9,7 @@
 
 import { Editor, Frame, useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   actions as actionApi, ApiError, canvas as canvasApi, datasets as dsApi,
   objects as objApi,
@@ -49,6 +49,11 @@ import {
 import {
   autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
 } from "./object-table-selection";
+import {
+  DEFAULT_LINES, EMPTY_MODES, MAX_LINES, cellStyle, emptyMessageOf, emptyModeOf,
+  fillsCellOf, fitColumnsOf, frozenOf, linesOf, narrowHeadersOf, noValueOf,
+  rowMinHeight, stickyLefts, wrapOf,
+} from "./object-table-display";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -83,6 +88,11 @@ import { Chart, toPoints } from "./charts";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
+
+/** The grid's own line height, in pixels (`globals.css`, `.data-grid td`).
+ * p.224's line count is a multiple of this, so the two have to agree; a test
+ * pins the stylesheet to it. */
+const LINE_HEIGHT = 18;
 
 function connectDragDrop(node: HTMLElement | null, connect: (el: HTMLElement) => HTMLElement, drag: (el: HTMLElement) => HTMLElement) {
   if (node) connect(drag(node));
@@ -2436,6 +2446,16 @@ export function CanvasObjectTable({
   autoSelect = true,
   multiSelect = false,
   selectedVariable = null,
+  lines = 1,
+  valueWrap = false,
+  frozenColumns = 0,
+  emptyMode = "default",
+  emptyMessage = "",
+  customNoValue = false,
+  noValueText = "",
+  fitColumns = true,
+  narrowHeaders = false,
+  formatFillsCell = false,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -2470,6 +2490,20 @@ export function CanvasObjectTable({
   /** p.224's **Selected objects**, "only in use and populated if the Enable
    * multi-select toggle is set to true". */
   selectedVariable?: string | null;
+  /** p.224's Display & formatting block. Each is read through
+   * `object-table-display.ts` rather than used raw: a saved document holds
+   * whatever an author or the raw JSON editor put there, and `Number(null)`
+   * is a perfectly finite `0`. */
+  lines?: number;
+  valueWrap?: boolean;
+  frozenColumns?: number;
+  emptyMode?: string;
+  emptyMessage?: string;
+  customNoValue?: boolean;
+  noValueText?: string;
+  fitColumns?: boolean;
+  narrowHeaders?: boolean;
+  formatFillsCell?: boolean;
 }) {
   const {
     id: nodeId,
@@ -2500,6 +2534,21 @@ export function CanvasObjectTable({
   const activeStated = hasSelection(activeRaw);
   const selectedStated = hasSelection(selectedRaw);
   const [screenRef, onScreen] = useOnScreen();
+
+  // p.224-225's Display & formatting, resolved once.
+  const rowLines = linesOf(lines);
+  const wrapValues = wrapOf(valueWrap);
+  const cell = cellStyle(rowLines, wrapValues);
+  const minHeight = rowMinHeight(rowLines, LINE_HEIGHT);
+  const fillsCell = fillsCellOf(formatFillsCell);
+  const emptyText = noValueOf(customNoValue, noValueText);
+  // **Measured, because a sticky column's offset is the running total of the
+  // widths before it** and CSS cannot add those up. Remeasured whenever the
+  // columns or the frozen count change; a width that is not there yet reads as
+  // zero, which puts a column at the left edge for one frame rather than
+  // unpinning every column after it.
+  const headRef = useRef<HTMLTableRowElement | null>(null);
+  const [widths, setWidths] = useState<number[]>([]);
 
   // Paging is *runtime* state, like a page or a variable value (decision 0002
   // §3): a saved app opens on the first page for every viewer. The hook holds
@@ -2605,6 +2654,21 @@ export function CanvasObjectTable({
     setParameter(selectedVariable, selectionClauses([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiSelect, selectedVariable, selectedStated]);
+
+  const columnCount = properties.length + 1 + (multiSelect && selectedVariable ? 1 : 0);
+  const frozen = frozenOf(frozenColumns, columnCount);
+  useEffect(() => {
+    const head = headRef.current;
+    if (!head || frozen === 0) return;
+    setWidths(Array.from(head.children, (cellEl) => (cellEl as HTMLElement).offsetWidth));
+  }, [frozen, columnCount, rows?.length, rowLines, wrapValues, fitColumns]);
+  const lefts = stickyLefts(widths, frozen);
+  const stick = (index: number) => {
+    const left = lefts[index];
+    return left === null || left === undefined
+      ? undefined
+      : ({ position: "sticky", left, zIndex: 1 } as React.CSSProperties);
+  };
   return (
     <div
       ref={(ref) => {
@@ -2625,6 +2689,14 @@ export function CanvasObjectTable({
       {active.isError && <p className="canvas-widget-empty">Couldn&apos;t load these objects.</p>}
       {rows && total !== undefined && (
         <>
+          {/* p.224's Empty state message, in place of the count line: a table
+              with nothing in it should say so in the author's words rather
+              than announce a zero. */}
+          {total === 0 ? (
+            <p className="canvas-widget-empty" data-testid="table-empty-state">
+              {emptyMessageOf(emptyMode, emptyMessage)}
+            </p>
+          ) : (
           <p className="canvas-widget-empty">
             {total.toLocaleString()} {type.data?.display_name ?? "object"}
             {total === 1 ? "" : "s"}
@@ -2641,12 +2713,23 @@ export function CanvasObjectTable({
               ? ` matching “${String(searchValue)}”`
               : ""}
           </p>
-          <div className="data-grid">
-            <table>
+          )}
+          <div
+            className={[
+              "data-grid",
+              // p.225's "Enable narrow headers". A class rather than a style,
+              // because it is the header's own padding and belongs with the
+              // rest of the grid's rules.
+              narrowHeadersOf(narrowHeaders) ? "data-grid--narrow" : "",
+            ].filter(Boolean).join(" ")}
+          >
+            {/* p.225's "Fit columns horizontally": full width, or the columns'
+                natural widths with the grid scrolling past them. */}
+            <table style={fitColumnsOf(fitColumns) ? undefined : { width: "auto" }}>
               <thead>
-                <tr>
+                <tr ref={headRef}>
                   {multiSelect && selectedVariable && (
-                    <th className="canvas-table-check">
+                    <th className="canvas-table-check" style={stick(0)}>
                       <input
                         type="checkbox"
                         aria-label="Select all rows on this page"
@@ -2671,9 +2754,14 @@ export function CanvasObjectTable({
                       />
                     </th>
                   )}
-                  <th>Key</th>
-                  {properties.map((p) => (
-                    <th key={p.api_name}>{p.display_name || p.api_name}</th>
+                  <th style={stick(multiSelect && selectedVariable ? 1 : 0)}>Key</th>
+                  {properties.map((p, column) => (
+                    <th
+                      key={p.api_name}
+                      style={stick(column + 1 + (multiSelect && selectedVariable ? 1 : 0))}
+                    >
+                      {p.display_name || p.api_name}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -2703,7 +2791,7 @@ export function CanvasObjectTable({
                     }
                   >
                     {multiSelect && selectedVariable && (
-                      <td className="canvas-table-check">
+                      <td className="canvas-table-check" style={stick(0)}>
                         <input
                           type="checkbox"
                           aria-label={`Select ${instance.primary_key}`}
@@ -2720,18 +2808,56 @@ export function CanvasObjectTable({
                         />
                       </td>
                     )}
-                    <td>{instance.primary_key}</td>
-                    {properties.map((p) => (
-                      <td key={p.api_name}>
-                        <PropertyValue
-                          workspaceId={workspaceId}
-                          dataType={p.data_type}
-                          valueFormat={p.value_format}
-                          style={conditionalStyle(p.conditional_format, instance.properties)}
-                          value={instance.properties[p.api_name]}
-                        />
-                      </td>
-                    ))}
+                    <td
+                      style={{
+                        // **`height`, not `minHeight`**, and the harness is
+                        // why the comment says what it says. `height` on a
+                        // table cell is *defined* to act as a minimum;
+                        // `min-height` on one is undefined, and Chromium
+                        // happens to honour it - so swapping them survives this
+                        // browser suite, which is an equivalent mutant here and
+                        // a difference somewhere else. The defined one is the
+                        // one to rely on.
+                        height: minHeight,
+                        ...stick(multiSelect && selectedVariable ? 1 : 0),
+                      }}
+                    >
+                      {/* **The clamp lives on an inner element**, because
+                          `-webkit-box` would stop the `<td>` being a table cell
+                          and take the column widths with it. */}
+                      <div style={cell}>{instance.primary_key}</div>
+                    </td>
+                    {properties.map((p, column) => {
+                      const paint = conditionalStyle(
+                        p.conditional_format, instance.properties,
+                      );
+                      return (
+                        <td
+                          key={p.api_name}
+                          style={{
+                            height: minHeight,
+                            // p.225's "Conditional formatting colors entire
+                            // cell". The rule is evaluated once either way; the
+                            // toggle only decides where the colour lands.
+                            ...(fillsCell && paint?.background
+                              ? { background: paint.background }
+                              : {}),
+                            ...stick(column + 1 + (multiSelect && selectedVariable ? 1 : 0)),
+                          }}
+                        >
+                          <div style={cell}>
+                            <PropertyValue
+                              workspaceId={workspaceId}
+                              dataType={p.data_type}
+                              valueFormat={p.value_format}
+                              style={paint}
+                              value={instance.properties[p.api_name]}
+                              emptyText={emptyText}
+                            />
+                          </div>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -2778,6 +2904,8 @@ function ObjectTableSettings() {
     objectTypeId, filterProperty, filterParameter, searchParameter,
     objectSetVariable, pageSize, columns, sort,
     activeVariable, autoSelect, multiSelect, selectedVariable,
+    lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
+    customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -2792,6 +2920,16 @@ function ObjectTableSettings() {
     autoSelect: node.data.props.autoSelect,
     multiSelect: node.data.props.multiSelect,
     selectedVariable: node.data.props.selectedVariable,
+    lines: node.data.props.lines,
+    valueWrap: node.data.props.valueWrap,
+    frozenColumns: node.data.props.frozenColumns,
+    emptyMode: node.data.props.emptyMode,
+    emptyMessage: node.data.props.emptyMessage,
+    customNoValue: node.data.props.customNoValue,
+    noValueText: node.data.props.noValueText,
+    fitColumns: node.data.props.fitColumns,
+    narrowHeaders: node.data.props.narrowHeaders,
+    formatFillsCell: node.data.props.formatFillsCell,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // **`array`, not `object_set`.** p.224 calls these outputs object sets and
@@ -2949,6 +3087,123 @@ function ObjectTableSettings() {
           Sorting by a property needs its declared type behind it — see the ontology roadmap
         </span>
       </label>
+      {/* p.224-225's Display & formatting, in p.224's order. */}
+      <label className="field">
+        <span className="field-label">Number of lines to display per row</span>
+        <input
+          type="number"
+          min={1}
+          max={MAX_LINES}
+          value={linesOf(lines)}
+          data-testid="table-lines"
+          onChange={(e) => setProp((p: { lines: number }) => (p.lines = Number(e.target.value)))}
+        />
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={wrapOf(valueWrap)}
+          data-testid="table-wrap"
+          onChange={(e) => setProp((p: { valueWrap: boolean }) => (p.valueWrap = e.target.checked))}
+        />
+        <span className="field-label">Enable value wrapping</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Number of frozen columns</span>
+        <input
+          type="number"
+          min={0}
+          value={Number(frozenColumns) || 0}
+          data-testid="table-frozen"
+          onChange={(e) =>
+            setProp((p: { frozenColumns: number }) => (p.frozenColumns = Number(e.target.value)))}
+        />
+        <span className="field-hint">Counted from the left, including the checkbox column</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Empty state message</span>
+        <select
+          value={emptyModeOf(emptyMode)}
+          data-testid="table-empty-mode"
+          onChange={(e) => setProp((p: { emptyMode: string }) => (p.emptyMode = e.target.value))}
+        >
+          {Object.entries(EMPTY_MODES).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+      </label>
+      {emptyModeOf(emptyMode) === "custom" && (
+        <label className="field">
+          <span className="field-label">Message</span>
+          <input
+            type="text"
+            value={emptyMessage || ""}
+            data-testid="table-empty-message"
+            onChange={(e) =>
+              setProp((p: { emptyMessage: string }) => (p.emptyMessage = e.target.value))}
+          />
+          {/* p.224's Custom option also takes an icon. There is no icon picker
+              on this platform - the same reason p.468's icon suffix is ○ - so
+              the message is the half that can be honoured. */}
+          <span className="field-hint">Blank falls back to “No objects found”</span>
+        </label>
+      )}
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={customNoValue === true}
+          data-testid="table-custom-no-value"
+          onChange={(e) =>
+            setProp((p: { customNoValue: boolean }) => (p.customNoValue = e.target.checked))}
+        />
+        <span className="field-label">Custom &ldquo;No value&rdquo; display</span>
+      </label>
+      {customNoValue === true && (
+        <label className="field">
+          <span className="field-label">Shown for an empty cell</span>
+          <input
+            type="text"
+            value={noValueText ?? ""}
+            data-testid="table-no-value-text"
+            onChange={(e) =>
+              setProp((p: { noValueText: string }) => (p.noValueText = e.target.value))}
+          />
+          <span className="field-hint">Blank shows nothing at all, which is a real answer</span>
+        </label>
+      )}
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={fitColumnsOf(fitColumns)}
+          data-testid="table-fit-columns"
+          onChange={(e) =>
+            setProp((p: { fitColumns: boolean }) => (p.fitColumns = e.target.checked))}
+        />
+        <span className="field-label">Fit columns horizontally</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={narrowHeadersOf(narrowHeaders)}
+          data-testid="table-narrow-headers"
+          onChange={(e) =>
+            setProp((p: { narrowHeaders: boolean }) => (p.narrowHeaders = e.target.checked))}
+        />
+        <span className="field-label">Enable narrow headers</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={fillsCellOf(formatFillsCell)}
+          data-testid="table-format-fills-cell"
+          onChange={(e) =>
+            setProp((p: { formatFillsCell: boolean }) => (p.formatFillsCell = e.target.checked))}
+        />
+        <span className="field-label">Conditional formatting colors entire cell</span>
+        <span className="field-hint">
+          The rules themselves come from the Ontology Manager
+        </span>
+      </label>
       </>}
       outputs={<>
       {/* p.224's Selection block, in p.224's order. */}
@@ -3030,7 +3285,10 @@ CanvasObjectTable.craft = {
     objectTypeId: null, filterProperty: null, filterParameter: null,
     searchParameter: null, pageSize: 25, columns: "", sort: "recent",
     activeVariable: null, autoSelect: true, multiSelect: false,
-    selectedVariable: null,
+    selectedVariable: null, lines: DEFAULT_LINES, valueWrap: false,
+    frozenColumns: 0, emptyMode: "default", emptyMessage: "",
+    customNoValue: false, noValueText: "", fitColumns: true,
+    narrowHeaders: false, formatFillsCell: false,
   },
   related: { settings: ObjectTableSettings },
 };
