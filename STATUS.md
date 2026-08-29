@@ -4312,8 +4312,15 @@ refusal works, so a cleanup that insisted would fail on them. It runs after the 
 where an exception would turn a green suite red for tidying up.
 
 Verified rather than assumed: 18 tests across two files, **29 object types before and 29
-after**. The previously red test passes three runs out of three, in 3.5s rather than timing out
-at 10.
+after**. Across a full browser run the residue is **7** — the `active` and `promoted` types the
+API refuses to delete, one per test that proves the refusal — so the workspace went 29 → 36 for
+423 tests rather than growing by hundreds. Not zero, and worth saying so: at seven a run this
+takes two hundred runs to reach where one session got, which is a different problem rather than
+no problem.
+
+The previously red test passes three runs out of three, in 3.5s rather than timing out at 10 —
+and the whole suite got **seven minutes faster** (25 minutes to 18), because every test that
+touched an ontology page had been paying for those 1,400 rows.
 
 **The defect underneath is still open and is now written down**: `ontology.list_types` has no
 `LIMIT`, so the listing is O(every type in the workspace). Fixing it properly means the type
