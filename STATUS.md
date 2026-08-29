@@ -4290,7 +4290,47 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
-### 208. The Object Table's display options, and a grid that never scrolled (this session)
+### 209. The browser suite tidies up after itself (this session)
+
+Not a parity item. §208's verification run went red on a test that had nothing to do with it,
+and chasing that properly turned up three things stacked on each other.
+
+**The suite had never cleaned up.** Every test file creates object types in one shared dev
+workspace and none removed any; after a session of runs there were about **1,400**. The
+Ontology Manager's listing fetches and renders every type in the workspace, so opening its Edit
+dialog took **7.2 seconds**, and a test leaning on Playwright's 5-second default failed — with
+nothing wrong in the product and nothing wrong in the diff. The suite had aged into failing on
+its own leftovers.
+
+The recording lives in `Api.call` rather than in each test, because that is the one funnel every
+write goes through: a per-test list would be right for the tests that remembered and silently
+wrong for the rest. It stores the **delete path built from the create path**, so it needs no
+workspace id of its own and cannot disagree with the one that created the type. Teardown is
+best effort and reports rather than asserts — the API refuses to delete an `active` or
+`promoted` object type (p.256), and those are exactly the types the suite creates to prove the
+refusal works, so a cleanup that insisted would fail on them. It runs after the last assertion,
+where an exception would turn a green suite red for tidying up.
+
+Verified rather than assumed: 18 tests across two files, **29 object types before and 29
+after**. The previously red test passes three runs out of three, in 3.5s rather than timing out
+at 10.
+
+**The defect underneath is still open and is now written down**: `ontology.list_types` has no
+`LIMIT`, so the listing is O(every type in the workspace). Fixing it properly means the type
+*pickers* — eight call sites — become searchable rather than exhaustive, since a dropdown that
+silently truncates is worse than a slow one. That is its own unit and it is recorded in
+`docs/parity/ontology.md` rather than half-done here.
+
+**And a correction.** The first version of §208's note asserted a mechanism I had not measured —
+that past ~1,200 types the dialog "stops producing the checkbox". It does not; it produces it
+after 7.2s. The rough-edge rule now records *that* mistake rather than repeating the guess.
+
+---
+---
+---
+---
+
+### 208. The Object Table's display options, and a grid that never scrolled
 
 p.224-225's Display & formatting block: lines per row, value wrapping, frozen columns, the
 empty state message, a custom "No value" display, fit columns horizontally, narrow headers,
@@ -4365,10 +4405,11 @@ with a 30s timeout passes 3 runs out of 3, and with the default fails 3 out of 3
 
 The slowness is real and its cause is `ontology.list_types`, which has **no `LIMIT`** — the
 Objects page renders every object type in the workspace, and the shared `operations` workspace
-now holds about 1,400 of them because the browser suite creates object types and never removes
-any. So fixture debris is the *trigger*, an unbounded list endpoint is the *defect*, and the
-test's reliance on a default timeout is what turned it into a red suite. Raising the timeout
-would hide all three.
+had accumulated about 1,400 of them because the browser suite created object types and never
+removed any. So fixture debris was the *trigger*, an unbounded list endpoint is the *defect*,
+and the test's reliance on a default timeout is what turned it into a red suite. Raising the
+timeout would have hidden all three. **§209 fixed the trigger**; the unbounded endpoint is
+still there and is written down in `docs/parity/ontology.md`.
 
 ---
 ---
