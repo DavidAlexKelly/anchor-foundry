@@ -197,6 +197,25 @@ def test_a_frozen_column_stays_put_when_the_grid_scrolls(page, api) -> None:
     assert abs(after - before) < 2, f"moved from {before} to {after}"
 
 
+def test_a_frozen_column_paints_over_what_it_scrolls_past(page, api) -> None:
+    """**Staying put is only half of a frozen column.** A sticky cell with no
+    background of its own is transparent, so the rows sliding underneath show
+    straight through it and the column is unreadable at exactly the moment it
+    exists to be readable.
+
+    The harness found this: every other frozen-column assertion is about
+    *position*, and position is unaffected by whether the cell paints.
+    """
+    mod = build(api, "Table frozen paint", {"frozenColumns": 2, "fitColumns": False})
+    open_module(page, mod)
+    settled(page)
+
+    first = cells(page).first
+    expect(first).to_be_visible()
+    background = first.evaluate("e => getComputedStyle(e).backgroundColor")
+    assert background not in ("transparent", "rgba(0, 0, 0, 0)"), background
+
+
 def test_an_unfrozen_column_does_scroll_away(page, api) -> None:
     """The control for the test above: without it, a grid that cannot scroll at
     all would satisfy "the column did not move"."""
