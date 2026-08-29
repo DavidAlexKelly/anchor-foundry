@@ -4353,14 +4353,22 @@ mutant removed as equivalent in Chromium, verified rather than assumed).
 
 **980 unit tests** (was 958); **423 browser tests** (was 408); 1515 API tests, 2 skipped.
 
-**One browser test is red and it is not this unit's**, which is worth writing down rather than
-leaving as a number that does not add up: `test_required_properties.py`'s Ontology Manager test
-fails against `origin/main` in this environment exactly as it does here, and it passed earlier
-in the same session with no code change in between. The difference is *data*. The browser suite
-creates object types and never removes them, and the shared `operations` workspace has
-accumulated **1,230** of them; past roughly that many, the Objects page's Edit dialog stops
-producing the checkbox the test clicks for. So it is fixture accumulation showing up as a
-feature failure — the environment aged into it.
+**One browser test is red and it is not this unit's.** `test_required_properties.py`'s Ontology
+Manager test fails against `origin/main` in this environment exactly as it does here, and it
+passed earlier in the same session with no code change in between.
+
+**The first version of this note asserted a mechanism I had not measured** — that past ~1,200
+object types the Objects page's Edit dialog "stops producing the checkbox". It does not. The
+dialog opens in 0.3s and the checkbox appears **7.2 seconds** after that; Playwright's default
+`expect` timeout is 5s, so the test times out on a page that was going to answer. The same test
+with a 30s timeout passes 3 runs out of 3, and with the default fails 3 out of 3.
+
+The slowness is real and its cause is `ontology.list_types`, which has **no `LIMIT`** — the
+Objects page renders every object type in the workspace, and the shared `operations` workspace
+now holds about 1,400 of them because the browser suite creates object types and never removes
+any. So fixture debris is the *trigger*, an unbounded list endpoint is the *defect*, and the
+test's reliance on a default timeout is what turned it into a red suite. Raising the timeout
+would hide all three.
 
 ---
 ---
@@ -4712,7 +4720,7 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A test whose "wrong" value is the environment's default cannot fail.** §205's `zoneOf` fallback test asserted that a bad configuration falls back to the viewer's own timezone, using `America/New_York` as the zone that should *not* come back — and `vitest.config.ts` deliberately runs the suite in `America/New_York`. The fallback and the wrong answer were the same string. Worse, the config's own comment explains it chose a non-UTC zone precisely so UTC assumptions would show up, which is exactly the trap it then set for anything naming that zone as a contrast. The fix is to **compute** a value the environment provably is not using rather than naming one, so it survives the config changing. The tell is a constant in a test that also appears in a config, a fixture, or a default — and this is the same family as the four entries above: two things that had to differ turning out to be the same thing.
 
-- **A browser suite that creates fixtures and never removes them eventually fails on its own history.** §208's verification run went red on an Ontology Manager test that had passed hours earlier with no code change between — and the same failure reproduces on `main`, so it was never about the diff. Every browser test file creates object types in one shared workspace and none deletes them; after a session's worth of runs there were **1,230**, and past roughly that point the Objects page's Edit dialog stops behaving. The failure reads as a broken feature and is really a full cupboard. The tell is a test that fails now, passed this morning, and fails identically on a commit that predates everything you have written — check the *volume* of whatever the fixtures create before reading the diff again.
+- **"Not caused by my diff" is one finding; *why* it fails is a second, and the second one has to be measured.** §208's verification run went red on an Ontology Manager test that had passed hours earlier. Reproducing it on `main` established the first half honestly. Then I wrote down a mechanism — "past ~1,200 object types the Edit dialog stops producing the checkbox" — that sounded right, fitted the evidence, and was **wrong**: the dialog produces it after 7.2s, and Playwright's default `expect` timeout is 5s. The real chain is an unbounded `list_types` (no `LIMIT`) rendering ~1,400 rows, fixture debris supplying the rows, and a test leaning on a default timeout. Three separate things, and the plausible single story I recorded named none of them. A diagnosis that has not been instrumented is a guess, and writing a guess into `STATUS.md` in the confident voice of the entries around it is worse than leaving the failure undescribed.
 
 - **A default that coincides with a clamp makes the guard in front of it unreachable.** §208's `linesOf` and `frozenOf` both checked for `null`/`""` before coercing, and deleting both changed no test. §203 needed exactly that guard — `Number(null)` is a finite `0`, and zero rows was a different answer from "not set" — but here the default *is* the clamp floor, so a coerced `0` already lands on the answer absence gives. Same coercion fact, opposite conclusion. The tell is a defensive check whose two branches return the same value for every input that reaches it; the question to ask is not "is this input possible" but "does this guard change the answer".
 
