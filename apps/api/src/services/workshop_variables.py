@@ -297,6 +297,11 @@ REFERENCE_PROPS = (
     # had to learn: a widget whose *configuration* comes from a variable is the
     # shape that gets missed, because the obvious reference is the output one.
     "timezoneVariable",
+    # p.316's Markdown "Input data: Variable" - "a string variable can be
+    # chosen as the input Markdown text to be displayed". Same shape as the
+    # two above: the widget's *content* comes from a variable, and a
+    # content reference is as easy to miss as a configuration one.
+    "textVariable",
     "name",
 )
 

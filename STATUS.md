@@ -4290,7 +4290,96 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
-### 205. The Date and Time Picker, and the rule that runs the other way (this session)
+### 206. Markdown, and a safety measure that was working backwards (this session)
+
+p.314-319's widget, and the third item of `workshop.md`'s library build order — which called it
+"trivially cheap" and was wrong. p.318's syntax table is the cheap half: fourteen syntaxes,
+enumerated, read as the specification it is and used as one, each row a case in the unit test.
+
+**The parser is hand-rolled, and safety is the argument rather than the absence of a library.**
+Every off-the-shelf Markdown renderer emits an HTML *string*, which then has to be sanitised and
+injected with `dangerouslySetInnerHTML` — so the platform would sit one sanitiser
+misconfiguration away from executing whatever an app author typed, and an app author is not
+somebody the whole workspace has chosen to trust. This parses to a **tree of plain objects** that
+the widget renders as React elements. There is no markup string anywhere in the path, so raw HTML
+in the source is text because text is all the parser produces, and the browser suite asserts it
+both ways: the `<script>` an author typed is *present as characters* and *absent as an element*.
+
+p.317's two precedence rules are functions in the model rather than conditionals in the JSX,
+because they are rules the page states and somebody will eventually ask whether we follow them:
+code blocks stay left-aligned whatever the widget says, and a table column that names its own
+alignment keeps it while one that does not takes the widget's — which is why `alignOf` returns
+`null` for an unmarked column rather than defaulting it to left. The browser suite caught the
+first of those being computed and discarded: the `<pre>` carried no style, so it read as `start`
+and was left-aligned only by inheritance.
+
+`{{v_id}}` is expanded in typed text, as `CanvasText` has always done, and deliberately **not** in
+text arriving from a variable. That text is data — a row out of a dataset, whatever a derivation
+put there — and data that can name variables is data that reads them.
+
+`textVariable` went into all four reference lists on the way in, as `timezoneVariable` did in
+§205.
+
+---
+
+**Ten survivors on the first run, and four of them were on `safeHref` — the one function whose
+entire job is safety.**
+
+Deleting its control-character strip changed no test. The strip was there for `java\nscript:`,
+the standard defence against a *denylist* that checks `startsWith("javascript:")`. This is an
+**allowlist**, which refuses `javascript:` for the ordinary reason that it is not on the list,
+broken up or not — so all three tests that named the strip were watching the allowlist do the
+work and crediting it to the strip.
+
+Worse than useless: under an allowlist, stripping can only ever *add* accepted strings.
+`ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody had typed. **The
+measure was running backwards, and every test of it passed.** A control character now refuses the
+URL rather than being deleted from it.
+
+The general rule is the one the other six survivors are also instances of: **a defence can only be
+tested on an input the other defences would let through.** Case folding tested with `javascript:`
+tests the allowlist. Case folding tested with `HTTPS://X.test` tests the fold.
+
+The rest, briefly: the text-merge test never crossed a flush, so it passed whether or not anything
+merged; the line-ending test asserted a block count both outcomes share; `&& !UNORDERED.test(line)`
+was dead, since one regex wants a digit where the other wants `-`, `*` or `+`; `cells`' fallback
+was unreachable, and looked reachable only because the table rule accepted an alignment row the
+row rule would not; and `--`, which is how people type a dash, had nothing saying it is not a
+horizontal rule.
+
+The widget layer found two more of the same shape. **The heading test rendered one level-1
+heading**, so a widget emitting `h1` for everything passed it — the level is read in the model and
+handed to `createElement`, and only a browser can say which tag came out. And **the word-wrap test
+asserted only the "off" side**, which a rule that does nothing in either direction satisfies
+perfectly.
+
+The third widget survivor is worth recording as *not* a hole: `item.done !== undefined && (…)`
+mutated to `item.done === undefined || (…)` survives because React renders `true` and `false`
+alike as nothing, so the two expressions are the same program. Planting the mutant that really
+does give every item a checkbox confirmed the assertion catches it. **An equivalent mutant is a
+fact about the language, not a gap** — and telling the two apart takes one more experiment, which
+is cheaper than the test nobody needed.
+
+**49 model mutants and 23 widget mutants, 0 real survivors, 0 no-ops** after the fixes (one
+equivalent mutant, verified as such).
+
+**933 unit tests** (was 862); **394 browser tests** (was 379); 1511 API tests, 2 skipped
+(both environmental — no MySQL server, and no group-membership rows in a fresh database).
+
+`workshop.md` §10 goes from 17 of ~52 widgets to 18.
+
+**Deferred, and named rather than approximated**: p.319's inline `:objectreference[…]{…}`
+extension with p.316's Inline reference toggle, p.315's annotation objects, and p.317's
+user-text-selection outputs. The first two need ontology plumbing and an output object set; a
+renderer that showed their syntax as literal text would be worse than one that says it does not
+do them.
+
+---
+---
+---
+---
+
+### 205. The Date and Time Picker, and the rule that runs the other way
 
 p.463–464's widget, decision 0011's fourth — and with it the generic parameter control's **palette entry is gone**, as that record said it would be. The component stays in the resolver: Craft maps a node's `resolvedName` to a component, and a document naming one it lacks does not degrade, it fails to render.
 
@@ -4457,6 +4546,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A test cannot see through a normalising read: where code corrects on the way out, assert on what was written.** §204's panel resets two props when the selection changes, and both resets had tests that could not fail. The variable picker lists only variables of the selection's kind, so a `<select>` still bound to a stale one renders `""` — identical to cleared. The display select's value goes through the resolver, so it reads the legal value whether or not the prop was fixed. **The render shows the corrected value; the prop keeps the stale one; the prop is what gets saved.** The defence is right and the assertion was in the wrong place — read the document back from the server instead. The tell is a control whose displayed value is computed rather than stored, which is exactly the controls worth defending, so this will keep happening. It completes the family two entries up: §203's clock could not see a change because something *erased* it; this one could not because something *corrected* it.
 
 - **A test whose "wrong" value is the environment's default cannot fail.** §205's `zoneOf` fallback test asserted that a bad configuration falls back to the viewer's own timezone, using `America/New_York` as the zone that should *not* come back — and `vitest.config.ts` deliberately runs the suite in `America/New_York`. The fallback and the wrong answer were the same string. Worse, the config's own comment explains it chose a non-UTC zone precisely so UTC assumptions would show up, which is exactly the trap it then set for anything naming that zone as a contrast. The fix is to **compute** a value the environment provably is not using rather than naming one, so it survives the config changing. The tell is a constant in a test that also appears in a config, a fixture, or a default — and this is the same family as the four entries above: two things that had to differ turning out to be the same thing.
+
+- **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 

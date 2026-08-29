@@ -1593,6 +1593,55 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-datetime { display: grid; gap: 4px; }
 .canvas-datetime select { max-width: 100%; }
 
+/* ---- Markdown (p.314-319) ------------------------------------------------ */
+.canvas-markdown { font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+.canvas-markdown > :first-child { margin-top: 0; }
+.canvas-markdown > :last-child { margin-bottom: 0; }
+.canvas-markdown p { margin: 0 0 8px; }
+.canvas-markdown-heading { margin: 14px 0 6px; line-height: 1.3; font-weight: 650; }
+.canvas-markdown h1 { font-size: 20px; }
+.canvas-markdown h2 { font-size: 17px; }
+.canvas-markdown h3 { font-size: 15px; }
+.canvas-markdown h4, .canvas-markdown h5, .canvas-markdown h6 { font-size: 13.5px; }
+.canvas-markdown a { color: var(--accent); }
+.canvas-markdown img { max-width: 100%; height: auto; border-radius: 4px; }
+.canvas-markdown mark { background: #fff2a8; color: inherit; padding: 0 2px; }
+.canvas-markdown code {
+  font-family: var(--font-mono); font-size: 0.92em;
+  background: var(--paper); border-radius: 3px; padding: 1px 4px;
+}
+/* p.317: "Code blocks remain left-aligned and full-width regardless of the
+   selected alignment." The alignment half is set by the widget; the full-width
+   half is here, and `overflow-x` is what keeps a long line from widening the
+   module rather than scrolling inside its own box. */
+.canvas-markdown-code {
+  margin: 0 0 10px; padding: 8px 10px; overflow-x: auto;
+  background: var(--paper); border-radius: 5px;
+}
+.canvas-markdown-code code { background: none; padding: 0; }
+.canvas-markdown-quote {
+  margin: 0 0 10px; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--line); color: var(--ink-soft);
+}
+.canvas-markdown-list { margin: 0 0 10px; padding-left: 22px; }
+/* A task item's marker would sit beside the checkbox and read as a second
+   bullet, so the list marker goes and the checkbox is the marker. */
+.canvas-markdown-task { list-style: none; margin-left: -22px; }
+.canvas-markdown-task input { margin-right: 6px; vertical-align: middle; }
+.canvas-markdown-table { border-collapse: collapse; margin: 0 0 10px; }
+.canvas-markdown-table th, .canvas-markdown-table td {
+  border: 1px solid var(--line); padding: 4px 8px;
+}
+.canvas-markdown-table th { background: var(--paper); font-weight: 600; }
+.canvas-markdown-mono { font-family: var(--font-mono); }
+/* p.317's "Enable scrolling". The height is here rather than a prop: the page
+   gives a toggle and no number, and a toggle that needs a second setting before
+   it does anything is not the toggle the page describes. */
+.canvas-markdown-scrolling { max-height: 320px; overflow-y: auto; }
+/* p.317's "Allow long word wrap", for "long, unbroken strings (such as long
+   URLs) that exceed the width of the widget". */
+.canvas-markdown-wrap { overflow-wrap: anywhere; }
+
 /* ---- String selector (p.461, decision 0011) ------------------------------- */
 .canvas-selector { display: grid; gap: 6px; }
 /* The grid template comes from the widget, because p.461's "grid formation with

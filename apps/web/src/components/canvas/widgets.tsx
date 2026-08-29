@@ -41,6 +41,11 @@ import {
   PRECISIONS, TIME_FORMATS, ZONE_MODES, formatDisplay, fromLocalInput, isZone,
   toLocalInput, zoneLabel, zoneOf, type Precision,
 } from "./date-time";
+import {
+  ALIGNMENTS, alignmentOf, blockAlignment, columnAlignment, parse as parseMarkdown,
+  sourceOf as markdownSourceOf, textOf as markdownTextOf,
+  type Align, type Block, type Inline,
+} from "./markdown";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -1901,6 +1906,323 @@ CanvasDateTimePicker.craft = {
     timezoneVariable: "", zoneEditable: false,
   },
   related: { settings: DateTimePickerSettings },
+};
+
+// ---- Markdown -------------------------------------------------------------------
+/** p.314-319's Markdown widget.
+ *
+ * The parsing, the URL rule and p.317's two alignment precedences all live in
+ * `markdown.ts` and are tested without a browser. What is here is the part that
+ * has to be React: turning the tree into elements.
+ *
+ * **There is no `dangerouslySetInnerHTML` in this file, and that is the design
+ * rather than an accident.** `parseMarkdown` returns plain objects, so every
+ * string below reaches the DOM as a text child, which React escapes. Raw HTML
+ * an author typed is shown as the characters they typed.
+ */
+function renderInline(nodes: Inline[]): React.ReactNode {
+  return nodes.map((node, index) => {
+    switch (node.kind) {
+      case "text":
+        return <React.Fragment key={index}>{node.text}</React.Fragment>;
+      case "code":
+        return <code key={index}>{node.text}</code>;
+      case "strong":
+        return <strong key={index}>{renderInline(node.children)}</strong>;
+      case "em":
+        return <em key={index}>{renderInline(node.children)}</em>;
+      case "del":
+        return <del key={index}>{renderInline(node.children)}</del>;
+      case "mark":
+        return <mark key={index}>{renderInline(node.children)}</mark>;
+      case "break":
+        return <br key={index} />;
+      case "link":
+        // `noreferrer` as well as `noopener`: an app's Markdown is written by
+        // one person and read by the workspace, and the reader did not choose
+        // to tell the destination where they came from.
+        return (
+          <a key={index} href={node.href} target="_blank" rel="noreferrer noopener">
+            {renderInline(node.children)}
+          </a>
+        );
+      case "image":
+        return <img key={index} src={node.src} alt={node.alt} />;
+    }
+  });
+}
+
+function renderBlock(block: Block, key: number, widget: Align): React.ReactNode {
+  // p.317's "Code blocks remain left-aligned and full-width regardless of the
+  // selected alignment", decided in the model rather than here.
+  const style = { textAlign: blockAlignment(block, widget) } as React.CSSProperties;
+  switch (block.kind) {
+    case "heading":
+      return React.createElement(
+        `h${block.level}`,
+        { key, style, className: "canvas-markdown-heading" },
+        renderInline(block.children),
+      );
+    case "paragraph":
+      return <p key={key} style={style}>{renderInline(block.children)}</p>;
+    case "code":
+      // **The style is applied here too, and that is the point.** Leaving it off
+      // let the browser compute `start`, which looks left-aligned and is only
+      // left-aligned by inheritance - so `blockAlignment`'s answer for the one
+      // block kind it exists for was computed and thrown away, and any future
+      // rule setting `text-align` on the container would have taken code blocks
+      // with it. The browser suite caught it as `start` != `left`.
+      return (
+        <pre key={key} style={style} className="canvas-markdown-code">
+          <code>{block.text}</code>
+        </pre>
+      );
+    case "rule":
+      return <hr key={key} />;
+    case "quote":
+      return (
+        <blockquote key={key} className="canvas-markdown-quote">
+          {block.blocks.map((b, i) => renderBlock(b, i, widget))}
+        </blockquote>
+      );
+    case "list": {
+      const Tag = block.ordered ? "ol" : "ul";
+      return (
+        <Tag key={key} style={style} className="canvas-markdown-list">
+          {block.items.map((item, i) => (
+            <li key={i} className={item.done === undefined ? undefined : "canvas-markdown-task"}>
+              {item.done !== undefined && (
+                // Shown, and not editable: p.318 lists a task list as a
+                // *syntax*, so the tick is what the author wrote. A checkbox a
+                // viewer could clear would be a control with nowhere to put the
+                // answer.
+                <input type="checkbox" checked={item.done} readOnly disabled />
+              )}
+              {renderInline(item.children)}
+            </li>
+          ))}
+        </Tag>
+      );
+    }
+    case "table":
+      return (
+        <table key={key} className="canvas-markdown-table">
+          <thead>
+            <tr>
+              {block.head.map((cell, i) => (
+                <th key={i} style={{ textAlign: columnAlignment(block.align[i] ?? null, widget) }}>
+                  {renderInline(cell)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, r) => (
+              <tr key={r}>
+                {row.map((cell, i) => (
+                  <td key={i} style={{ textAlign: columnAlignment(block.align[i] ?? null, widget) }}>
+                    {renderInline(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+  }
+}
+
+export function CanvasMarkdown({
+  source = "text",
+  text = "",
+  textVariable = "",
+  monospace = false,
+  scrolling = false,
+  wordWrap = true,
+  breaks = true,
+  alignment = "left",
+}: {
+  source?: string;
+  text?: string;
+  textVariable?: string;
+  monospace?: boolean;
+  scrolling?: boolean;
+  wordWrap?: boolean;
+  breaks?: boolean;
+  alignment?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { resolved } = useCanvasVariables();
+
+  const raw = markdownTextOf(
+    source, text, textVariable ? resolved[textVariable] : undefined,
+  );
+  // **`{{v_id}}` is expanded in typed text only.** It is what `CanvasText` does
+  // and what an author moving to this widget will expect to keep working. It is
+  // deliberately *not* done to text arriving from a variable: that text is data,
+  // and data that can name variables is data that reads them.
+  const filled = markdownSourceOf(source) === "text" ? interpolate(raw, resolved) : raw;
+  const widgetAlign = alignmentOf(alignment);
+  const blocks = parseMarkdown(filled, { breaks: breaks !== false });
+
+  const classes = ["canvas-markdown"];
+  if (monospace) classes.push("canvas-markdown-mono");
+  if (scrolling) classes.push("canvas-markdown-scrolling");
+  // p.317's "Allow long word wrap", default on: a long URL breaks onto the next
+  // line rather than pushing the widget wider than its column.
+  if (wordWrap !== false) classes.push("canvas-markdown-wrap");
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {blocks.length === 0 ? (
+        <p className="canvas-widget-empty">Markdown - add text in Settings</p>
+      ) : (
+        <div className={classes.join(" ")} data-testid="markdown">
+          {blocks.map((block, i) => renderBlock(block, i, widgetAlign))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MarkdownSettings() {
+  const {
+    source, text, textVariable, monospace, scrolling, wordWrap, breaks, alignment,
+    actions: { setProp },
+  } = useNode((node) => ({
+    source: node.data.props.source,
+    text: node.data.props.text,
+    textVariable: node.data.props.textVariable,
+    monospace: node.data.props.monospace,
+    scrolling: node.data.props.scrolling,
+    wordWrap: node.data.props.wordWrap,
+    breaks: node.data.props.breaks,
+    alignment: node.data.props.alignment,
+  }));
+  const { declared } = useCanvasVariables();
+  const strings = Object.values(declared).filter((v) => v.kind === "string");
+
+  return (
+    <WidgetSetup
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Input data</span>
+        <select
+          value={markdownSourceOf(source)}
+          data-testid="markdown-source"
+          onChange={(e) => setProp((p: { source: string }) => (p.source = e.target.value))}
+        >
+          <option value="text">Text</option>
+          <option value="variable">Variable</option>
+        </select>
+      </label>
+      {markdownSourceOf(source) === "text" ? (
+        <label className="field">
+          <span className="field-label">Text</span>
+          <textarea
+            value={text || ""}
+            rows={8}
+            data-testid="markdown-text"
+            onChange={(e) => setProp((p: { text: string }) => (p.text = e.target.value))}
+          />
+          <span className="field-hint">
+            {"{{v_id}}"} shows a variable&apos;s current value
+          </span>
+        </label>
+      ) : (
+        <label className="field">
+          <span className="field-label">Text variable</span>
+          <select
+            value={textVariable || ""}
+            data-testid="markdown-variable"
+            onChange={(e) =>
+              setProp((p: { textVariable: string }) => (p.textVariable = e.target.value))}
+          >
+            <option value="">Choose…</option>
+            {strings.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            {strings.length === 0
+              ? "Declare a string variable in the Variables panel first"
+              : "Its value is rendered as Markdown, and is not scanned for {{v_id}}"}
+          </span>
+        </label>
+      )}
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Text alignment</span>
+        <select
+          value={alignmentOf(alignment)}
+          data-testid="markdown-alignment"
+          onChange={(e) => setProp((p: { alignment: string }) => (p.alignment = e.target.value))}
+        >
+          {Object.entries(ALIGNMENTS).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          A table column that names its own alignment keeps it, and code blocks stay left
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={breaks !== false}
+          data-testid="markdown-breaks"
+          onChange={(e) => setProp((p: { breaks: boolean }) => (p.breaks = e.target.checked))}
+        />
+        <span className="field-label">Break on newlines</span>
+        <span className="field-hint">
+          Off follows standard Markdown, where a single newline is a space
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={!!monospace}
+          data-testid="markdown-monospace"
+          onChange={(e) => setProp((p: { monospace: boolean }) => (p.monospace = e.target.checked))}
+        />
+        <span className="field-label">Enable monospace font</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={!!scrolling}
+          data-testid="markdown-scrolling"
+          onChange={(e) => setProp((p: { scrolling: boolean }) => (p.scrolling = e.target.checked))}
+        />
+        <span className="field-label">Enable scrolling</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={wordWrap !== false}
+          data-testid="markdown-wrap"
+          onChange={(e) => setProp((p: { wordWrap: boolean }) => (p.wordWrap = e.target.checked))}
+        />
+        <span className="field-label">Allow long word wrap</span>
+        <span className="field-hint">
+          A long unbroken string breaks onto the next line instead of overflowing
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasMarkdown.craft = {
+  displayName: "Markdown",
+  props: {
+    source: "text", text: "", textVariable: "", monospace: false,
+    scrolling: false, wordWrap: true, breaks: true, alignment: "left",
+  },
+  related: { settings: MarkdownSettings },
 };
 
 // ---- Dataset table --------------------------------------------------------------
@@ -7331,6 +7653,7 @@ export const CANVAS_RESOLVER = {
   CanvasTextInput,
   CanvasStringSelector,
   CanvasDateTimePicker,
+  CanvasMarkdown,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -7360,6 +7683,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
   { key: "CanvasStringSelector", label: "String selector", hint: "Pick one or many from a list of strings" },
   { key: "CanvasDateTimePicker", label: "Date and time", hint: "A single date and time, in a chosen timezone" },
+  { key: "CanvasMarkdown", label: "Markdown", hint: "Formatted text, typed or read from a string variable" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
