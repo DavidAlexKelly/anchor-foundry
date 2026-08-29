@@ -356,7 +356,7 @@ Our generic parameter control was a defensible design, but it was *our* design, 
 
 | Foundry | Ours |
 |---|---|
-| Object Table | ◑ `CanvasObjectTable` — see below |
+| **Object Table** | ◑ §207 `CanvasObjectTable` — see below |
 | Object List (cards) | ✅ `CanvasObjectCards` |
 | **Object View** — renders Object Explorer's object view for one object | ○ — depends on `ontology.md` §Object Views |
 | Property List | ○ |
@@ -364,7 +364,11 @@ Our generic parameter control was a defensible design, but it was *our* design, 
 | Object Set Title | ○ |
 | Header text — two rows optimised for a header | ○ |
 
-**Object Table** is the most-configured widget in Foundry and our gap is wide (p.221–223): multiple object types in one table; time-series columns; **derived columns generated on-the-fly via a Function** `[fn]`; multi-column sort; column size and row height; conditional and numeric formatting from the ontology; single- and multi-select; **inline editing for cell-level writeback**; events on row selection ✅; custom row actions in the right-click menu; and a `hubble:icon` type class that renders an image property in place of the object-type icon.
+**Object Table** is the most-configured widget in Foundry, and p.222–225 is where its configuration actually lives.
+
+**p.224's Selection block is done (§207)**: the **Active object** output, auto-selection of the first row with p.224's setting to disable it, **Enable multi-select**, and the **Selected objects** output. Both outputs are clause lists a `narrow_set` derivation turns into object sets — clauses rather than finished definitions, so a selection means whatever it means *against the table's current set*; a stored definition would freeze the base set at the moment of the click and go on describing rows that have since been filtered away. Two details from that page are worth naming because neither was free. **p.224's "empty active object at load time" had no expressible value**: a variable nothing has written holds no clauses, no clauses means no narrowing, and every downstream widget would have received the whole table — so `object_sets.parse` now accepts `in []` as the empty set (the argument is in the code, and turns on *direction*: a missing value must not widen a set, while `in []` narrows to nothing). And **"auto-selection only triggers when the widget is visible"** is real work, because a collapsed section keeps its children mounted so a table inside one is running; an `IntersectionObserver` answers it, and covers a hidden tab and a closed overlay that a walk up the tree looking for a collapsed ancestor would not.
+
+Still ○, and the list is p.222–225's own: multiple object types in one table (and p.225's Combine multiple object types); time-series columns; **derived columns generated on-the-fly via a Function** `[fn]`; p.223's multi-column **default sorts**, which need the declared property type behind them the same way ordered filters do; column size and row height (p.224's lines-per-row, value wrapping, frozen columns, empty-state message, custom "No value"); conditional and numeric formatting from the Ontology Manager; **inline editing for cell-level writeback**; p.223's export to CSV and Excel; custom row actions in the right-click menu; p.225's variable-backed column visibility and Scenario comparison; and a `hubble:icon` type class that renders an image property in place of the object-type icon. Events on row selection are ✅ (p.224's "On active object selection").
 
 ### Visualization (p.276) — ~25
 
@@ -420,7 +424,7 @@ Our generic parameter control was a defensible design, but it was *our* design, 
 1. **Text, Date, Numeric Input, String Selector, Checkbox** — split out of the parameter control; makes a filter bar feel complete
 2. ~~**Object set filter variables** (§3.2) — unblocks the rest of the filtering category~~ — done as far as behaviour goes (§3.2); only the dedicated variable *kind* is outstanding, and no widget is waiting on it
 3. ~~**Markdown** — trivially cheap, disproportionately useful~~ — done in §206, and "trivially cheap" was wrong. p.314–319 is six pages, and the widget's core claim (that an author's markup cannot become the reader's markup) is a claim about the *renderer*, which is the part a library would have made hardest to keep. What was cheap was the syntax; what was not was refusing to emit a string
-4. **Object Table depth** — sorting, sizing, formatting, inline edit, row actions
+4. **Object Table depth** — sorting, sizing, formatting, inline edit, row actions. **p.224's Selection block landed in §207**; what is left divides into three groups that want doing separately: the *display* options of p.224–225 (lines per row, wrapping, frozen columns, empty state), which are cheap and want no server; the *sorting* of p.223, which is blocked on declared property types exactly as ordered filter operators are, so it belongs with that ontology work rather than here; and *inline editing*, which is writeback with permissions behind it and is its own unit
 5. **Object View widget, Property List, Links, Object Set Title** — depend on ontology work
 6. **Inline Action depth**, Object Dropdown, Object Selector
 7. **Timeline, Stepper, Status Tracker, Pie, Waterfall** — the visual long tail

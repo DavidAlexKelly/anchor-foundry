@@ -160,6 +160,9 @@ export const REFERENCE_PROPS = [
   "timezoneVariable",
   // p.316's Markdown input read from a string variable. See the API's copy.
   "textVariable",
+  // p.224's two Object Table outputs, both writes. See the API's copy.
+  "activeVariable",
+  "selectedVariable",
   "name",
 ] as const;
 

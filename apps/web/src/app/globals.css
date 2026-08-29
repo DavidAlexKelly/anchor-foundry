@@ -1700,6 +1700,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    clickable and does nothing is worse than one that looks inert. */
 .row-clickable { cursor: pointer; }
 .row-clickable:hover { background: var(--surface-2, rgba(0, 0, 0, 0.04)); }
+/* p.224's active object. A left bar rather than a background, so it survives
+   the hover above and reads as "this one" rather than "the pointer is here" —
+   and so a conditionally-formatted cell keeps its own colour. */
+.row-active > td { background: var(--accent-wash); }
+.row-active > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.canvas-table-check { width: 1px; white-space: nowrap; }
+.canvas-table-check input { margin: 0; vertical-align: middle; }
 
 /* ---- pages and tabs (ROADMAP phase 2, 1.4) -------------------------------- */
 /* In the builder every page is visible and labelled, because the alternative

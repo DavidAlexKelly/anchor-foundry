@@ -33,6 +33,8 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   filterParameter: "write",
   searchParameter: "write",
   drilldownVariable: "write",
+  activeVariable: "write",
+  selectedVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

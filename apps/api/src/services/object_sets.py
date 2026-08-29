@@ -400,8 +400,27 @@ def parse(definition: dict[str, Any]) -> ObjectSet:
             )
         value = entry.get("value")
         if op in LIST_OPERATORS:
-            if not isinstance(value, list) or not value:
-                raise ValueError(f"the {op!r} operator needs a non-empty list of values")
+            if not isinstance(value, list):
+                raise ValueError(f"the {op!r} operator needs a list of values")
+            # **An empty list is the empty set, and is allowed.** This refused
+            # it once, alongside the `None` case below and for what looked like
+            # the same reason. It is not the same reason, and the difference is
+            # the direction: a missing value must not *widen* a set, because
+            # that is decision 0002's failure - a map showing more rows than it
+            # should because a parameter was unset. `in []` narrows, to
+            # nothing, which is the safe direction and the only honest reading
+            # of "is a member of no values".
+            #
+            # It has to be expressible, because otherwise a widget whose output
+            # is a selection has no value for "nothing is selected" (p.224's
+            # Selected objects). Every alternative available to such a widget -
+            # omitting the filter, leaving the variable unset - hands
+            # downstream widgets the *whole* set, which is exactly the failure
+            # the refusal below exists to prevent. Keeping the refusal here
+            # causes the bug it was written against.
+            #
+            # Both stores already agree: Postgres `= ANY(ARRAY[])` is false and
+            # OpenSearch `terms: []` matches nothing, as does `matches`.
         elif isinstance(value, (list, dict)):
             raise ValueError(f"the {op!r} operator takes a single value, not a list")
         elif value is None:

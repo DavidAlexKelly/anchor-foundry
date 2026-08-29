@@ -302,6 +302,14 @@ REFERENCE_PROPS = (
     # two above: the widget's *content* comes from a variable, and a
     # content reference is as easy to miss as a configuration one.
     "textVariable",
+    # p.224's two Object Table outputs: the active/highlighted row, and
+    # the checked rows under multi-select. **Writes**, unlike every other
+    # entry added since §198 - a widget that *produces* a variable is as
+    # much a usage as one that reads it, and a table whose selection
+    # variable could be deleted underneath it would go on writing to a
+    # binding the module no longer declares.
+    "activeVariable",
+    "selectedVariable",
     "name",
 )
 

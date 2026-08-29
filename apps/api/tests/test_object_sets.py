@@ -51,6 +51,11 @@ CASES = [
     {"filters": [{"property": "region", "op": "eq", "value": "north"}]},
     {"filters": [{"property": "region", "op": "neq", "value": "north"}]},
     {"filters": [{"property": "region", "op": "in", "value": ["north", "east"]}]},
+    # `in []` is the empty set (p.224's "nothing is selected"), and it is in
+    # this list because that is a claim about the *store*: Postgres
+    # `= ANY(ARRAY[])` and OpenSearch `terms: []` both have to reach the same
+    # nothing the reference semantics do.
+    {"filters": [{"property": "region", "op": "in", "value": []}]},
     {"filters": [{"property": "status", "op": "starts_with", "value": "clos"}]},
     {
         "filters": [
@@ -116,7 +121,7 @@ def test_a_filter_with_no_value_is_refused_rather_than_ignored() -> None:
 
 def test_list_and_scalar_operators_refuse_each_other() -> None:
     type_id = str(uuid.uuid4())
-    with pytest.raises(ValueError, match="non-empty list"):
+    with pytest.raises(ValueError, match="list of values"):
         object_sets.parse(
             {"object_type_id": type_id, "filters": [{"property": "r", "op": "in", "value": "north"}]}
         )
@@ -124,6 +129,58 @@ def test_list_and_scalar_operators_refuse_each_other() -> None:
         object_sets.parse(
             {"object_type_id": type_id, "filters": [{"property": "r", "op": "eq", "value": ["a"]}]}
         )
+
+
+def test_the_browser_addresses_the_primary_key_by_the_same_name() -> None:
+    """`PRIMARY_KEY_FILTER` is mirrored in `canvas/object-table-selection.ts`,
+    where the Object Table builds the clauses for p.224's selection outputs.
+
+    **Drift here is silent and wrong rather than loud.** A clause naming
+    anything else is a filter on a property that happens not to exist, which
+    narrows to nothing — indistinguishable from an empty selection, on both
+    stores, with no error anywhere. Asserted mechanically for the same reason
+    `REFERENCE_PROPS` is.
+    """
+    import re
+
+    web = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "components", "canvas", "object-table-selection.ts",
+    )
+    source = open(web).read()
+    found = re.search(r'export const PRIMARY_KEY = "([^"]+)"', source)
+    assert found, "PRIMARY_KEY not found in object-table-selection.ts - renamed?"
+    assert found.group(1) == object_sets.PRIMARY_KEY_FILTER, (
+        f"browser uses {found.group(1)!r}, server uses "
+        f"{object_sets.PRIMARY_KEY_FILTER!r}"
+    )
+
+
+def test_an_empty_in_list_is_the_empty_set_rather_than_a_refusal() -> None:
+    """**The direction is what separates this from the refusal above it.**
+
+    A missing value must not *widen* a set - decision 0002's failure, where an
+    unset parameter made a map show more rows than it should. `in []` narrows,
+    to nothing, which is the safe direction and the only honest reading of "is
+    a member of no values".
+
+    It has to be expressible or a widget whose output is a selection (p.224's
+    Selected objects) has no value for "nothing is selected", and every
+    alternative open to it - omit the filter, leave the variable unset - hands
+    downstream widgets the whole set. Refusing it here *causes* the bug the
+    refusal was written against.
+    """
+    definition = object_sets.parse(
+        {
+            "object_type_id": str(uuid.uuid4()),
+            "filters": [{"property": "region", "op": "in", "value": []}],
+        }
+    )
+    assert definition.filters[0].value == []
+    # And the written-down semantics say so, which is what both stores are
+    # checked against.
+    for _key, props in ROWS:
+        assert object_sets.matches(props, definition.filters) is False
 
 
 def test_ordered_comparison_is_refused_and_says_why() -> None:

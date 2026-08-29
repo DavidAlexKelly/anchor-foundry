@@ -19,7 +19,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { objects as objApi } from "@/lib/api";
 import type { ObjectInstance } from "@/lib/types";
 
@@ -110,4 +110,44 @@ export function describeSet(
     ? ` where ${filters.map((f) => `${f.property} = ${String(f.value)}`).join(" and ")}`
     : "";
   return `${total.toLocaleString()} ${noun}${where}`;
+}
+
+/** Whether an element is actually on screen.
+ *
+ * **p.224's auto-selection "only triggers when the widget is visible"**, and a
+ * collapsed section keeps its children *mounted* — deliberately, so a table
+ * inside one does not refetch every time somebody folds it away. So a table in
+ * a folded section is running, and something has to tell it that nobody can
+ * see it.
+ *
+ * An `IntersectionObserver` rather than a walk up the Craft tree looking for a
+ * collapsed ancestor: the question is "is this on screen", and the tree answers
+ * a narrower one. A section is only the case p.224 happens to name — a hidden
+ * tab and a closed overlay hide a widget just as completely, and each would
+ * need its own special case in a tree walk while the observer already covers
+ * them. It also reports *changes*, which is what "until the section is
+ * expanded" asks for.
+ */
+export function useOnScreen(): [(node: HTMLElement | null) => void, boolean] {
+  const [node, setNode] = useState<HTMLElement | null>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!node) return;
+    // Guarded because the observer does not exist in every runtime a component
+    // is rendered in. Absent means *visible*: a widget that never auto-selects
+    // is a worse failure than one that does so early, and it would only ever
+    // show up somewhere with no layout to hide it in anyway.
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => setVisible(entries.some((e) => e.isIntersecting)),
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [node]);
+
+  return [setNode, visible];
 }
