@@ -118,10 +118,14 @@ def test_a_row_is_one_line_tall_by_default(page, api) -> None:
 def test_more_lines_make_a_taller_row(page, api) -> None:
     """p.224: the number "controls the height of each table row".
 
-    **Asserted as a measurement, not as a prop.** `min-height` is ignored on a
-    table cell per spec, so the obvious implementation sets a property that does
-    nothing — and every unit test still passes, because the arithmetic was
-    right and the CSS was not.
+    **Asserted as a measurement, not as a prop**, because the arithmetic being
+    right says nothing about whether the row got taller.
+
+    It does *not* distinguish `height` from `min-height`: the harness planted
+    that swap and it survived, since Chromium honours `min-height` on a table
+    cell even though the property is undefined there. The widget uses `height`,
+    which is defined to act as a minimum, and this suite cannot tell the two
+    apart — a difference that would only show in another engine.
     """
     one = build(api, "Table lines one", {"lines": 1})
     open_module(page, one)

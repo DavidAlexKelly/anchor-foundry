@@ -91,7 +91,12 @@ export function cellStyle(lines: number, wrap: boolean): CSSProperties {
   } as CSSProperties;
 }
 
-/** The height a row must be, so the line count shows even on short values. */
+/** The height a row must be, so the line count shows even on short values.
+ *
+ * Applied as a cell's `height`, which CSS defines as a minimum for table cells
+ * (`min-height` on one is undefined - Chromium honours it, which is why the
+ * browser suite cannot tell the two apart).
+ */
 export function rowMinHeight(lines: number, lineHeight: number): number {
   return lines * lineHeight;
 }

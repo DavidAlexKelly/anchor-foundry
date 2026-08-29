@@ -2810,10 +2810,14 @@ export function CanvasObjectTable({
                     )}
                     <td
                       style={{
-                        // **`height`, not `minHeight`.** A table cell ignores
-                        // `min-height` per spec, while `height` on one is
-                        // treated as a minimum - which is the behaviour p.224's
-                        // line count needs.
+                        // **`height`, not `minHeight`**, and the harness is
+                        // why the comment says what it says. `height` on a
+                        // table cell is *defined* to act as a minimum;
+                        // `min-height` on one is undefined, and Chromium
+                        // happens to honour it - so swapping them survives this
+                        // browser suite, which is an equivalent mutant here and
+                        // a difference somewhere else. The defined one is the
+                        // one to rely on.
                         height: minHeight,
                         ...stick(multiSelect && selectedVariable ? 1 : 0),
                       }}
