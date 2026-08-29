@@ -59,6 +59,9 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   filterParameter: "write",
   searchParameter: "write",
   drilldownVariable: "write",
+  // p.224's Object Table outputs - "data passed out of a given widget".
+  activeVariable: "write",
+  selectedVariable: "write",
   // Reads — p.69's "input variables… data passed into a given widget".
   variable: "read",
   objectSetVariable: "read",

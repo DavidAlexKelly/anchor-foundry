@@ -9,7 +9,7 @@
 
 import { Editor, Frame, useEditor, useNode } from "@craftjs/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   actions as actionApi, ApiError, canvas as canvasApi, datasets as dsApi,
   objects as objApi,
@@ -46,6 +46,9 @@ import {
   sourceOf as markdownSourceOf, textOf as markdownTextOf,
   type Align, type Block, type Inline,
 } from "./markdown";
+import {
+  autoSelectKey, hasSelection, keysOf, selectionClauses, toggle as toggleKey,
+} from "./object-table-selection";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -62,7 +65,7 @@ import {
 } from "./context";
 import { eventsFor, interpolate, run as runEvents, useEventContext } from "./events";
 import { invalidateCanvasReads } from "./refresh";
-import { describeSet, selectionOf, useSetPage } from "./object-set";
+import { describeSet, selectionOf, useOnScreen, useSetPage } from "./object-set";
 import {
   MIN_SHARE, formatWeights, inputTypeFor, parseWeights, pivotClauses, resizeWeights,
   roundWeight, seedActionForm, seriesLabel, seriesPointLabel, type PivotPick,
@@ -2429,6 +2432,10 @@ export function CanvasObjectTable({
   pageSize = 25,
   columns = "",
   sort = "recent",
+  activeVariable = null,
+  autoSelect = true,
+  multiSelect = false,
+  selectedVariable = null,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -2450,6 +2457,19 @@ export function CanvasObjectTable({
    * differently on the two stores; the settings panel therefore offers what
    * the server accepts rather than a column-header click that sometimes 422s. */
   sort?: string;
+  /** p.224's **Active object**: the row a viewer highlighted, as clauses a
+   * `narrow_set` derivation turns into an object set. Clauses rather than a
+   * finished definition so the meaning is recomputed against whatever the
+   * table's set currently is - see `object-table-selection.ts`. */
+  activeVariable?: string | null;
+  /** p.224's setting, as the positive: the panel offers "Disable active object
+   * auto-selection", which is this turned off. */
+  autoSelect?: boolean;
+  /** p.224's **Enable multi-select**. */
+  multiSelect?: boolean;
+  /** p.224's **Selected objects**, "only in use and populated if the Enable
+   * multi-select toggle is set to true". */
+  selectedVariable?: string | null;
 }) {
   const {
     id: nodeId,
@@ -2462,6 +2482,24 @@ export function CanvasObjectTable({
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending, events: moduleEvents } = useCanvasVariables();
   const usingSet = !!objectSetVariable;
+
+  // p.224's two outputs. **The variables are the source of truth**, not a copy
+  // in component state: a table holding its own set would disagree with the
+  // variable the moment anything else wrote to it — an event that clears the
+  // selection, a saved state restored on load — and the checkboxes would show
+  // one answer while every downstream widget acted on another.
+  const { set: setParameter } = useCanvasParameters();
+  const activeRaw = useCanvasParameter(activeVariable);
+  const selectedRaw = useCanvasParameter(selectedVariable);
+  const activeKeys = keysOf(activeRaw);
+  const selectedKeys = keysOf(selectedRaw);
+  // **Stated, not merely empty.** A variable this widget has never written
+  // holds no clauses at all, and no clauses means *no narrowing* - so an
+  // "empty" active object would hand every downstream widget the whole table.
+  // `hasSelection` is how the widget knows it still has to say so.
+  const activeStated = hasSelection(activeRaw);
+  const selectedStated = hasSelection(selectedRaw);
+  const [screenRef, onScreen] = useOnScreen();
 
   // Paging is *runtime* state, like a page or a variable value (decision 0002
   // §3): a saved app opens on the first page for every viewer. The hook holds
@@ -2528,9 +2566,53 @@ export function CanvasObjectTable({
   // the module's events say what happens. That is the difference between a
   // widget with a hardcoded behaviour and one an app author can wire.
   const rowEvents = eventsFor(moduleEvents, nodeId, "row_select");
-  const rowsAreClickable = rowEvents.length > 0;
+  // **Every row is clickable once there is somewhere to put the answer.** It
+  // used to take an event: before p.224's outputs the only thing a click could
+  // do was fire one, so a table with no events had nothing to say. Now a click
+  // also sets the active object, and a table bound to that variable is
+  // interactive whether or not anybody wired an event to it.
+  const rowsAreClickable = rowEvents.length > 0 || !!activeVariable;
+
+  const chooseActive = (key: string) => {
+    if (activeVariable) setParameter(activeVariable, selectionClauses([key]));
+  };
+
+  // p.224's auto-selection, in an effect because it is a *write* — doing it
+  // during render would set a variable while React is drawing the widget that
+  // reads it.
+  const autoKey = autoSelectKey({
+    rows, current: activeKeys, enabled: autoSelect !== false, visible: onScreen,
+  });
+  useEffect(() => {
+    if (!activeVariable) return;
+    if (autoKey) {
+      setParameter(activeVariable, selectionClauses([autoKey]));
+      return;
+    }
+    // p.224's "results in an empty active object at load time", written down
+    // rather than left unsaid - see `activeStated` above.
+    if (!activeStated) setParameter(activeVariable, selectionClauses([]));
+    // `setParameter` is stable for the life of the provider; listing it would
+    // re-run this on every render of every widget in the module.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoKey, activeVariable, activeStated]);
+
+  useEffect(() => {
+    // p.224: the Selected objects variable "will only be in use and populated
+    // if the Enable multi-select toggle is set to true" - so an unbound or
+    // single-select table leaves it alone entirely.
+    if (!multiSelect || !selectedVariable || selectedStated) return;
+    setParameter(selectedVariable, selectionClauses([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [multiSelect, selectedVariable, selectedStated]);
   return (
-    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+    <div
+      ref={(ref) => {
+        connectDragDrop(ref, connect, drag);
+        screenRef(ref);
+      }}
+      className="canvas-block"
+    >
       {!usingSet && !objectTypeId && (
         <p className="canvas-widget-empty">Object table - pick an object type in Settings</p>
       )}
@@ -2563,6 +2645,32 @@ export function CanvasObjectTable({
             <table>
               <thead>
                 <tr>
+                  {multiSelect && selectedVariable && (
+                    <th className="canvas-table-check">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all rows on this page"
+                        data-testid="table-select-all"
+                        checked={rows.length > 0 && rows.every(
+                          (r) => selectedKeys.includes(r.primary_key),
+                        )}
+                        onChange={(e) =>
+                          setParameter(selectedVariable, selectionClauses(
+                            // **This page, not the whole set.** Checking a box
+                            // that selects rows nobody has seen is a promise
+                            // the widget cannot keep: it only has the page it
+                            // fetched, and the set may be a million rows.
+                            e.target.checked
+                              ? Array.from(new Set([
+                                ...selectedKeys, ...rows.map((r) => r.primary_key),
+                              ]))
+                              : selectedKeys.filter(
+                                (k) => !rows.some((r) => r.primary_key === k),
+                              ),
+                          ))}
+                      />
+                    </th>
+                  )}
                   <th>Key</th>
                   {properties.map((p) => (
                     <th key={p.api_name}>{p.display_name || p.api_name}</th>
@@ -2573,17 +2681,45 @@ export function CanvasObjectTable({
                 {rows.map((instance) => (
                   <tr
                     key={instance.id}
-                    className={rowsAreClickable ? "row-clickable" : undefined}
+                    className={[
+                      rowsAreClickable ? "row-clickable" : "",
+                      activeKeys.includes(instance.primary_key) ? "row-active" : "",
+                    ].filter(Boolean).join(" ") || undefined}
+                    // The active row is announced rather than only coloured: a
+                    // highlight nobody can hear is not a selection.
+                    aria-current={
+                      activeKeys.includes(instance.primary_key) ? "true" : undefined
+                    }
                     onClick={
                       rowsAreClickable
-                        ? () =>
-                            runEvents(rowEvents, {
-                              ...eventContext,
-                              ...selectionOf(instance, effectiveTypeId),
-                            })
+                        ? () => {
+                          chooseActive(instance.primary_key);
+                          runEvents(rowEvents, {
+                            ...eventContext,
+                            ...selectionOf(instance, effectiveTypeId),
+                          });
+                        }
                         : undefined
                     }
                   >
+                    {multiSelect && selectedVariable && (
+                      <td className="canvas-table-check">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${instance.primary_key}`}
+                          checked={selectedKeys.includes(instance.primary_key)}
+                          // **Stops the click reaching the row.** Checking a box
+                          // is not choosing an active object, and without this
+                          // one click would do both — and fire the row's events
+                          // as a side effect of ticking a checkbox.
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() =>
+                            setParameter(selectedVariable, selectionClauses(
+                              toggleKey(selectedKeys, instance.primary_key),
+                            ))}
+                        />
+                      </td>
+                    )}
                     <td>{instance.primary_key}</td>
                     {properties.map((p) => (
                       <td key={p.api_name}>
@@ -2641,6 +2777,7 @@ function ObjectTableSettings() {
   const {
     objectTypeId, filterProperty, filterParameter, searchParameter,
     objectSetVariable, pageSize, columns, sort,
+    activeVariable, autoSelect, multiSelect, selectedVariable,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -2651,8 +2788,18 @@ function ObjectTableSettings() {
     pageSize: node.data.props.pageSize,
     columns: node.data.props.columns,
     sort: node.data.props.sort,
+    activeVariable: node.data.props.activeVariable,
+    autoSelect: node.data.props.autoSelect,
+    multiSelect: node.data.props.multiSelect,
+    selectedVariable: node.data.props.selectedVariable,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  // **`array`, not `object_set`.** p.224 calls these outputs object sets and
+  // they end up as ones, but what the widget *writes* is the clause list a
+  // `narrow_set` derivation reads - so the variable to bind here is the array
+  // in the middle. Offering object-set variables would invite binding the
+  // derived one and overwriting the thing that derives it.
+  const clauseVariables = Object.values(declared).filter((v) => v.kind === "array");
   const types = useQuery({
     queryKey: ["object-types", workspaceId],
     queryFn: () => objApi.listTypes(workspaceId),
@@ -2803,6 +2950,76 @@ function ObjectTableSettings() {
         </span>
       </label>
       </>}
+      outputs={<>
+      {/* p.224's Selection block, in p.224's order. */}
+      <label className="field">
+        <span className="field-label">Active object</span>
+        <select
+          value={activeVariable || ""}
+          data-testid="table-active-variable"
+          onChange={(e) =>
+            setProp((p: { activeVariable: string | null }) =>
+              (p.activeVariable = e.target.value || null))}
+        >
+          <option value="">None</option>
+          {clauseVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {clauseVariables.length === 0
+            ? "Declare an array variable in the Variables panel, then derive an object set from it with narrow set"
+            : "Holds the clauses that pick the highlighted row; derive an object set from it with narrow set"}
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={autoSelect === false}
+          data-testid="table-disable-auto-select"
+          onChange={(e) =>
+            setProp((p: { autoSelect: boolean }) => (p.autoSelect = !e.target.checked))}
+        />
+        <span className="field-label">Disable active object auto-selection</span>
+        {/* Stored as the positive and shown as the negative, because p.224
+            words it as the negative and an author looking for that sentence
+            should find it. The prop is the positive so a document that omits
+            it gets p.224's default rather than the opposite. */}
+        <span className="field-hint">
+          By default the first row is active at load, once the widget is on screen
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={!!multiSelect}
+          data-testid="table-multi-select"
+          onChange={(e) =>
+            setProp((p: { multiSelect: boolean }) => (p.multiSelect = e.target.checked))}
+        />
+        <span className="field-label">Enable multi-select</span>
+      </label>
+      {multiSelect && (
+        <label className="field">
+          <span className="field-label">Selected objects</span>
+          <select
+            value={selectedVariable || ""}
+            data-testid="table-selected-variable"
+            onChange={(e) =>
+              setProp((p: { selectedVariable: string | null }) =>
+                (p.selectedVariable = e.target.value || null))}
+          >
+            <option value="">None</option>
+            {clauseVariables.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            Empty means nothing is selected, not everything — the clauses say so explicitly
+          </span>
+        </label>
+      )}
+      </>}
     />
   );
 }
@@ -2812,6 +3029,8 @@ CanvasObjectTable.craft = {
   props: {
     objectTypeId: null, filterProperty: null, filterParameter: null,
     searchParameter: null, pageSize: 25, columns: "", sort: "recent",
+    activeVariable: null, autoSelect: true, multiSelect: false,
+    selectedVariable: null,
   },
   related: { settings: ObjectTableSettings },
 };
