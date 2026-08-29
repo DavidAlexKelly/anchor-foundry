@@ -4290,7 +4290,64 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
-### 209. The browser suite tidies up after itself (this session)
+### 210. The Object Set Title, and a widget whose job is to be absent (this session)
+
+p.274's widget, and the first of `workshop.md`'s build-order item 5 — which turned out not to
+depend on ontology work at all, only on the object set variables and title properties that
+already existed. The input object set, Contains single object, Show icon, Title override, and
+Render widget when the object set is empty with its placeholder object type.
+
+**Three rules worth naming, and each is a place the obvious implementation is wrong.**
+
+p.274 says the override is "only available when Contains single object is disabled".
+*Available* is a statement about the panel. One click flips the toggle and leaves the override
+sitting in the document, so the rule has to hold on the **value** as well — otherwise a
+leftover override quietly renames somebody's object and reads as deliberate.
+
+**A single-object title never falls back to the type name.** "Site" where "Site 14" was meant
+is not a degraded answer, it is a wrong one that looks right: nothing on screen distinguishes
+it from an object genuinely called that. The fallback is the empty string.
+
+**Unresolved is not empty.** A set whose definition has not come back has an unknown count, and
+reading that as zero would make every module carrying this widget flash a gap on load and then
+fill it — §81's rule for `visibleWhen`, arrived at from the other direction.
+
+**Two divergences, both stated.** Show icon draws a mark in the object type's *colour* carrying
+the icon **name** as its accessible label, because the `icon` field holds a name like `cube` and
+this platform has no icon set to draw one from. And on the *canvas* a hidden widget says why it
+would be absent rather than going blank: p.274's rule is about the module view, and a builder
+who cannot see the widget cannot select it to turn the setting back off. **Enable drag** is ○ —
+p.274 makes it conditional on a data bank service that does not exist here, and a drag source no
+drop zone accepts promises something nothing will do.
+
+---
+
+**The harness found the same shape §205 did, in the tests rather than the code.**
+
+Both placeholder assertions used the module's **own object type** as the placeholder. So "used
+the placeholder" and "ignored it" produced the same string, and the two mutants that gut the
+feature — never consult the placeholder, consult it always — both sailed through. The control
+value coincided with what it was being contrasted against. They now declare a second type with
+a different display name, and there is a new test for the half p.274 states and nothing checked:
+a placeholder applies *"if the inputted object set is empty"*, so one that stood in always would
+rename every non-empty set to whatever an author once picked as the stand-in.
+
+One survivor in the model is recorded as **equivalent rather than a hole**: `single` is provably
+`false` where `overrideFor` is called, because the branch above returns unconditionally, so
+swapping it for `false` cannot differ. The argument stays — the early return is the thing most
+likely to move, and this is what would still be right if it did.
+
+**17 model mutants and 16 widget mutants, 0 survivors, 0 no-ops** after the fixes.
+
+**997 unit tests** (was 980); **435 browser tests** (was 423); 1515 API tests, 2 skipped.
+`workshop.md` §10 goes from 18 of ~52 widgets to 19.
+
+---
+---
+---
+---
+
+### 209. The browser suite tidies up after itself
 
 Not a parity item. §208's verification run went red on a test that had nothing to do with it,
 and chasing that properly turned up three things stacked on each other.

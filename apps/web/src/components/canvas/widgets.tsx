@@ -54,6 +54,9 @@ import {
   fillsCellOf, fitColumnsOf, frozenOf, linesOf, narrowHeadersOf, noValueOf,
   rowMinHeight, stickyLefts, wrapOf,
 } from "./object-table-display";
+import {
+  overrideFor, renderWhenEmptyOf, shouldRender, showIconOf, singleOf, titleFor,
+} from "./object-set-title";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -3291,6 +3294,247 @@ CanvasObjectTable.craft = {
     narrowHeaders: false, formatFillsCell: false,
   },
   related: { settings: ObjectTableSettings },
+};
+
+// ---- Object set title (p.274) ---------------------------------------------------
+/** p.274's Object Set Title: "a summary of a given object set as a title".
+ *
+ * The string and the decision about whether to draw at all are in
+ * `object-set-title.ts`. What is here is the three things that need the server:
+ * the set's count, the first object's title when p.274 wants one, and the object
+ * type behind it.
+ *
+ * **`Enable drag` is not built.** p.274 makes it conditional on a "data bank
+ * service" and on the set holding fewer than 500 objects; there is no such
+ * service here, and a drag source that no drop zone accepts is an affordance
+ * that promises something nothing will do.
+ */
+export function CanvasObjectSetTitle({
+  objectSetVariable = null,
+  single = false,
+  showIcon = false,
+  titleOverride = "",
+  renderWhenEmpty = false,
+  placeholderTypeId = null,
+}: {
+  objectSetVariable?: string | null;
+  /** p.274's Contains single object. */
+  single?: boolean;
+  showIcon?: boolean;
+  /** p.274's Title override, which it says is "only available when Contains
+   * single object is disabled" - enforced on the *value* rather than only in
+   * the panel, so a stale one cannot rename somebody's object. */
+  titleOverride?: string;
+  renderWhenEmpty?: boolean;
+  /** p.274: "Allows selection of an object type to display as a placeholder if
+   * the inputted object set is empty." */
+  placeholderTypeId?: string | null;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, mode } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+
+  // One row, because that is all p.274 ever shows: the count comes back with
+  // it, and a page of twenty-five would be twenty-four rows fetched to be
+  // thrown away on every resolve.
+  const setPage = useSetPage(workspaceId, setDefinition, {
+    pageSize: 1, variablesPending,
+  });
+
+  const holdsOne = singleOf(single);
+  const empty = renderWhenEmptyOf(renderWhenEmpty);
+  // The placeholder type stands in only when the set is empty and p.274's
+  // toggle asked for one; otherwise the set's own type is the subject.
+  const showingPlaceholder = empty && setPage.total === 0 && !!placeholderTypeId;
+  const typeId = showingPlaceholder ? placeholderTypeId : setPage.typeId;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  const titleProperty = (type.data?.properties ?? []).find(
+    (p) => p.id === type.data?.title_property_id,
+  );
+  const first = setPage.rows?.[0];
+  const objectTitle = first && titleProperty
+    ? String(first.properties[titleProperty.api_name] ?? "")
+    : undefined;
+
+  const title = titleFor({
+    single: holdsOne,
+    typeName: type.data?.display_name,
+    objectTitle,
+    total: setPage.total,
+    override: titleOverride,
+  });
+
+  const draws = shouldRender({
+    resolved: !setPage.unresolved,
+    total: setPage.total,
+    renderWhenEmpty: empty || showingPlaceholder,
+  });
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">Object set title - bind an object set in Settings</p>
+      ) : !draws ? (
+        // p.274: "Widget will not render in the module view if the inputted
+        // object set is empty." **In the module view** - a builder who cannot
+        // see the widget cannot select it to turn the setting back off, so the
+        // canvas says why instead of going blank.
+        mode === "run" ? null : (
+          <p className="canvas-widget-empty" data-testid="set-title-hidden">
+            Hidden: the object set is empty
+          </p>
+        )
+      ) : (
+        <h3 className="canvas-set-title" data-testid="set-title">
+          {showIconOf(showIcon) && (
+            // **A mark in the type's colour, not the named icon**, because this
+            // platform has no icon set - the `icon` field holds a name like
+            // `cube` and nothing has ever drawn one. The name travels as the
+            // accessible label so it is readable rather than merely absent.
+            <span
+              className="canvas-set-title-icon"
+              data-testid="set-title-icon"
+              aria-label={type.data?.icon ?? "object type"}
+              style={{ background: type.data?.colour || "var(--accent)" }}
+            />
+          )}
+          <span>{title}</span>
+        </h3>
+      )}
+    </div>
+  );
+}
+
+function ObjectSetTitleSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectSetVariable, single, showIcon, titleOverride, renderWhenEmpty,
+    placeholderTypeId,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    single: node.data.props.single,
+    showIcon: node.data.props.showIcon,
+    titleOverride: node.data.props.titleOverride,
+    renderWhenEmpty: node.data.props.renderWhenEmpty,
+    placeholderTypeId: node.data.props.placeholderTypeId,
+  }));
+  const { declared } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const types = useQuery({
+    queryKey: ["object-types", workspaceId],
+    queryFn: () => objApi.listTypes(workspaceId),
+  });
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Input object set</span>
+        <select
+          value={objectSetVariable || ""}
+          data-testid="set-title-variable"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={singleOf(single)}
+          data-testid="set-title-single"
+          onChange={(e) => setProp((p: { single: boolean }) => (p.single = e.target.checked))}
+        />
+        <span className="field-label">Contains single object</span>
+        <span className="field-hint">Shows that object&apos;s title instead of a count</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={showIconOf(showIcon)}
+          data-testid="set-title-icon-toggle"
+          onChange={(e) => setProp((p: { showIcon: boolean }) => (p.showIcon = e.target.checked))}
+        />
+        <span className="field-label">Show icon</span>
+      </label>
+      {/* p.274: "This option is only available when Contains single object is
+          disabled." */}
+      {!singleOf(single) && (
+        <label className="field">
+          <span className="field-label">Title override</span>
+          <input
+            type="text"
+            value={titleOverride || ""}
+            data-testid="set-title-override"
+            onChange={(e) =>
+              setProp((p: { titleOverride: string }) => (p.titleOverride = e.target.value))}
+          />
+          <span className="field-hint">Blank uses the object type and the count</span>
+        </label>
+      )}
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={renderWhenEmptyOf(renderWhenEmpty)}
+          data-testid="set-title-render-empty"
+          onChange={(e) =>
+            setProp((p: { renderWhenEmpty: boolean }) =>
+              (p.renderWhenEmpty = e.target.checked))}
+        />
+        <span className="field-label">Render widget when the object set is empty</span>
+        <span className="field-hint">Off by default: the widget disappears instead</span>
+      </label>
+      {renderWhenEmptyOf(renderWhenEmpty) && (
+        <label className="field">
+          <span className="field-label">Placeholder object type</span>
+          <select
+            value={placeholderTypeId || ""}
+            data-testid="set-title-placeholder"
+            onChange={(e) =>
+              setProp((p: { placeholderTypeId: string | null }) =>
+                (p.placeholderTypeId = e.target.value || null))}
+          >
+            <option value="">None</option>
+            {(types.data ?? []).map((t) => (
+              <option key={t.id} value={t.id}>{t.display_name}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            Named so an empty widget still says what it would have shown
+          </span>
+        </label>
+      )}
+      </>}
+    />
+  );
+}
+
+CanvasObjectSetTitle.craft = {
+  displayName: "Object set title",
+  props: {
+    objectSetVariable: null, single: false, showIcon: false,
+    titleOverride: "", renderWhenEmpty: false, placeholderTypeId: null,
+  },
+  related: { settings: ObjectSetTitleSettings },
 };
 
 // ---- Search (roadmap 1.5) ---------------------------------------------------
@@ -8131,6 +8375,7 @@ export const CANVAS_RESOLVER = {
   CanvasStringSelector,
   CanvasDateTimePicker,
   CanvasMarkdown,
+  CanvasObjectSetTitle,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -8161,6 +8406,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasStringSelector", label: "String selector", hint: "Pick one or many from a list of strings" },
   { key: "CanvasDateTimePicker", label: "Date and time", hint: "A single date and time, in a chosen timezone" },
   { key: "CanvasMarkdown", label: "Markdown", hint: "Formatted text, typed or read from a string variable" },
+  { key: "CanvasObjectSetTitle", label: "Object set title", hint: "One object's title, or an object type and how many there are" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

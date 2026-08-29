@@ -1610,6 +1610,18 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-datetime { display: grid; gap: 4px; }
 .canvas-datetime select { max-width: 100%; }
 
+/* ---- Object set title (p.274) -------------------------------------------- */
+.canvas-set-title {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: 650;
+}
+/* A mark in the object type's colour rather than its named icon: the `icon`
+   field holds a name like `cube` and this platform has no icon set to draw one
+   from. Round, so it reads as a marker rather than as a missing image. */
+.canvas-set-title-icon {
+  width: 12px; height: 12px; border-radius: 50%; flex: none;
+}
+
 /* ---- Markdown (p.314-319) ------------------------------------------------ */
 .canvas-markdown { font-size: 13.5px; line-height: 1.55; color: var(--ink); }
 .canvas-markdown > :first-child { margin-top: 0; }
