@@ -4370,7 +4370,7 @@ that variable is only in use when the toggle is on.
 
 **20 model mutants and 19 widget mutants, 0 survivors, 0 no-ops** after the fixes.
 
-**957 unit tests** (was 933); **408 browser tests** (was 394); **1515 API tests**, 2 skipped
+**958 unit tests** (was 933); **408 browser tests** (was 394); **1515 API tests**, 2 skipped
 (both environmental).
 
 ---
