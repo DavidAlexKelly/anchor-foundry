@@ -4337,6 +4337,16 @@ against a version that handed back the caller's own array. The copy only matters
 is returned directly, and there the alternative is returning the object type's property array —
 which a caller sorting for display would reorder for everything else reading it.
 
+One widget mutant is recorded as **equivalent**: `rows?.[0]` and `rows?.[length - 1]` cannot
+differ, because the widget fetches one row. p.265's "only the first object will be displayed" is
+kept by the *page size* rather than by the index, and a widget that fetched more to make the
+index testable would be spending a round trip on a test.
+
+**19 model mutants and 12 widget mutants, 0 survivors, 0 no-ops** after the fixes.
+
+**1013 unit tests** (was 997); **444 browser tests** (was 435); 1515 API tests, 2 skipped.
+`workshop.md` §10 goes from 19 of ~52 widgets to 20.
+
 ---
 ---
 ---
