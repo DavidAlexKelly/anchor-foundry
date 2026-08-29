@@ -4290,7 +4290,95 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
-### 206. Markdown, and a safety measure that was working backwards (this session)
+### 207. The Object Table's selection outputs, and a set that could not be empty (this session)
+
+p.224's Selection block, and the fourth item of `workshop.md`'s library build order started:
+the **Active object** output, auto-selection of the first row with p.224's setting to disable
+it, **Enable multi-select**, and the **Selected objects** output.
+
+**The widget writes clauses, not a finished set definition.** A clause list is what
+`narrow_set` consumes — the Pivot Table's drill-down already works this way — so a selection
+means whatever it means *against the table's current set*. Storing a definition would be
+closer to p.224's wording and would freeze the base set at the moment of the click: filter the
+table afterwards and the selection variable would go on describing rows that are no longer
+there.
+
+---
+
+**Building it honestly found something the platform could not say.**
+
+p.224 wants "an empty active object at load time" when auto-selection is disabled, and there
+was no value for it. A variable nothing has written holds no clauses; no clauses means *no
+narrowing*; so every downstream widget would have received the whole table — three objects
+selected because none was. `object_sets.parse` refused `in []`, and that refusal sat directly
+beside the one for a missing value and looked like the same rule.
+
+**It is not the same rule, and the difference is direction.** A missing value must not
+*widen* a set: that is decision 0002's failure, where an unset parameter made a map show more
+rows than it should. `in []` narrows — to nothing — which is the safe direction and the only
+honest reading of "is a member of no values". Keeping the refusal *caused* the bug it was
+written against. Both stores already agreed (`= ANY(ARRAY[])`, `terms: []`, and the reference
+`matches` all find nothing), so the change is one refusal and a cross-store case.
+
+That forced a second distinction into the model, and it is the one worth remembering:
+**"nothing is selected" and "nobody has said" are different values, and only one of them is
+safe to hand downstream.** `keysOf` cannot tell them apart — both are no keys — so there is a
+separate `hasSelection`, and the widget *states* emptiness on load rather than leaving the
+variable alone.
+
+**p.224's "auto-selection only triggers when the widget is visible" is also not free.** A
+collapsed section keeps its children mounted — deliberately, so a table inside one does not
+refetch every time somebody folds it away — so the table is running, has its rows, and would
+select one for a viewer who cannot see it, opening the drawer p.224 describes on a row nobody
+chose. An `IntersectionObserver` answers it, and answers the hidden tab and the closed overlay
+with it; a walk up the Craft tree looking for a collapsed ancestor would have needed a case
+for each.
+
+`activeVariable` and `selectedVariable` went into all four reference lists as **writes** — the
+first entries added there that a widget produces rather than reads — and `PRIMARY_KEY` is
+pinned to the server's constant by a test, because a clause naming anything else filters on a
+property that does not exist, which narrows to nothing and is indistinguishable from an empty
+selection on both stores.
+
+---
+
+**The harness found the same two shapes it keeps finding.**
+
+Two survivors in `keysOf`, and they were a pair: dropping the operator check changed nothing
+because the test clause had a scalar value and the *shape* check refused it anyway, and
+dropping the shape check changed nothing because no test ever handed it a key clause whose
+value was not a list. **Each guard was covered only through the other** — §202's shape, third
+time. Both are reachable: an `array` variable holds whatever a `set_variable` effect put
+there, and the server's refusal comes at resolve time, long after the checkboxes have been
+drawn. The second is the worse one, since `"S1".map` is a TypeError and a widget that throws
+during render takes the module with it.
+
+And the browser tests had a **false pass that was hiding an off-by-one across the whole
+file**. `CanvasObjectTable` renders a `.canvas-block`; so does the ROOT `CanvasContainer`. So
+`.canvas-block` index 0 was the container, and "exactly one row is active" passed against it —
+the container holds every row on the page, so the assertion was true whichever table the row
+was in. It passed while every other assertion in the file read the wrong table. The fix is a
+child combinator (`:has(> .data-grid)`); the lesson is that the one assertion that passed was
+the one to distrust.
+
+The widget layer found two more of the same kind. **Nothing asserted the active row was
+actually *coloured***, only that it carried the class and the ARIA state — both of which pass
+against a stylesheet where that class does nothing. And **`multiSelect &&` was never doing any
+work**, because every test bound the Selected objects output and enabled multi-select together;
+an author turning the toggle off with the output still bound is one click away, and p.224 says
+that variable is only in use when the toggle is on.
+
+**20 model mutants and 19 widget mutants, 0 survivors, 0 no-ops** after the fixes.
+
+**957 unit tests** (was 933); **408 browser tests** (was 394); **1515 API tests**, 2 skipped
+(both environmental).
+
+---
+---
+---
+---
+
+### 206. Markdown, and a safety measure that was working backwards
 
 p.314-319's widget, and the third item of `workshop.md`'s library build order — which called it
 "trivially cheap" and was wrong. p.318's syntax table is the cheap half: fourteen syntaxes,
@@ -4546,6 +4634,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A test cannot see through a normalising read: where code corrects on the way out, assert on what was written.** §204's panel resets two props when the selection changes, and both resets had tests that could not fail. The variable picker lists only variables of the selection's kind, so a `<select>` still bound to a stale one renders `""` — identical to cleared. The display select's value goes through the resolver, so it reads the legal value whether or not the prop was fixed. **The render shows the corrected value; the prop keeps the stale one; the prop is what gets saved.** The defence is right and the assertion was in the wrong place — read the document back from the server instead. The tell is a control whose displayed value is computed rather than stored, which is exactly the controls worth defending, so this will keep happening. It completes the family two entries up: §203's clock could not see a change because something *erased* it; this one could not because something *corrected* it.
 
 - **A test whose "wrong" value is the environment's default cannot fail.** §205's `zoneOf` fallback test asserted that a bad configuration falls back to the viewer's own timezone, using `America/New_York` as the zone that should *not* come back — and `vitest.config.ts` deliberately runs the suite in `America/New_York`. The fallback and the wrong answer were the same string. Worse, the config's own comment explains it chose a non-UTC zone precisely so UTC assumptions would show up, which is exactly the trap it then set for anything naming that zone as a contrast. The fix is to **compute** a value the environment provably is not using rather than naming one, so it survives the config changing. The tell is a constant in a test that also appears in a config, a fixture, or a default — and this is the same family as the four entries above: two things that had to differ turning out to be the same thing.
+
+- **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
 

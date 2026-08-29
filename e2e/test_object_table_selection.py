@@ -287,6 +287,47 @@ def test_the_active_row_is_announced_and_not_only_coloured(page, api) -> None:
     expect(table(page, 0).locator('tbody tr[aria-current="true"]')).to_contain_text("Alpha")
 
 
+def test_the_active_row_is_also_coloured(page, api) -> None:
+    """**And the other half**, which the class alone does not prove. The tests
+    above assert `row-active` and `aria-current`; both pass just as happily
+    against a stylesheet where that class does nothing, which the harness
+    demonstrated by gutting the rule. Asserted as a *difference* from an
+    ordinary row rather than as a colour, so it survives a palette change."""
+    mod = build(api, "Table active colour")
+    open_module(page, mod)
+    settled(page)
+
+    rows = rows_of(page, 0)
+    expect(rows).to_have_count(len(ROWS))
+    active = rows.nth(0).locator("td").first.evaluate(
+        "e => getComputedStyle(e).backgroundColor"
+    )
+    ordinary = rows.nth(1).locator("td").first.evaluate(
+        "e => getComputedStyle(e).backgroundColor"
+    )
+    assert active != ordinary, f"active and ordinary rows both {active}"
+
+
+def test_binding_selected_objects_without_multi_select_draws_no_checkboxes(page, api) -> None:
+    """p.224: the Selected objects variable "will only be in use and populated
+    if the Enable multi-select toggle is set to true".
+
+    **Reachable by one click**: an author binds the output, then turns
+    multi-select off. Every other test here has the two set together, so the
+    `multiSelect &&` half of the guard was never doing any work — the harness
+    removed it and nothing failed.
+    """
+    mod = build(api, "Table selected without multi", {
+        "multiSelect": False, "selectedVariable": "v_selected",
+    })
+    open_module(page, mod)
+    settled(page)
+
+    expect(rows_of(page, 0)).to_have_count(len(ROWS))
+    expect(table(page, 0).locator("input[type=checkbox]")).to_have_count(0)
+    expect(table(page, 0).get_by_test_id("table-select-all")).to_have_count(0)
+
+
 def test_the_selected_objects_setting_appears_only_with_multi_select(page, api) -> None:
     """p.224: "this output variable will only be in use and populated if the
     Enable multi-select toggle is set to true" — so a control for it before
