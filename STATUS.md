@@ -4351,7 +4351,16 @@ that predate it are drawn.
 **28 model mutants and 18 widget mutants, 0 survivors, 0 no-ops** after the fixes (one
 mutant removed as equivalent in Chromium, verified rather than assumed).
 
-**980 unit tests** (was 958); **411 browser tests** (was 408); 1515 API tests, 2 skipped.
+**980 unit tests** (was 958); **423 browser tests** (was 408); 1515 API tests, 2 skipped.
+
+**One browser test is red and it is not this unit's**, which is worth writing down rather than
+leaving as a number that does not add up: `test_required_properties.py`'s Ontology Manager test
+fails against `origin/main` in this environment exactly as it does here, and it passed earlier
+in the same session with no code change in between. The difference is *data*. The browser suite
+creates object types and never removes them, and the shared `operations` workspace has
+accumulated **1,230** of them; past roughly that many, the Objects page's Edit dialog stops
+producing the checkbox the test clicks for. So it is fixture accumulation showing up as a
+feature failure — the environment aged into it.
 
 ---
 ---
@@ -4702,6 +4711,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A test cannot see through a normalising read: where code corrects on the way out, assert on what was written.** §204's panel resets two props when the selection changes, and both resets had tests that could not fail. The variable picker lists only variables of the selection's kind, so a `<select>` still bound to a stale one renders `""` — identical to cleared. The display select's value goes through the resolver, so it reads the legal value whether or not the prop was fixed. **The render shows the corrected value; the prop keeps the stale one; the prop is what gets saved.** The defence is right and the assertion was in the wrong place — read the document back from the server instead. The tell is a control whose displayed value is computed rather than stored, which is exactly the controls worth defending, so this will keep happening. It completes the family two entries up: §203's clock could not see a change because something *erased* it; this one could not because something *corrected* it.
 
 - **A test whose "wrong" value is the environment's default cannot fail.** §205's `zoneOf` fallback test asserted that a bad configuration falls back to the viewer's own timezone, using `America/New_York` as the zone that should *not* come back — and `vitest.config.ts` deliberately runs the suite in `America/New_York`. The fallback and the wrong answer were the same string. Worse, the config's own comment explains it chose a non-UTC zone precisely so UTC assumptions would show up, which is exactly the trap it then set for anything naming that zone as a contrast. The fix is to **compute** a value the environment provably is not using rather than naming one, so it survives the config changing. The tell is a constant in a test that also appears in a config, a fixture, or a default — and this is the same family as the four entries above: two things that had to differ turning out to be the same thing.
+
+- **A browser suite that creates fixtures and never removes them eventually fails on its own history.** §208's verification run went red on an Ontology Manager test that had passed hours earlier with no code change between — and the same failure reproduces on `main`, so it was never about the diff. Every browser test file creates object types in one shared workspace and none deletes them; after a session's worth of runs there were **1,230**, and past roughly that point the Objects page's Edit dialog stops behaving. The failure reads as a broken feature and is really a full cupboard. The tell is a test that fails now, passed this morning, and fails identically on a commit that predates everything you have written — check the *volume* of whatever the fixtures create before reading the diff again.
 
 - **A default that coincides with a clamp makes the guard in front of it unreachable.** §208's `linesOf` and `frozenOf` both checked for `null`/`""` before coercing, and deleting both changed no test. §203 needed exactly that guard — `Number(null)` is a finite `0`, and zero rows was a different answer from "not set" — but here the default *is* the clamp floor, so a coerced `0` already lands on the answer absence gives. Same coercion fact, opposite conclusion. The tell is a defensive check whose two branches return the same value for every input that reaches it; the question to ask is not "is this input possible" but "does this guard change the answer".
 
