@@ -44,7 +44,13 @@ export const MAX_LINES = 10;
  * read rather than an error anybody would see.
  */
 export function linesOf(raw: unknown): number {
-  if (raw === null || raw === undefined || raw === "") return DEFAULT_LINES;
+  // **No guard for `null`/`""`, and the harness is why.** §203's `rowsOf` had
+  // to check absence *before* coercing, because `Number(null)` is a finite `0`
+  // and zero rows was a different answer from "not set". Here it is not: the
+  // default is 1 and so is the floor, so `0` clamps to exactly what absence
+  // gives. The guard could never change a result, which makes it a branch no
+  // test can hold (§202). Same coercion fact, opposite conclusion — and what
+  // decides it is whether the default coincides with the clamp.
   const value = Number(raw);
   if (!Number.isFinite(value)) return DEFAULT_LINES;
   return Math.min(MAX_LINES, Math.max(1, Math.floor(value)));
@@ -100,7 +106,8 @@ export function rowMinHeight(lines: number, lineHeight: number): number {
  * from the object type.
  */
 export function frozenOf(raw: unknown, total: number): number {
-  if (raw === null || raw === undefined || raw === "") return 0;
+  // No absence guard, for the reason given on `linesOf`: none frozen is the
+  // default *and* the floor, so a coerced `0` is already the right answer.
   const value = Number(raw);
   if (!Number.isFinite(value)) return 0;
   return Math.min(Math.max(0, total), Math.max(0, Math.floor(value)));

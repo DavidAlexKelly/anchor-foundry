@@ -24,9 +24,13 @@ describe("lines per row", () => {
   });
 
   it("treats absence as the default rather than as zero", () => {
-    // **`Number(null)` is 0 and `Number("")` is 0** (§203). A row of zero lines
-    // is a row nobody can read, and it would arrive from a prop that is simply
-    // missing — which is every table saved before this setting existed.
+    // **`Number(null)` is 0 and `Number("")` is 0** (§203), and a row of zero
+    // lines is a row nobody can read. It arrives from a prop that is simply
+    // missing, which is every table saved before this setting existed.
+    //
+    // The *clamp* is what makes this true, not a guard: the default and the
+    // floor are both 1, so a coerced zero lands on the right answer anyway.
+    // An explicit absence check here was dead code, and the harness said so.
     expect(linesOf(undefined)).toBe(DEFAULT_LINES);
     expect(linesOf(null)).toBe(DEFAULT_LINES);
     expect(linesOf("")).toBe(DEFAULT_LINES);
