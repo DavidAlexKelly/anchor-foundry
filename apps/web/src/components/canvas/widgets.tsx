@@ -57,6 +57,17 @@ import {
 import {
   overrideFor, renderWhenEmptyOf, shouldRender, showIconOf, singleOf, titleFor,
 } from "./object-set-title";
+import {
+  LAYOUTS as PROPERTY_LAYOUTS,
+  // **Aliased, and the aliases are load-bearing.** `MIN_COLUMNS`/`MAX_COLUMNS`
+  // already mean 2 and 8 in this file, from the String Selector's option grid;
+  // p.266's are 1 and 6. Without the rename the panel would have offered a
+  // minimum of two columns for a widget whose model clamps to one - a
+  // typechecking, silently wrong control.
+  MAX_COLUMNS as PROPERTY_MAX_COLUMNS, MIN_COLUMNS as PROPERTY_MIN_COLUMNS,
+  columnsOf as propertyColumnsOf, gridStyle as propertyGridStyle, hideNullOf,
+  layoutOf as propertyLayoutOf, visibleProperties,
+} from "./property-list";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -3535,6 +3546,219 @@ CanvasObjectSetTitle.craft = {
     titleOverride: "", renderWhenEmpty: false, placeholderTypeId: null,
   },
   related: { settings: ObjectSetTitleSettings },
+};
+
+// ---- Property list (p.265-266) --------------------------------------------------
+/** p.265-266's Property List: "a list of properties from a single provided object".
+ *
+ * Which properties and how they are arranged is `property-list.ts`. What is here
+ * is the fetch — one object out of a set, plus the type that says what its
+ * properties are called and how to draw each one.
+ *
+ * **Not built, and named rather than approximated**: p.265's "Load data from
+ * scenario" (there are no Scenarios here), p.266's security markings (no
+ * markings), and p.266's **inline editing**, which it says is configured "by
+ * configuring an inline action for the property in the Ontology Manager" - that
+ * is `workshop.md`'s build-order item 6, and a Property List that offered an
+ * edit no action backs would be a control that does nothing.
+ */
+export function CanvasPropertyList({
+  objectSetVariable = null,
+  layout = "adjacent",
+  properties = "",
+  columns = 1,
+  hideNull = false,
+}: {
+  objectSetVariable?: string | null;
+  /** p.265's Layout: the value beside its label, or under it. */
+  layout?: string;
+  /** p.266's selection, in the order to show them. Blank means all of them. */
+  properties?: string;
+  columns?: number;
+  hideNull?: boolean;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+
+  // p.265: "If the object set contains more than one object, only the first
+  // object will be displayed within the widget." One row is all it ever needs.
+  const setPage = useSetPage(workspaceId, setDefinition, {
+    pageSize: 1, variablesPending,
+  });
+  const type = useQuery({
+    queryKey: ["object-type", setPage.typeId],
+    queryFn: () => objApi.getType(workspaceId, setPage.typeId!),
+    enabled: !!setPage.typeId,
+  });
+
+  // `[0]` and `[length - 1]` are the same expression here, because the fetch
+  // above asks for one row: p.265's "only the first object will be displayed"
+  // is kept by the *page size*, not by the index.
+  const instance = setPage.rows?.[0];
+  const shown = visibleProperties({
+    all: type.data?.properties ?? [],
+    chosen: properties,
+    values: instance?.properties,
+    hideNull: hideNullOf(hideNull),
+  });
+  const stacked = propertyLayoutOf(layout) === "below";
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">Property list - bind an object set in Settings</p>
+      ) : setPage.unresolved ? (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      ) : !instance ? (
+        // Distinct from "resolving", because they are different facts and only
+        // one of them is worth an author's attention.
+        <p className="canvas-widget-empty" data-testid="property-list-empty">
+          No object to show
+        </p>
+      ) : (
+        <dl
+          className={`canvas-property-list${stacked ? " canvas-property-list--stacked" : ""}`}
+          data-testid="property-list"
+          style={propertyGridStyle(propertyColumnsOf(columns))}
+        >
+          {shown.map((p) => (
+            <div className="canvas-property" key={p.api_name} data-testid="property-row">
+              <dt>{p.display_name || p.api_name}</dt>
+              <dd>
+                <PropertyValue
+                  workspaceId={workspaceId}
+                  dataType={p.data_type}
+                  valueFormat={p.value_format}
+                  style={conditionalStyle(p.conditional_format, instance.properties)}
+                  value={instance.properties[p.api_name]}
+                />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function PropertyListSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectSetVariable, layout, properties, columns, hideNull,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    layout: node.data.props.layout,
+    properties: node.data.props.properties,
+    columns: node.data.props.columns,
+    hideNull: node.data.props.hideNull,
+  }));
+  const { declared, resolved } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  // The set's own type, so the property names offered are the ones this widget
+  // will actually be able to draw - a free-text list would let an author name
+  // a property that silently never appears.
+  const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
+  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Input object set</span>
+        <select
+          value={objectSetVariable || ""}
+          data-testid="property-list-variable"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          Only the first object is shown, which is what p.265 says a set of several does
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Layout</span>
+        <select
+          value={propertyLayoutOf(layout)}
+          data-testid="property-list-layout"
+          onChange={(e) => setProp((p: { layout: string }) => (p.layout = e.target.value))}
+        >
+          {Object.entries(PROPERTY_LAYOUTS).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Properties</span>
+        <input
+          type="text"
+          value={properties ?? ""}
+          placeholder="every property"
+          data-testid="property-list-properties"
+          onChange={(e) =>
+            setProp((p: { properties: string }) => (p.properties = e.target.value))}
+        />
+        <span className="field-hint">
+          {type.data
+            ? `Names in the order to show them. Available: ${
+              (type.data.properties ?? []).map((p) => p.api_name).join(", ")}`
+            : "Names in the order to show them. Blank shows all of them."}
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Columns</span>
+        <input
+          type="number"
+          min={PROPERTY_MIN_COLUMNS}
+          max={PROPERTY_MAX_COLUMNS}
+          value={propertyColumnsOf(columns)}
+          data-testid="property-list-columns"
+          onChange={(e) =>
+            setProp((p: { columns: number }) => (p.columns = Number(e.target.value)))}
+        />
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={hideNullOf(hideNull)}
+          data-testid="property-list-hide-null"
+          onChange={(e) => setProp((p: { hideNull: boolean }) => (p.hideNull = e.target.checked))}
+        />
+        <span className="field-label">Hide null properties</span>
+        <span className="field-hint">A blank value counts, not only a missing one</span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasPropertyList.craft = {
+  displayName: "Property list",
+  props: {
+    objectSetVariable: null, layout: "adjacent", properties: "",
+    columns: 1, hideNull: false,
+  },
+  related: { settings: PropertyListSettings },
 };
 
 // ---- Search (roadmap 1.5) ---------------------------------------------------
@@ -8376,6 +8600,7 @@ export const CANVAS_RESOLVER = {
   CanvasDateTimePicker,
   CanvasMarkdown,
   CanvasObjectSetTitle,
+  CanvasPropertyList,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -8407,6 +8632,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasDateTimePicker", label: "Date and time", hint: "A single date and time, in a chosen timezone" },
   { key: "CanvasMarkdown", label: "Markdown", hint: "Formatted text, typed or read from a string variable" },
   { key: "CanvasObjectSetTitle", label: "Object set title", hint: "One object's title, or an object type and how many there are" },
+  { key: "CanvasPropertyList", label: "Property list", hint: "The properties of one object, in a grid" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

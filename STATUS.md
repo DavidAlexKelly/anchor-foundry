@@ -4290,7 +4290,69 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
-### 210. The Object Set Title, and a widget whose job is to be absent (this session)
+### 211. The Property List, and two column limits that were not the same (this session)
+
+p.265-266's widget: the input object set (first object only), p.265's Layout, p.266's property
+selection with a column count, and Hide null properties. Like §210 it needed no ontology work —
+only the object set variables and property renderer that already existed. **That is twice the
+build order's "depend on ontology work" has been wrong about this group**, which is now written
+down in `workshop.md` before it is wrong about the third.
+
+---
+
+**The bug worth the unit is one word long.**
+
+`MIN_COLUMNS` and `MAX_COLUMNS` already meant **2 and 8** in `widgets.tsx`, imported from the
+String Selector's option grid. p.266's are **1 and 6**. Imported without aliasing, the number
+input in the panel would have offered a minimum of two columns for a widget whose model clamps
+to one — and it *typechecks*, because both modules export a number under that name. The
+settings panel and the model would have disagreed about the legal range with nothing to say so.
+Both are renamed at the import, with the reason beside them.
+
+**Two rules carried forward.** A blank value counts as null, because a CSV column that was empty
+arrives as `""` rather than `null` and hiding one while keeping the other looks arbitrary to
+somebody who cannot see which the store holds. And nulls hide only once there is something to
+judge — every value is `undefined` while the instance resolves, so hiding then would empty the
+widget on load and fill it a moment later, which is §210's rule about whether a widget renders
+at all, one level down.
+
+---
+
+**Two survivors, and both were tests that could not fail.**
+
+The browser tests read labels with `count()` and `text_content()`, neither of which retries, so
+calling them straight after `settled()` asks the page a question before it has the answer and
+gets `[]`. **Three of the four label assertions had been passing on timing luck**; the fourth
+failed and was the only reason it came to light. They now wait on the count first — the clock
+again (§202).
+
+They also read `text_content` rather than `inner_text`. The stylesheet upper-cases these labels,
+so an assertion on the *rendered* text would have passed just as happily if the display names
+had been replaced by the api names in caps — which is precisely the mutant the label test
+exists to catch.
+
+And the model's "does not mutate the list it was given" used `hideNull: true`. That path
+**filters**, and `filter` allocates whether or not anything was copied, so the assertion held
+against a version that handed back the caller's own array. The copy only matters where the list
+is returned directly, and there the alternative is returning the object type's property array —
+which a caller sorting for display would reorder for everything else reading it.
+
+One widget mutant is recorded as **equivalent**: `rows?.[0]` and `rows?.[length - 1]` cannot
+differ, because the widget fetches one row. p.265's "only the first object will be displayed" is
+kept by the *page size* rather than by the index, and a widget that fetched more to make the
+index testable would be spending a round trip on a test.
+
+**19 model mutants and 12 widget mutants, 0 survivors, 0 no-ops** after the fixes.
+
+**1013 unit tests** (was 997); **444 browser tests** (was 435); 1515 API tests, 2 skipped.
+`workshop.md` §10 goes from 19 of ~52 widgets to 20.
+
+---
+---
+---
+---
+
+### 210. The Object Set Title, and a widget whose job is to be absent
 
 p.274's widget, and the first of `workshop.md`'s build-order item 5 — which turned out not to
 depend on ontology work at all, only on the object set variables and title properties that
@@ -4826,6 +4888,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A test whose "wrong" value is the environment's default cannot fail.** §205's `zoneOf` fallback test asserted that a bad configuration falls back to the viewer's own timezone, using `America/New_York` as the zone that should *not* come back — and `vitest.config.ts` deliberately runs the suite in `America/New_York`. The fallback and the wrong answer were the same string. Worse, the config's own comment explains it chose a non-UTC zone precisely so UTC assumptions would show up, which is exactly the trap it then set for anything naming that zone as a contrast. The fix is to **compute** a value the environment provably is not using rather than naming one, so it survives the config changing. The tell is a constant in a test that also appears in a config, a fixture, or a default — and this is the same family as the four entries above: two things that had to differ turning out to be the same thing.
 
 - **"Not caused by my diff" is one finding; *why* it fails is a second, and the second one has to be measured.** §208's verification run went red on an Ontology Manager test that had passed hours earlier. Reproducing it on `main` established the first half honestly. Then I wrote down a mechanism — "past ~1,200 object types the Edit dialog stops producing the checkbox" — that sounded right, fitted the evidence, and was **wrong**: the dialog produces it after 7.2s, and Playwright's default `expect` timeout is 5s. The real chain is an unbounded `list_types` (no `LIMIT`) rendering ~1,400 rows, fixture debris supplying the rows, and a test leaning on a default timeout. Three separate things, and the plausible single story I recorded named none of them. A diagnosis that has not been instrumented is a guess, and writing a guess into `STATUS.md` in the confident voice of the entries around it is worse than leaving the failure undescribed.
+
+- **Two modules exporting the same constant name are one import away from a control that typechecks and lies.** §211's Property List clamps its column count to 1–6; the String Selector's option grid clamps to 2–8, and `widgets.tsx` already imported `MIN_COLUMNS` and `MAX_COLUMNS` from the second. The new panel's number input picked those up silently — the types match, both are numbers — and would have refused a one-column layout the model considers legal, with nothing anywhere reporting a disagreement. The tell is a shared, generic constant name (`MIN_*`, `MAX_*`, `DEFAULT_*`) in a file that already imports one from somewhere else; the fix is to alias at the import so the two cannot be confused by reading.
 
 - **A default that coincides with a clamp makes the guard in front of it unreachable.** §208's `linesOf` and `frozenOf` both checked for `null`/`""` before coercing, and deleting both changed no test. §203 needed exactly that guard — `Number(null)` is a finite `0`, and zero rows was a different answer from "not set" — but here the default *is* the clamp floor, so a coerced `0` already lands on the answer absence gives. Same coercion fact, opposite conclusion. The tell is a defensive check whose two branches return the same value for every input that reaches it; the question to ask is not "is this input possible" but "does this guard change the answer".
 
