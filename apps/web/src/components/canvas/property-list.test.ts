@@ -119,10 +119,19 @@ describe("which properties are drawn", () => {
       .toEqual(["name", "region", "note"]);
   });
 
-  it("does not mutate the list it was given", () => {
+  it("returns a list the caller may keep, on the path that returns it directly", () => {
+    // **`hideNull: true` cannot test this**, which is what the harness said:
+    // that path filters, and `filter` allocates whether or not anything was
+    // copied. The copy only matters where the list is handed straight back —
+    // blank selection, nulls kept — and there the alternative is returning the
+    // object type's own property array, which a caller sorting for display
+    // would reorder for everything else reading it.
     const all = [...ALL];
-    visibleProperties({ all, chosen: "", values: VALUES, hideNull: true });
-    expect(all).toHaveLength(3);
+    const shown = visibleProperties({
+      all, chosen: "", values: VALUES, hideNull: false,
+    });
+    shown.reverse();
+    expect(all.map((p) => p.api_name)).toEqual(["name", "region", "note"]);
   });
 });
 
