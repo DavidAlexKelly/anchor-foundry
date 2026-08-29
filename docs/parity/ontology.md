@@ -239,6 +239,17 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 8. **Ontology Manager search** — done (`STATUS.md` §146), now across six kinds: object types, properties, link types, action types, shared properties (§167) and groups (§172). **Filtering by group is done** (§172, p.262); filtering by development status is now possible in principle since §170 built statuses, and is not wired to the listing yet. The **indexing-issue column** is still open — it wants indexing state the sync path does not record.
 9. Shared properties, value types, interfaces, derived properties.
 10. Side effects — notifications, then webhooks.
+11. **The object type listing is unbounded, and that is ours rather than a parity gap.**
+    `ontology.list_types` has no `LIMIT`, so the Ontology Manager's table fetches and renders
+    every object type in the workspace — and so does every type *picker* built on the same
+    endpoint (eight call sites). Found in §209, where a dev workspace holding ~1,400 types made
+    the listing take seven seconds to open a dialog and turned a browser test red. p.262 says
+    only that the table "supports displaying and filtering by group", so there is no page to
+    copy a page size from; the shape is ours to choose. **The pickers are what make it a unit
+    rather than a one-line `LIMIT`**: a dropdown that silently truncates is worse than a slow
+    one, so bounding the endpoint means making them searchable at the same time. Until then the
+    listing is O(the ontology), which is survivable for a real one and was not for a dev
+    workspace full of fixtures.
 
 ---
 

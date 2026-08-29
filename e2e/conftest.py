@@ -105,7 +105,24 @@ def token(stack: None) -> str:
 
 @pytest.fixture(scope="session")
 def api(token: str) -> Api:
-    return Api(API_BASE, token)
+    """The suite's one API caller — and the thing that tidies up after it.
+
+    **The suite used to leave every object type it created behind.** In a
+    long-lived dev workspace that accumulates: about 1,400 of them over one
+    session, which is enough that the Ontology Manager's listing (it fetches
+    and renders every type in the workspace) took seven seconds to open a
+    dialog, and a test relying on Playwright's five-second default went red.
+    Nothing had changed in the product; the suite had aged into failing on its
+    own leftovers.
+
+    Teardown runs after the last test, and reports rather than asserts — some
+    types cannot be deleted by design (p.256 refuses an `active` one), and
+    those are exactly the ones the suite creates to prove the refusal works.
+    """
+    caller = Api(API_BASE, token)
+    yield caller
+    removed, left = caller.cleanup()
+    print(f"\ncleanup: removed {removed} object types, left {left} that refused deletion")
 
 
 @pytest.fixture(scope="session")
