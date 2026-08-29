@@ -44,6 +44,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   arrayVariable: "read",
   optionsVariable: "read",
   timezoneVariable: "read",
+  textVariable: "read",
 };
 
 describe("PROP_DIRECTION", () => {

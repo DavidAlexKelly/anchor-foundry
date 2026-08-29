@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALIGNMENTS, DEFAULT_ALIGNMENT, URL_SCHEMES,
-  alignmentOf, parse, parseInline, safeHref, sourceOf, textOf,
+  alignmentOf, blockAlignment, columnAlignment,
+  parse, parseInline, safeHref, sourceOf, textOf,
   type Block, type Inline,
 } from "./markdown";
 
@@ -450,6 +451,28 @@ describe("widget settings", () => {
     expect(alignmentOf("diagonal")).toBe("left");
     expect(alignmentOf("constructor")).toBe("left");
     expect(alignmentOf(undefined)).toBe("left");
+  });
+
+  it("leaves a code block left-aligned whatever the widget says", () => {
+    // p.317: "Code blocks remain left-aligned and full-width regardless of the
+    // selected alignment." Centred code is unreadable, which is why the page
+    // bothers to say so.
+    const code = parse("```\nx = 1\n```")[0]!;
+    const prose = parse("words")[0]!;
+    expect(blockAlignment(code, "center")).toBe("left");
+    expect(blockAlignment(code, "right")).toBe("left");
+    expect(blockAlignment(prose, "center")).toBe("center");
+    expect(blockAlignment(prose, "right")).toBe("right");
+  });
+
+  it("lets a column's own alignment beat the widget's", () => {
+    // p.317: explicit per-column alignment "takes precedence over the
+    // widget-level text alignment setting" — and a column that did not ask
+    // keeps the widget's, which is what `null` is for.
+    expect(columnAlignment("center", "right")).toBe("center");
+    expect(columnAlignment("left", "right")).toBe("left");
+    expect(columnAlignment(null, "right")).toBe("right");
+    expect(columnAlignment(null, "left")).toBe("left");
   });
 
   it("has p.316's two input sources, defaulting to typed text", () => {

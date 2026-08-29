@@ -409,6 +409,34 @@ export function alignmentOf(raw: unknown): Align {
     : DEFAULT_ALIGNMENT;
 }
 
+/** How one block is aligned, given the widget's setting.
+ *
+ * > "Code blocks remain left-aligned and full-width regardless of the selected
+ * > alignment." (p.317)
+ *
+ * A function rather than a conditional inside the renderer, because it is a
+ * rule p.317 *states* — and a rule stated in a document is one somebody will
+ * eventually ask whether we follow.
+ */
+export function blockAlignment(block: Block, widget: Align): Align {
+  return block.kind === "code" ? "left" : widget;
+}
+
+/** How one table column is aligned.
+ *
+ * > "Explicit per-column alignment defined in Markdown table syntax (for
+ * > example, `| :---: |`) takes precedence over the widget-level text alignment
+ * > setting." (p.317)
+ *
+ * This is the whole reason `alignOf` returns `null` for a column that did not
+ * ask, rather than defaulting it to `"left"`: a default there would mean every
+ * table silently overrode the widget's own setting, and the precedence p.317
+ * describes would run backwards.
+ */
+export function columnAlignment(column: Align | null, widget: Align): Align {
+  return column ?? widget;
+}
+
 /** p.316's "Input data: Text/Variable". */
 export type Source = "text" | "variable";
 

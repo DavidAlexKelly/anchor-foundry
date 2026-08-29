@@ -158,6 +158,8 @@ export const REFERENCE_PROPS = [
   "optionsVariable",
   // p.464's Default timezone read from a variable. See the API's copy.
   "timezoneVariable",
+  // p.316's Markdown input read from a string variable. See the API's copy.
+  "textVariable",
   "name",
 ] as const;
 
