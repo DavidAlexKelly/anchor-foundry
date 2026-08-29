@@ -88,17 +88,33 @@ export const URL_SCHEMES = ["http://", "https://", "mailto:", "/"];
 
 /** A URL if it is one this platform will navigate to, `null` otherwise.
  *
- * Leading whitespace and control characters are stripped before the check,
- * because `java\nscript:alert(1)` is a URL a browser will happily follow and a
- * naive `startsWith` will happily allow.
+ * **An embedded control character is a refusal, not something to strip out.**
+ * This first stripped them and re-checked, which is the standard defence
+ * against `java\nscript:alert(1)` — and which is a *denylist* measure that
+ * does nothing here while quietly doing harm. An allowlist already refuses
+ * `javascript:` for the ordinary reason that it is not on the list, broken up
+ * or not; what stripping adds is the other direction, where `ht\ntps://evil`
+ * becomes an accepted `https://evil` that nobody wrote.
+ *
+ * The mutation harness is what found it: **deleting the strip changed no
+ * test**, because all three tests that named it were watching the allowlist do
+ * the work and calling it the strip's.
+ *
+ * Whitespace at the ends is ordinary and is trimmed. A control character
+ * anywhere inside is not, and refuses the URL.
  */
 export function safeHref(raw: unknown): string | null {
+  // Not `String(raw)`: props come off a saved JSON document, so this is reached
+  // with whatever an author put there, and an object that *stringifies* to an
+  // allowed URL is not an allowed URL.
   if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
   // eslint-disable-next-line no-control-regex
-  const cleaned = raw.replace(/[\u0000-\u0020]/g, "");
-  if (!cleaned) return null;
-  const lower = cleaned.toLowerCase();
-  return URL_SCHEMES.some((s) => lower.startsWith(s)) ? cleaned : null;
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return null;
+  // Folded for the comparison and returned **unfolded**: `HTTPS://` is a URL,
+  // and case is not this function's to change.
+  const lower = trimmed.toLowerCase();
+  return URL_SCHEMES.some((s) => lower.startsWith(s)) ? trimmed : null;
 }
 
 // ---- inline -----------------------------------------------------------------
@@ -223,11 +239,16 @@ const TASK = /^\[([ xX])\]\s+(.*)$/;
 const QUOTE = /^\s*>\s?(.*)$/;
 const FENCE = /^\s*```\s*(\S*)\s*$/;
 const TABLE_ROW = /^\s*\|(.*)\|\s*$/;
-const TABLE_RULE = /^\s*\|?[\s:|-]+\|[\s:|-]*$/;
+// The same pipe shape `TABLE_ROW` requires. Allowing the alignment row to
+// drop its leading pipe made `cells` reachable with a line no pipe rule had
+// matched, which is how the dead fallback above came to be written.
+const TABLE_RULE = /^\s*\|[\s:|-]+\|\s*$/;
 
 function cells(line: string): string[] {
-  const inner = TABLE_ROW.exec(line)?.[1] ?? line;
-  return inner.split("|").map((c) => c.trim());
+  // Strips the outer pipes rather than re-matching `TABLE_ROW`: the match
+  // has already happened at both call sites, so a `?? line` fallback was a
+  // branch no input could reach and no test could kill.
+  return line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
 }
 
 function alignOf(spec: string): Align | null {
@@ -330,7 +351,10 @@ export function parse(source: unknown, options: ParseOptions = {}): Block[] {
 
     if (UNORDERED.test(line) || ORDERED.test(line)) {
       endParagraph();
-      const ordered = ORDERED.test(line) && !UNORDERED.test(line);
+      // No `&& !UNORDERED.test(line)`: it was there, and it was dead. One
+      // regex needs a digit where the other needs `-`, `*` or `+`, so no
+      // line matches both and the guard could never decide anything (§202).
+      const ordered = ORDERED.test(line);
       const items: ListItem[] = [];
       while (i < lines.length) {
         const m = ordered ? ORDERED.exec(lines[i]!) : UNORDERED.exec(lines[i]!);
