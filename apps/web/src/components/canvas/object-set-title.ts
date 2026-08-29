@@ -82,6 +82,11 @@ export function titleFor({ single, typeName, objectTitle, total, override }: Set
     // reader has no way to tell it apart from an object genuinely called that.
     return objectTitle ?? "";
   }
+  // `single` is provably `false` here — the branch above returns
+  // unconditionally — so passing it rather than `false` is belt-and-braces, and
+  // a mutation swapping the two is equivalent rather than a hole. Kept because
+  // the early return is the thing most likely to move, and this is what would
+  // still be right if it did.
   const chosen = overrideFor(single, override);
   if (chosen) return chosen;
   const count = total ?? 0;
