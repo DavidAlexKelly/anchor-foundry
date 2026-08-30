@@ -129,19 +129,24 @@ def test_the_tick_sits_beside_its_title(page, api, sites) -> None:
     """Asserted by position, because a class no rule matches passes every other
     kind of check (§211). A box stacked above its own label reads as belonging
     to the row before it."""
-    mod = build(api, sites, "Selector layout", {"properties": "region"})
+    # **Two property lines, on a row that has both values.** A one-line row
+    # cannot tell `align-items: start` from `center`: the difference is how far
+    # the box drops as the row grows, so a short row makes the two identical.
+    mod = build(api, sites, "Selector layout", {"properties": "region,note"})
     open_module(page, mod)
     settled(page)
 
     open_list(page)
-    row = page.get_by_test_id("selector-option").first
+    row = page.get_by_test_id("selector-option").filter(has_text="Bravo Yard").first
     expect(row).to_be_visible()
-    box, title = row.evaluate(
+    box, title, whole = row.evaluate(
         "e => [e.querySelector('input').getBoundingClientRect(),"
-        " e.querySelector('.canvas-dropdown-title').getBoundingClientRect()]"
+        " e.querySelector('.canvas-dropdown-title').getBoundingClientRect(),"
+        " e.getBoundingClientRect()]"
     )
+    assert whole["height"] > 30, whole  # the row really is several lines tall
     assert box["right"] <= title["left"] + 1, (box, title)
-    assert abs(box["top"] - title["top"]) < 8, (box, title)
+    assert abs(box["top"] - title["top"]) < 6, (box, title)
 
 
 def test_search_can_cover_a_property_that_is_not_shown(page, api, sites) -> None:
