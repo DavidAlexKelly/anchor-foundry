@@ -4290,6 +4290,117 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 215. The Object Selector, and a widget documented in one line (this session)
+
+p.444: "Object Selector: Allow the user to select multiple objects from a list of objects." That
+sentence is the **whole specification** — alone among the filtering widgets it has no page of its
+own — and what to do about that is the unit's only real decision.
+
+**The temptation with a one-line spec is to fill the gap with your own design and call it
+parity.** A multi-select "obviously" wants select-all, invert, a chip row of what is chosen,
+maybe a maximum. Foundry documents none of those, and building them would have produced a widget
+that looks like Workshop's and is not. So the Selector is the Object Dropdown with a different
+selection: the same model file, the same p.458 search rules, the same property lines, the same
+clause output carrying several keys instead of one. Nothing was added to its settings panel that
+p.455-458 does not already give the Dropdown, and one thing was *removed* — p.457's Allow no
+selection, which is meaningless for a widget whose resting state is already none.
+
+Three behaviours differ, and each follows from the word "multiple" rather than from taste:
+
+* **No auto-selection.** p.457's setting exists because a single dropdown with nothing chosen
+  starves every downstream widget. Pre-ticking one row of many would be a filter nobody applied.
+* **The list stays open while ticking**, the whole point being to choose several.
+* **The empty selection is still stated** — `in []` on load — for §207's reason: a variable
+  nothing has written means *no narrowing*, so downstream would receive the whole set rather
+  than none of it.
+
+The one new function is `selectionSummary`, and its middle case is why it is a function at all:
+none is a prompt, several is a count, and **one is the object's own title** — a reader who has
+picked one can see which, and showing "1 selected" there would withhold an answer the widget
+already has.
+
+---
+
+**A test that passed for free, because a rule two units old was right.**
+
+The thing multiple selection gets wrong most often is losing what is already ticked when the list
+is filtered: a reader narrowing to find their second object loses their first. That test passed
+on the first run, and the reason is §207's decision that **the variable is the source of truth,
+not a copy in component state**. Ticks live in the clause list; the search filters what is drawn;
+the two never touch. A widget holding its own `Set` of keys would have had to remember to survive
+re-filtering, and would have looked correct until somebody typed.
+
+Worth recording as the positive case: the entries in this file are mostly bugs a rule would have
+prevented, and this is a rule preventing one two units after it was written, in a widget that did
+not exist when it was made.
+
+---
+
+**Four widget survivors, and three of them were the same mistake.**
+
+Every selection test in this file reads the *downstream table*, which is the right instinct — the
+clauses are what the module acts on, and a widget can draw the right ticks while writing the
+wrong ones. But it left the mirror uncovered: a selector whose boxes **never tick**, or tick
+**all at once**, passes every one of those tests, because the clicks still write the right
+clauses. Both mutants survived, in the same run. Nothing exercised a non-default search mode
+either, so `searchMode` could have been hardcoded and the whole file would still be green.
+
+The lesson is not "assert the checkbox too". It is that **choosing the strongest observable can
+leave the obvious one untested.** The downstream table was picked deliberately, because it is
+harder to fake; the reader's own feedback then went unasserted precisely *because* it looked too
+simple to be worth a test. A widget with no visible state is unusable whatever it writes.
+
+The fourth was the tick's position — a class no rule matches passes every check that is not a
+measurement (§211), so it is measured: the box's right edge left of the title's left edge, and
+their tops within a line of each other.
+
+---
+
+**A CSS class name that already meant something else, and the bug it was hiding.**
+
+The last survivor was the tick's layout rule, and it took three rounds to understand — each one
+worth writing down, because they are three different mistakes.
+
+**First: the rule was dead.** `.canvas-selector-option` has meant the String Selector's option
+grid since §204, and that rule comes *later* in the file, so it won. The Object Selector's rows
+were being styled by a widget they have nothing to do with. Nothing looked wrong, because that
+rule is also a flex row — and either widget could have broken the other from then on. This is
+§211's import collision in a namespace with **no compiler to catch it**: two modules exporting the
+same name at least fail to typecheck sometimes, while two rules claiming the same class silently
+resolve by source order. Renamed to `canvas-object-tick`.
+
+**Second: the renamed rule was still untestable**, because the mutant that swapped the class back
+kept passing. Measuring rather than reasoning (§209) settled it in one run: the row was
+`display: flex`, height 31.75 — **one line**. `align-items: start` and `center` cannot differ on a
+row one line tall, so no assertion about the tick's position could separate the two rules.
+
+**Third: the reason it was one line was a real defect.** p.457 says a property is displayed
+*beneath* the object title. `.canvas-dropdown-option`'s grid stacks its **direct** children, and
+in the Selector the title and its details sit one element deeper inside a wrapper — so they ran
+inline after the title. Every existing test passed, because they **counted** the detail lines
+rather than measuring where they were. The wrapper stacks now, and a test measures that the first
+detail's top is below the title's bottom.
+
+So a collision hid a dead rule, the dead rule hid a flat layout, and the flat layout hid a
+mis-rendered widget — and the thing that broke the chain open was a mutant nobody could kill.
+
+---
+
+**5 new model mutants (40 on the shared file) and 22 widget mutants, 0 survivors, 0 no-ops**
+after the fixes.
+
+**1081 unit tests** (was 1076); **509 browser tests** (was 491); 1521 API tests, 2 skipped,
+unchanged.
+
+`workshop.md` §10 goes from 25 of ~52 rows to 26, counted from the table. **Build-order item 6's
+two pickers are done**; what is left of it — Inline Action depth — is blocked on `ontology.md`
+item 4, action parameters and rules, which is designed (decision 0007) and unbuilt.
+
+---
+---
+---
+---
+
 ### 214. The Object Dropdown, and a setting the platform refuses (this session)
 
 p.455-458's widget: p.457's Label, Input object set, Selected object output and Allow no
@@ -5189,6 +5300,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
+
+- **Two CSS rules claiming the same class resolve silently by source order — §211's collision, in a namespace with no compiler.** §215 gave the Object Selector's row `.canvas-selector-option`, which has meant the String Selector's option grid since §204 and is defined later in the file. The new rule was dead from the moment it was written; the rows were styled by an unrelated widget, looked fine because that rule is also a flex row, and either widget could have restyled the other from then on. Two modules exporting one name at least fail to typecheck sometimes; two rules claiming one class never do. **Before adding a class, grep for it** — and the tell that you did not is a stylesheet mutant that changes nothing.
+
+  It went three layers deep, and the layers are three separate mistakes. The renamed rule was *still* untestable, because the mutant swapping the class back kept passing — measuring rather than reasoning (§209) showed the row was one line tall, and `align-items: start` cannot differ from `center` on one line. **And the reason it was one line was a real defect**: p.457's property lines were running *inline* after the title instead of beneath it, because `.canvas-dropdown-option`'s grid stacks its direct children and the Selector's sit one element deeper. Every test passed, because they **counted** the detail lines rather than measuring where they were. A collision hid a dead rule, the dead rule hid a flat layout, and the flat layout hid a mis-rendered widget — and what broke it open was a mutant nobody could kill. **A stylesheet mutant that survives is not a missing CSS test; it is a question about whether the rule does anything.**
+
+- **Choosing the strongest observable can leave the obvious one untested.** §215's Object Selector tests all read the *downstream table* its clauses narrow to, which is the right instinct: a widget can draw the right ticks while writing the wrong clauses, and the clauses are what the module acts on. But a selector whose checkboxes never tick — or tick all at once — passes every one of those tests, because the clicks still write correctly. Both mutants survived in the same run. The reader's own feedback went unasserted *because* it looked too simple to be worth a test, next to an assertion that was chosen for being hard to fake. A widget with no visible state is unusable whatever it writes. The tell is a test file where every assertion is one hop away from the widget: at least one has to be about what the person operating it can see.
 
 - **Playwright's `to_have_text` normalises whitespace, so it cannot see a trim.** §214's label test asserted `to_have_text("Site")` against a widget rendering `"  Site  "` and passed — the matcher collapses leading, trailing and repeated whitespace before comparing, which is usually what you want and is exactly wrong when the trim *is* the behaviour under test. The mutant that removed the read sailed through. Anything asserting normalisation — trimming, collapsing, padding — has to read `text_content` (after a `to_be_visible` wait, since it does not retry) and compare exactly. The other half of the same test had the paired fault: it used `""` for "no label", and the empty string is falsy whether or not it has been read through the model, so the case that separates them is `"   "`. Two ways to write a test about whitespace that cannot see whitespace, in one test.
 
