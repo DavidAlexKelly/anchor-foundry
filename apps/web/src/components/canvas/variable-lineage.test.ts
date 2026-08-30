@@ -193,6 +193,29 @@ describe("buildGraph", () => {
     expect(g.edges.map((e) => e.via)).toContain("steps[1].completedVariable");
   });
 
+  it("draws nothing for a reference no catalogue gives a direction", () => {
+    // **The branch the harness found nothing holding.** `buildGraph` skips a
+    // reference `directionOf` cannot answer, and without this the skip could
+    // be deleted and every test still pass — the edge would simply be drawn as
+    // a read, which is the `?? "read"` the module argues against by name.
+    //
+    // Reaching into the catalogue is the only way to produce the state: the
+    // type refuses an unclassified *flat* prop and the check above refuses an
+    // unclassified *nested* one, so nothing a document can hold gets here. A
+    // branch that guards against a future edit is still worth pinning, and
+    // pinning it needs that future edit made and undone.
+    (NESTED_REFERENCE_PROPS as Record<string, readonly string[]>).rows = ["ownerVariable"];
+    try {
+      const g = buildGraph(variables, {
+        rowed: widget("CanvasSomething", { rows: [{ ownerVariable: "v_in" }] }),
+      });
+      expect(g.nodes.has("rowed")).toBe(false);
+      expect(g.edges.filter((e) => e.from === "rowed" || e.to === "rowed")).toEqual([]);
+    } finally {
+      delete (NESTED_REFERENCE_PROPS as Record<string, readonly string[]>).rows;
+    }
+  });
+
   it("leaves out a widget whose only reference is to an undeclared variable", () => {
     // A nested binding to something the module does not declare is the state
     // the server refuses to save, but a document can arrive here from anywhere
