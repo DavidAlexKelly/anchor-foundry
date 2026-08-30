@@ -4853,7 +4853,7 @@ export function CanvasObjectSelector({
               ) : (
                 options.map((row) => (
                   <label
-                    className="canvas-dropdown-option canvas-selector-option"
+                    className="canvas-dropdown-option canvas-object-tick"
                     key={row.id}
                     data-testid="selector-option"
                   >
