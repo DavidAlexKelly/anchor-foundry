@@ -1626,6 +1626,36 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .canvas-property dd { margin: 0; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
 
+/* ---- Links (p.268-272) ---------------------------------------------------- */
+.canvas-links { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.canvas-link-group { border-bottom: 1px solid var(--line); }
+.canvas-link-group:last-child { border-bottom: 0; }
+/* The whole header is the control, not a caret beside a label: a section that
+   only opens from a 12px triangle is a section most people do not know opens. */
+.canvas-link-header {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 7px 2px; background: none; border: 0; cursor: pointer;
+  font: inherit; text-align: left; color: inherit;
+}
+.canvas-link-header:hover { background: var(--accent-wash); }
+.canvas-link-caret { color: var(--ink-soft); font-size: 10px; width: 10px; }
+.canvas-link-label { font-weight: 600; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.canvas-link-count {
+  margin-left: auto; font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--ink-soft); white-space: nowrap;
+}
+.canvas-link-objects {
+  list-style: none; margin: 0 0 8px; padding: 0 0 0 18px;
+  display: grid; gap: 3px; font-size: 12.5px;
+}
+.canvas-link-objects li { min-width: 0; overflow-wrap: anywhere; }
+.canvas-link-more, .canvas-link-empty {
+  color: var(--ink-soft); font-size: 11.5px;
+}
+.canvas-link-empty { margin: 0 0 8px; padding-left: 18px; }
+.canvas-link-picker { display: grid; gap: 6px; }
+.canvas-link-choice { display: grid; gap: 4px; }
+
 /* ---- Object set title (p.274) -------------------------------------------- */
 .canvas-set-title {
   display: flex; align-items: center; gap: 8px;

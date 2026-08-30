@@ -1592,6 +1592,26 @@ export interface LinkType {
 export const PRIMARY_KEY_REF = "$primary_key";
 
 /**
+ * One traversable link *from an object type*, with no object in hand.
+ *
+ * What a builder chooses between when configuring a widget, before there is
+ * any data to traverse. A self-link appears **twice**, once per end, so the
+ * identity of one of these is the pair `link_type_id` + `direction`.
+ */
+export interface TypeLink {
+  link_type_id: string;
+  api_name: string;
+  display_name: string;
+  cardinality: LinkCardinality;
+  direction: "outbound" | "inbound";
+  side_name: string;
+  far_type_id: string;
+  far_type_display_name: string;
+  near_property: string;
+  far_property: string;
+}
+
+/**
  * One link traversed from a single instance: which relationship, which way it
  * runs, and a first page of what is on the far side.
  */
