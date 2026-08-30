@@ -323,8 +323,16 @@ def test_a_property_sort_a_document_holds_does_not_break_the_list(page, api, sit
 
 
 def test_the_label_is_drawn_only_when_there_is_one(page, api, sites) -> None:
-    without = build(api, sites, "Dropdown no label")
-    open_module(page, without)
+    """p.457's optional label.
+
+    **The blank case is whitespace, not the empty string** — the harness had to
+    say so. `""` is falsy whether or not it has been read through the model, so
+    a test using it asks nothing; `"   "` is truthy, and a widget that skipped
+    the read would draw a row of nothing above itself that no author can see to
+    remove.
+    """
+    blank = build(api, sites, "Dropdown blank label", {"label": "   "})
+    open_module(page, blank)
     settled(page)
     expect(page.get_by_test_id("object-dropdown")).to_be_visible()
     expect(page.get_by_test_id("dropdown-label")).to_have_count(0)
@@ -332,7 +340,33 @@ def test_the_label_is_drawn_only_when_there_is_one(page, api, sites) -> None:
     with_one = build(api, sites, "Dropdown label", {"label": "  Site  "})
     open_module(page, with_one)
     settled(page)
-    expect(page.get_by_test_id("dropdown-label")).to_have_text("Site")
+    label = page.get_by_test_id("dropdown-label")
+    expect(label).to_be_visible()
+    # **`text_content`, not `to_have_text`.** Playwright normalises whitespace
+    # for that matcher, so "  Site  " and "Site" compare equal to it and the
+    # trim would have been invisible.
+    assert label.text_content() == "Site", repr(label.text_content())
+
+
+def test_opening_the_list_does_not_move_the_page(page, api, sites) -> None:
+    """A picker that shoves everything below it down the page as it opens makes
+    the reader lose their place, and — §195's finding — anything that reflows
+    under a pointer stops receiving the clicks aimed at it.
+
+    Measured on a *second* widget, because the toggle itself sits above the
+    panel and would not move even in flow.
+    """
+    mod = build(api, sites, "Dropdown float")
+    open_module(page, mod)
+    settled(page)
+
+    echo = page.get_by_test_id("set-title")
+    expect(echo).to_be_visible()
+    before = echo.evaluate("e => e.getBoundingClientRect().top")
+    open_list(page)
+    expect(options(page).first).to_be_visible()
+    after = echo.evaluate("e => e.getBoundingClientRect().top")
+    assert abs(after - before) < 2, (before, after)
 
 
 def test_the_panel_names_the_properties_that_exist(page, api, sites) -> None:
