@@ -12,13 +12,18 @@
  *
  * ---
  *
- * **A configured view is not a thing every object type has**, and that is what
- * these functions are really about. p.261 lets a builder ask for one; whether
- * there is one to give is a fact about the object type, discovered at read
- * time and able to change after the module was saved — a view can be
- * unpublished, or one can appear where there was none. So the mode a document
- * holds is a *preference*, and every question here takes `hasConfigured`
- * beside it rather than trusting the document alone.
+ * **A configured view is not a thing every object type has**, and the mode a
+ * document holds is therefore a *preference*: a view can be unpublished, or
+ * one can appear where there was none, long after the module was saved.
+ *
+ * This file used to answer that too — `startsStandard` and `showsToggle`, each
+ * taking a `hasConfigured` beside the document's value. **The harness deleted
+ * them**, and it was right: `ObjectView` already opens the standard view when
+ * there is no configured one and already withholds a switch that leads
+ * nowhere, so replacing `hasConfigured` with a constant `true` in the widget
+ * changed nothing on screen. Two functions and eight tests were restating a
+ * guard that lives one level down and is tested there. What is left is only
+ * what a *document* means, which is the part with no other home.
  */
 
 /** p.261's Object View Mode. */
@@ -56,41 +61,4 @@ export const DEFAULT_EMPTY_MESSAGE = "No object to show";
 
 export function emptyMessageOf(raw: unknown): string {
   return typeof raw === "string" && raw.trim() ? raw.trim() : DEFAULT_EMPTY_MESSAGE;
-}
-
-export interface ViewChoice {
-  /** What the document asks for. */
-  mode: unknown;
-  /** Whether this object type actually has a configured view right now. */
-  hasConfigured: boolean;
-}
-
-/** Which view opens.
- *
- * **A type with no configured view opens on the standard one whatever the
- * document says.** The alternative is a widget that renders nothing because it
- * was pointed at a view somebody has since unpublished, which is the failure
- * `ObjectView` already refuses one level down: the object stays viewable.
- */
-export function startsStandard({ mode, hasConfigured }: ViewChoice): boolean {
-  // `viewModeOf(mode) === "standard"` and `mode === "standard"` cannot differ
-  // while `VIEW_MODES` has two keys, and the harness duly reported the second
-  // as a survivor: `viewModeOf` returns `"configured"` for everything that is
-  // not exactly `"standard"`, which is what the raw comparison says too.
-  // **Recorded as equivalent rather than simplified**, because the two stop
-  // agreeing the moment p.261 grows a third mode — and the raw comparison
-  // would then silently treat it as configured, which is the shape of bug that
-  // never gets reported. The read stays; no test can hold it today.
-  return !hasConfigured || viewModeOf(mode) === "standard";
-}
-
-/** Whether the reader is offered the switch.
- *
- * Never when there is nothing to switch *to*: two buttons where one of them
- * leads nowhere is a control that lies about what the platform has.
- */
-export function showsToggle(
-  { allowToggle, hasConfigured }: { allowToggle: unknown; hasConfigured: boolean },
-): boolean {
-  return hasConfigured && allowToggleOf(allowToggle);
 }

@@ -85,7 +85,7 @@ import {
   // which takes two arguments. The two survived the same collision differently
   // only because that one's arity differs — the rule is the same either way.
   VIEW_MODES, allowToggleOf, emptyMessageOf as objectViewEmptyMessageOf,
-  hideHeaderOf, showsToggle, startsStandard, viewModeOf,
+  hideHeaderOf, viewModeOf,
 } from "./object-view-widget";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
@@ -4135,17 +4135,6 @@ export function CanvasObjectViewWidget({
     pageSize: 1, variablesPending,
   });
   const instance = setPage.rows?.[0];
-  // **Whether there is a configured view is asked here, not inferred from the
-  // document**, because it is a fact about the object type that can change
-  // after the module was saved — and both answers to it change what the
-  // settings below are allowed to mean.
-  const view = useQuery({
-    queryKey: ["object-view", workspaceId, setPage.typeId],
-    queryFn: () => objApi.getView(workspaceId, setPage.typeId!),
-    enabled: !!setPage.typeId,
-  });
-  const hasConfigured = !!view.data;
-
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {!objectSetVariable ? (
@@ -4162,8 +4151,14 @@ export function CanvasObjectViewWidget({
             workspaceId={workspaceId}
             typeId={setPage.typeId}
             instance={instance}
-            initialStandard={startsStandard({ mode: viewMode, hasConfigured })}
-            allowToggle={showsToggle({ allowToggle, hasConfigured })}
+            // **Neither of these asks whether the type has a configured
+            // view**, and it used to. `ObjectView` opens the standard one when
+            // there is none and withholds a switch that leads nowhere; a
+            // harness run replacing this widget's answer with a constant
+            // changed nothing on screen, which is what a second copy of a
+            // guard looks like from outside.
+            initialStandard={viewModeOf(viewMode) === "standard"}
+            allowToggle={allowToggleOf(allowToggle)}
             hideHeader={hideHeaderOf(hideHeader)}
           />
         </div>
