@@ -4290,6 +4290,115 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 213. The Object View widget, and a guard that was already there (this session)
+
+p.259-263's widget: the input object set, p.261's Object View Mode with the reader's toggle,
+p.262's Hide header and Empty state message. It finishes `workshop.md`'s build-order item 5.
+
+**It renders the platform's own `ObjectView`** — the one the Object Explorer and the traversal
+dialog render — rather than a Workshop copy of it. A second renderer would be a second place for
+a configured view, a prominent geopoint's map and a derived property to drift, which is the
+mistake `object-properties.ts` exists to record. That decision is also what made the unit small:
+almost everything p.259-263 asks for was already built somewhere a reader could reach it.
+
+The import goes through `next/dynamic`, because `object-view.tsx` imports `CANVAS_RESOLVER`
+from `widgets.tsx` — a configured view *is* a module, and rendering one needs the widget table.
+A static import back would close the cycle, and which half ends up `undefined` then depends on
+which module the bundler reaches first: a blank widget with no error.
+
+---
+
+**The build order was wrong about this item four times, in three different ways.**
+
+§210 and §211 needed no ontology work at all. §212's traversal existed and the widget still
+needed a new endpoint, because a builder configures before there is data — "does the data layer
+support this" and "can this be configured" are separate questions. §213 is the one the item had
+always said would need the Object Views work, and it did: it renders one. **The work had been
+finished for eleven units by the time anybody checked.**
+
+That is a different failure from the other three, and the one worth naming: a build order records
+what was true when it was written, and nothing in it ever goes back to ask whether it still is.
+Three entries in that item now say so.
+
+---
+
+**A comment that said "there is no setting that could express this" was falsified by this unit.**
+
+`object-view.tsx` opened with the claim that the standard view "cannot be turned off, because the
+rule is about the reader rather than about configuration — there is no setting that could express
+'hide it'". Workshop p.261 **is** that setting. The claim was true about the platform's own
+surfaces and was written as though it were true about the code, and nothing pointed at it when
+that stopped being so. The same sentence had been copied into `ontology.md` §4.2's table. Both
+now say what actually holds: every caller that is not a configured widget takes the defaults, and
+the widget's toggle defaults to on, so withholding the standard view takes a deliberate act about
+one widget in one module.
+
+---
+
+**The harness deleted code rather than finding a missing test.**
+
+The widget asked the server whether the bound object type had a configured view and fed the
+answer into two model functions — `startsStandard` and `showsToggle` — so that a stale
+"configured" preference would fall back and a switch with nowhere to go would be withheld. Both
+are correct rules. Replacing that answer with a constant `true` **changed nothing on screen**,
+and the mutant survived.
+
+It survived because `ObjectView` already does both, one level down, and is tested there. The
+widget's copy could never be observed, whatever it said. Two functions, one query and eight unit
+tests went; the browser test that covers the behaviour stayed, because it was always testing the
+level that decides.
+
+**The tell is a survivor whose code is a rule you can point at somewhere else.** §195's version
+of this was a fix that fixed nothing; this is a guard that guards nothing, and it is harder to
+see, because the behaviour is right either way and the duplicate reads like defensiveness. The
+question to ask a surviving guard is not "which test is missing" but "who else already refuses
+this" — and if somebody does, the missing test is not missing.
+
+One further mutant is recorded as **equivalent** in the model: `viewModeOf(mode) === "standard"`
+and `mode === "standard"` cannot differ while `VIEW_MODES` has two keys. The read stays anyway,
+because the two stop agreeing the moment p.261 grows a third mode and the raw comparison would
+then treat it as configured — silently.
+
+---
+
+**Two header tests could not fail, and the signal to fix them was already there.**
+
+`standard-object-view` is on the element in all three of its states — loading, error and ready —
+and the component says why in a comment: without it, "failed to load" and "failed to render"
+look identical from outside. So `expect(view).to_be_visible()` followed by
+`expect(".sov-head").to_have_count(0)` asks about an absence while the view is still *loading*,
+where everything is absent. Both header mutants sailed through; the test asserting the header
+can be hidden passed against a build that never hid it.
+
+The fix was one locator: `[data-state='ready']`. **The clock (§202) was already provided, with a
+comment explaining what it was for, and the test did not use it.** That is worth more than
+another entry about waiting: an affordance nobody reaches for is not much better than one that
+does not exist, and the place to look for it is the component's own reason for existing.
+
+---
+
+**§211's aliasing rule fired again, and the compiler caught it this time.** `emptyMessageOf`
+already meant the Object Table's, which takes two arguments, so the duplicate import failed to
+typecheck instead of quietly resolving to the wrong function. That is luck, not a safety net —
+§211's collision was two numbers and typechecked perfectly. The rule does not depend on whether
+`tsc` happens to notice.
+
+---
+
+**16 model mutants and 16 widget mutants, 0 survivors, 0 no-ops** after the fixes, plus one
+withdrawn as equivalent and one withdrawn as not a mutant at all (it inlined a function's own
+body — §201's rule with the sign flipped).
+
+**1046 unit tests** (was 1038 — eight were *removed* with the guard they tested and nine added);
+**473 browser tests** (was 463); 1521 API tests, 2 skipped, unchanged.
+
+`workshop.md` §10 goes from 23 of ~52 rows to 24, counted from the table.
+
+---
+---
+---
+---
+
 ### 212. The Links widget, and a fixture that never crossed its own boundary (this session)
 
 p.268-272's widget: the input object set, p.270's "All link types" against "Specify link types",
@@ -4981,6 +5090,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
+
+- **A guard duplicated one level up is invisible to every test, because the level below is still right.** §213's Object View widget asked whether the bound type had a configured view and used the answer to fall back and to withhold a switch that led nowhere. Both rules are correct; both were already enforced by `ObjectView`, which the widget renders. Replacing the widget's answer with a constant changed nothing on screen, so the mutant survived — and the survivor was not a missing test but two functions, a query and eight unit tests that could never have been observed. §195's version of this was a fix that fixed nothing; this is subtler, because a duplicated guard reads like ordinary defensiveness and the behaviour is right either way. **The question to ask a surviving guard is not "which test is missing" but "who else already refuses this"** — and when somebody does, delete rather than test. The tell is a survivor whose code restates a rule you can point at in another file.
+
+- **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
 
 - **A fixture that never crosses the limit the code is written against cannot see the limit.** §212's Links widget header reports a link's `total`; the section under it lists the first page, which the traversal caps at ten. The fixture gave the object two linked rows, so `total` and `items.length` were both 2 — and a header that counted its own list passed every assertion while being wrong by exactly the amount nobody could observe. This is the "two things that had to differ were the same thing" family once more, but with a tell of its own: a **fixture sized under a boundary the code claims to handle**. Any pagination, truncation, clamp or preview limit has one, and the fixture has to cross it or the branch on the far side is untested. The fix is a number, not a test: eleven reports instead of two, and the widget now says "11" over a list of ten.
 

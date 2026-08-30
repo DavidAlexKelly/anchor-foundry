@@ -1656,6 +1656,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-link-picker { display: grid; gap: 6px; }
 .canvas-link-choice { display: grid; gap: 4px; }
 
+
 /* ---- Object set title (p.274) -------------------------------------------- */
 .canvas-set-title {
   display: flex; align-items: center; gap: 8px;
