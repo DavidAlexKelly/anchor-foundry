@@ -2114,6 +2114,61 @@ class LinkedInstances(BaseModel):
 LINK_PREVIEW_LIMIT = 10
 
 
+class TypeLink(BaseModel):
+    """One traversable link *from an object type*, with no object in hand.
+
+    The same rows `instance_links` walks, minus the traversal: which links
+    exist, which way each one runs, and what the far side is called. A
+    builder configuring a widget is choosing between link types before there
+    is any data to traverse, and answering that question with an instance
+    endpoint would make the set of configurable links depend on whether the
+    bound object set happens to be empty.
+    """
+
+    link_type_id: UUID
+    api_name: str
+    display_name: str
+    cardinality: str
+    direction: str
+    side_name: str
+    far_type_id: UUID
+    far_type_display_name: str
+    near_property: str
+    far_property: str
+
+
+@router.get("/object-types/{type_id}/links", response_model=list[TypeLink])
+async def type_links(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[TypeLink]:
+    """Every mapped link touching this object type, once per end it occupies.
+
+    A self-link comes back **twice** - `links_for_type` says why, and it is
+    the reason this returns a `direction` beside every `link_type_id` rather
+    than a list of ids: outbound and inbound are different questions with the
+    same link type, and a caller that recorded only the id would configure
+    both when it meant one.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        links = await ontology_service.links_for_type(conn, access.workspace_id, type_id)
+    return [
+        TypeLink(
+            link_type_id=UUID(str(link["id"])),
+            api_name=str(link["api_name"]),
+            display_name=str(link["display_name"]),
+            cardinality=str(link["cardinality"]),
+            direction=str(link["direction"]),
+            side_name=str(link["side_name"]),
+            far_type_id=UUID(str(link["far_type_id"])),
+            far_type_display_name=str(link["far_type_display_name"]),
+            near_property=str(link["near_property"]),
+            far_property=str(link["far_property"]),
+        )
+        for link in links
+    ]
+
+
 @router.get(
     "/object-types/{type_id}/instances/{instance_id}/links",
     response_model=list[LinkedInstances],

@@ -1146,6 +1146,10 @@ export const objects = {
     if (!res.ok) throw new ApiError(res.status, res.statusText);
     return res.blob();
   },
+  typeLinks: (wid: string, typeId: string) =>
+    request<import("./types").TypeLink[]>(
+      `/workspaces/${wid}/object-types/${typeId}/links`,
+    ),
   instanceLinks: (wid: string, typeId: string, instanceId: string) =>
     request<import("./types").LinkedInstances[]>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}/links`,

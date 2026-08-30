@@ -436,3 +436,78 @@ def test_a_link_with_no_side_names_falls_back_to_its_own(
     groups = _links(client, fx, ontology["person"], people["1"]["id"])
     works_in = groups[f"works_in_{ontology['tag']}:outbound"]
     assert works_in["side_name"] == "Works in" == works_in["display_name"]
+
+
+# ---- links from a type, with no object in hand (parity workshop.md §212) -----
+def _type_links(client: TestClient, fx: Fixture, type_id: str) -> dict[str, dict]:
+    r = client.get(f"{_wbase(fx)}/object-types/{type_id}/links",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return {f"{g['api_name']}:{g['direction']}": g for g in r.json()}
+
+
+def test_a_type_lists_its_links_without_an_instance(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """A builder configuring a widget chooses between link types before there
+    is any data to traverse.
+
+    Answering that with the instance endpoint would make the set of
+    configurable links depend on whether the bound object set happens to be
+    empty — a widget that could not be configured on a Monday and could on a
+    Tuesday.
+    """
+    tag = ontology["tag"]
+    links = _type_links(client, fx, ontology["person"])
+
+    works_in = links[f"works_in_{tag}:outbound"]
+    assert works_in["cardinality"] == "one_to_many"
+    assert works_in["far_type_display_name"] == f"Department {tag}"
+    assert works_in["near_property"] == "department"
+    assert works_in["far_property"] == "$primary_key"
+    assert works_in["far_type_id"] == ontology["dept"]
+    # This link names no sides, so `side_name` and `display_name` are the same
+    # string here and neither can stand in for the other — the assertion that
+    # separates them is the self-link's, below.
+    assert works_in["side_name"] == works_in["display_name"] == "Works in"
+    # **The id is checked against the traversal's**, not against itself: every
+    # other id in this row is also a uuid, so an assertion that it is one would
+    # hold if the far type's had been sent instead.
+    people = _instances(client, fx, ontology["person"])
+    traversed = _links(client, fx, ontology["person"], people["1"]["id"])
+    assert works_in["link_type_id"] == traversed[f"works_in_{tag}:outbound"]["link_type_id"]
+    assert works_in["link_type_id"] != works_in["far_type_id"]
+    # No traversal happened, so there is nothing about *this* object here.
+    assert "items" not in works_in and "total" not in works_in
+
+
+def test_a_self_link_is_listed_once_per_end(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    """The reason a configured link is keyed on the pair, not the id.
+
+    Both rows carry the same `link_type_id`; only `direction` and `side_name`
+    tell "my manager" apart from "my direct reports".
+    """
+    tag = ontology["tag"]
+    links = _type_links(client, fx, ontology["person"])
+    outbound = links[f"reports_to_{tag}:outbound"]
+    inbound = links[f"reports_to_{tag}:inbound"]
+
+    assert outbound["link_type_id"] == inbound["link_type_id"]
+    assert outbound["side_name"] == "Manager"
+    assert inbound["side_name"] == "Direct reports"
+    assert outbound["near_property"] == "manager_id"
+    assert inbound["near_property"] == "$primary_key"
+
+
+def test_listing_a_types_links_needs_a_visible_type(
+    client: TestClient, fx: Fixture, ontology: dict
+) -> None:
+    r = client.get(f"{_wbase(fx)}/object-types/{uuid.uuid4()}/links",
+                   headers=hdr(fx.viewer_sub))
+    assert r.status_code == 404
+
+    r = client.get(f"{_wbase(fx)}/object-types/{ontology['person']}/links",
+                   headers=hdr(fx.outsider_sub))
+    assert r.status_code == 404, "outside the workspace: 404, never 403"

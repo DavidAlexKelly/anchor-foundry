@@ -68,6 +68,16 @@ import {
   columnsOf as propertyColumnsOf, gridStyle as propertyGridStyle, hideNullOf,
   layoutOf as propertyLayoutOf, visibleProperties,
 } from "./property-list";
+import {
+  // Aliased for §211's reason: `modeOf` and `chosenOf` already mean the String
+  // Selector's in this file, and both of these take different arguments and
+  // return different things. Left unaliased they would typecheck at neither
+  // call site or - worse - at one of them.
+  LINK_MODES, MAX_DEFAULT_EXPAND,
+  chosenOf as linkChosenOf, defaultExpandOf, initiallyExpanded, labelFor,
+  linkKey, modeOf as linkModeOf, toggleExpanded, visibleLinks,
+  type ChosenLink,
+} from "./links-widget";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -3759,6 +3769,292 @@ CanvasPropertyList.craft = {
     columns: 1, hideNull: false,
   },
   related: { settings: PropertyListSettings },
+};
+
+// ---- Links (p.268-272) ------------------------------------------------------
+/** p.268-272's Links widget: "the links relationship between objects and
+ * provide exploration into those paths".
+ *
+ * Which rows are drawn, what they are called and which of them open on load is
+ * `links-widget.ts`. What is here is the fetch - one object out of the bound
+ * set, then every mapped link from it in a single request, which is what
+ * `instance_links` exists to answer.
+ *
+ * **Not built, and named rather than approximated**: p.270's "Load data from
+ * scenario" (there are no Scenarios here); p.271's "Enable exploration on link
+ * types" and "Enable open object view on linked objects", which need the
+ * Object View widget that `workshop.md`'s build order still has ahead of this;
+ * p.271-272's hover preview and the properties shown in it, which is the same
+ * dependency seen from the other side; and p.272's "Sort linked object by",
+ * because the traversal endpoint returns one page per link in the store's own
+ * order and a control that reordered *that page* would claim to sort the link
+ * while only shuffling the first ten of it.
+ */
+export function CanvasLinksWidget({
+  objectSetVariable = null,
+  linkMode = "all",
+  links = [],
+  defaultExpand = 0,
+}: {
+  objectSetVariable?: string | null;
+  /** p.270's "Link types to display": all of them, or the configured list. */
+  linkMode?: string;
+  /** p.272's per-link configuration, keyed on `${link_type_id}:${direction}`. */
+  links?: ChosenLink[];
+  /** p.271's "Default link expand". */
+  defaultExpand?: number;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+
+  // One row: p.268's widget explores the links of *an* object, and a page of
+  // twenty-five would be twenty-four objects fetched to be thrown away.
+  const setPage = useSetPage(workspaceId, setDefinition, {
+    pageSize: 1, variablesPending,
+  });
+  const instance = setPage.rows?.[0];
+  // The same query key the Object Explorer's traversal dialog uses, so a
+  // reader who opens both pays for one request.
+  const linkQuery = useQuery({
+    queryKey: ["instance-links", workspaceId, setPage.typeId, instance?.id],
+    queryFn: () => objApi.instanceLinks(workspaceId, setPage.typeId!, instance!.id),
+    enabled: !!setPage.typeId && !!instance,
+  });
+
+  const chosen = linkChosenOf(links);
+  const visible = visibleLinks(linkQuery.data ?? [], linkMode, chosen);
+  const expand = defaultExpandOf(defaultExpand);
+
+  // p.271's default expansion is a *starting* state, so it is seeded rather
+  // than computed: once somebody has folded a section away, re-deriving it
+  // every render would open it again on the next fetch. Re-seeded when the
+  // object, the configuration or the count changes, because each of those
+  // makes the previous answer about a different widget.
+  const [open, setOpen] = useState<string[]>([]);
+  const seed = `${instance?.id ?? ""}|${visible.map(linkKey).join(",")}|${expand}`;
+  const [seeded, setSeeded] = useState<string | null>(null);
+  if (linkQuery.data && seed !== seeded) {
+    setSeeded(seed);
+    setOpen(initiallyExpanded(visible, expand));
+  }
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">Links - bind an object set in Settings</p>
+      ) : setPage.unresolved ? (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      ) : !instance ? (
+        <p className="canvas-widget-empty" data-testid="links-no-object">No object to show</p>
+      ) : linkQuery.isPending ? (
+        <p className="canvas-widget-empty">Following links…</p>
+      ) : visible.length === 0 ? (
+        // Distinct from "no object": the object is there and has no link this
+        // widget was asked to draw, which is a different thing to fix.
+        <p className="canvas-widget-empty" data-testid="links-none">No links to show</p>
+      ) : (
+        <ul className="canvas-links" data-testid="links">
+          {visible.map((group) => {
+            const key = linkKey(group);
+            const isOpen = open.includes(key);
+            return (
+              <li className="canvas-link-group" key={key} data-testid="link-group">
+                <button
+                  type="button"
+                  className="canvas-link-header"
+                  aria-expanded={isOpen}
+                  data-testid={`link-toggle-${key}`}
+                  onClick={() => setOpen(toggleExpanded(open, key))}
+                >
+                  <span className="canvas-link-caret" aria-hidden>{isOpen ? "▾" : "▸"}</span>
+                  <span className="canvas-link-label" data-testid="link-label">
+                    {labelFor(group, chosen)}
+                  </span>
+                  <span className="canvas-link-count">
+                    {group.total} {group.far_type_display_name}
+                  </span>
+                </button>
+                {isOpen && (
+                  group.items.length === 0 ? (
+                    <p className="canvas-link-empty" data-testid="link-empty">
+                      Nothing on the other side of this link
+                    </p>
+                  ) : (
+                    <ul className="canvas-link-objects">
+                      {group.items.map((i) => (
+                        <li key={i.id} data-testid="link-object">{i.primary_key}</li>
+                      ))}
+                      {group.total > group.items.length && (
+                        // The traversal returns a first page, not the far side.
+                        <li className="canvas-link-more">
+                          Showing {group.items.length} of {group.total}
+                        </li>
+                      )}
+                    </ul>
+                  )
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function LinksWidgetSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectSetVariable, linkMode, links, defaultExpand,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    linkMode: node.data.props.linkMode,
+    links: node.data.props.links,
+    defaultExpand: node.data.props.defaultExpand,
+  }));
+  const { declared, resolved } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
+  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  // **The type's links, not the bound object's.** p.272 says the dropdown
+  // follows from choosing a starting object set, and which links exist is a
+  // fact about the object type - asking the traversal endpoint would make the
+  // configurable set depend on whether today's set happens to be empty.
+  const available = useQuery({
+    queryKey: ["type-links", workspaceId, typeId],
+    queryFn: () => objApi.typeLinks(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  const chosen = linkChosenOf(links);
+  const write = (next: ChosenLink[]) =>
+    setProp((p: { links: ChosenLink[] }) => (p.links = next));
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Input object set</span>
+        <select
+          value={objectSetVariable || ""}
+          data-testid="links-variable"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          The links of the first object in the set, which is what p.268 explores
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Link types to display</span>
+        <select
+          value={linkModeOf(linkMode)}
+          data-testid="links-mode"
+          onChange={(e) => setProp((p: { linkMode: string }) => (p.linkMode = e.target.value))}
+        >
+          {Object.entries(LINK_MODES).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+      </label>
+      {linkModeOf(linkMode) === "specify" && (
+        <div className="field">
+          <span className="field-label">Link types</span>
+          {!typeId ? (
+            <span className="field-hint">Bind an object set first</span>
+          ) : available.data && available.data.length === 0 ? (
+            <span className="field-hint">
+              This object type has no mapped links. A link also needs to say which
+              properties join before anything can be traversed.
+            </span>
+          ) : (
+            <div className="canvas-link-picker" data-testid="links-picker">
+              {(available.data ?? []).map((link) => {
+                const key = linkKey(link);
+                const picked = chosen.find((c) => c.key === key);
+                return (
+                  <div className="canvas-link-choice" key={key}>
+                    <label className="canvas-toggle">
+                      <input
+                        type="checkbox"
+                        checked={!!picked}
+                        data-testid={`links-pick-${key}`}
+                        onChange={() =>
+                          write(picked
+                            ? chosen.filter((c) => c.key !== key)
+                            : [...chosen, { key }])}
+                      />
+                      <span className="field-label">
+                        {link.side_name} → {link.far_type_display_name}
+                      </span>
+                    </label>
+                    {picked && (
+                      <input
+                        type="text"
+                        placeholder={link.side_name}
+                        value={picked.label ?? ""}
+                        data-testid={`links-label-${key}`}
+                        onChange={(e) =>
+                          write(chosen.map((c) =>
+                            c.key === key
+                              ? { key, ...(e.target.value ? { label: e.target.value } : {}) }
+                              : c))}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <span className="field-hint">
+            Ticked links are drawn in the order they were ticked. A self-link
+            appears twice, once per direction — they are different questions.
+          </span>
+        </div>
+      )}
+      <label className="field">
+        <span className="field-label">Default link expand</span>
+        <input
+          type="number"
+          min={0}
+          max={MAX_DEFAULT_EXPAND}
+          value={defaultExpandOf(defaultExpand)}
+          data-testid="links-default-expand"
+          onChange={(e) =>
+            setProp((p: { defaultExpand: number }) =>
+              (p.defaultExpand = Number(e.target.value)))}
+        />
+        <span className="field-hint">
+          How many of the sections shown open on load (p.271)
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasLinksWidget.craft = {
+  displayName: "Links",
+  props: {
+    objectSetVariable: null, linkMode: "all", links: [], defaultExpand: 0,
+  },
+  related: { settings: LinksWidgetSettings },
 };
 
 // ---- Search (roadmap 1.5) ---------------------------------------------------
@@ -8601,6 +8897,7 @@ export const CANVAS_RESOLVER = {
   CanvasMarkdown,
   CanvasObjectSetTitle,
   CanvasPropertyList,
+  CanvasLinksWidget,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -8633,6 +8930,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasMarkdown", label: "Markdown", hint: "Formatted text, typed or read from a string variable" },
   { key: "CanvasObjectSetTitle", label: "Object set title", hint: "One object's title, or an object type and how many there are" },
   { key: "CanvasPropertyList", label: "Property list", hint: "The properties of one object, in a grid" },
+  { key: "CanvasLinksWidget", label: "Links", hint: "One object's links, in expandable sections" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
