@@ -25,6 +25,15 @@
  * `visibleProperties`, applied once per row instead of once. What is left here
  * is the part p.458 introduces and nothing else has: **which properties a
  * search runs on**, and what matching one means.
+ *
+ * ---
+ *
+ * **The Object Selector shares this file** (p.444: "Allow the user to select
+ * multiple objects from a list of objects" — one line, and no page of its own).
+ * Every setting it has is one of these, so a second module would be a second
+ * place for p.458's search rules to drift; the only thing the two do not share
+ * is how a selection of several reads back, which is `selectionSummary` at the
+ * bottom.
  */
 
 /** How many objects the dropdown loads.
@@ -215,4 +224,21 @@ export function titleOf(
 export function truncationNote(total: number | undefined, loaded: number): string | null {
   if (total === undefined || total <= loaded) return null;
   return `Showing the first ${loaded} of ${total.toLocaleString()} — narrow the object set to search the rest`;
+}
+
+/** What the Object Selector's closed control says (p.444's one line).
+ *
+ * **Three answers, and the middle one is the reason this is a function.** None
+ * is a prompt; several is a count; *one* is the object's own title, because a
+ * selector showing "1 selected" beside a list where the reader can see which
+ * one would be withholding the answer to make the code simpler.
+ *
+ * The count is what a set of several reads as: naming them would run off the
+ * control at four, and truncating a list of titles produces a label that
+ * changes width every time somebody ticks a box.
+ */
+export function selectionSummary(count: number, onlyTitle: string | null): string {
+  if (count <= 0) return "Select objects...";
+  if (count === 1 && onlyTitle) return onlyTitle;
+  return `${count} selected`;
 }

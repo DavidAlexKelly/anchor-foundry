@@ -1690,6 +1690,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-dropdown-option[aria-selected="true"] { background: var(--accent-wash); font-weight: 600; }
 .canvas-dropdown-title { font-size: 13px; overflow-wrap: anywhere; }
 .canvas-dropdown-detail { font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+/* p.444's Object Selector shares the dropdown's list; the tick is the only
+   thing it adds. `align-items: start` so a row with property lines under its
+   title keeps the box beside the title rather than centred against the block. */
+.canvas-selector-option {
+  grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px;
+}
+.canvas-selector-option input { margin-top: 2px; }
 
 
 /* ---- Object set title (p.274) -------------------------------------------- */

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SEARCH_MODE, DEFAULT_SORT, PAGE_LIMIT, SEARCH_MODES, SORTS,
   allowNoSelectionOf, isSearchable, labelOf, matchesQuery, propertyListOf,
-  searchModeOf, searchProperties, sortOf, titleOf, truncationNote,
+  searchModeOf, searchProperties, selectionSummary, sortOf, titleOf,
+  truncationNote,
 } from "./object-dropdown";
 
 /** p.455-458's Object Dropdown. */
@@ -244,5 +245,37 @@ describe("p.458's sort", () => {
     // hold, and sending it on would be a 422 in place of a list.
     expect(sortOf("name")).toBe("key");
     expect(sortOf("constructor")).toBe("key");
+  });
+});
+
+describe("what a multiple selection reads as", () => {
+  it("prompts when nothing is selected", () => {
+    expect(selectionSummary(0, null)).toBe("Select objects...");
+    expect(selectionSummary(0, "Alpha")).toBe("Select objects...");
+  });
+
+  it("names the object when there is exactly one", () => {
+    // **Not "1 selected".** The reader can see which one; showing a count
+    // instead would withhold the answer to make the code simpler.
+    expect(selectionSummary(1, "Alpha")).toBe("Alpha");
+  });
+
+  it("counts them when there are several", () => {
+    // Naming them runs off the control at four, and a truncated list of titles
+    // changes width every time somebody ticks a box.
+    expect(selectionSummary(2, "Alpha")).toBe("2 selected");
+    expect(selectionSummary(9, null)).toBe("9 selected");
+  });
+
+  it("counts even a single object whose title could not be resolved", () => {
+    // A blank title falls back to the primary key upstream, so `null` here
+    // means the row is not on the loaded page at all — and "" would be a
+    // control with no text in it.
+    expect(selectionSummary(1, null)).toBe("1 selected");
+    expect(selectionSummary(1, "")).toBe("1 selected");
+  });
+
+  it("does not treat a negative count as a selection", () => {
+    expect(selectionSummary(-1, "Alpha")).toBe("Select objects...");
   });
 });
