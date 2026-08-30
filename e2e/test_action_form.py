@@ -33,7 +33,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import open_module
+from conftest import open_builder, open_module, settled
 
 
 def build(api, name: str) -> Module:
@@ -237,6 +237,12 @@ def build_widget(api, name: str, props: dict | None = None, *, blocked: bool = F
             "parameters": [
                 {"api_name": "status", "display_name": "New status", "data_type": "string"},
                 {"api_name": "note", "display_name": "Note", "data_type": "string"},
+                # **A parameter no property is named after**, so the object has
+                # nothing to say about it and a local default is the only thing
+                # that can fill it. Without one, both of p.512's tests below
+                # were about the object's value winning — which happens whether
+                # or not the default is passed at all, and the harness said so.
+                {"api_name": "reason", "display_name": "Reason", "data_type": "string"},
             ],
             "rules": [
                 {"kind": "modify_object",
@@ -328,21 +334,44 @@ def test_a_local_default_seeds_a_parameter_the_object_says_nothing_about(page, a
 
 
 def test_a_default_applies_to_a_parameter_with_no_property_behind_it(page, api):
-    """The other half, and the one that can actually observe the setting: a
-    parameter the object has nothing to say about starts empty, and a local
-    default fills it."""
+    """The other half, and the only one that can observe the setting at all.
+
+    `reason` is named after no property, so nothing seeds it but p.512's
+    default — which is why it exists. The first version of this test used
+    `note`, a parameter the object *does* have a value for, so it asserted the
+    object winning twice and passed against a widget that never passed the
+    defaults on. The harness caught it; the fixture was wrong, not the
+    assertion.
+    """
     plain = build_widget(api, "Action default empty")
     open_module(page, plain)
     choose_the_ticket(page)
-    expect(field(page, "note")).to_have_value("keep me")
+    expect(field(page, "reason")).to_have_value("")
 
-    # `spare` is declared by neither the object type nor a rule, so nothing
-    # seeds it but p.512's setting.
     mod = build_widget(api, "Action default spare",
-                       {"parameterDefaults": {"note": "from the module"}})
+                       {"parameterDefaults": {"reason": "from the module"}})
     open_module(page, mod)
     choose_the_ticket(page)
-    expect(field(page, "note")).to_have_value("keep me")
+    expect(field(page, "reason")).to_have_value("from the module")
+
+
+def test_the_panel_says_whether_the_invalid_state_will_mean_anything(page, api):
+    """An action with no submission criteria can never be invalid, so p.513's
+    setting is a control that does nothing — and which of those an action is
+    cannot be seen from the select itself."""
+    plain = build_widget(api, "Action panel plain")
+    open_builder(page, plain)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Action form").first.click()
+    hint = page.get_by_test_id("action-form-invalid-state").locator("xpath=..")
+    expect(hint).to_contain_text("no submission criteria")
+
+    blocked = build_widget(api, "Action panel blocked", blocked=True)
+    open_builder(page, blocked)
+    settled(page)
+    page.locator(".canvas-tree-row").filter(has_text="Action form").first.click()
+    hint = page.get_by_test_id("action-form-invalid-state").locator("xpath=..")
+    expect(hint).to_contain_text("before anything is written")
 
 
 def test_an_action_that_cannot_be_submitted_is_disabled_with_its_own_reason(page, api):
