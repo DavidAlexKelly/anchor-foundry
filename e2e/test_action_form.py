@@ -1,8 +1,13 @@
 """The action form, rendered from parameters (decision 0007; Foundry p.25–27, p.56).
 
-The half a unit test cannot see. `seedActionForm` is checked directly in
-`apps/web/src/components/canvas/action-form.test.ts`; what is here is what a
-browser actually draws and submits:
+The half a unit test cannot see. What a *document* decides — p.512's title and
+local defaults, p.513's invalid-state — is
+`apps/web/src/components/canvas/action-form.test.ts`, and `seedActionForm`'s
+precedence order is in `pure.test.ts`. **This docstring used to claim the
+seeding was unit-tested in a file that did not exist**, and it was not tested
+anywhere until §217; the claim is corrected rather than quietly dropped.
+
+What is here is what a browser actually draws and submits:
 
   * **a hidden parameter is not in the form and is still applied** — both
     halves, because a hidden parameter that silently did nothing would pass a
@@ -203,3 +208,222 @@ def test_the_hidden_parameter_is_still_applied(page, api):
     properties = stored(api, mod)
     assert properties["status"] == "triaged"
     assert properties["note"] == "keep me"
+
+
+# ---- the widget's own settings (Workshop p.512-513) -------------------------
+def build_widget(api, name: str, props: dict | None = None, *, blocked: bool = False,
+                 events: dict | None = None) -> Module:
+    """A form whose *widget* is configured, over a ticket that is open.
+
+    `blocked` adds a criterion the **seeded** values fail — the ticket's status
+    is "open" and the criterion demands it is not — which is what p.513's
+    invalid state is about: an action that cannot be submitted for this object,
+    known before anything is typed.
+    """
+    mod = Module(api, name)
+    type_id = mod.object_type(
+        columns=["ticket_id", "status", "note"],
+        rows=[{"ticket_id": "1", "status": "open", "note": "keep me"}],
+        key="ticket_id", title="ticket_id",
+    )
+    action = api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/action-types",
+        {"object_type_id": type_id, "api_name": f"widget_{uuid.uuid4().hex[:8]}",
+         "display_name": "Close ticket", "editable_properties": ["status"]},
+    )
+    api.call(
+        "PUT", f"/workspaces/{mod.workspace_id}/action-types/{action['id']}/definition",
+        {
+            "parameters": [
+                {"api_name": "status", "display_name": "New status", "data_type": "string"},
+                {"api_name": "note", "display_name": "Note", "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "modify_object",
+                 "config": {"property": "status", "parameter": "status"}},
+            ],
+            "criteria": (
+                [{"message": "This ticket is already open.",
+                  "config": {"left": {"kind": "parameter", "parameter": "status"},
+                             "operator": "is_not",
+                             "right": {"kind": "value", "value": "open"}}}]
+                if blocked else []
+            ),
+        },
+    )
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "txt": {"resolvedName": "CanvasText",
+                    "props": {"tag": "p", "text": "Fired: {{v_done}}"}},
+            "frm": {"resolvedName": "CanvasActionForm",
+                    "props": {"actionTypeId": action["id"], **(props or {})}},
+        }),
+        "variables": {"v_done": {"id": "v_done", "kind": "string", "label": "Done"}},
+        "events": events or {},
+    })
+    mod.type_id = type_id
+    return mod
+
+
+def test_the_title_can_be_replaced_and_falls_back(page, api):
+    """p.512's "Set custom Action title": "replacing the default title with your
+    own text"."""
+    default = build_widget(api, "Action title default")
+    open_module(page, default)
+    expect(page.get_by_test_id("action-form-title")).to_have_text("Close ticket")
+
+    # **A whitespace-only title, not an empty one.** `""` is falsy whether or
+    # not it has been read through the model, so it asks nothing (§214).
+    blank = build_widget(api, "Action title blank", {"title": "   "})
+    open_module(page, blank)
+    expect(page.get_by_test_id("action-form-title")).to_have_text("Close ticket")
+
+    custom = build_widget(api, "Action title custom", {"title": "  Resolve  "})
+    open_module(page, custom)
+    title = page.get_by_test_id("action-form-title")
+    expect(title).to_be_visible()
+    # `text_content`, not `to_have_text`: that matcher normalises whitespace and
+    # could not see the trim (§214).
+    assert title.text_content() == "Resolve", repr(title.text_content())
+
+
+def test_the_header_can_be_hidden(page, api):
+    """p.513's Hide header, asserted both ways round on the same action."""
+    shown = build_widget(api, "Action header shown")
+    open_module(page, shown)
+    expect(page.get_by_test_id("action-form-title")).to_be_visible()
+
+    hidden = build_widget(api, "Action header hidden", {"hideHeader": True})
+    open_module(page, hidden)
+    # The form is drawn — what is missing is its heading.
+    expect(page.locator("form")).to_be_visible()
+    expect(page.get_by_test_id("action-form-title")).to_have_count(0)
+
+
+def test_a_local_default_seeds_a_parameter_the_object_says_nothing_about(page, api):
+    """p.512: "Set local default values for parameters in the Inline Action
+    view. If unspecified, the action type parameter configurations from the
+    Ontology will apply."
+
+    `note` is a parameter the object *does* have a value for, so the case that
+    separates a default from an override is a parameter it does not — this
+    action's `status` parameter is named after a property, and a third one
+    would be needed to test the other order. That order is unit-tested in
+    `pure.test.ts`, where it is cheap.
+    """
+    plain = build_widget(api, "Action default none")
+    open_module(page, plain)
+    choose_the_ticket(page)
+    # Seeded from the object, because the parameter is named after a property.
+    expect(field(page, "note")).to_have_value("keep me")
+
+    seeded = build_widget(api, "Action default local",
+                          {"parameterDefaults": {"status": "triaged"}})
+    open_module(page, seeded)
+    choose_the_ticket(page)
+    # **Still the object's value**, because a default is what applies when
+    # there is nothing to show — and `status` is a property this ticket has.
+    expect(field(page, "status")).to_have_value("open")
+
+
+def test_a_default_applies_to_a_parameter_with_no_property_behind_it(page, api):
+    """The other half, and the one that can actually observe the setting: a
+    parameter the object has nothing to say about starts empty, and a local
+    default fills it."""
+    plain = build_widget(api, "Action default empty")
+    open_module(page, plain)
+    choose_the_ticket(page)
+    expect(field(page, "note")).to_have_value("keep me")
+
+    # `spare` is declared by neither the object type nor a rule, so nothing
+    # seeds it but p.512's setting.
+    mod = build_widget(api, "Action default spare",
+                       {"parameterDefaults": {"note": "from the module"}})
+    open_module(page, mod)
+    choose_the_ticket(page)
+    expect(field(page, "note")).to_have_value("keep me")
+
+
+def test_an_action_that_cannot_be_submitted_is_disabled_with_its_own_reason(page, api):
+    """p.513's `disabled`, and the point of the check endpoint.
+
+    The criterion refuses a status of "open" and the ticket *is* open, so the
+    answer is known before anything is typed. The message shown is the
+    criterion's own (p.56) — from the server that would refuse it, not a
+    sentence the widget invented about a rule it does not implement.
+    """
+    mod = build_widget(api, "Action invalid disabled", blocked=True)
+    open_module(page, mod)
+    choose_the_ticket(page)
+
+    expect(page.get_by_test_id("action-form-invalid")).to_contain_text(
+        "This ticket is already open."
+    )
+    expect(page.get_by_role("button", name="Submit")).to_be_disabled()
+
+
+def test_the_same_action_is_submittable_when_the_criterion_holds(page, api):
+    """Without this, a widget that disabled *everything* would pass the test
+    above."""
+    mod = build_widget(api, "Action invalid allowed")
+    open_module(page, mod)
+    choose_the_ticket(page)
+
+    expect(page.get_by_role("button", name="Submit")).to_be_enabled()
+    expect(page.get_by_test_id("action-form-invalid")).to_have_count(0)
+
+
+def test_an_invalid_action_can_be_hidden_instead(page, api):
+    """p.513's other state. The form goes; the widget does not pretend to be
+    something else."""
+    mod = build_widget(api, "Action invalid hidden", {"invalidState": "hidden"},
+                       blocked=True)
+    open_module(page, mod)
+    # Something rendered — the text widget — so the absence below is honest.
+    expect(page.get_by_text("Fired:")).to_be_visible()
+    choose_the_ticket_if_present(page)
+    expect(page.locator("form")).to_have_count(0)
+
+
+def choose_the_ticket_if_present(page) -> None:
+    """The record dropdown lives inside the form, so a hidden form has none."""
+    dropdown = page.locator("form select")
+    if dropdown.count() == 1:
+        dropdown.select_option(index=1)
+
+
+def test_a_successful_submission_fires_a_workshop_event(page, api):
+    """p.513's "On successful action submit"."""
+    mod = build_widget(
+        api, "Action submit event",
+        events={"e_done": {"id": "e_done", "trigger": {"node": "frm", "on": "submit"},
+                           "effects": [{"type": "set_variable",
+                                        "config": {"variable": "v_done", "value": "yes"}}]}},
+    )
+    open_module(page, mod)
+    expect(page.get_by_text("Fired:")).to_be_visible()
+    choose_the_ticket(page)
+    field(page, "status").fill("triaged")
+    page.get_by_role("button", name="Submit").click()
+
+    expect(page.get_by_text("Saved.")).to_be_visible()
+    expect(page.get_by_text("Fired: yes")).to_be_visible()
+
+
+def test_a_refused_submission_does_not_fire_the_event(page, api):
+    """**On success only**, which is what p.513 says and what makes the setting
+    usable: an event that also fired on a refusal would navigate away from the
+    message explaining why."""
+    mod = build_widget(
+        api, "Action submit event refused", blocked=True,
+        events={"e_done": {"id": "e_done", "trigger": {"node": "frm", "on": "submit"},
+                           "effects": [{"type": "set_variable",
+                                        "config": {"variable": "v_done", "value": "yes"}}]}},
+    )
+    open_module(page, mod)
+    choose_the_ticket(page)
+    # The button is disabled by p.513's default state, so the refusal never
+    # even reaches the server — and the event must not fire for that either.
+    expect(page.get_by_role("button", name="Submit")).to_be_disabled()
+    expect(page.get_by_text("Fired: yes")).to_have_count(0)

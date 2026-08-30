@@ -8151,16 +8151,23 @@ export function CanvasActionForm({
 
   const live = mode === "run";
   // p.513's "form state if invalid", asked of the server rather than decided
-  // here. **Keyed on the seeded values, not on every keystroke**: the question
-  // is whether this action is available for this object, which is what p.513's
-  // example is about ("a ticket that is not open"), and a request per character
-  // typed would be a different and much more expensive question. A criterion
-  // over a value somebody is still editing is answered by the refusal on
-  // submit, in the criterion's own words.
-  const seededValues = JSON.stringify(values);
+  // here.
+  //
+  // **On the seeded values, keyed on the object — not on what is typed.** The
+  // question is whether this action is available for *this object*, which is
+  // p.513's own example (a ticket that is not open). The first version keyed
+  // this on the current values and broke §130's test: typing a value a
+  // criterion refuses disabled the button, so the submission never happened
+  // and the criterion's own message (p.56) never appeared. A live check does
+  // not *add* to that message, it **replaces it with silence** — and it asks
+  // the server once per keystroke to do it.
+  const seedForCheck = seedActionForm(
+    actionType?.parameters ?? [], chosen?.properties ?? {},
+    localDefaultsOf(parameterDefaults),
+  );
   const criteriaCheck = useQuery({
-    queryKey: ["action-check", actionTypeId, chosenKey, seededValues],
-    queryFn: () => actionApi.check(workspaceId, projectId, actionTypeId!, values),
+    queryKey: ["action-check", actionTypeId, chosenKey],
+    queryFn: () => actionApi.check(workspaceId, projectId, actionTypeId!, seedForCheck),
     // Only where a builder asked for it, and only when there is something to
     // check: an action with no criteria can never be refused by one, so asking
     // would be a round trip whose answer is known.
