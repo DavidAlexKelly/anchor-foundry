@@ -369,11 +369,30 @@ def test_a_list_prop_holding_junk_names_no_variables() -> None:
     """The tolerance §212 argued for, one level deeper. A saved document can
     hold anything, and a scan that threw on it would make a module with one bad
     step impossible to open rather than impossible to save."""
-    layout = {"w1": node({"steps": "not a list"}), "w2": node({"steps": [None, 7, {}]})}
+    layout = {
+        # **A number, a dict and a string, not just a string.** A string is
+        # iterable, so a scan that dropped the list check would walk its
+        # characters and pass anyway - the harness's survivor, and the
+        # under-the-boundary fixture §212, §217 and §218 each met differently.
+        "w1": node({"steps": "not a list"}),
+        "w2": node({"steps": 7}),
+        "w3": node({"steps": {"label": "One", "completedVariable": "v_done"}}),
+        "w4": node({"steps": [None, 7, "text", [], {}]}),
+    }
     assert wv.usages(layout, wv.parse({"v_done": var("v_done", kind="boolean")})) == {
         "v_done": []
     }
     assert wv.dangling_references(layout, {}) == []
+
+
+def test_a_blank_nested_binding_names_no_variable() -> None:
+    """The settings panel's "Never completed" option writes `""`, and a scan
+    that reported it would make an unbound step a usage of nothing - and would
+    put a blank prop in the answer the Variables panel shows a person."""
+    assert wv.references({"steps": [{"label": "One", "completedVariable": ""}]}) == []
+    assert wv.references({"variable": "", "steps": [{"completedVariable": "v_d"}]}) == [
+        ("steps[0].completedVariable", "v_d")
+    ]
 
 
 def test_a_nested_prop_that_is_not_catalogued_is_not_a_reference() -> None:
