@@ -159,6 +159,15 @@ describe("what an option is called", () => {
     expect(titleOf({ name: 0 }, "name", "S1")).toBe("0");
     expect(titleOf({ name: false }, "name", "S1")).toBe("false");
   });
+
+  it("does not read a property called null when there is no title property", () => {
+    // **`values[null]` is `values["null"]`, and `null` matches the api-name
+    // pattern** (`^[a-z][a-z0-9_]{0,99}$`), so a guard that checked only
+    // whether there were values would make "this type has no title property"
+    // depend on whether some property happens to be called that. The harness
+    // found it; the input is exotic and the confusion is not.
+    expect(titleOf({ null: "Weird" }, null, "S1")).toBe("S1");
+  });
 });
 
 describe("p.457's allow no selection", () => {
