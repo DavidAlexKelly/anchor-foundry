@@ -318,6 +318,63 @@ REFERENCE_PROPS = (
     "name",
 )
 
+# Props holding a **list of configuration objects**, each of which may name a
+# variable of its own.
+#
+# Every entry in `REFERENCE_PROPS` is a *top-level* prop, and the scan below
+# reads them with one `props.get(prop)`. p.313's Stepper is the first widget
+# whose bindings do not live there: its Steps prop is a list, and each step
+# carries its own "Is completed" boolean variable. Left to the flat scan, such
+# a variable reports **zero usages** - so the Variables panel offers to delete
+# it, the delete refusal never fires, and afterwards every step reads as never
+# completed. That is exactly the failure §185's `collapsedWhen` and §190's
+# `tabVariable` each shipped, arriving by a route neither of those guards can
+# see: the naming convention holds (`completedVariable` ends in `Variable`) but
+# the name never appears as `node.data.props.X`, because it is a key inside an
+# element rather than a prop.
+#
+# So nested references get their own catalogue rather than a special case in
+# the scan. A widget with repeating configuration is not a one-off - a
+# Timeline's rows and a Waterfall's stages are the same shape - and the next
+# one should have a list to be added to instead of a precedent to copy.
+NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
+    # p.313's Steps: "**Is completed**: Set a boolean variable to be used a
+    # check to determine when a step has been completed."
+    "steps": ("completedVariable",),
+}
+
+
+def references(props: Any) -> list[tuple[str, str]]:
+    """Every variable id a node's props name, with the prop that names it.
+
+    One definition for both callers below, so a nested binding cannot be
+    counted as a usage and *not* checked for dangling - or the reverse, which
+    would refuse a save over a reference nothing considers used.
+
+    A nested prop is reported as `steps[1].completedVariable`: the index is
+    what makes the answer usable, because "used by the Stepper" is not enough
+    to find which step to unbind before deleting.
+    """
+    if not isinstance(props, dict):
+        return []
+    found: list[tuple[str, str]] = []
+    for prop in REFERENCE_PROPS:
+        ref = props.get(prop)
+        if isinstance(ref, str) and ref:
+            found.append((prop, ref))
+    for prop, inner_props in NESTED_REFERENCE_PROPS.items():
+        entries = props.get(prop)
+        if not isinstance(entries, list):
+            continue
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            for inner in inner_props:
+                ref = entry.get(inner)
+                if isinstance(ref, str) and ref:
+                    found.append((f"{prop}[{index}].{inner}", ref))
+    return found
+
 
 class VariableError(ValueError):
     """Refusal, phrased for whoever is building the app."""
@@ -1773,12 +1830,8 @@ def usages(layout: Any, variables: dict[str, Variable]) -> dict[str, list[dict[s
     for node_id, node in layout.items():
         if not isinstance(node, dict):
             continue
-        props = node.get("props")
-        if not isinstance(props, dict):
-            continue
-        for prop in REFERENCE_PROPS:
-            ref = props.get(prop)
-            if isinstance(ref, str) and ref in found:
+        for prop, ref in references(node.get("props")):
+            if ref in found:
                 found[ref].append({"node": str(node_id), "prop": prop})
     # A derived variable is a usage too. Deleting an input out from under a
     # derivation is the same mistake as deleting one out from under a widget,
@@ -1807,12 +1860,8 @@ def dangling_references(layout: Any, variables: dict[str, Variable]) -> list[dic
     for node_id, node in layout.items():
         if not isinstance(node, dict):
             continue
-        props = node.get("props")
-        if not isinstance(props, dict):
-            continue
-        for prop in REFERENCE_PROPS:
-            ref = props.get(prop)
-            if isinstance(ref, str) and ref.startswith("v_") and ref not in variables:
+        for prop, ref in references(node.get("props")):
+            if ref.startswith("v_") and ref not in variables:
                 broken.append({"node": str(node_id), "prop": prop, "variable": ref})
     return broken
 
