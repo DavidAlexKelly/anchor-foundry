@@ -461,6 +461,7 @@ def test_a_type_lists_its_links_without_an_instance(
     links = _type_links(client, fx, ontology["person"])
 
     works_in = links[f"works_in_{tag}:outbound"]
+    assert works_in["cardinality"] == "one_to_many"
     assert works_in["far_type_display_name"] == f"Department {tag}"
     assert works_in["near_property"] == "department"
     assert works_in["far_property"] == "$primary_key"
