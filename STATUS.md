@@ -4290,6 +4290,91 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 212. The Links widget, and a fixture that never crossed its own boundary (this session)
+
+p.268-272's widget: the input object set, p.270's "All link types" against "Specify link types",
+p.272's link selection and label override, and p.271's Default link expand. It is the third of
+`workshop.md`'s build-order item 5, and the third time that item's "depends on ontology work"
+has been wrong — from a new direction, which is the part worth keeping.
+
+---
+
+**A link is identified by its type *and* its direction.**
+
+`links_for_type` returns a link type once per end it occupies, so a self-link — Person manages
+Person — comes back **twice** on purpose: "my manager" and "my direct reports" are different
+questions carrying the same `link_type_id`. Every selection, override and expansion in this
+widget is keyed on `${link_type_id}:${direction}`. Keyed on the id, ticking one end would tick
+both, an override meant for one would rename both, and **nothing on screen would look wrong** —
+which is why the browser fixture gives Ada eleven reports and no manager, so her two ends of the
+one link carry different counts and no single row can stand in for both.
+
+The row's label is the **side name**, not the link type's display name, because a link called
+"manages" reads backwards on the inbound side.
+
+---
+
+**The new endpoint is the interesting part of "no ontology work needed".**
+
+Traversal has existed since §155, and the widget still needed something new:
+`GET /object-types/{id}/links`, which lists a type's links with no object in hand. p.272's
+dropdown is a question a builder asks *before* there is data to traverse, and answering it from
+the instance endpoint would have made the set of configurable links depend on whether the bound
+object set happened to be empty — a widget configurable on a Monday and not on a Tuesday.
+
+So the build order's premise was wrong a third time, but not in the way the first two were:
+**"does the data layer support this" and "can this be configured" are separate questions**, and
+only the first had been asked. That is now written down beside the item.
+
+---
+
+**p.271's expansion is seeded, not derived.**
+
+Recomputing which sections are open on every render would reopen a section the moment anything
+else on the page refetched, and the reader would be clicking the same triangle with no idea why.
+The seed follows the object *and the configuration*, so an author who swaps which link the widget
+draws sees the new section open rather than a fully folded widget and a setting that looks broken.
+
+---
+
+**The survivors, and the one worth remembering.**
+
+The model gave one: `chosenOf` asked only whether a key was *present*, and a numeric key is
+truthy. It resolves against no link — `linkKey` builds a string — but the settings panel lists
+what `chosenOf` returns, so an author would have been shown a row nothing could fill.
+
+The widget layer gave five, and four are ordinary: nothing measured that the header is the
+full-width control; nothing opened the settings panel under "All link types" to find the link
+picker absent; every `defaultExpand` in the fixture was already legal, so reading the prop raw
+and reading it through the model were the same; and nothing changed the configuration after
+mount, so the expansion seed never had to follow it.
+
+The fifth is the family again. **The header reports the link's `total`; the section under it
+lists the first page, which the traversal caps at ten.** The fixture gave Ada two reports, so
+`total` and `items.length` were both 2 and a header that counted its own list passed every
+assertion — it would have been wrong by exactly the amount nobody could see. The tell is a
+fixture sized *under* a limit the code is written against: a boundary the data never crosses is a
+boundary no test can hold. Ada now has eleven reports, and the widget says "11" over a list of
+ten.
+
+---
+
+**33 model mutants, 27 widget mutants and 7 API mutants, 0 survivors, 0 no-ops** after the fixes.
+
+**1038 unit tests** (was 1013); **463 browser tests** (was 444); **1521 API tests**, 2 skipped
+(was 1515).
+
+`workshop.md` §10 goes from 22 of ~52 rows to 23 — **counted from the table this time.** The
+number written at the top of that section said 17, and the running total in these entries said
+20; neither matches what the rows actually say, because both were carried forward by hand. The
+header now states how it was arrived at, so the next person can check it in one command instead
+of trusting it.
+
+---
+---
+---
+---
+
 ### 211. The Property List, and two column limits that were not the same (this session)
 
 p.265-266's widget: the input object set (first object only), p.265's Layout, p.266's property
@@ -4896,6 +4981,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
+
+- **A fixture that never crosses the limit the code is written against cannot see the limit.** §212's Links widget header reports a link's `total`; the section under it lists the first page, which the traversal caps at ten. The fixture gave the object two linked rows, so `total` and `items.length` were both 2 — and a header that counted its own list passed every assertion while being wrong by exactly the amount nobody could observe. This is the "two things that had to differ were the same thing" family once more, but with a tell of its own: a **fixture sized under a boundary the code claims to handle**. Any pagination, truncation, clamp or preview limit has one, and the fixture has to cross it or the branch on the far side is untested. The fix is a number, not a test: eleven reports instead of two, and the widget now says "11" over a list of ten.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
 

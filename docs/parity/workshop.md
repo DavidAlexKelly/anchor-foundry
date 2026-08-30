@@ -330,7 +330,7 @@ Ours: 3 triggers (`click`, `row_select`, `change`) and 5 effects (`set_variable`
 
 Foundry's inventory, compiled from the category Overview pages and the per-widget page headers. Some widgets appear in one and not the other; the union is the target.
 
-Ours in the right-hand column. **We have 17 of ~52.**
+Ours in the right-hand column. **23 of ~52 rows below are ✅ or ◑** — counted from the table rather than carried forward, because the number written here had drifted six behind it by §212 and a tally nobody recomputes is worse than no tally.
 
 ### Filtering (p.444) — 13
 
