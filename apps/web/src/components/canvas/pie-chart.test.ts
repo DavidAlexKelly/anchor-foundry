@@ -205,6 +205,12 @@ describe("the arc geometry", () => {
     expect(d).toContain("A 10 10 0 1 1");
     expect(d).not.toContain("L 0 0");
     expect(d).not.toContain("M 0 0 ");
+    // **And the arc must not end where it began.** That is the whole failure
+    // this case exists for, and asserting only the flag missed it: a path from
+    // (0,-10) arcing back to (0,-10) contains the same `A 10 10 0 1 1` and
+    // draws nothing at all. The harness said so.
+    expect(d.startsWith("M 0 -10")).toBe(true);
+    expect(d.endsWith("0 -10 Z")).toBe(false);
   });
 
   it("draws a whole ring for a single slice of a donut", () => {
