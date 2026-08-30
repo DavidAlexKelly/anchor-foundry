@@ -71,8 +71,13 @@ describe("reading a saved selection", () => {
   it("drops entries that cannot name a link", () => {
     // The raw JSON editor can put anything in an array prop. An entry with no
     // key would render a row that nothing on the server can fill.
-    expect(chosenOf([null, "a", 7, { label: "no key" }, { key: "" }, { key: "b" }]))
-      .toEqual([{ key: "b" }]);
+    // `{ key: 7 }` belongs here for the same reason `{ key: "" }` does, and the
+    // harness had to say so: a numeric key is *truthy*, so a guard that only
+    // asked whether a key was present would keep it. It resolves against no
+    // link — `linkKey` builds a string — but the settings panel lists what
+    // `chosenOf` returns, so it would show an author a row nothing can fill.
+    expect(chosenOf([null, "a", 7, { label: "no key" }, { key: "" }, { key: 7 },
+                     { key: "b" }])).toEqual([{ key: "b" }]);
   });
 
   it("drops a blank override rather than labelling a row with nothing", () => {
