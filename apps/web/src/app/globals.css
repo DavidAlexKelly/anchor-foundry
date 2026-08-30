@@ -14,6 +14,11 @@
   --accent: #14646e;
   --accent-deep: #0c3f46;
   --accent-wash: #e7f0f1;
+  /* A wash one step off the panel, for a hover tint and a zebra row. It was
+     `var(--surface-2, rgba(0, 0, 0, 0.03))` in five places with three
+     different alphas - drift, not a decision, and on a dark panel a black
+     wash is invisible. Defined once so the dark block below can answer it. */
+  --surface-2: rgba(0, 0, 0, 0.03);
   --brass: #8a6d3b;
   --brass-wash: #f3ede1;
   --danger: #8c2f22;
@@ -48,6 +53,7 @@
   --line: rgba(255, 255, 255, 0.18);
   --line-strong: rgba(255, 255, 255, 0.32);
   --accent-wash: rgba(255, 255, 255, 0.1);
+  --surface-2: rgba(255, 255, 255, 0.07);
   --accent-deep: #bfe3e6;
   color: var(--ink);
 }
@@ -744,7 +750,7 @@ button { font: inherit; cursor: pointer; }
 .code-tree-item {
   width: 100%; min-width: 0; display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
   background: none; border: 1px solid transparent; border-radius: var(--radius);
-  padding: 5px 8px; font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px;
+  padding: 5px 8px; font-family: var(--font-mono); font-size: 12.5px;
   color: var(--ink); cursor: pointer; text-align: left;
 }
 .code-tree-item:hover { border-color: var(--line); }
@@ -753,11 +759,11 @@ button { font: inherit; cursor: pointer; }
 .code-tree-item > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .code-tree-meta { flex: none; }
 .code-tree-item.current { background: var(--paper); border-color: var(--line-strong); }
-.code-tree-meta { color: var(--ink-soft); font-size: 11.5px; font-family: var(--font-sans, inherit); }
+.code-tree-meta { color: var(--ink-soft); font-size: 11.5px; font-family: var(--font-body); }
 .code-file-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
 .code-editor {
   width: 100%; min-height: 380px; resize: vertical;
-  font-family: var(--mono, ui-monospace, monospace); font-size: 13px; line-height: 1.5;
+  font-family: var(--font-mono); font-size: 13px; line-height: 1.5;
   padding: 10px; border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--paper); color: var(--ink);
 }
@@ -770,10 +776,10 @@ button { font: inherit; cursor: pointer; }
 .code-log-entry:hover { border-color: var(--line); }
 .code-log-summary { color: var(--ink); font-size: 13px; }
 .code-log-meta { color: var(--ink-soft); font-size: 11.5px; display: flex; gap: 6px; align-items: center; }
-.code-change-file { font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; padding: 3px 8px; }
+.code-change-file { font-family: var(--font-mono); font-size: 12.5px; padding: 3px 8px; }
 .code-detail { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
 .code-diff {
-  margin: 0; overflow-x: auto; font-family: var(--mono, ui-monospace, monospace);
+  margin: 0; overflow-x: auto; font-family: var(--font-mono);
   font-size: 12px; line-height: 1.45; display: grid;
 }
 .diff-line { white-space: pre; padding: 0 4px; }
@@ -1316,7 +1322,7 @@ button { font: inherit; cursor: pointer; }
 .repo-preview-warning {
   margin: 0; padding: 8px 10px;
   border-left: 3px solid var(--brass);
-  background: var(--surface-2, rgba(0, 0, 0, 0.03));
+  background: var(--surface-2);
   font-size: 12.5px; line-height: 1.45;
 }
 .repo-preview-drift {
@@ -1337,7 +1343,22 @@ button { font: inherit; cursor: pointer; }
   white-space: nowrap;
 }
 /* --panel, not --surface: there is no --surface, and an undefined custom
-   property leaves the header transparent, so rows scroll underneath it. */
+   property leaves the header transparent, so rows scroll underneath it.
+
+   That note was written once and the mistake happened four more times anyway -
+   `--rule`, `--border`, `--surface` and `--muted` were all being referenced by
+   the state bar and the layout template picker, and all four resolved to
+   nothing: a border-top that drew no border, and a floating preview panel with
+   no background sitting over the canvas. Found while writing §219's stepper,
+   which had reached for two of the same names.
+
+   Three more were invented *with* a fallback, so nothing looked broken and the
+   fallback did all the work: `--mono` and `--font-sans` next to a file that
+   defines `--font-mono` and `--font-body`, which is why the code views were in
+   the browser's monospace rather than this project's; and `--surface-2` in
+   five places with three different alphas, black on a dark panel. All defined
+   or renamed now, and there is a test over this file (`tokens.test.ts`) rather
+   than a fifth comment. */
 .repo-preview-table th { position: sticky; top: 0; background: var(--panel); font-weight: 600; }
 .repo-preview-table th .soft { display: block; font-weight: 400; font-size: 10.5px; }
 .repo-preview-table td { font-family: var(--font-mono); }
@@ -1538,7 +1559,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   display: flex; align-items: baseline; gap: 8px; width: 100%;
   padding: 7px 9px; background: none; border: 0; cursor: pointer; text-align: left;
 }
-.vars-row:hover { background: var(--surface-2, rgba(0, 0, 0, 0.03)); }
+.vars-row:hover { background: var(--surface-2); }
 .vars-name { font-size: 12.5px; font-weight: 600; }
 .vars-kind { font-size: 10.5px; color: var(--ink-soft); font-family: var(--font-mono); }
 /* A derived variable behaves differently - its value is not editable - so it
@@ -1574,7 +1595,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .vars-value code { font-family: var(--font-mono); }
 .vars-derivation {
   display: grid; gap: 8px; padding: 8px;
-  border-left: 2px solid var(--brass); background: var(--surface-2, rgba(0, 0, 0, 0.02));
+  border-left: 2px solid var(--brass); background: var(--surface-2);
 }
 .btn.danger { color: var(--danger); }
 
@@ -1725,6 +1746,52 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   width: 12px; height: 12px; border-radius: 50%; flex: none;
 }
 
+/* ---- Stepper (p.312-313) ------------------------------------------------- */
+/* A row of steps with a connecting rule between them. `flex-wrap` rather than a
+   scroller: a workflow's later stages are the part a viewer most needs to see,
+   and a horizontal scrollbar is where they would go to hide. */
+.canvas-stepper {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  gap: 4px 0; margin: 0; padding: 0; list-style: none;
+}
+.canvas-step { display: flex; align-items: center; min-width: 0; }
+/* The rule between two steps, drawn by the step that follows one. `:not(:first-child)`
+   rather than `:not(:last-child)` so a wrapped row does not start with a
+   dangling line into the margin. */
+.canvas-step:not(:first-child)::before {
+  content: ""; width: 18px; height: 1px; background: var(--line); flex: none;
+}
+.canvas-step-button {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  padding: 4px 9px 4px 5px; border: 0; border-radius: 999px;
+  background: none; font: inherit; color: var(--ink); cursor: pointer;
+  text-align: left;
+}
+.canvas-step-button:hover:not(:disabled) { background: var(--accent-wash); }
+/* p.312's linear rule reaches the viewer as a disabled control, so it has to
+   *look* unavailable — `not-allowed` and dimmed, rather than a button that
+   silently ignores a click. Edit mode disables every step for a different
+   reason, which is why the cursor is the shared signal and the dimming is not. */
+.canvas-step-button:disabled { cursor: not-allowed; }
+.canvas-step[data-reachable="no"] .canvas-step-button { opacity: 0.55; }
+/* The numbered circle, and p.313's Completed/Active colours paint it. Defaults
+   live in `stepper.ts`, not here: the widget sets `background` inline for both
+   states, so this rule only has to describe the third one. */
+.canvas-step-mark {
+  display: grid; place-items: center; flex: none;
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--panel);
+  font-size: 11.5px; font-weight: 650; line-height: 1;
+}
+.canvas-step[data-state="completed"] .canvas-step-mark,
+.canvas-step[data-state="active"] .canvas-step-mark { color: #fff; }
+.canvas-step-label { font-size: 13px; overflow-wrap: anywhere; }
+.canvas-step[data-state="active"] .canvas-step-label { font-weight: 650; }
+.canvas-step[data-state="upcoming"] .canvas-step-label { color: var(--ink-soft); }
+/* The settings panel's step editor. */
+.canvas-step-editor { display: grid; gap: 6px; }
+.canvas-step-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; }
+
 /* ---- Markdown (p.314-319) ------------------------------------------------ */
 .canvas-markdown { font-size: 13.5px; line-height: 1.55; color: var(--ink); }
 .canvas-markdown > :first-child { margin-top: 0; }
@@ -1831,7 +1898,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* Only when the module wires an event to this table - a row that looks
    clickable and does nothing is worse than one that looks inert. */
 .row-clickable { cursor: pointer; }
-.row-clickable:hover { background: var(--surface-2, rgba(0, 0, 0, 0.04)); }
+.row-clickable:hover { background: var(--surface-2); }
 /* p.224's active object. A left bar rather than a background, so it survives
    the hover above and reads as "this one" rather than "the pointer is here" —
    and so a conditionally-formatted cell keeps its own colour. */
@@ -2157,7 +2224,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 /* The count beside a heading is the whole row or column, not the part in the
    grid - see the widget for why those differ. */
 .canvas-pivot-count { color: var(--ink-soft); font-weight: 400; margin-left: 6px; }
-.canvas-pivot .canvas-pivot-total { background: var(--surface-2, rgba(0, 0, 0, 0.03)); font-weight: 600; }
+.canvas-pivot .canvas-pivot-total { background: var(--surface-2); font-weight: 600; }
 .canvas-pivot button {
   background: none; border: 0; padding: 0; font: inherit; color: inherit;
   cursor: pointer; border-radius: 3px;
@@ -2340,7 +2407,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    p.206 ties state saving to the module header, and this is the nearest thing
    we have to chrome that every viewer route already renders. */
 .canvas-state-bar {
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--line);
   margin-top: 16px;
   padding-top: 10px;
   display: flex;
@@ -2356,12 +2423,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-template-picker { margin-top: 14px; position: relative; }
 .canvas-template-strip {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 8px; border-top: 1px dashed var(--border);
+  padding: 8px; border-top: 1px dashed var(--line);
 }
 .canvas-template-strip .field-label { margin: 0 4px 0 0; }
 .canvas-template-button {
   width: 46px; height: 34px; padding: 3px; cursor: pointer;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
 }
 .canvas-template-button:hover, .canvas-template-button:focus-visible {
   border-color: var(--accent); outline: none;
@@ -2381,12 +2448,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   position: absolute; bottom: 100%; left: 0; z-index: 5;
   display: flex; gap: 10px; align-items: center;
   padding: 8px 10px; margin-bottom: 6px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
   box-shadow: 0 4px 14px rgb(0 0 0 / 12%);
 }
 .canvas-template-preview .canvas-template-shape { width: 64px; height: 44px; flex: 0 0 auto; }
 .canvas-template-preview div { display: flex; flex-direction: column; gap: 2px; }
-.canvas-template-preview span { font-size: 12px; color: var(--muted); }
+.canvas-template-preview span { font-size: 12px; color: var(--ink-soft); }
 
 /* p.55's conditional-visibility indicator on a Layout panel row. */
 .canvas-tree-condition {
@@ -2395,7 +2462,7 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 
 /* p.68's Unused widgets area, at the bottom of the Layout panel. */
-.canvas-unused { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.canvas-unused { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .canvas-unused-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .canvas-unused-head .btn { padding: 3px 8px; font-size: 12px; }
 .canvas-unused-row { display: flex; align-items: center; gap: 6px; }

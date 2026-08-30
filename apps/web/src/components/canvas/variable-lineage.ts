@@ -35,7 +35,7 @@
  * chevrons, Show all, Clear and undo/redo are all operations on a set of
  * visible node ids, and a set of ids is testable without a browser.
  */
-import { REFERENCE_PROPS } from "../../lib/workshop-module";
+import { REFERENCE_PROPS, referencesOf } from "../../lib/workshop-module";
 import type { WorkshopVariable } from "../../lib/types";
 
 /** Which direction a widget prop points.
@@ -80,6 +80,31 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   // p.316's Markdown text read from a string variable.
   textVariable: "read",
 };
+
+/** The same judgement for `NESTED_REFERENCE_PROPS`, keyed by `prop.inner`.
+ *
+ * A second map rather than entries in the one above, because the keys are a
+ * different shape: a nested reference arrives from `referencesOf` as
+ * `steps[1].completedVariable`, so the index has to come off before a
+ * direction can be looked up. Keyed by the outer prop *and* the inner one,
+ * since two nested props on the same widget need not point the same way — a
+ * step could gain a variable it writes without that making its completion
+ * variable a write too.
+ */
+export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
+  // p.313: the Stepper *displays* progress the module records, so a step's
+  // completion variable is upstream of the widget. §219's whole design is that
+  // completion is read and never stored, and an arrow pointing the other way
+  // would say the opposite in the one view built to be trusted while debugging.
+  "steps.completedVariable": "read",
+};
+
+/** The direction of a reference `referencesOf` reported, nested or not. */
+export function directionOf(prop: string): "read" | "write" | undefined {
+  if (prop in PROP_DIRECTION) return PROP_DIRECTION[prop as keyof typeof PROP_DIRECTION];
+  const nested = prop.match(/^([A-Za-z_]+)\[\d+\]\.([A-Za-z_]+)$/);
+  return nested ? NESTED_PROP_DIRECTION[`${nested[1]}.${nested[2]}`] : undefined;
+}
 
 export interface LineageNode {
   id: string;
@@ -155,22 +180,23 @@ export function buildGraph(
   for (const [nodeId, raw] of Object.entries(layout)) {
     if (nodeId === "ROOT" || !raw || typeof raw !== "object") continue;
     const node = raw as LayoutNode;
-    const props = node.props ?? {};
     let referenced = false;
-    for (const prop of REFERENCE_PROPS) {
-      const value = props[prop];
-      if (typeof value !== "string" || !value || !variables[value]) continue;
+    for (const { prop, ref } of referencesOf(node.props)) {
+      if (!variables[ref]) continue;
+      // **A reference with no direction draws no edge**, rather than an edge
+      // this code guessed the direction of. `PROP_DIRECTION` is keyed by
+      // `REFERENCE_PROPS` itself, so a flat prop cannot get here unclassified —
+      // the compiler refuses it. A *nested* one can, since its map is keyed by
+      // strings, and the tests beside this module are what hold that: a `??
+      // "read"` here would point an arrow backwards, which p.77 says is worse
+      // than not drawing it.
+      const direction = directionOf(prop);
+      if (!direction) continue;
       referenced = true;
-      // No fallback, and that is the point: `PROP_DIRECTION` is keyed by
-      // `REFERENCE_PROPS` itself, so a prop added there without a direction is
-      // a **compile** error rather than an arrow this code has to guess at. A
-      // `?? "read"` here would be a branch nothing could ever reach — and a
-      // branch nothing can reach is a branch no test can hold.
-      const direction = PROP_DIRECTION[prop];
       edges.push(
         direction === "write"
-          ? { from: nodeId, to: value, via: prop }
-          : { from: value, to: nodeId, via: prop },
+          ? { from: nodeId, to: ref, via: prop }
+          : { from: ref, to: nodeId, via: prop },
       );
     }
     if (referenced) {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildGraph, childrenOf, clear, collapse, expand, hasMore, initial, layers,
-  parentsOf, PROP_DIRECTION, redo, showAll, step, undo,
+  buildGraph, childrenOf, clear, collapse, directionOf, expand, hasMore, initial,
+  layers, NESTED_PROP_DIRECTION, parentsOf, PROP_DIRECTION, redo, showAll, step, undo,
 } from "./variable-lineage";
-import { REFERENCE_PROPS } from "../../lib/workshop-module";
+import { NESTED_REFERENCE_PROPS, REFERENCE_PROPS } from "../../lib/workshop-module";
 import type { WorkshopVariable } from "../../lib/types";
 
 /** p.77–78's variable lineage graph (Foundry `workshop` p.77, p.78). */
@@ -87,6 +87,52 @@ describe("PROP_DIRECTION", () => {
   );
 });
 
+describe("NESTED_PROP_DIRECTION", () => {
+  const expected = Object.entries(NESTED_REFERENCE_PROPS)
+    .flatMap(([outer, inner]) => inner.map((key) => `${outer}.${key}`));
+
+  it("classifies every nested reference", () => {
+    // The type cannot do this one: its keys are `prop.inner` strings rather
+    // than a union, so the compiler has nothing to refuse. Without this check
+    // a nested prop added to the catalogue draws no edge at all — the widget
+    // and the variable both appear, unconnected, and nothing says why.
+    expect(expected.filter((key) => !(key in NESTED_PROP_DIRECTION))).toEqual([]);
+    expect(expected.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("classifies nothing that is not one", () => {
+    expect(Object.keys(NESTED_PROP_DIRECTION).filter((k) => !expected.includes(k))).toEqual([]);
+  });
+
+  it("calls a step's completion variable a read", () => {
+    // Pinned by hand for the reason above the flat table: §219's design is
+    // that completion is read and never stored, and an arrow the other way
+    // would say the opposite in the one view built to be trusted.
+    expect(NESTED_PROP_DIRECTION["steps.completedVariable"]).toBe("read");
+  });
+});
+
+describe("directionOf", () => {
+  it("answers a flat prop", () => {
+    expect(directionOf("drilldownVariable")).toBe("write");
+    expect(directionOf("visibleWhen")).toBe("read");
+  });
+
+  it("answers a nested one with its index stripped", () => {
+    expect(directionOf("steps[0].completedVariable")).toBe("read");
+    expect(directionOf("steps[14].completedVariable")).toBe("read");
+  });
+
+  it("answers nothing for a prop no catalogue names", () => {
+    // Nothing rather than a guess. `buildGraph` draws no edge for an
+    // unclassified reference, and a `?? "read"` there would point an arrow
+    // backwards — which p.77 says is worse than not drawing it.
+    expect(directionOf("column")).toBeUndefined();
+    expect(directionOf("steps[0].label")).toBeUndefined();
+    expect(directionOf("steps.completedVariable")).toBeUndefined();
+  });
+});
+
 describe("buildGraph", () => {
   const variables = { v_in: v("v_in"), v_out: v("v_out", {
     derivation: { transform: "concat", inputs: ["v_in"] },
@@ -123,6 +169,39 @@ describe("buildGraph", () => {
     });
     expect(g.edges.find((e) => e.to === "table")?.via).toBe("objectSetVariable");
     expect(g.edges.find((e) => e.to === "v_out")?.via).toBe("derivation");
+  });
+
+  it("draws an edge for a variable named inside a list prop", () => {
+    // §219's Stepper is the first widget whose bindings are not top-level
+    // props. Before the nested walk it appeared in the graph as an unconnected
+    // node — or not at all — while plainly depending on the variable.
+    const g = buildGraph(variables, {
+      stepper: widget("CanvasStepper", { steps: [{ label: "One", completedVariable: "v_in" }] }),
+    });
+    expect(childrenOf(g, "v_in")).toContain("stepper");
+    expect(g.edges.find((e) => e.to === "stepper")?.via).toBe("steps[0].completedVariable");
+  });
+
+  it("names the step in the edge", () => {
+    // The `via` is a tooltip and a test failure both, so which step is the
+    // part worth carrying: two steps of one stepper are two different edges.
+    const g = buildGraph(variables, {
+      stepper: widget("CanvasStepper", {
+        steps: [{ label: "One" }, { label: "Two", completedVariable: "v_in" }],
+      }),
+    });
+    expect(g.edges.map((e) => e.via)).toContain("steps[1].completedVariable");
+  });
+
+  it("leaves out a widget whose only reference is to an undeclared variable", () => {
+    // A nested binding to something the module does not declare is the state
+    // the server refuses to save, but a document can arrive here from anywhere
+    // — and a node drawn against a variable with no node is an edge to nothing.
+    const g = buildGraph(variables, {
+      stepper: widget("CanvasStepper", { steps: [{ label: "One", completedVariable: "v_gone" }] }),
+    });
+    expect(g.nodes.has("stepper")).toBe(false);
+    expect(g.edges).toHaveLength(1);
   });
 
   it("leaves out a widget that references nothing", () => {

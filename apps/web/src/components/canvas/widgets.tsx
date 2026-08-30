@@ -110,6 +110,16 @@ import {
   propertyListOf, searchModeOf, searchProperties, selectionSummary,
   sortOf as dropdownSortOf, titleOf as optionTitleOf, truncationNote,
 } from "./object-dropdown";
+import {
+  // Aliased on §211's rule, and this pair is the plainest case yet: `typeOf`
+  // and `templateOf` are names half the widgets in this file could want, and
+  // `TEMPLATES` says nothing about which widget's. Unaliased they would each
+  // resolve to something, silently.
+  STEPPER_TYPES, TEMPLATES as STEPPER_TEMPLATES,
+  activeColourOf, activeIndex, completedColourOf, isCompleted, isReachable,
+  showsStepNumber, stateOf, stepsOf, templateOf as stepperTemplateOf,
+  typeOf as stepperTypeOf,
+} from "./stepper";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -4605,6 +4615,285 @@ CanvasPieChart.craft = {
     showLegend: true, segments: [], ontologyColors: false, filterVariable: null,
   },
   related: { settings: PieChartSettings },
+};
+
+// ---- Stepper (p.312-313) ----------------------------------------------------
+/** p.312-313's Stepper: "navigate the user through a multi-step workflow,
+ * displaying and tracking progress as they walk through a sequence of steps".
+ *
+ * The rules are `stepper.ts`. What is here is the wiring: each step's
+ * completion is read from **a boolean variable the module owns**, so this
+ * widget stores no progress of its own and cannot disagree with the module
+ * about how far somebody has got.
+ *
+ * **The first widget whose bindings are not top-level props**, which is the
+ * larger part of this unit: a step's completion variable lives inside the
+ * `steps` array, where `REFERENCE_PROPS` cannot see it. Left that way the
+ * variable would report zero usages and be deletable out from under the
+ * stepper - §185 and §190's failure by a route their guards cannot reach - so
+ * `NESTED_REFERENCE_PROPS` is what usage scanning, dangling-reference
+ * refusal, the lineage graph, paste remapping and page bindings all now walk.
+ *
+ * **Not built, and named rather than approximated**: p.313's **Icon** is a
+ * name, and this platform has no icon set - the icon template draws a mark
+ * carrying the configured name as its accessible label, which is the same call
+ * §210's Object Set Title made for the same reason. A named-icon picker is one
+ * decision for all of them, not a setting on this widget.
+ */
+export function CanvasStepper({
+  steps = [],
+  stepperType = "linear",
+  template = "text",
+  showStepNumber = false,
+  completedColour = "",
+  activeColour = "",
+}: {
+  /** p.313's Steps. */
+  steps?: unknown;
+  /** p.312's Type. */
+  stepperType?: string;
+  /** p.313's Template. */
+  template?: string;
+  /** p.313's Show step number. */
+  showStepNumber?: boolean;
+  /** p.313's Completed color. */
+  completedColour?: string;
+  /** p.313's Active color. */
+  activeColour?: string;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode } = useCanvasEnv();
+  const { events: moduleEvents, resolved } = useCanvasVariables();
+  const eventContext = useEventContext(undefined, useOverlayIds());
+
+  const drawn = stepsOf(steps);
+  // p.313: completion is "a boolean variable … to determine when a step has
+  // been completed", so it is read every render rather than held here.
+  //
+  // **`resolved`, not the parameter store.** The store holds what a *viewer*
+  // has set; `resolved` is the whole variable graph, so a completion variable
+  // with a default is true from the first render and a **derived** one - "is
+  // this approved?", the natural way to write a real workflow's step - can be
+  // read at all. Reading the store made both of those permanently incomplete,
+  // which every colour and state assertion in `test_stepper.py` caught at once.
+  const completed = drawn.map((step) =>
+    isCompleted(step.completedVariable ? resolved[step.completedVariable] : undefined));
+  const active = activeIndex(completed);
+  const numbered = showsStepNumber({ template, type: stepperType, show: showStepNumber });
+  const useIcons = stepperTemplateOf(template) === "icons";
+
+  const clicked = eventsFor(moduleEvents, nodeId, "click");
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {drawn.length === 0 ? (
+        <p className="canvas-widget-empty">Stepper - add steps in Settings</p>
+      ) : (
+        <ol className="canvas-stepper" data-testid="stepper">
+          {drawn.map((step, index) => {
+            const state = stateOf(index, completed, active);
+            const reachable = isReachable({ index, completed, type: stepperType });
+            const colour = state === "completed"
+              ? completedColourOf(completedColour)
+              : state === "active" ? activeColourOf(activeColour) : undefined;
+            return (
+              <li
+                className="canvas-step"
+                key={`${index}:${step.label}`}
+                data-testid="step"
+                data-state={state}
+                data-reachable={reachable ? "yes" : "no"}
+              >
+                <button
+                  type="button"
+                  className="canvas-step-button"
+                  data-testid={`step-${index}`}
+                  // p.312's Linear: a step whose predecessors are unfinished is
+                  // *shown* - a workflow with invisible later stages tells a
+                  // viewer nothing about how much is left - and is not
+                  // clickable, which is what "required to complete in order"
+                  // constrains.
+                  disabled={!reachable || mode !== "run"}
+                  aria-current={state === "active" ? "step" : undefined}
+                  onClick={() => {
+                    if (clicked.length > 0) {
+                      runEvents(clicked, {
+                        ...eventContext,
+                        payload: { step: String(index + 1), label: step.label },
+                      });
+                    }
+                  }}
+                >
+                  <span
+                    className="canvas-step-mark"
+                    data-testid="step-mark"
+                    style={colour ? { background: colour, borderColor: colour } : undefined}
+                    // p.313's Icon, as a mark: the field holds a name like
+                    // `check` and this platform has no icon set, so the name
+                    // travels as the accessible label rather than being lost.
+                    aria-label={useIcons ? (step.icon || "step") : undefined}
+                  >
+                    {!useIcons || numbered ? index + 1 : ""}
+                  </span>
+                  <span className="canvas-step-label">{step.label}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function StepperSettings() {
+  const {
+    steps, stepperType, template, showStepNumber, completedColour, activeColour,
+    actions: { setProp },
+  } = useNode((node) => ({
+    steps: node.data.props.steps,
+    stepperType: node.data.props.stepperType,
+    template: node.data.props.template,
+    showStepNumber: node.data.props.showStepNumber,
+    completedColour: node.data.props.completedColour,
+    activeColour: node.data.props.activeColour,
+  }));
+  const { declared } = useCanvasVariables();
+  const booleans = Object.values(declared).filter((v) => v.kind === "boolean");
+  const drawn = stepsOf(steps);
+  const write = (next: unknown[]) => setProp((p: { steps: unknown[] }) => (p.steps = next));
+
+  return (
+    <WidgetSetup
+      inputs={<>
+      <div className="field">
+        <span className="field-label">Steps</span>
+        <div className="canvas-step-editor" data-testid="stepper-steps">
+          {drawn.map((step, index) => (
+            <div className="canvas-step-row" key={index}>
+              <input
+                type="text"
+                value={step.label}
+                data-testid={`stepper-label-${index}`}
+                onChange={(e) =>
+                  write(drawn.map((s, i) =>
+                    i === index ? { ...s, label: e.target.value } : s))}
+              />
+              <select
+                value={step.completedVariable ?? ""}
+                data-testid={`stepper-done-${index}`}
+                onChange={(e) =>
+                  write(drawn.map((s, i) =>
+                    i === index ? { ...s, completedVariable: e.target.value } : s))}
+              >
+                <option value="">Never completed</option>
+                {booleans.map((v) => (
+                  <option key={v.id} value={v.id}>{v.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid={`stepper-remove-${index}`}
+                onClick={() => write(drawn.filter((_, i) => i !== index))}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="stepper-add"
+            onClick={() => write([...drawn, { label: `Step ${drawn.length + 1}` }])}
+          >
+            Add step
+          </button>
+        </div>
+        <span className="field-hint">
+          Completion is a boolean variable the module writes, so the stepper holds no progress
+          of its own
+        </span>
+      </div>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Type</span>
+        <select
+          value={stepperTypeOf(stepperType)}
+          data-testid="stepper-type"
+          onChange={(e) =>
+            setProp((p: { stepperType: string }) => (p.stepperType = e.target.value))}
+        >
+          {Object.entries(STEPPER_TYPES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Template</span>
+        <select
+          value={stepperTemplateOf(template)}
+          data-testid="stepper-template"
+          onChange={(e) => setProp((p: { template: string }) => (p.template = e.target.value))}
+        >
+          {Object.entries(STEPPER_TEMPLATES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={showStepNumber === true}
+          data-testid="stepper-show-number"
+          onChange={(e) =>
+            setProp((p: { showStepNumber: boolean }) => (p.showStepNumber = e.target.checked))}
+        />
+        <span className="field-label">Show step number</span>
+        <span className="field-hint">
+          {showsStepNumber({ template, type: stepperType, show: true })
+            ? "Numbers appear beside the icons"
+            : "p.313 applies this to a linear stepper using icons; the text template is already numbered"}
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Completed colour</span>
+        <input
+          type="text"
+          value={completedColour ?? ""}
+          placeholder={completedColourOf("")}
+          data-testid="stepper-completed-colour"
+          onChange={(e) =>
+            setProp((p: { completedColour: string }) => (p.completedColour = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Active colour</span>
+        <input
+          type="text"
+          value={activeColour ?? ""}
+          placeholder={activeColourOf("")}
+          data-testid="stepper-active-colour"
+          onChange={(e) =>
+            setProp((p: { activeColour: string }) => (p.activeColour = e.target.value))}
+        />
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasStepper.craft = {
+  displayName: "Stepper",
+  props: {
+    steps: [], stepperType: "linear", template: "text", showStepNumber: false,
+    completedColour: "", activeColour: "",
+  },
+  related: { settings: StepperSettings },
 };
 
 // ---- Object dropdown (p.455-458) --------------------------------------------
@@ -10335,6 +10624,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectDropdown,
   CanvasObjectSelector,
   CanvasPieChart,
+  CanvasStepper,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -10372,6 +10662,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectDropdown", label: "Object dropdown", hint: "Pick one object from a searchable list" },
   { key: "CanvasObjectSelector", label: "Object selector", hint: "Pick several objects from a searchable list" },
   { key: "CanvasPieChart", label: "Pie chart", hint: "Objects grouped by a property, as proportional slices" },
+  { key: "CanvasStepper", label: "Stepper", hint: "Progress through a multi-step workflow, in order or not" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

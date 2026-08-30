@@ -168,6 +168,87 @@ export const REFERENCE_PROPS = [
   "name",
 ] as const;
 
+/** Props holding a **list of configuration objects**, each of which may name a
+ * variable of its own. Mirrors `NESTED_REFERENCE_PROPS` in
+ * `services/workshop_variables.py`.
+ *
+ * Every entry in `REFERENCE_PROPS` above is a *top-level* prop, read with one
+ * `props[prop]`. p.313's Stepper is the first widget whose bindings do not
+ * live there: its Steps prop is a list, and each step names its own "Is
+ * completed" boolean variable. To the flat scan such a variable is referenced
+ * by nothing at all — so the panel offers to delete it, and afterwards every
+ * step reads as never completed. See the API's copy for why this is a
+ * catalogue rather than a special case.
+ */
+export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
+  // p.313's Steps: "Is completed: Set a boolean variable to be used a check to
+  // determine when a step has been completed."
+  steps: ["completedVariable"],
+};
+
+export interface Reference {
+  /** `objectSetVariable`, or `steps[1].completedVariable` for a nested one. */
+  prop: string;
+  ref: string;
+}
+
+/** Every variable id a node's props name.
+ *
+ * One definition for all four browser-side scans — usages, the lineage graph,
+ * a clipping's referenced variables and a page's bindings. Four copies of this
+ * walk is four chances for a nested binding to be a usage in one of them and
+ * invisible in the others, which is the drift §191's guard exists to refuse.
+ */
+export function referencesOf(props: unknown): Reference[] {
+  if (!props || typeof props !== "object") return [];
+  const bag = props as Record<string, unknown>;
+  const found: Reference[] = [];
+  for (const prop of REFERENCE_PROPS) {
+    const ref = bag[prop];
+    if (typeof ref === "string" && ref) found.push({ prop, ref });
+  }
+  for (const [prop, inner] of Object.entries(NESTED_REFERENCE_PROPS)) {
+    const entries = bag[prop];
+    if (!Array.isArray(entries)) continue;
+    entries.forEach((entry, index) => {
+      if (!entry || typeof entry !== "object") return;
+      for (const key of inner) {
+        const ref = (entry as Record<string, unknown>)[key];
+        if (typeof ref === "string" && ref) found.push({ prop: `${prop}[${index}].${key}`, ref });
+      }
+    });
+  }
+  return found;
+}
+
+/** The same walk, rewriting rather than reading: a paste into another module
+ * mints new variable ids, and a nested binding left pointing at the old one
+ * would be a dangling reference the moment the copy was saved. */
+export function remapReferences(
+  props: Record<string, unknown>,
+  replacement: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  const next = { ...props };
+  for (const prop of REFERENCE_PROPS) {
+    const value = next[prop];
+    if (typeof value === "string" && replacement.has(value)) next[prop] = replacement.get(value);
+  }
+  for (const [prop, inner] of Object.entries(NESTED_REFERENCE_PROPS)) {
+    const entries = next[prop];
+    if (!Array.isArray(entries)) continue;
+    next[prop] = entries.map((entry) => {
+      if (!entry || typeof entry !== "object") return entry;
+      const copy = { ...(entry as Record<string, unknown>) };
+      for (const key of inner) {
+        const value = copy[key];
+        if (typeof value === "string" && replacement.has(value)) copy[key] = replacement.get(value);
+      }
+      return copy;
+    });
+  }
+  return next;
+}
+
 export interface Usage {
   node: string;
   prop: string;
@@ -182,10 +263,8 @@ export function usagesOf(
   const found: Usage[] = [];
   const layout = layoutOf(definition);
   for (const [nodeId, node] of Object.entries(layout)) {
-    const props = (node as { props?: Record<string, unknown> })?.props;
-    if (!props) continue;
-    for (const prop of REFERENCE_PROPS) {
-      if (props[prop] === variableId) found.push({ node: nodeId, prop });
+    for (const { prop, ref } of referencesOf((node as { props?: unknown })?.props)) {
+      if (ref === variableId) found.push({ node: nodeId, prop });
     }
   }
   for (const variable of Object.values(variablesOf(definition))) {

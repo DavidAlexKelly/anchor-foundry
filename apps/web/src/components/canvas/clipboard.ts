@@ -57,7 +57,7 @@
  * is a judgement call: the other reading is defensible and produces a very
  * different feature.
  */
-import { REFERENCE_PROPS } from "../../lib/workshop-module";
+import { referencesOf, remapReferences } from "../../lib/workshop-module";
 import type { LayoutNodes } from "../../lib/workshop-module";
 import type { WorkshopEvent, WorkshopVariable } from "../../lib/types";
 
@@ -135,12 +135,7 @@ export function subtreeIds(layout: LayoutNodes, nodeId: string): string[] {
 export function referencedVariables(nodes: LayoutNodes): string[] {
   const found = new Set<string>();
   for (const node of Object.values(nodes)) {
-    const props = (node as LayoutNode)?.props;
-    if (!props) continue;
-    for (const prop of REFERENCE_PROPS) {
-      const value = props[prop];
-      if (typeof value === "string" && value) found.add(value);
-    }
+    for (const { ref } of referencesOf((node as LayoutNode)?.props)) found.add(ref);
   }
   return [...found].sort();
 }
@@ -290,14 +285,7 @@ export function paste(
 
   const remapProps = (props: Record<string, unknown> | undefined) => {
     if (!props) return props;
-    const next = { ...props };
-    for (const prop of REFERENCE_PROPS) {
-      const value = next[prop];
-      if (typeof value === "string" && variableIdFor.has(value)) {
-        next[prop] = variableIdFor.get(value);
-      }
-    }
-    return next;
+    return remapReferences(props, variableIdFor);
   };
 
   const pasted: LayoutNodes = {};

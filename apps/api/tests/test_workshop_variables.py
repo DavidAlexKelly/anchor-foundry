@@ -331,6 +331,59 @@ def test_every_prop_that_names_a_variable_is_checked() -> None:
         assert "does not declare" in str(raised.value), prop
 
 
+# ---- nested references (p.313's Stepper) -------------------------------------
+def test_a_variable_named_inside_a_list_prop_is_checked() -> None:
+    """§219's Stepper is the first widget whose bindings are not top-level props.
+
+    A step's "Is completed" variable lives inside the `steps` array, where the
+    flat scan cannot see it - so before `NESTED_REFERENCE_PROPS` this saved
+    happily and the widget then read a variable the module does not declare.
+    """
+    # A loop over an empty catalogue passes - the failure this whole unit is
+    # about is a binding nobody catalogued, so the loop cannot be the only
+    # thing asserting the catalogue is not empty.
+    assert wv.NESTED_REFERENCE_PROPS.get("steps") == ("completedVariable",)
+    for prop, inners in wv.NESTED_REFERENCE_PROPS.items():
+        for inner in inners:
+            layout = {"w1": node({prop: [{"label": "One", inner: "v_gone"}]})}
+            with pytest.raises(wv.VariableError, match="v_gone") as raised:
+                wv.validate_module(module({}, layout))
+            assert "does not declare" in str(raised.value), f"{prop}.{inner}"
+
+
+def test_a_variable_named_inside_a_list_prop_counts_as_a_usage() -> None:
+    """The other half, and the one that bites quietly: a usage nothing counts
+    is a variable the Variables panel offers to delete, after which every step
+    reads as never completed and nothing anywhere says why."""
+    layout = {"w1": node({"steps": [
+        {"label": "One"},
+        {"label": "Two", "completedVariable": "v_done"},
+    ]})}
+    found = wv.usages(layout, wv.parse({"v_done": var("v_done", kind="boolean")}))
+    # Named by index, not just by node: "used by the Stepper" is not enough to
+    # find which step to unbind before deleting.
+    assert found["v_done"] == [{"node": "w1", "prop": "steps[1].completedVariable"}]
+
+
+def test_a_list_prop_holding_junk_names_no_variables() -> None:
+    """The tolerance §212 argued for, one level deeper. A saved document can
+    hold anything, and a scan that threw on it would make a module with one bad
+    step impossible to open rather than impossible to save."""
+    layout = {"w1": node({"steps": "not a list"}), "w2": node({"steps": [None, 7, {}]})}
+    assert wv.usages(layout, wv.parse({"v_done": var("v_done", kind="boolean")})) == {
+        "v_done": []
+    }
+    assert wv.dangling_references(layout, {}) == []
+
+
+def test_a_nested_prop_that_is_not_catalogued_is_not_a_reference() -> None:
+    """Only the catalogued inner keys carry variable ids. A step's `label`
+    holding the text `v_done` is a label, and refusing that save - or counting
+    it as a usage - would be the mirror of the mistake above."""
+    layout = {"w1": node({"steps": [{"label": "v_gone", "icon": "v_gone"}]})}
+    assert wv.validate_module(module({}, layout)) == {}
+
+
 def test_a_prop_that_merely_looks_like_a_reference_is_not_one() -> None:
     """Only the declared reference props carry variable ids. A column called
     `v_region` in somebody's data is not a binding, and treating it as one
@@ -378,6 +431,37 @@ def test_the_reference_prop_list_agrees_with_the_browser_s_copy() -> None:
     in_browser = tuple(re.findall(r'"([^"]+)"', block.group(1)))
     assert in_browser == wv.REFERENCE_PROPS, (
         f"browser has {in_browser}, API has {wv.REFERENCE_PROPS}"
+    )
+
+
+def test_the_nested_reference_catalogue_agrees_with_the_browser_s_copy() -> None:
+    """The same mirror, for the same reason, one level deeper.
+
+    `NESTED_REFERENCE_PROPS` decides what the API refuses; the browser's copy
+    decides what the builder counts as a usage, what the lineage graph draws an
+    arrow for, and what a paste into another module rewrites. Four browser-side
+    readers of one list, which is precisely the count that makes drift here
+    cost more than drift in the flat one.
+    """
+    import re
+
+    web = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "lib", "workshop-module.ts",
+    )
+    source = open(web).read()
+    block = re.search(
+        r"export const NESTED_REFERENCE_PROPS: Record<string, readonly string\[\]> = \{(.*?)\n\};",
+        source,
+        re.S,
+    )
+    assert block, "NESTED_REFERENCE_PROPS not found in workshop-module.ts - renamed?"
+    in_browser = {
+        outer: tuple(re.findall(r'"([^"]+)"', inner))
+        for outer, inner in re.findall(r"\n  (\w+): \[([^\]]*)\]", block.group(1))
+    }
+    assert in_browser == {k: tuple(v) for k, v in wv.NESTED_REFERENCE_PROPS.items()}, (
+        f"browser has {in_browser}, API has {wv.NESTED_REFERENCE_PROPS}"
     )
 
 
@@ -440,6 +524,60 @@ def test_every_variable_prop_is_a_known_reference() -> None:
         "REFERENCE_PROPS nor NOT_A_LOCAL_VARIABLE. A prop holding a variable id "
         "that is not a known reference cannot be counted as a usage, so the "
         "variable it names can be deleted out from under it"
+    )
+
+
+def test_every_nested_field_that_names_a_variable_is_a_known_reference() -> None:
+    """**The guard the one above cannot be**, and §219 is why it exists.
+
+    That one scans `node.data.props.X` - what a settings panel reads - so it
+    only ever sees *top-level* props. A Stepper step's `completedVariable`
+    holds a variable id and follows the convention exactly, and that scan
+    cannot see it: the name never appears as a prop, because it is a key inside
+    an element of one. The failure it lets through is §185's and §190's, by a
+    route neither of their guards reaches.
+
+    So this scans the **model modules** instead - `components/canvas/*.ts`,
+    where the pure-module pattern puts every widget's shapes. A field typed
+    `string` whose name ends in `Variable`, `Parameter` or `When` must be a
+    catalogued nested reference or a named exception.
+
+    Typed `string` on purpose: `mintVariable: () => string` is a factory and
+    `filterParameter: "write"` is a classification, and neither holds an id.
+    """
+    import glob
+    import re
+
+    canvas = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "components", "canvas",
+    )
+    files = [f for f in glob.glob(os.path.join(canvas, "*.ts")) if not f.endswith(".test.ts")]
+    assert len(files) >= 20, f"only {len(files)} model modules - has the directory moved?"
+    fields: set[str] = set()
+    for path in files:
+        fields |= set(
+            re.findall(
+                r"^\s+([A-Za-z_]*(?:Variable|Parameter|When))\??:\s*string\b",
+                open(path).read(),
+                re.M,
+            )
+        )
+    # The vacuity guard, and the number is honestly one: `completedVariable` is
+    # the first nested reference this platform has. What the assertion is for
+    # is the day the scan stops matching - a rename of the directory, a change
+    # of file extension, a shape declared inline instead of as an interface -
+    # because a completeness check over an empty set passes forever.
+    assert len(fields) >= 1, (
+        "no variable-shaped model fields found - the scan broke, not the convention"
+    )
+    catalogued = {inner for inners in wv.NESTED_REFERENCE_PROPS.values() for inner in inners}
+    unknown = sorted(fields - catalogued - set(wv.REFERENCE_PROPS) - set(NOT_A_LOCAL_VARIABLE))
+    assert not unknown, (
+        f"{', '.join(unknown)} name variables from inside a widget's own shape and are "
+        "in no reference catalogue. Nothing counts them as a usage, so the variable "
+        "each names can be deleted out from under the widget that reads it - add the "
+        "holding prop to NESTED_REFERENCE_PROPS in both runtimes"
     )
 
 

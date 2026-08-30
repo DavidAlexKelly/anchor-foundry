@@ -18,7 +18,7 @@
  * cheapest way to keep noticing that they are separate rules. Same boundary
  * though: no React, no DOM, nothing rendered.
  */
-import { REFERENCE_PROPS } from "../../lib/workshop-module";
+import { referencesOf } from "../../lib/workshop-module";
 
 /** The query parameter carrying the current page (p.197).
  *
@@ -89,13 +89,7 @@ export function variablesOnPage(layout: unknown, pageNodeId: string | null): Set
     seen.add(nodeId);
     const node = nodes[nodeId];
     if (!node) return;
-    const props = node.props;
-    if (props && typeof props === "object") {
-      for (const prop of REFERENCE_PROPS) {
-        const ref = props[prop];
-        if (typeof ref === "string" && ref) found.add(ref);
-      }
-    }
+    for (const { ref } of referencesOf(node.props)) found.add(ref);
     const children = Array.isArray(node.nodes) ? node.nodes : [];
     for (const child of children) if (typeof child === "string") walk(child);
     for (const child of Object.values(node.linkedNodes ?? {})) {
