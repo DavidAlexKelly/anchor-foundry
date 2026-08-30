@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MIN_SHARE, formatWeights, parseWeights, pivotClauses, resizeWeights, roundWeight,
-  seedFromQuery, seriesLabel, seriesPointLabel,
+  seedActionForm, seedFromQuery, seriesLabel, seriesPointLabel,
 } from "./pure";
 
 describe("pivotClauses", () => {
@@ -308,5 +308,44 @@ describe("seedFromQuery", () => {
       new URLSearchParams("?set=x&obj=y"),
     );
     expect(Object.keys(seed)).toEqual([]);
+  });
+});
+
+describe("Workshop p.512's local parameter defaults", () => {
+  const PARAMETERS = [
+    { api_name: "status", data_type: "string", required: false, hidden: false,
+      default_value: "open" },
+    { api_name: "note", data_type: "string", required: false, hidden: false },
+  ];
+
+  it("beats the parameter's own default", () => {
+    // p.512: "If unspecified, the action type parameter configurations from
+    // the Ontology will apply" — so where one *is* specified, it applies.
+    expect(seedActionForm(PARAMETERS, {}, { status: "triaged" }).status).toBe("triaged");
+  });
+
+  it("does not beat the object's current value", () => {
+    // **A local default is a default.** This is an edit form, and a default
+    // that overwrote what the object says would show a viewer a value the
+    // object does not have and write it back if they pressed Submit.
+    expect(seedActionForm(PARAMETERS, { status: "closed" }, { status: "triaged" }).status)
+      .toBe("closed");
+  });
+
+  it("applies to a parameter that has no default of its own", () => {
+    expect(seedActionForm(PARAMETERS, {}, { note: "from the module" }).note)
+      .toBe("from the module");
+  });
+
+  it("changes nothing when there are none", () => {
+    expect(seedActionForm(PARAMETERS, {})).toEqual({ status: "open", note: "" });
+    expect(seedActionForm(PARAMETERS, {}, {})).toEqual({ status: "open", note: "" });
+  });
+
+  it("seeds a local default that only looks empty", () => {
+    // `0` and `false` are answers; the seeding order asks whether a source has
+    // *something to say*, not whether it is truthy.
+    expect(seedActionForm(PARAMETERS, {}, { status: 0 }).status).toBe("0");
+    expect(seedActionForm(PARAMETERS, {}, { status: false }).status).toBe("false");
   });
 });

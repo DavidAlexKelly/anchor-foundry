@@ -382,3 +382,94 @@ def test_the_criteria_are_on_the_wire(
     criteria = r.json()["criteria"]
     assert [c["message"] for c in criteria] == ["Tickets cannot be closed from here."]
     assert criteria[0]["config"]["operator"] == "is_not"
+
+
+# ---- asking before submitting (Workshop p.513) ------------------------------
+def _check(client: TestClient, fx: Fixture, world: dict[str, str], values: dict) -> dict:
+    r = client.post(
+        f"{world['project']}/actions/{world['action_id']}/check",
+        headers=hdr(fx.editor_sub), json={"values": values},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_submission_can_be_asked_about_before_it_is_made(
+    client: TestClient, fx: Fixture, world: dict[str, str]
+) -> None:
+    """Workshop p.513 lets a builder disable or hide an Inline Action form
+    "when submission criteria are not met", which needs the answer before
+    anything is written.
+
+    **The point is that it is the same check.** The alternative is a browser
+    evaluating p.54-55's operators in another language, free to disagree with
+    the one that governs writes — so the assertions here are that the endpoint
+    agrees with `execute` in both directions.
+    """
+    refused = _check(client, fx, world, {"status": "closed"})
+    assert refused["ok"] is False
+    assert refused["error"] == "Tickets cannot be closed from here."
+
+    allowed = _check(client, fx, world, {"status": "triaged"})
+    assert allowed == {"ok": True, "error": None}
+
+
+def test_asking_writes_nothing(
+    client: TestClient, fx: Fixture, world: dict[str, str]
+) -> None:
+    """**Asking is not submitting.** A check that appended a dataset version, or
+    opened a run, would make a disabled form more expensive than a working
+    one — and a widget that asks on every object change would fill the history
+    with attempts nobody made."""
+    def runs() -> int:
+        return len(client.get(
+            f"{world['base']}/action-types/{world['action_id']}/runs",
+            headers=hdr(fx.viewer_sub),
+        ).json())
+
+    # **Counted, not compared to zero.** `world` is module-scoped and an
+    # earlier test in this file submits the action successfully, so `== []`
+    # held only where it happened to sit - which is the claim's neighbour
+    # passing for it rather than the claim.
+    before_version, before_runs = _version(client, fx, world), runs()
+    _check(client, fx, world, {"status": "closed"})
+    _check(client, fx, world, {"status": "triaged"})
+    assert _version(client, fx, world) == before_version
+    assert runs() == before_runs
+
+
+def test_a_refusal_is_an_answer_rather_than_an_error(
+    client: TestClient, fx: Fixture, world: dict[str, str]
+) -> None:
+    """200 with `ok: false`, not 422. A 4xx would make "this action is not
+    available" indistinguishable from "the question could not be asked", and
+    the widget has to tell those apart to decide between disabling a form and
+    reporting that something is broken."""
+    r = client.post(
+        f"{world['project']}/actions/{world['action_id']}/check",
+        headers=hdr(fx.editor_sub), json={"values": {"status": "closed"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
+
+
+def test_a_value_the_parameters_refuse_is_reported_too(
+    client: TestClient, fx: Fixture, world: dict[str, str]
+) -> None:
+    """A binding failure is also a reason the submission would not go through,
+    and saying so here is more use than saying nothing until Submit."""
+    answer = _check(client, fx, world, {"not_a_parameter": "x"})
+    assert answer["ok"] is False
+    assert answer["error"]
+
+
+def test_checking_needs_the_role_that_could_submit(
+    client: TestClient, fx: Fixture, world: dict[str, str]
+) -> None:
+    """p.140 makes criteria a permissions mechanism, so a caller who may not run
+    the action has no business learning which criterion would stop them."""
+    r = client.post(
+        f"{world['project']}/actions/{world['action_id']}/check",
+        headers=hdr(fx.viewer_sub), json={"values": {"status": "triaged"}},
+    )
+    assert r.status_code in (403, 404), r.text

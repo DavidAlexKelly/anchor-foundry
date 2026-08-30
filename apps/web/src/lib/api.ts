@@ -1212,6 +1212,22 @@ export const actions = {
       `/workspaces/${wid}/action-types/${actionTypeId}/definition`,
       { method: "PUT", body: JSON.stringify(input) },
     ),
+  /** Would this submission be refused? (Workshop p.513.)
+   *
+   * The same `check_criteria` the executor runs, asked without writing —
+   * which is the whole point: the alternative is the browser evaluating
+   * p.54-55's operators in another language, free to disagree with the one
+   * that governs writes. */
+  check: (
+    wid: string,
+    pid: string,
+    actionTypeId: string,
+    values: Record<string, unknown>,
+  ) =>
+    request<{ ok: boolean; error: string | null }>(
+      `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/check`,
+      { method: "POST", body: JSON.stringify({ values }) },
+    ),
   execute: (
     wid: string,
     pid: string,

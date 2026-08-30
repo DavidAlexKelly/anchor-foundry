@@ -1,86 +1,106 @@
 import { describe, expect, it } from "vitest";
 
-import { inputTypeFor, seedActionForm } from "./pure";
+import {
+  DEFAULT_INVALID_STATE, INVALID_STATES,
+  formVisible, headerTitleOf, hideHeaderOf, invalidStateOf, localDefaultsOf,
+} from "./action-form";
 
-/** The action form's starting values (decision 0007; Foundry p.25, p.27).
- *
- * The form itself is checked in `e2e/test_action_parameters.py` - what a
- * browser draws is a browser's question. What is here is the ordering of the
- * three sources, which is arithmetic and belongs where it can be asked
- * directly.
- */
-const parameter = (over: Partial<Parameters<typeof seedActionForm>[0][number]> = {}) => ({
-  api_name: "status",
-  data_type: "string",
-  hidden: false,
-  ...over,
+/** p.510-513's Inline Action widget. */
+
+describe("p.513's form state if invalid", () => {
+  it("has the two states p.513 names and defaults to disabled", () => {
+    expect(Object.keys(INVALID_STATES).sort()).toEqual(["disabled", "hidden"]);
+    expect(DEFAULT_INVALID_STATE).toBe("disabled");
+    expect(invalidStateOf(undefined)).toBe("disabled");
+    expect(invalidStateOf("hidden")).toBe("hidden");
+  });
+
+  it("falls back for a state the widget does not have", () => {
+    expect(invalidStateOf("greyed")).toBe("disabled");
+    expect(invalidStateOf("constructor")).toBe("disabled");
+    expect(invalidStateOf(0)).toBe("disabled");
+  });
 });
 
-describe("seedActionForm", () => {
-  it("starts from the object's current value", () => {
-    expect(seedActionForm([parameter()], { status: "open" })).toEqual({ status: "open" });
+describe("whether the form is drawn", () => {
+  it("is drawn when the criteria are met", () => {
+    expect(formVisible({ invalidState: "hidden", valid: true })).toBe(true);
+    expect(formVisible({ invalidState: "disabled", valid: true })).toBe(true);
   });
 
-  it("falls back to the parameter's default when the object has nothing", () => {
-    // p.27's default values, and the case that matters: a parameter not named
-    // after a property never has a current value to start from.
-    expect(seedActionForm([parameter({ api_name: "reason", default_value: "routine" })], {}))
-      .toEqual({ reason: "routine" });
+  it("is drawn while the answer is still being asked for", () => {
+    // **`undefined` is neither valid nor invalid.** A form that vanished
+    // mid-check and reappeared a moment later would flicker on every object a
+    // viewer clicks — §210's rule that unresolved is not empty.
+    expect(formVisible({ invalidState: "hidden", valid: undefined })).toBe(true);
   });
 
-  it("prefers the object's value over the default", () => {
-    expect(
-      seedActionForm([parameter({ default_value: "triaged" })], { status: "open" }),
-    ).toEqual({ status: "open" });
+  it("is removed only by the hidden state", () => {
+    expect(formVisible({ invalidState: "hidden", valid: false })).toBe(false);
+    // The other state keeps the form and disables it, which is p.513's point:
+    // a reader can see what they would be submitting and why they cannot.
+    expect(formVisible({ invalidState: "disabled", valid: false })).toBe(true);
+    expect(formVisible({ invalidState: undefined, valid: false })).toBe(true);
+  });
+});
+
+describe("p.512's custom action title", () => {
+  it("replaces the action's own name", () => {
+    expect(headerTitleOf("Close this ticket", "Close ticket")).toBe("Close this ticket");
   });
 
-  it("treats a null property as nothing, not as a value", () => {
-    // A synced row with an empty column arrives as null. Rendering "null" in
-    // the box and submitting it would write the four characters.
-    expect(seedActionForm([parameter({ default_value: "triaged" })], { status: null }))
+  it("is trimmed, and a blank one is not a title", () => {
+    expect(headerTitleOf("  Close  ", "Close ticket")).toBe("Close");
+    expect(headerTitleOf("   ", "Close ticket")).toBe("Close ticket");
+    expect(headerTitleOf("", "Close ticket")).toBe("Close ticket");
+    expect(headerTitleOf(undefined, "Close ticket")).toBe("Close ticket");
+    expect(headerTitleOf(7, "Close ticket")).toBe("Close ticket");
+  });
+
+  it("still says something when there is no action to name", () => {
+    // The header renders before the action list has arrived, and an empty
+    // heading is a gap a reader cannot interpret.
+    expect(headerTitleOf("", undefined)).toBe("Action");
+    expect(headerTitleOf(undefined, "")).toBe("Action");
+  });
+});
+
+describe("p.513's hide header", () => {
+  it("is off unless a document says so", () => {
+    expect(hideHeaderOf(undefined)).toBe(false);
+    expect(hideHeaderOf("true")).toBe(false);
+    expect(hideHeaderOf(true)).toBe(true);
+  });
+});
+
+describe("p.512's local parameter defaults", () => {
+  it("reads what a document holds", () => {
+    expect(localDefaultsOf({ status: "triaged", priority: 2 }))
+      .toEqual({ status: "triaged", priority: 2 });
+  });
+
+  it("is empty for anything that is not an object of names", () => {
+    expect(localDefaultsOf(undefined)).toEqual({});
+    expect(localDefaultsOf("status=triaged")).toEqual({});
+    // An array is `typeof "object"`, and its indices would become parameter
+    // names — which is a default for a parameter called "0".
+    expect(localDefaultsOf(["triaged"])).toEqual({});
+  });
+
+  it("drops entries that name nothing", () => {
+    expect(localDefaultsOf({ "": "x", "   ": "y", status: "triaged" }))
       .toEqual({ status: "triaged" });
-    expect(seedActionForm([parameter()], { status: null })).toEqual({ status: "" });
   });
 
-  it("keeps zero and false, which are values", () => {
-    // The same trap §125 and §128 both hit: written as a falsiness check, this
-    // would replace a real 0 with the default.
-    expect(seedActionForm([parameter({ api_name: "n", default_value: 9 })], { n: 0 }))
-      .toEqual({ n: "0" });
-    expect(seedActionForm([parameter({ api_name: "ok", default_value: true })], { ok: false }))
-      .toEqual({ ok: "false" });
+  it("drops an empty default rather than seeding a blank", () => {
+    // **`null` is how the raw JSON editor spells "no default".** Kept, it would
+    // beat the parameter's own default (p.27) with nothing at all, which is
+    // exactly what p.512 says an unspecified local default must not do.
+    expect(localDefaultsOf({ status: null, priority: undefined, note: "" }))
+      .toEqual({ note: "" });
   });
 
-  it("seeds hidden parameters too", () => {
-    // p.25's whole point: a hidden parameter carries a value the rules use -
-    // in Foundry's own example, the *previous* value to compare against. A
-    // form that skipped them would leave the action unable to receive what it
-    // was built for. Hidden means undrawn, not unsent.
-    expect(seedActionForm([parameter({ hidden: true })], { status: "open" }))
-      .toEqual({ status: "open" });
-  });
-
-  it("renders a structured value as JSON rather than [object Object]", () => {
-    // §125, one component over.
-    expect(
-      seedActionForm([parameter({ api_name: "site" })], { site: { lat: 51.5, lon: -0.1 } }),
-    ).toEqual({ site: '{"lat":51.5,"lon":-0.1}' });
-  });
-});
-
-describe("inputTypeFor", () => {
-  it("gives numbers a number field and dates a date field", () => {
-    expect(inputTypeFor("integer")).toBe("number");
-    expect(inputTypeFor("float")).toBe("number");
-    expect(inputTypeFor("date")).toBe("date");
-  });
-
-  it("leaves everything else as text, because the server coerces", () => {
-    // A browser-side type stricter than `coerce_property_value` would refuse
-    // values the platform accepts - a timestamp typed as `datetime-local`
-    // cannot express an offset, and ours preserve one.
-    expect(inputTypeFor("timestamp")).toBe("text");
-    expect(inputTypeFor("geopoint")).toBe("text");
-    expect(inputTypeFor("string")).toBe("text");
+  it("keeps values that only look empty", () => {
+    expect(localDefaultsOf({ count: 0, flag: false })).toEqual({ count: 0, flag: false });
   });
 });

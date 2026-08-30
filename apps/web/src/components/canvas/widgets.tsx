@@ -88,6 +88,13 @@ import {
   hideHeaderOf, viewModeOf,
 } from "./object-view-widget";
 import {
+  // Aliased on §211's rule: `hideHeaderOf` already means the Object View
+  // widget's, and the two answer the same question about different widgets —
+  // exactly the pair that resolves silently to the wrong one.
+  INVALID_STATES, formVisible, headerTitleOf,
+  hideHeaderOf as hideActionHeaderOf, invalidStateOf, localDefaultsOf,
+} from "./action-form";
+import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
   // enough to collide with something later, and `labelOf` is the kind of name
   // three widgets could each want.
@@ -8036,8 +8043,20 @@ CanvasChart.craft = {
 export function CanvasActionForm({
   actionTypeId = null,
   subjectVariable = null,
+  title = "",
+  hideHeader = false,
+  parameterDefaults = {},
+  invalidState = "disabled",
 }: {
   actionTypeId?: string | null;
+  /** p.512's "Set custom Action title". */
+  title?: string;
+  /** p.513's Hide header. */
+  hideHeader?: boolean;
+  /** p.512's local parameter defaults, keyed by parameter api_name. */
+  parameterDefaults?: Record<string, unknown>;
+  /** p.513's "form state if invalid". */
+  invalidState?: string;
   /** A `single_object` variable naming what to edit (roadmap 1.5, the inline
    * action form). Bound, the form edits the object somebody picked and the
    * record dropdown disappears — which is the difference between a form beside
@@ -8046,10 +8065,13 @@ export function CanvasActionForm({
   subjectVariable?: string | null;
 }) {
   const {
+    id: nodeId,
     connectors: { connect, drag },
   } = useNode();
   const { workspaceId, projectId, mode } = useCanvasEnv();
   const queryClient = useQueryClient();
+  const { events: moduleEvents } = useCanvasVariables();
+  const eventContext = useEventContext(undefined, useOverlayIds());
   const subject = useCanvasVariable(subjectVariable) as
     | { id?: string; primary_key?: unknown; properties?: Record<string, unknown> }
     | undefined;
@@ -8089,7 +8111,10 @@ export function CanvasActionForm({
   const [seeded, setSeeded] = useState<string | null>(null);
   if (chosenKey !== seeded) {
     setSeeded(chosenKey);
-    setValues(seedActionForm(actionType?.parameters ?? [], chosen?.properties ?? {}));
+    setValues(seedActionForm(
+      actionType?.parameters ?? [], chosen?.properties ?? {},
+      localDefaultsOf(parameterDefaults),
+    ));
   }
 
   const execute = useMutation({
@@ -8111,10 +8136,39 @@ export function CanvasActionForm({
           properties: { ...(subject.properties ?? {}), ...values },
         });
       }
+      // p.513's "On successful action submit". **On success only**, which is
+      // what p.513 says and what makes it usable: an event that also fired on
+      // a refusal would navigate away from the message explaining why.
+      const submitted = eventsFor(moduleEvents, nodeId, "submit");
+      if (submitted.length > 0) {
+        runEvents(submitted, {
+          ...eventContext,
+          payload: { ...values, primary_key: String(subject?.primary_key ?? "") },
+        });
+      }
     },
   });
 
   const live = mode === "run";
+  // p.513's "form state if invalid", asked of the server rather than decided
+  // here. **Keyed on the seeded values, not on every keystroke**: the question
+  // is whether this action is available for this object, which is what p.513's
+  // example is about ("a ticket that is not open"), and a request per character
+  // typed would be a different and much more expensive question. A criterion
+  // over a value somebody is still editing is answered by the refusal on
+  // submit, in the criterion's own words.
+  const seededValues = JSON.stringify(values);
+  const criteriaCheck = useQuery({
+    queryKey: ["action-check", actionTypeId, chosenKey, seededValues],
+    queryFn: () => actionApi.check(workspaceId, projectId, actionTypeId!, values),
+    // Only where a builder asked for it, and only when there is something to
+    // check: an action with no criteria can never be refused by one, so asking
+    // would be a round trip whose answer is known.
+    enabled: live && !!actionTypeId && !!instanceId
+      && (actionType?.criteria ?? []).length > 0,
+  });
+  const valid = criteriaCheck.data ? criteriaCheck.data.ok : undefined;
+  const visibleForm = formVisible({ invalidState, valid });
   // p.25: hidden parameters are supplied by the caller and never drawn. The
   // form still sends them - `values` carries every parameter it seeded.
   const visible = (actionType?.parameters ?? []).filter((p) => !p.hidden);
@@ -8125,7 +8179,17 @@ export function CanvasActionForm({
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {!actionType && <p className="canvas-widget-empty">Action form - pick an action in Settings</p>}
-      {actionType && (
+      {actionType && !visibleForm && (
+        // p.513's `hidden`. Said rather than drawn as nothing, because a
+        // builder arranging the page needs to know the widget is there — the
+        // same argument §210 makes for a title widget that renders nothing.
+        mode === "run" ? null : (
+          <p className="canvas-widget-empty" data-testid="action-form-hidden">
+            Hidden: this action cannot be submitted
+          </p>
+        )
+      )}
+      {actionType && visibleForm && (
         <form
           className="card"
           onSubmit={(e) => {
@@ -8133,7 +8197,11 @@ export function CanvasActionForm({
             if (live) execute.mutate();
           }}
         >
-          <h3 style={{ marginTop: 0 }}>{actionType.display_name}</h3>
+          {!hideActionHeaderOf(hideHeader) && (
+            <h3 style={{ marginTop: 0 }} data-testid="action-form-title">
+              {headerTitleOf(title, actionType.display_name)}
+            </h3>
+          )}
           {subjectVariable ? (
             <p className="canvas-widget-empty">
               {subject?.id
@@ -8172,10 +8240,19 @@ export function CanvasActionForm({
           <button
             type="submit"
             className="btn"
-            disabled={!live || !instanceId || execute.isPending || missingRequired.length > 0}
+            disabled={!live || !instanceId || execute.isPending
+              || missingRequired.length > 0 || valid === false}
           >
             {execute.isPending ? "Submitting…" : "Submit"}
           </button>
+          {valid === false && live && (
+            // The criterion's own message (p.56), from the server that would
+            // refuse it — not a sentence this widget invented about a rule it
+            // does not implement.
+            <p className="canvas-widget-empty" data-testid="action-form-invalid">
+              {criteriaCheck.data?.error}
+            </p>
+          )}
           {missingRequired.length > 0 && live && (
             <p className="canvas-widget-empty" data-testid="action-form-missing">
               {missingRequired.map((p) => p.display_name || p.api_name).join(", ")} is required.
@@ -8207,10 +8284,16 @@ function ActionFormSettings() {
   const {
     actionTypeId,
     subjectVariable,
+    title,
+    hideHeader,
+    invalidState,
     actions: { setProp },
   } = useNode((node) => ({
     actionTypeId: node.data.props.actionTypeId,
     subjectVariable: node.data.props.subjectVariable,
+    title: node.data.props.title,
+    hideHeader: node.data.props.hideHeader,
+    invalidState: node.data.props.invalidState,
   }));
   const { declared } = useCanvasVariables();
   const objects = Object.values(declared).filter((v) => v.kind === "single_object");
@@ -8218,6 +8301,10 @@ function ActionFormSettings() {
     queryKey: ["action-types", workspaceId],
     queryFn: () => actionApi.listTypes(workspaceId),
   });
+  // So the panel can say whether the setting below is going to mean anything —
+  // an action with no criteria can never be invalid, and a control that is
+  // permanently inert should say so rather than look configurable.
+  const chosenAction = list.data?.find((a) => a.id === actionTypeId) ?? null;
   // The action type is the input: until one is chosen there is no form, so
   // "which variable does it edit" is a question about nothing. Note the *lack*
   // of a `subjectVariable` requirement - leaving it unset is a real answer
@@ -8267,6 +8354,44 @@ function ActionFormSettings() {
           A single-object variable — what a row or pin selection writes
         </span>
       </label>
+      <label className="field">
+        <span className="field-label">Action title</span>
+        <input
+          type="text"
+          value={title ?? ""}
+          placeholder="the action's own name"
+          data-testid="action-form-title-input"
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={hideActionHeaderOf(hideHeader)}
+          data-testid="action-form-hide-header"
+          onChange={(e) =>
+            setProp((p: { hideHeader: boolean }) => (p.hideHeader = e.target.checked))}
+        />
+        <span className="field-label">Hide header</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Form state if invalid</span>
+        <select
+          value={invalidStateOf(invalidState)}
+          data-testid="action-form-invalid-state"
+          onChange={(e) =>
+            setProp((p: { invalidState: string }) => (p.invalidState = e.target.value))}
+        >
+          {Object.entries(INVALID_STATES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {(chosenAction?.criteria ?? []).length > 0
+            ? "Checked against this action's submission criteria before anything is written"
+            : "This action has no submission criteria, so it is never invalid"}
+        </span>
+      </label>
       </>}
     />
   );
@@ -8274,7 +8399,10 @@ function ActionFormSettings() {
 
 CanvasActionForm.craft = {
   displayName: "Action form",
-  props: { actionTypeId: null, subjectVariable: null },
+  props: {
+    actionTypeId: null, subjectVariable: null, title: "", hideHeader: false,
+    parameterDefaults: {}, invalidState: "disabled",
+  },
   related: { settings: ActionFormSettings },
 };
 

@@ -228,14 +228,19 @@ type FormParameter = {
 
 /** What the form starts with, for one object.
  *
- * Three sources in a deliberate order:
+ * Four sources in a deliberate order:
  *
  *   1. **the object's current value**, because this is an edit form and showing
  *      a blank box beside the thing being edited is how somebody blanks a
  *      property they only meant to look at;
- *   2. **the parameter's default** (p.27) when the object has nothing to say -
+ *   2. **the widget's own default** (Workshop p.512's "Set local default values
+ *      for parameters in the Inline Action view. If unspecified, the action
+ *      type parameter configurations from the Ontology will apply") - which is
+ *      why it sits *here* rather than above the object's value: p.512 calls it
+ *      a default, and a default is what applies when there is nothing to show;
+ *   3. **the parameter's default** (p.27) when neither has anything to say -
  *      which is every parameter that is not named after a property;
- *   3. **empty**.
+ *   4. **empty**.
  *
  * **Hidden parameters are seeded too, and that is the point of them.** p.25's
  * example passes a *previous* value into a hidden parameter so that a rule can
@@ -246,17 +251,20 @@ type FormParameter = {
 export function seedActionForm(
   parameters: FormParameter[],
   properties: Record<string, unknown>,
+  /** Workshop p.512's local defaults, keyed by parameter api_name. Extended
+   * here rather than answered by a second seeding function: two of those would
+   * be two places for the order above to drift. */
+  localDefaults: Record<string, unknown> = {},
 ): Record<string, string> {
   const seeded: Record<string, string> = {};
   for (const parameter of parameters) {
-    const current = properties[parameter.api_name];
-    const fallback = parameter.default_value;
-    const value =
-      current !== undefined && current !== null
-        ? current
-        : fallback !== undefined && fallback !== null
-          ? fallback
-          : "";
+    const sources = [
+      properties[parameter.api_name],
+      localDefaults[parameter.api_name],
+      parameter.default_value,
+    ];
+    const found = sources.find((v) => v !== undefined && v !== null);
+    const value = found === undefined ? "" : found;
     seeded[parameter.api_name] =
       typeof value === "object" ? JSON.stringify(value) : String(value);
   }
