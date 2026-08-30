@@ -230,14 +230,14 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
 ## 7. Build order
 
 1. ~~**Property visibility**~~ — **done (`STATUS.md` §121)**. Stored, editable, and honoured by the Object Explorer, which no longer draws a hidden property's column. Deliberately **a display hint and not a permission**: the value is still stored, still synced and still returned by the API, exactly as Foundry's "an indication to user applications" (p.111) describes. Making it look like access control would be worse than not having it, because somebody would use it as one.
-2. **Standard Object Views.** Generated from the object type; no builder UI needed. Biggest visible gain in this file, and now unblocked — visibility is the input it was waiting for.
+2. ~~**Standard Object Views.**~~ — **done (`STATUS.md` §122, §147, §149)**. Generated from the object type, no builder UI, no saved document. §4.1's table is the detail: prominent properties above a table of the rest, a geopoint on a map, a time series as a chart. Was still written here as "now unblocked" long after it shipped — see the note under this list.
 3. ~~**Link type per-side display names and self-links**~~ — **done (`STATUS.md` §123)**, less the one test named above. Self-links turned out to already work; only the naming was missing.
-4. **Action parameters and rules.** The structural change everything in §5 depends on. **Designed — decision 0007 — and next to build.**
+4. ~~**Action parameters and rules.**~~ — **done (`STATUS.md` §127–§143)**, and with it the transaction boundary it turned out to need. Decisions 0007 and 0008 both read "decided and **built**": migration 0044 split the one JSON column into `action_parameters` and `action_rules`, 0045 added submission criteria, and all five of p.75's simple rules execute in one Postgres transaction with one dataset version per dataset per action. **This line said "designed and next to build" for sixteen units**, and a recommendation was made from it before anybody opened the decision record it cites — see the note under this list. What is genuinely left in §5 is on that section's own tables: filtered parameter dropdowns, parameter configuration overrides, nested submission criteria, form sections, and everything in §5.2's side effects.
 5. ~~**Time series and media reference property types.**~~ — decision 0009 made, and both built as far as this platform can honour them. Media needed no type at all, only a renderer (§147). Time series is the type, the `object_type_series` mapping and the points read (§148); what is left is the *chart* that draws them, which belongs with §4.1's standard Object View rather than with the storage.
 6. ~~**Configured Object Views**, reusing the Workshop runtime~~ — **done (`STATUS.md` §144)**. A pointer at a published module plus the one variable that receives the object; the panel form factor is stored and separately addressable, and waits for something to embed it in.
 7. **Struct property type**, then Workshop struct variables.
 8. **Ontology Manager search** — done (`STATUS.md` §146), now across six kinds: object types, properties, link types, action types, shared properties (§167) and groups (§172). **Filtering by group is done** (§172, p.262); filtering by development status is now possible in principle since §170 built statuses, and is not wired to the listing yet. The **indexing-issue column** is still open — it wants indexing state the sync path does not record.
-9. Shared properties, value types, interfaces, derived properties.
+9. Shared properties, value types, interfaces, derived properties — **three of the four are built and ◑** (`STATUS.md` §161–§163 derived, §164/§167 shared, §168 value types); each is ◑ for reasons its own row in §1.2 names. **Interfaces are the one that has not started**, and §1.2 marks it `[?]` — a second-source gap found in §168 rather than a scheduling decision.
 10. Side effects — notifications, then webhooks.
 11. **The object type listing is unbounded, and that is ours rather than a parity gap.**
     `ontology.list_types` has no `LIMIT`, so the Ontology Manager's table fetches and renders
@@ -250,6 +250,25 @@ What is left of §5: many-to-many links stay refused — one foreign key cannot 
     one, so bounding the endpoint means making them searchable at the same time. Until then the
     listing is O(the ontology), which is survivable for a real one and was not for a dev
     workspace full of fixtures.
+
+**This list was audited in §216, and three of its eleven entries were wrong.** Items 2, 4 and 9
+each described work that had since been done — item 4 for sixteen units, while a recommendation
+about what to build next was made *from* it. The failure is not carelessness: a build order records
+what was true when it was written, and nothing in the ordinary flow of work ever re-reads it.
+Finishing an item means opening a pull request, not editing this list, so the list drifts in
+exactly one direction — it always claims *more* is left than there is.
+
+Two things follow, and they are cheap. **Finishing a unit means striking its line here**, in the
+same commit; and **before recommending anything from this list, open the thing it cites** — a
+decision record's own Status line, or the section's table. Both of §216's worst cases would have
+been caught by reading one sentence: decisions 0007 and 0008 both begin "decided and **built**".
+
+`workshop.md`'s build order was audited in the same pass and had two wrong entries. The other
+three — `code-repositories.md`, `datasets-lineage.md`, `data-connection.md` — were checked and are
+accurate, which is what you would expect: **no unit has been built against them**, so nothing has
+had the chance to drift. That is the shape of this failure. A build order is only wrong where work
+has been done, so the lists that look most trustworthy are the ones nobody has touched.
+
 
 ---
 

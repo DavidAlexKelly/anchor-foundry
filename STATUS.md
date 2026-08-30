@@ -4290,6 +4290,65 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 216. The build orders were wrong, and one of them had just been acted on (this session)
+
+**No code. A correction pass, and it is here because the thing it corrects caused a real mistake
+an hour earlier.**
+
+§213 recorded that a build order "records what was true when it was written, and nothing in it
+ever goes back to ask whether it still is". §215 finished, the next unit was chosen from
+`ontology.md`'s item 4 — *"Action parameters and rules. The structural change everything in §5
+depends on. **Designed — decision 0007 — and next to build.**"* — and that recommendation was
+given to the user in those words.
+
+It is built. `docs/decisions/0007-action-parameters-and-rules.md` opens with **"Status: decided
+and built"**, and names the five units that did it (§127–§131); decision 0008 opens the same way
+for the transaction boundary those rules turned out to need (§134–§143). Sixteen units of work,
+described in two decision records, cited by the line that said it had not started. **One sentence
+would have caught it, and I did not read it before recommending from it.**
+
+---
+
+**The audit.** Eleven items in `ontology.md`, nine in `workshop.md`:
+
+* **ontology 2** — Standard Object Views: built in §122, still described as "now unblocked".
+* **ontology 4** — action parameters and rules: built across §127–§143, still "next to build".
+* **ontology 9** — three of its four (derived properties, shared properties, value types) are
+  built and ◑; only interfaces have not started, and §1.2 marks that `[?]` for a source gap
+  rather than a scheduling one.
+* **workshop 1** — the five named input widgets: done in §202–§205, unstruck for eleven units.
+* **workshop 6** — its "blocked on ontology item 4" clause was written **in this session**, from
+  the stale line, without opening the record it cited.
+
+`code-repositories.md`, `datasets-lineage.md` and `data-connection.md` were checked and are
+accurate — because **no unit has been built against them**. That is the shape of the failure: a
+build order is only wrong where work has been done, so the lists that look most trustworthy are
+the ones nobody has touched.
+
+---
+
+**Why it drifts in one direction.** Finishing a unit means opening a pull request, not editing a
+list in another file. Nothing in the ordinary flow of work re-reads a build order, so entries are
+never *added* by accident and never *removed* on time: every drift makes the project look less
+finished than it is. That is the dangerous direction, because it sends the next unit at work
+already done — which is precisely what nearly happened here.
+
+Two rules, both cheap, now written under each list: **strike the line in the commit that finishes
+it**, and **open what a line cites before building on it**. The second is the one that matters,
+because the first will be forgotten again.
+
+---
+
+**No mutants, and that is not an oversight.** There is nothing here a test could hold: the change
+is prose about which prose was false. What replaces the harness is the citation — every claim
+struck above names the `STATUS.md` section or decision record that disproves it, so the next
+audit is a matter of reading them rather than of trusting this one.
+
+---
+---
+---
+---
+
 ### 215. The Object Selector, and a widget documented in one line (this session)
 
 p.444: "Object Selector: Allow the user to select multiple objects from a list of objects." That
@@ -5300,6 +5359,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
+
+- **A plan drifts in one direction only: it always claims more is left than there is.** §216 audited the two parity build orders that have had work done against them and found five wrong entries, one of which — `ontology.md`'s "action parameters and rules… designed and next to build" — had been **built sixteen units earlier, across two decision records that both open with "decided and built"**, and had just been recommended to the user as the next thing to do. The mechanism is structural, not careless: finishing a unit means opening a pull request, not editing a list in another file, so entries are never added by accident and never removed on time. The three build orders that turned out to be accurate were the three **nobody has built against** — a plan is only wrong where work has happened, so the lists that look most trustworthy are the untouched ones. Two rules, both cheap: strike the line in the commit that finishes it, and **open what a line cites before building on it** — a decision record's Status line settles in one sentence what a stale summary gets wrong for a year. The second rule is the one that matters, because the first will be forgotten again.
 
 - **Two CSS rules claiming the same class resolve silently by source order — §211's collision, in a namespace with no compiler.** §215 gave the Object Selector's row `.canvas-selector-option`, which has meant the String Selector's option grid since §204 and is defined later in the file. The new rule was dead from the moment it was written; the rows were styled by an unrelated widget, looked fine because that rule is also a flex row, and either widget could have restyled the other from then on. Two modules exporting one name at least fail to typecheck sometimes; two rules claiming one class never do. **Before adding a class, grep for it** — and the tell that you did not is a stylesheet mutant that changes nothing.
 
