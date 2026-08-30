@@ -1,5 +1,7 @@
 "use client";
 
+import { arcPath, percentLabel, wedges } from "./pie-chart";
+
 /**
  * Chart rendering for canvas widgets (ROADMAP Canvas item 2) — four kinds in
  * hand-written SVG.
@@ -259,55 +261,82 @@ function ScatterChart({ points }: { points: ChartPoint[] }) {
   );
 }
 
-function PieChart({ points, drill }: { points: ChartPoint[]; drill?: Drill }) {
-  const total = points.reduce((sum, p) => sum + Math.max(0, p.value), 0);
-  const cx = 130;
-  const cy = HEIGHT / 2;
-  const r = 96;
-  let angle = -Math.PI / 2;
+/** p.309-310's pie, and Chart XY's.
+ *
+ * **One renderer, two widgets.** The angle arithmetic used to live inline in
+ * this function, where nothing but a browser could reach it — so "does a 30%
+ * slice cover 30%" was a question no test had asked. It is `pie-chart.ts` now,
+ * and the options p.310 adds (an inner radius, a legend that can move or go,
+ * per-segment colours and labels) are parameters with Chart XY's old behaviour
+ * as their defaults.
+ */
+export function PieChart({
+  points,
+  drill,
+  inner = 0,
+  legend = "right",
+  showLegend = true,
+  colors,
+}: {
+  points: ChartPoint[];
+  drill?: Drill;
+  /** p.310's Radius, as a fraction of the outer radius. */
+  inner?: number;
+  /** p.310's legend position. */
+  legend?: string;
+  showLegend?: boolean;
+  /** p.310's per-segment colours, keyed by the *label* drawn. */
+  colors?: Record<string, string | null>;
+}) {
+  const slices = points.map((p) => ({
+    value: p.label, label: p.label, count: Math.max(0, p.value),
+    color: colors?.[p.label] ?? null,
+  }));
+  const drawn = wedges(slices);
+  const total = slices.reduce((sum, s) => sum + s.count, 0);
+  // The legend takes a side, so the pie's centre moves with it. Beside it the
+  // chart keeps its half; above or below, the pie centres and gives up height.
+  const beside = legend === "left" || legend === "right";
+  const keyed = showLegend && drawn.length > 0;
+  const cx = keyed && beside ? (legend === "left" ? WIDTH - 190 : 130) : WIDTH / 2;
+  const cy = keyed && !beside ? (legend === "top" ? HEIGHT / 2 + 16 : HEIGHT / 2 - 16)
+    : HEIGHT / 2;
+  const r = keyed && !beside ? 84 : 96;
+  const colourOf = (index: number, slice: { color: string | null }) =>
+    slice.color ?? PALETTE[index % PALETTE.length];
+
   return (
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="Pie chart" style={{ width: "100%" }}>
       {total <= 0 && (
-        <text x={cx} y={cy} textAnchor="middle" fontSize={12} fill="var(--ink-soft)">
+        <text x={WIDTH / 2} y={HEIGHT / 2} textAnchor="middle" fontSize={12} fill="var(--ink-soft)">
           Nothing to show — every value is zero or negative
         </text>
       )}
-      {total > 0 &&
-        points.map((p, i) => {
-          const share = Math.max(0, p.value) / total;
-          const end = angle + share * Math.PI * 2;
-          const large = share > 0.5 ? 1 : 0;
-          const path =
-            share >= 1
-              ? // A single slice is a circle: an arc from a point back to
-                // itself draws nothing at all.
-                `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r} Z`
-              : [
-                  `M ${cx} ${cy}`,
-                  `L ${cx + r * Math.cos(angle)} ${cy + r * Math.sin(angle)}`,
-                  `A ${r} ${r} 0 ${large} 1 ${cx + r * Math.cos(end)} ${cy + r * Math.sin(end)}`,
-                  "Z",
-                ].join(" ");
-          const slice = (
-            <path
-              key={i}
-              d={path}
-              fill={PALETTE[i % PALETTE.length]}
-              opacity={dim(drill, p.label)}
-              {...markProps(drill, p.label)}
-            >
-              <title>{`${p.label}: ${p.value} (${(share * 100).toFixed(1)}%)`}</title>
-            </path>
-          );
-          angle = end;
-          return slice;
-        })}
-      {total > 0 &&
-        points.map((p, i) => (
-          <g key={`k${i}`} transform={`translate(268, ${28 + i * 18})`}>
-            <rect width={11} height={11} y={-9} fill={PALETTE[i % PALETTE.length]} />
+      {drawn.map((wedge, i) => (
+        <path
+          key={i}
+          data-testid="pie-slice"
+          data-label={wedge.slice.label}
+          d={arcPath({ cx, cy, r, inner, start: wedge.start, end: wedge.end })}
+          fill={colourOf(i, wedge.slice)}
+          opacity={dim(drill, wedge.slice.value)}
+          {...markProps(drill, wedge.slice.value)}
+        >
+          <title>{`${wedge.slice.label}: ${wedge.slice.count} (${percentLabel(wedge.share)})`}</title>
+        </path>
+      ))}
+      {keyed &&
+        drawn.map((wedge, i) => (
+          <g
+            key={`k${i}`}
+            data-testid="pie-legend-entry"
+            transform={beside
+              ? `translate(${legend === "left" ? 24 : 268}, ${28 + i * 18})`
+              : `translate(24, ${legend === "top" ? 20 + i * 18 : HEIGHT - 12 - (drawn.length - i - 1) * 18})`}
+          >
+            <rect width={11} height={11} y={-9} fill={colourOf(i, wedge.slice)} />
             <text x={17} fontSize={11.5} fill="var(--ink)">
-              {shortLabel(p.label, 22)} — {niceNumber(p.value)}
+              {shortLabel(wedge.slice.label, 22)} — {niceNumber(wedge.slice.count)}
             </text>
           </g>
         ))}
