@@ -35,6 +35,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   drilldownVariable: "write",
   activeVariable: "write",
   selectedVariable: "write",
+  filterVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

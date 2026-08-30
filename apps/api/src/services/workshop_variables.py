@@ -310,6 +310,11 @@ REFERENCE_PROPS = (
     # binding the module no longer declares.
     "activeVariable",
     "selectedVariable",
+    # p.310's Selection as filter - the Pie Chart writes the clicked
+    # slice's clauses into it, the way p.224's outputs do. Found by
+    # §191's drift guard on the way in (§218), which is the third new
+    # prop it has caught.
+    "filterVariable",
     "name",
 )
 

@@ -95,6 +95,13 @@ import {
   hideHeaderOf as hideActionHeaderOf, invalidStateOf, localDefaultsOf,
 } from "./action-form";
 import {
+  // Aliased on §211's rule: `AGGREGATIONS` and `segmentsOf` are generic enough
+  // to collide, and `visibleSlices` sits beside two other `visible*` reads.
+  AGGREGATIONS as PIE_AGGREGATIONS, LEGEND_POSITIONS, MAX_INNER_RADIUS,
+  aggregationOf as pieAggregationOf, innerRadiusOf, legendPositionOf,
+  segmentsOf, showLegendOf, visibleSlices,
+} from "./pie-chart";
+import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
   // enough to collide with something later, and `labelOf` is the kind of name
   // three widgets could each want.
@@ -133,7 +140,7 @@ import {
   type ChartKind,
   type FilterOperator,
 } from "./filter-sql";
-import { Chart, toPoints } from "./charts";
+import { Chart, PieChart, toPoints } from "./charts";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
 import { PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
@@ -4306,6 +4313,298 @@ CanvasObjectViewWidget.craft = {
     hideHeader: false, emptyMessage: "",
   },
   related: { settings: ObjectViewWidgetSettings },
+};
+
+// ---- Pie chart (p.309-310) --------------------------------------------------
+/** p.309-310's Pie Chart: objects grouped by a property into proportional
+ * slices.
+ *
+ * The slice arithmetic, the document reads and the SVG geometry are
+ * `pie-chart.ts`, and **Chart XY's pie renders through the same functions** —
+ * one pie, two widgets. What is here is the fetch: `/object-sets/group`, which
+ * has answered grouped counts over an object set since roadmap 1.5 and is
+ * exactly what p.310's "each property type value will be represented by a
+ * slice" asks for.
+ *
+ * **Not built, and named rather than approximated**: five of p.310's six
+ * aggregations — the grouped endpoint answers a **count**, because instance
+ * properties are stored untyped and the two stores would disagree about a sum
+ * (decision 0006), which is §214's sort refusal in another widget; and p.309's
+ * **export as PNG / copy to clipboard**, which rasterises an SVG and is a
+ * capability rather than a setting.
+ */
+export function CanvasPieChart({
+  objectSetVariable = null,
+  groupBy = "",
+  inner = 0,
+  legend = "right",
+  showLegend = true,
+  segments = [],
+  ontologyColors = false,
+  filterVariable = null,
+}: {
+  objectSetVariable?: string | null;
+  /** p.310's Group by. */
+  groupBy?: string;
+  /** p.310's Radius, as a fraction of the outer radius. */
+  inner?: number;
+  legend?: string;
+  showLegend?: boolean;
+  /** p.310's Segment display overrides. */
+  segments?: unknown;
+  /** p.310's "Enable ontology colors". */
+  ontologyColors?: boolean;
+  /** p.310's "Selection as filter". */
+  filterVariable?: string | null;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const { set: setParameter } = useCanvasParameters();
+  const filterRaw = useCanvasParameter(filterVariable);
+
+  const grouped = useQuery({
+    queryKey: ["object-set-group", JSON.stringify(setDefinition ?? null), groupBy],
+    queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, groupBy),
+    enabled: !!setDefinition && !!groupBy && !variablesPending,
+  });
+  const typeId = (setDefinition as { object_type_id?: string } | undefined)?.object_type_id
+    ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    // Only for p.310's ontology colours: the rules live on the property, and
+    // asking for the type when nobody wants them is a round trip for nothing.
+    enabled: !!typeId && ontologyColors === true,
+  });
+
+  const chosen = segmentsOf(segments);
+  const slices = visibleSlices(grouped.data?.groups ?? [], chosen);
+  // p.310's "Enable ontology colors": the conditional formatting rules set for
+  // *that property* in the Ontology, evaluated against a row whose only
+  // property is the one being grouped — which is all a rule about it can read.
+  const property = (type.data?.properties ?? []).find((p) => p.api_name === groupBy);
+  const colors: Record<string, string | null> = {};
+  for (const slice of slices) {
+    const override = chosen.find((s) => s.value === slice.value)?.color ?? null;
+    const fromOntology = ontologyColors && property
+      ? conditionalStyle(property.conditional_format, { [groupBy]: slice.value })?.background
+        ?? null
+      : null;
+    // A per-segment colour beats the ontology's: p.310 offers both, and the
+    // one written on this widget is the more specific statement.
+    colors[slice.label] = override ?? fromOntology;
+  }
+
+  // p.310's "Selection as filter", as the clauses every other narrowing widget
+  // writes — so a pie, a table and a filter list compose instead of competing.
+  let selected: string | null = null;
+  for (const clause of Array.isArray(filterRaw) ? filterRaw : []) {
+    const c = clause as { property?: string; op?: string; value?: unknown };
+    if (c.property === groupBy && c.op === "eq") selected = String(c.value ?? "");
+  }
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable || !groupBy ? (
+        <p className="canvas-widget-empty">
+          Pie chart - bind an object set and a property in Settings
+        </p>
+      ) : grouped.isPending ? (
+        <p className="canvas-widget-empty">Counting…</p>
+      ) : grouped.isError ? (
+        <p className="canvas-widget-empty" data-testid="pie-error">
+          Couldn&apos;t group this object set.
+        </p>
+      ) : (
+        <div data-testid="pie-chart">
+          <PieChart
+            points={slices.map((s) => ({ label: s.label, value: s.count }))}
+            inner={innerRadiusOf(inner)}
+            legend={legendPositionOf(legend)}
+            showLegend={showLegendOf(showLegend)}
+            colors={colors}
+            drill={filterVariable
+              ? {
+                selected,
+                onSelect: (label: string) => {
+                  const slice = slices.find((s) => s.label === label);
+                  const value = slice ? slice.value : label;
+                  setParameter(filterVariable, selected === value
+                    ? []
+                    : [{ property: groupBy, op: "eq", value }]);
+                },
+              }
+              : undefined}
+          />
+          {grouped.data?.truncated && (
+            // Said rather than hidden: a pie missing slices is not a smaller
+            // pie, it is the wrong proportions — §214's rule about a search
+            // over part of a set, where the cost of silence is higher.
+            <p className="canvas-widget-empty" data-testid="pie-truncated">
+              Showing {slices.length} of {grouped.data.distinct_total} values
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PieChartSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectSetVariable, groupBy, inner, legend, showLegend, ontologyColors,
+    filterVariable,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    groupBy: node.data.props.groupBy,
+    inner: node.data.props.inner,
+    legend: node.data.props.legend,
+    showLegend: node.data.props.showLegend,
+    ontologyColors: node.data.props.ontologyColors,
+    filterVariable: node.data.props.filterVariable,
+  }));
+  const { declared, resolved } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
+  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable, groupBy }}
+      requires={["objectSetVariable", "groupBy"]}
+      labels={{ objectSetVariable: "an object set", groupBy: "a property to group by" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Input object set</span>
+        <select
+          value={objectSetVariable || ""}
+          data-testid="pie-variable"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Group by</span>
+        <select
+          value={groupBy || ""}
+          data-testid="pie-group-by"
+          onChange={(e) => setProp((p: { groupBy: string }) => (p.groupBy = e.target.value))}
+        >
+          <option value="">Choose…</option>
+          {(type.data?.properties ?? []).map((p) => (
+            <option key={p.api_name} value={p.api_name}>{p.display_name || p.api_name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Aggregation</span>
+        <select value={pieAggregationOf(undefined)} data-testid="pie-aggregation" disabled>
+          {Object.entries(PIE_AGGREGATIONS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          p.310 lists six; a grouped sum needs declared property types (decision 0006)
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Inner radius</span>
+        <input
+          type="number"
+          min={0}
+          max={MAX_INNER_RADIUS}
+          step={0.1}
+          value={innerRadiusOf(inner)}
+          data-testid="pie-inner"
+          onChange={(e) => setProp((p: { inner: number }) => (p.inner = Number(e.target.value)))}
+        />
+        <span className="field-hint">Zero is a pie; anything above it is a donut</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={showLegendOf(showLegend)}
+          data-testid="pie-show-legend"
+          onChange={(e) =>
+            setProp((p: { showLegend: boolean }) => (p.showLegend = e.target.checked))}
+        />
+        <span className="field-label">Show legend</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Legend position</span>
+        <select
+          value={legendPositionOf(legend)}
+          data-testid="pie-legend-position"
+          onChange={(e) => setProp((p: { legend: string }) => (p.legend = e.target.value))}
+        >
+          {Object.entries(LEGEND_POSITIONS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={ontologyColors === true}
+          data-testid="pie-ontology-colors"
+          onChange={(e) =>
+            setProp((p: { ontologyColors: boolean }) => (p.ontologyColors = e.target.checked))}
+        />
+        <span className="field-label">Enable ontology colors</span>
+        <span className="field-hint">
+          The conditional formatting rules set for this property in the Ontology
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Selection as filter</span>
+        <select
+          value={filterVariable || ""}
+          data-testid="pie-filter-variable"
+          onChange={(e) =>
+            setProp((p: { filterVariable: string | null }) =>
+              (p.filterVariable = e.target.value || null))}
+        >
+          <option value="">Clicking a slice does nothing</option>
+          {arrays.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          An array variable holding clauses, which a narrow_set derivation reads
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasPieChart.craft = {
+  displayName: "Pie chart",
+  props: {
+    objectSetVariable: null, groupBy: "", inner: 0, legend: "right",
+    showLegend: true, segments: [], ontologyColors: false, filterVariable: null,
+  },
+  related: { settings: PieChartSettings },
 };
 
 // ---- Object dropdown (p.455-458) --------------------------------------------
@@ -10035,6 +10334,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectViewWidget,
   CanvasObjectDropdown,
   CanvasObjectSelector,
+  CanvasPieChart,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -10071,6 +10371,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectViewWidget", label: "Object view", hint: "The whole object view for one object, embedded" },
   { key: "CanvasObjectDropdown", label: "Object dropdown", hint: "Pick one object from a searchable list" },
   { key: "CanvasObjectSelector", label: "Object selector", hint: "Pick several objects from a searchable list" },
+  { key: "CanvasPieChart", label: "Pie chart", hint: "Objects grouped by a property, as proportional slices" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
