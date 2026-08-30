@@ -98,6 +98,73 @@ def test_it_lists_the_objects_with_a_tick_each(page, api, sites) -> None:
     expect(page.get_by_test_id("selector-option").first).to_contain_text("North West Depot")
 
 
+def test_the_ticks_show_what_is_selected(page, api, sites) -> None:
+    """**The reader's own feedback, and nothing else here was asserting it.**
+
+    Every other test in this file reads the downstream table, which is right —
+    the clauses are what the module acts on — but a widget whose boxes never
+    tick, or tick all at once, would pass all of them: the clicks still write
+    the right clauses. The harness caught both, in the same run.
+    """
+    mod = build(api, sites, "Selector ticks")
+    open_module(page, mod)
+    settled(page)
+
+    open_list(page)
+    for key in ("S1", "S2", "S3"):
+        expect(page.get_by_test_id(f"selector-tick-{key}")).not_to_be_checked()
+
+    tick(page, "S2")
+    expect(page.get_by_test_id("selector-tick-S2")).to_be_checked()
+    # And only that one — a widget ticking everything is as wrong as one
+    # ticking nothing, and looks more plausible.
+    expect(page.get_by_test_id("selector-tick-S1")).not_to_be_checked()
+    expect(page.get_by_test_id("selector-tick-S3")).not_to_be_checked()
+
+    tick(page, "S2")
+    expect(page.get_by_test_id("selector-tick-S2")).not_to_be_checked()
+
+
+def test_the_tick_sits_beside_its_title(page, api, sites) -> None:
+    """Asserted by position, because a class no rule matches passes every other
+    kind of check (§211). A box stacked above its own label reads as belonging
+    to the row before it."""
+    mod = build(api, sites, "Selector layout", {"properties": "region"})
+    open_module(page, mod)
+    settled(page)
+
+    open_list(page)
+    row = page.get_by_test_id("selector-option").first
+    expect(row).to_be_visible()
+    box, title = row.evaluate(
+        "e => [e.querySelector('input').getBoundingClientRect(),"
+        " e.querySelector('.canvas-dropdown-title').getBoundingClientRect()]"
+    )
+    assert box["right"] <= title["left"] + 1, (box, title)
+    assert abs(box["top"] - title["top"]) < 8, (box, title)
+
+
+def test_search_can_cover_a_property_that_is_not_shown(page, api, sites) -> None:
+    """p.458's modes reach this widget too — the harness found that nothing here
+    exercised them, so the mode could have been hardcoded and every other test
+    would still pass. `region` is not displayed, so the default mode must *not*
+    find it and "all searchable" must."""
+    default = build(api, sites, "Selector search default")
+    open_module(page, default)
+    settled(page)
+    open_list(page)
+    page.get_by_test_id("selector-search").fill("south")
+    expect(page.get_by_test_id("selector-option")).to_have_count(0)
+
+    everything = build(api, sites, "Selector search all", {"searchMode": "all"})
+    open_module(page, everything)
+    settled(page)
+    open_list(page)
+    page.get_by_test_id("selector-search").fill("south")
+    expect(page.get_by_test_id("selector-option")).to_have_count(1)
+    expect(page.get_by_test_id("selector-option").first).to_contain_text("Bravo Yard")
+
+
 def test_nothing_is_selected_on_load_and_that_narrows_to_nothing(page, api, sites) -> None:
     """**The difference between "none" and "nobody has said".**
 
