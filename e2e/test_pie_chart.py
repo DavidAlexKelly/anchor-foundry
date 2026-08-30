@@ -144,6 +144,18 @@ def test_a_donut_has_a_hole(page, api, sites) -> None:
     assert ring.count(" A ") == 2, ring
     assert solid != ring
 
+    # **A radius that is not a number at all**, which the raw JSON editor can
+    # hold. Read through the model it is zero; passed on raw it makes every
+    # coordinate `NaN` and the browser draws nothing — and the harness found
+    # that nothing here had asked, because every other radius in this file is
+    # already legal.
+    broken = build(api, sites, "Pie bad radius", {"inner": "abc"})
+    open_module(page, broken)
+    settled(page)
+    d = slice_for(page, "open").get_attribute("d") or ""
+    assert "NaN" not in d, d
+    assert d == solid, d
+
 
 def test_the_legend_names_every_slice_and_can_be_turned_off(page, api, sites) -> None:
     shown = build(api, sites, "Pie legend")
@@ -180,6 +192,18 @@ def test_the_legend_moves(page, api, sites) -> None:
     assert on_the_left < on_the_right, (on_the_left, on_the_right)
     # And the pie moved out of its way rather than the legend landing on top.
     assert slices(page).first.evaluate("e => e.getBoundingClientRect().left") > pie_right
+
+    # **Bottom, too, and the harness had to say so**: left and right are both
+    # *beside* the chart, so a renderer that ignored the distinction between
+    # beside and stacked passed both halves above. This one is below the pie.
+    below = build(api, sites, "Pie legend bottom", {"legend": "bottom"})
+    open_module(page, below)
+    settled(page)
+    legend_top = page.get_by_test_id("pie-legend-entry").first.evaluate(
+        "e => e.getBoundingClientRect().top"
+    )
+    pie_bottom = slices(page).first.evaluate("e => e.getBoundingClientRect().bottom")
+    assert legend_top > pie_bottom - 40, (legend_top, pie_bottom)
 
 
 def test_a_segment_can_be_relabelled_and_recoloured(page, api, sites) -> None:
@@ -244,7 +268,13 @@ def test_clicking_a_slice_narrows_a_downstream_set(page, api, sites) -> None:
     """p.310's "Selection as filter", asserted through a *second widget*: the
     clauses are what the module acts on, and a slice that highlights itself
     while writing nothing looks identical from the chart's side."""
-    mod = build(api, sites, "Pie filter", with_filter=True)
+    # **With a label override on the slice being clicked.** Without one the
+    # label and the value are the same string, so a widget writing the wrong
+    # one of them narrows correctly anyway — which is exactly what the harness
+    # found this test doing.
+    mod = build(api, sites, "Pie filter", {
+        "segments": [{"value": "closed", "label": "Shut"}],
+    }, with_filter=True)
     open_module(page, mod)
     settled(page)
 
@@ -257,13 +287,13 @@ def test_clicking_a_slice_narrows_a_downstream_set(page, api, sites) -> None:
     # by `closed` sitting on top of the aim point. A quarter wedge contains its
     # own bbox centre. The narrowing is sharper this way round anyway: one row
     # of four rather than three.
-    slice_for(page, "closed").click()
+    slice_for(page, "Shut").click()
     expect(rows).to_have_count(1)
     expect(rows.first).to_contain_text("S4")
 
     # And clicking the same slice again clears it, so the control is the same
     # one both ways round.
-    slice_for(page, "closed").click()
+    slice_for(page, "Shut").click()
     expect(rows).to_have_count(len(ROWS))
 
 
@@ -278,6 +308,83 @@ def test_a_slice_is_not_clickable_without_somewhere_to_put_the_answer(
 
     expect(slices(page).first).to_be_visible()
     expect(slice_for(page, "open")).not_to_have_attribute("role", "button")
+
+
+def test_two_pies_over_different_sets_do_not_share_an_answer(page, api, sites) -> None:
+    """**One widget per page hides a caching mistake.** Every other test here
+    has a single pie, so a chart keyed on anything at all — even a constant —
+    shows the right slices. Two pies over different sets is the state that
+    tells them apart, and it is an ordinary page: a chart of everything beside
+    a chart of one region.
+    """
+    mod = Module(api, "Pie two sets", beside=sites)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "all": {"resolvedName": "CanvasPieChart",
+                    "props": {"objectSetVariable": "v_all", "groupBy": "status"}},
+            "north": {"resolvedName": "CanvasPieChart",
+                      "props": {"objectSetVariable": "v_north", "groupBy": "status"}},
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "Every site",
+                      "object_set": object_set(sites.site_type_id)},
+            "v_north": {
+                "id": "v_north", "kind": "object_set", "label": "The north",
+                "object_set": object_set(
+                    sites.site_type_id,
+                    [{"property": "region", "op": "eq", "value": "north"}],
+                ),
+            },
+        },
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+
+    charts = page.get_by_test_id("pie-chart")
+    expect(charts).to_have_count(2)
+    # Everything: three open and one closed. The north: two open and none
+    # closed — so the second chart has *one* slice, and a chart showing the
+    # first one's answer would have two.
+    expect(charts.nth(0).get_by_test_id("pie-slice")).to_have_count(2)
+    expect(charts.nth(1).get_by_test_id("pie-slice")).to_have_count(1)
+    expect(charts.nth(1).locator("title")).to_have_text("open: 2 (100.0%)")
+
+
+def test_ontology_colours_stay_off_when_something_else_loaded_the_type(
+    page, api, sites
+) -> None:
+    """The colours-off half of the pair, **on a page where the object type is
+    already in the query cache**.
+
+    Without the table beside it the type is never fetched — the widget only
+    asks for it when the setting is on — so "the setting is off" and "the rules
+    are not here" were the same state, and a widget ignoring the setting passed.
+    A table and a chart of the same objects is the ordinary page this happens on.
+    """
+    mod = Module(api, "Pie cached type", beside=sites)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "tbl": {"resolvedName": "CanvasObjectTable",
+                    "props": {"objectSetVariable": "v_set", "columns": "id,status",
+                              "pageSize": 25, "activeVariable": None, "autoSelect": False}},
+            "pie": {"resolvedName": "CanvasPieChart",
+                    "props": {"objectSetVariable": "v_set", "groupBy": "status",
+                              "ontologyColors": False}},
+        }),
+        "variables": {
+            "v_set": {"id": "v_set", "kind": "object_set", "label": "Every site",
+                      "object_set": object_set(sites.site_type_id)},
+        },
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+
+    expect(page.locator(".data-grid tbody tr")).to_have_count(len(ROWS))
+    expect(slice_for(page, "open")).not_to_have_attribute("fill", "#123456")
 
 
 def test_the_panel_offers_the_bound_type_s_properties(page, api, sites) -> None:
