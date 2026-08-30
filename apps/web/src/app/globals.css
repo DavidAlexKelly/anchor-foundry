@@ -1705,6 +1705,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px;
 }
 .canvas-object-tick input { margin-top: 2px; }
+/* The tick's sibling wraps a title and p.457's property lines, and it has to
+   stack them itself: `.canvas-dropdown-option`'s grid stacks its *direct*
+   children, and here they are one element deeper. Without this the details run
+   inline after the title — which is what "beneath the object title" is not, and
+   what the class collision above was hiding. */
+.canvas-object-tick > span { display: grid; gap: 1px; min-width: 0; }
 
 
 /* ---- Object set title (p.274) -------------------------------------------- */

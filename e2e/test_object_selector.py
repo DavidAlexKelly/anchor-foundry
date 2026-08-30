@@ -144,9 +144,30 @@ def test_the_tick_sits_beside_its_title(page, api, sites) -> None:
         " e.querySelector('.canvas-dropdown-title').getBoundingClientRect(),"
         " e.getBoundingClientRect()]"
     )
-    assert whole["height"] > 30, whole  # the row really is several lines tall
+    assert whole["height"] > 40, whole  # the row really is several lines tall
     assert box["right"] <= title["left"] + 1, (box, title)
     assert abs(box["top"] - title["top"]) < 6, (box, title)
+
+
+def test_the_property_lines_sit_beneath_the_title(page, api, sites) -> None:
+    """p.457: "a property to display **beneath** the object title".
+
+    Counting the lines is not enough — they were running *inline* after the
+    title for a while and every count passed. The measurement is what says
+    beneath.
+    """
+    mod = build(api, sites, "Selector stacked", {"properties": "region,note"})
+    open_module(page, mod)
+    settled(page)
+
+    open_list(page)
+    row = page.get_by_test_id("selector-option").filter(has_text="Bravo Yard").first
+    expect(row).to_be_visible()
+    title, first_detail = row.evaluate(
+        "e => [e.querySelector('.canvas-dropdown-title').getBoundingClientRect(),"
+        " e.querySelector('.canvas-dropdown-detail').getBoundingClientRect()]"
+    )
+    assert first_detail["top"] >= title["bottom"] - 1, (title, first_detail)
 
 
 def test_search_can_cover_a_property_that_is_not_shown(page, api, sites) -> None:
