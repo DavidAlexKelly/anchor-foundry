@@ -4290,6 +4290,125 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 219. The Stepper, and a variable binding no scan could see (this session)
+
+p.312-313's widget: p.312's Linear and Non-linear types, p.313's Steps with a label, an On click
+event and an Is completed boolean variable, both Templates, Show step number under both of its
+conditions, and the Completed and Active colours.
+
+**Checked before starting, per §216.** It needs no data layer at all — p.313's step is a label, an
+event, a boolean and an icon — which is exactly what build-order item 7 said, and the estimate was
+still wrong, in the direction worth recording: the widget was the small half.
+
+---
+
+**Progress is read and never stored.**
+
+p.313 makes completion "a boolean variable to be used a check", which means the widget owns no
+progress of its own: the module decides what completing a step means, the variable records it, and
+the stepper draws the answer. A stepper holding its own idea of progress would disagree with the
+module the moment anything else wrote to those variables — §207's rule about selections, in a
+widget that looks nothing like a table.
+
+**Which step is active is derived from that** and is not a fourth thing to store: it is the first
+incomplete one. p.313 names an active colour and never says what sets it, and any *stored* answer
+could disagree with the completion variables drawn beside it.
+
+The first version read the **parameter store**, which holds what a viewer has set. A completion
+variable with a default was therefore false until somebody touched it, and a **derived** one — "is
+this approved?", which is how a real workflow's step is actually written — could not be read at
+all. Every state and colour assertion in `test_stepper.py` failed at once; `resolved`, the whole
+variable graph, is the right source. Worth stating as a rule: **a widget reading a variable wants
+the resolved graph, not the store**, unless what it wants is specifically what a viewer typed.
+
+---
+
+**The larger half: this is the first widget whose bindings are not top-level props.**
+
+Every entry in `REFERENCE_PROPS` is read with one `props[prop]`. A Stepper step's completion
+variable lives inside the `steps` array, so it is invisible to that scan — and the failure is the
+familiar one: nothing counts it as a usage, the Variables panel says "unused" and offers to delete
+it, the delete refusal never fires, and afterwards every step reads as never completed with nothing
+anywhere saying why. **That is §185's `collapsedWhen` and §190's `tabVariable` again, arriving by a
+route neither of their guards can reach**: the naming convention holds perfectly —
+`completedVariable` ends in `Variable` — but the name never appears as `node.data.props.X`, because
+it is a key inside an element rather than a prop.
+
+So nested references got a catalogue rather than a special case. `NESTED_REFERENCE_PROPS` exists in
+both runtimes, mirrored by the same kind of drift test as the flat list, and **one shared walk**
+(`references` / `referencesOf`) now feeds what had been five separate copies of the same loop:
+usage scanning, dangling-reference refusal, the lineage graph, a clipping's referenced variables,
+and a page's bindings. Five copies is five chances for a binding to be a usage in one place and
+invisible in another. A sixth caller, the paste remapper, needed a *rewrite* rather than a read, so
+it is `remapReferences` beside it.
+
+**The fifth guard beside §191's four** scans the model modules — `components/canvas/*.ts`, where
+the pure-module pattern puts every widget's shapes — for a field typed `string` whose name ends in
+`Variable`, `Parameter` or `When`, and requires each to be catalogued somewhere. Typed `string` on
+purpose: `mintVariable: () => string` is a factory and `filterParameter: "write"` is a
+classification, and neither holds an id.
+
+The generalisable part: **a guard that reads one place a name can appear stops working the moment
+the name can appear somewhere else.** The old guard was not wrong, and it was complete for exactly
+as long as every binding was a prop. A widget with repeating configuration — a Timeline's rows, a
+Waterfall's stages — is not a one-off, so the next one should find a list to be added to rather
+than a precedent to copy.
+
+---
+
+**Two survivors, and both were a fixture stopping short of the boundary.**
+
+* `references` walks a list prop only when it *is* a list, and every junk fixture in the test was
+  the string `"not a list"` — which is iterable, so the scan without the check walked its
+  characters and passed. **A number is what separates them.** §212 met this as a page limit the
+  data never crossed, §217 as a parameter with nothing to default, §218 as a page with one chart.
+* Nothing asked `references` directly, so counting a blank binding changed no assertion anywhere —
+  `""` is neither a declared variable nor a `v_` prefix, so both callers filtered it out one step
+  later. The browser's copy had the test; the API's did not.
+
+A third was in the lineage graph and is a different shape: `buildGraph` skips a reference no
+catalogue gives a direction, and **nothing held that skip** — deleting it drew the edge as a read,
+which is the `?? "read"` the module argues against by name. The state is unreachable through a
+document (the type refuses an unclassified flat prop, and a test refuses an unclassified nested
+one), so pinning it needed the test to add a catalogue entry and take it away again. **A branch
+that guards against a future edit is still worth pinning; pinning it means making that edit.**
+
+---
+
+**Four CSS custom properties were being read that nothing defines.**
+
+`--rule`, `--border`, `--surface` and `--muted`, in the saved-state bar and the layout template
+picker. An undefined custom property is not an error anywhere — the declaration is simply dropped —
+so a `border-top` drew no border and the template picker's *floating preview panel* had no
+background at all, sitting transparent over the canvas. Three more were invented **with** a
+fallback, which did all the work silently: `--mono` and `--font-sans` beside a file that defines
+`--font-mono` and `--font-body`, which is why the code views were rendering in the browser's
+monospace rather than this project's, and `--surface-2` in five places with three different alphas,
+black-on-black in dark mode.
+
+Found because the Stepper reached for two of the same invented names. The file already carried a
+comment about it — written the first time, and the mistake happened four more times anyway. It now
+has `tokens.test.ts` instead. **A CSS variable is the one reference in this codebase with no
+compiler behind it**, and a comment is a warning to whoever reads it.
+
+---
+
+**74 mutants across four layers — 30 on the model, 9 on the shared reference walk, 5 on the lineage
+graph, 8 on the API, 22 on the widget and its CSS — 74 caught, 0 survivors, 0 no-ops** after the
+three fixes above.
+
+**1175 unit tests** (was 1118); **559 browser tests** (was 534); **1533 API tests**, 2 skipped (was
+1526).
+
+`workshop.md` §10 goes from 27 of ~52 rows to 28. Build-order item 7 is struck for Stepper **in the
+commit that finished it**, leaving Timeline (p.347-350) as the item's one remaining real page —
+Status Tracker and Waterfall have no section in the PDF at all (§218).
+
+---
+---
+---
+---
+
 ### 218. The Pie Chart, and a pie whose geometry nothing could reach (this session)
 
 p.309-310's widget: the input object set, Group by, p.310's Radius, the Legend and its four
@@ -5529,9 +5648,15 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
 
-- **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed and §217 as a parameter with nothing to default. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table.
+- **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A guard that reads one place a name can appear stops working the moment the name can appear somewhere else.** §191's completeness check scans `node.data.props.X` — what a settings panel reads — and was complete for exactly as long as every variable binding was a top-level prop. §219's Stepper put one *inside* an array: `steps[1].completedVariable` follows the naming convention perfectly and the scan cannot see it, because the name never appears as a prop. So nothing counted it as a usage, the Variables panel said "unused" and offered to delete it, and afterwards every step would read as never completed — §185's `collapsedWhen` and §190's `tabVariable` a third time, by a route neither of their guards reaches. The fix is a catalogue rather than a special case (`NESTED_REFERENCE_PROPS`, mirrored in both runtimes) plus **one shared walk** for what had become five copies of the same loop — usage scanning, dangling-reference refusal, the lineage graph, a clipping's references, a page's bindings — because five copies is five chances for a binding to be a usage in one place and invisible in another. The general tell: when a *shape* changes (a prop becoming a list of objects), ask what each existing guard actually scans, not whether the new thing follows the convention.
+
+- **A widget reading a variable wants the resolved graph, not the parameter store.** §219's Stepper first read `useCanvasParameters().values`, which holds what a *viewer* has set. A completion variable with a default was therefore false until somebody touched it, and a **derived** one — "is this approved?", which is how a real workflow's step is actually written — could not be read at all. Every state and colour assertion in the browser suite failed at once, which is the good case; the bad case is a widget where the difference only shows for the derived binding nobody wrote a fixture for. `resolved` is the whole variable graph and the right default; the store is for what a viewer typed, specifically.
+
+- **A CSS custom property is the one reference in this codebase with no compiler behind it.** `var(--surface)` where nothing declares `--surface` is not an error anywhere — the declaration is silently dropped — so a `border-top` draws no border and a floating panel has no background. §219 found four such names live (`--rule`, `--border`, `--surface`, `--muted`) in the saved-state bar and the layout template picker, and three more invented *with* a fallback that quietly did all the work, which is why the code views were rendering in the browser's monospace rather than this project's. `globals.css` had carried a comment about this since the first occurrence and the mistake happened four more times anyway — including in the stepper being written beside it. **A comment is a warning to whoever reads it**; the check that does not depend on being read is twenty lines of `tokens.test.ts`, and it distinguishes an absent token from a deliberate fallback so "add a fallback" cannot become a way to silence it.
 
 - **When a client needs to know what a server rule would decide, add an endpoint that runs the rule — do not port the rule.** §217's Inline Action widget has p.513's "disable or hide the form when submission criteria are not met", which needs the answer before anything is written; §130 had built the same form deliberately *not* evaluating criteria, because that would be a second implementation of a rule governing writes, free to disagree with the first. Both are right, and `POST .../check` is how to have both: it binds the parameters and runs **the same `check_criteria` the executor runs**, writes nothing, opens no run, and requires the role that could submit. It answers `200 {ok: false}` rather than a 4xx, because "not available" and "could not be asked" are different facts a widget has to tell apart. The cost is one round trip; the alternative is two implementations that agree until they do not. Two details generalise: ask it **per subject, not per keystroke** (the first version keyed it on the typed values and disabled the button before the server could refuse, replacing the criterion's own message with silence — caught by an existing test for a *different* feature), and enable it only where the rule can bite, or every action with no criteria pays for an answer that is known.
 
