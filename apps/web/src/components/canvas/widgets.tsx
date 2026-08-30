@@ -87,6 +87,15 @@ import {
   VIEW_MODES, allowToggleOf, emptyMessageOf as objectViewEmptyMessageOf,
   hideHeaderOf, viewModeOf,
 } from "./object-view-widget";
+import {
+  // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
+  // enough to collide with something later, and `labelOf` is the kind of name
+  // three widgets could each want.
+  PAGE_LIMIT as DROPDOWN_PAGE_LIMIT, SEARCH_MODES, SORTS as DROPDOWN_SORTS,
+  allowNoSelectionOf, labelOf as dropdownLabelOf, matchesQuery,
+  propertyListOf, searchModeOf, searchProperties, sortOf as dropdownSortOf,
+  titleOf as optionTitleOf, truncationNote,
+} from "./object-dropdown";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -4290,6 +4299,399 @@ CanvasObjectViewWidget.craft = {
     hideHeader: false, emptyMessage: "",
   },
   related: { settings: ObjectViewWidgetSettings },
+};
+
+// ---- Object dropdown (p.455-458) --------------------------------------------
+/** p.455-458's Object Dropdown: "used to select a single object from a list of
+ * objects".
+ *
+ * p.458's search rules are `object-dropdown.ts`. The **output** is the Object
+ * Table's — `selectionClauses`, one key — and p.457's "Allow no selection" is
+ * p.224's auto-selection with the sign flipped, so it is `autoSelectKey` with
+ * `enabled: !allowNone`. Two settings on two pages of two different widgets
+ * turn out to be the same question about the same variable shape, and writing
+ * a second answer to it would have been a second thing to keep in step.
+ *
+ * **Not built, and named rather than approximated**: p.455's "data on one or
+ * multiple object types", which needs an object set spanning types and is the
+ * same ○ as the Object Table's; p.455's conditional and numerical formatting
+ * *configured in the Ontology Manager* is in fact drawn — `PropertyValue` does
+ * it — but the sort in p.458 is a single property here, because p.458's own
+ * "only shared properties can be sorted on" is about the multi-type case that
+ * does not exist yet.
+ */
+export function CanvasObjectDropdown({
+  objectSetVariable = null,
+  selectedVariable = null,
+  label = "",
+  properties = "",
+  hideNull = false,
+  sortProperty = "",
+  searchMode = "on_screen",
+  searchPropertyNames = "",
+  allowNoSelection = false,
+}: {
+  objectSetVariable?: string | null;
+  /** p.457's Selected object — the output, as selection clauses. */
+  selectedVariable?: string | null;
+  label?: string;
+  /** p.457's "Add property": what is drawn beneath each object's title. */
+  properties?: string;
+  /** p.458's Hide null properties, per object. */
+  hideNull?: boolean;
+  /** p.458's Sort items by, as far as `object_sets` can express it. */
+  sortProperty?: string;
+  /** p.458's Search items by. */
+  searchMode?: string;
+  /** p.458's "the specified string properties". */
+  searchPropertyNames?: string;
+  /** p.457's Allow no selection. */
+  allowNoSelection?: boolean;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+  const { set: setParameter } = useCanvasParameters();
+  const selectedRaw = useCanvasParameter(selectedVariable);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [screenRef, onScreen] = useOnScreen();
+
+  const setPage = useSetPage(workspaceId, setDefinition, {
+    pageSize: DROPDOWN_PAGE_LIMIT,
+    sort: dropdownSortOf(sortProperty),
+    variablesPending,
+  });
+  const type = useQuery({
+    queryKey: ["object-type", setPage.typeId],
+    queryFn: () => objApi.getType(workspaceId, setPage.typeId!),
+    enabled: !!setPage.typeId,
+  });
+  const declared = type.data?.properties ?? [];
+  const titleProperty = declared.find((p) => p.id === type.data?.title_property_id);
+  const shownNames = propertyListOf(properties);
+  const searchable = searchProperties({
+    mode: searchMode,
+    all: declared,
+    // The title is on screen too, and p.458 says search runs on what is
+    // displayed — a picker whose search ignored the words it is showing would
+    // be the most surprising thing on the page.
+    shown: [...(titleProperty ? [titleProperty.api_name] : []), ...shownNames],
+    specific: searchPropertyNames,
+  });
+
+  const rows = setPage.rows ?? [];
+  const options = rows.filter((row) => matchesQuery(row.properties, query, searchable));
+  const keys = keysOf(selectedRaw);
+  const chosenKey = keys[0] ?? null;
+  const chosen = rows.find((row) => row.primary_key === chosenKey);
+  const allowNone = allowNoSelectionOf(allowNoSelection);
+
+  // p.457's Allow no selection, off, is p.224's auto-selection: pick the first
+  // object so downstream widgets have something to read. In an effect because
+  // it is a *write*, and only when the widget is on screen for p.224's reason.
+  const autoKey = autoSelectKey({
+    rows, current: keys, enabled: !allowNone, visible: onScreen,
+  });
+  const stated = hasSelection(selectedRaw);
+  useEffect(() => {
+    if (!selectedVariable) return;
+    if (autoKey) {
+      setParameter(selectedVariable, selectionClauses([autoKey]));
+      return;
+    }
+    if (!stated) setParameter(selectedVariable, selectionClauses([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoKey, selectedVariable, stated]);
+
+  const pick = (key: string | null) => {
+    setOpen(false);
+    setQuery("");
+    if (selectedVariable) {
+      setParameter(selectedVariable, selectionClauses(key ? [key] : []));
+    }
+  };
+
+  const note = truncationNote(setPage.total, rows.length);
+  const heading = dropdownLabelOf(label);
+
+  return (
+    <div
+      ref={(ref) => {
+        connectDragDrop(ref, connect, drag);
+        screenRef(ref);
+      }}
+      className="canvas-block"
+    >
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">Object dropdown - bind an object set in Settings</p>
+      ) : (
+        <div className="canvas-dropdown" data-testid="object-dropdown">
+          {heading && <span className="field-label" data-testid="dropdown-label">{heading}</span>}
+          <button
+            type="button"
+            className="canvas-dropdown-toggle"
+            aria-expanded={open}
+            aria-haspopup="listbox"
+            data-testid="dropdown-toggle"
+            onClick={() => setOpen(!open)}
+          >
+            <span data-testid="dropdown-value">
+              {setPage.unresolved
+                ? "Resolving the object set…"
+                : chosen
+                  ? optionTitleOf(chosen.properties, titleProperty?.api_name ?? null,
+                                  chosen.primary_key)
+                  : "Select an object..."}
+            </span>
+            <span className="canvas-dropdown-caret" aria-hidden>▾</span>
+          </button>
+          {open && (
+            <div className="canvas-dropdown-panel" role="listbox">
+              <input
+                type="search"
+                className="canvas-dropdown-search"
+                placeholder="Search…"
+                value={query}
+                data-testid="dropdown-search"
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              {/* p.457's Allow no selection, as a control rather than only as a
+                  permission: a viewer who may have no selection needs a way
+                  back to having none. */}
+              {allowNone && (
+                <button
+                  type="button"
+                  className="canvas-dropdown-option"
+                  data-testid="dropdown-clear"
+                  onClick={() => pick(null)}
+                >
+                  No selection
+                </button>
+              )}
+              {options.length === 0 ? (
+                <p className="canvas-widget-empty" data-testid="dropdown-no-matches">
+                  Nothing matches
+                </p>
+              ) : (
+                options.map((row) => (
+                  <button
+                    type="button"
+                    key={row.id}
+                    role="option"
+                    aria-selected={row.primary_key === chosenKey}
+                    className="canvas-dropdown-option"
+                    data-testid="dropdown-option"
+                    onClick={() => pick(row.primary_key)}
+                  >
+                    <span className="canvas-dropdown-title">
+                      {optionTitleOf(row.properties, titleProperty?.api_name ?? null,
+                                     row.primary_key)}
+                    </span>
+                    {visibleProperties({
+                      all: declared, chosen: properties,
+                      values: row.properties, hideNull: hideNullOf(hideNull),
+                    }).map((p) => (
+                      <span className="canvas-dropdown-detail" key={p.api_name}
+                            data-testid="dropdown-detail">
+                        <PropertyValue
+                          workspaceId={workspaceId}
+                          dataType={p.data_type}
+                          valueFormat={p.value_format}
+                          style={conditionalStyle(p.conditional_format, row.properties)}
+                          value={row.properties[p.api_name]}
+                        />
+                      </span>
+                    ))}
+                  </button>
+                ))
+              )}
+              {note && (
+                <p className="canvas-widget-empty" data-testid="dropdown-truncated">{note}</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ObjectDropdownSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectSetVariable, selectedVariable, label, properties, hideNull,
+    sortProperty, searchMode, searchPropertyNames, allowNoSelection,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    selectedVariable: node.data.props.selectedVariable,
+    label: node.data.props.label,
+    properties: node.data.props.properties,
+    hideNull: node.data.props.hideNull,
+    sortProperty: node.data.props.sortProperty,
+    searchMode: node.data.props.searchMode,
+    searchPropertyNames: node.data.props.searchPropertyNames,
+    allowNoSelection: node.data.props.allowNoSelection,
+  }));
+  const { declared, resolved } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
+  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const names = (type.data?.properties ?? []).map((p) => p.api_name).join(", ");
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable, selectedVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set", selectedVariable: "where to put the selection" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Input object set</span>
+        <select
+          value={objectSetVariable || ""}
+          data-testid="dropdown-variable"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Selected object</span>
+        <select
+          value={selectedVariable || ""}
+          data-testid="dropdown-selected-variable"
+          onChange={(e) =>
+            setProp((p: { selectedVariable: string | null }) =>
+              (p.selectedVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          An object set of the one selected object, which is what p.457 says it holds
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={allowNoSelectionOf(allowNoSelection)}
+          data-testid="dropdown-allow-none"
+          onChange={(e) =>
+            setProp((p: { allowNoSelection: boolean }) =>
+              (p.allowNoSelection = e.target.checked))}
+        />
+        <span className="field-label">Allow no selection</span>
+        <span className="field-hint">
+          Off means the first object is selected on load, so downstream widgets have one
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label ?? ""}
+          placeholder="none"
+          data-testid="dropdown-label-input"
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Properties</span>
+        <input
+          type="text"
+          value={properties ?? ""}
+          placeholder="the title only"
+          data-testid="dropdown-properties"
+          onChange={(e) =>
+            setProp((p: { properties: string }) => (p.properties = e.target.value))}
+        />
+        <span className="field-hint">
+          {names ? `Shown beneath each title. Available: ${names}` : "Shown beneath each title"}
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={hideNullOf(hideNull)}
+          data-testid="dropdown-hide-null"
+          onChange={(e) => setProp((p: { hideNull: boolean }) => (p.hideNull = e.target.checked))}
+        />
+        <span className="field-label">Hide null properties</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Sort items by</span>
+        <select
+          value={dropdownSortOf(sortProperty)}
+          data-testid="dropdown-sort"
+          onChange={(e) =>
+            setProp((p: { sortProperty: string }) => (p.sortProperty = e.target.value))}
+        >
+          {Object.entries(DROPDOWN_SORTS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          Sorting by a property needs declared property types (decision 0006)
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Search items by</span>
+        <select
+          value={searchModeOf(searchMode)}
+          data-testid="dropdown-search-mode"
+          onChange={(e) =>
+            setProp((p: { searchMode: string }) => (p.searchMode = e.target.value))}
+        >
+          {Object.entries(SEARCH_MODES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      {searchModeOf(searchMode) === "specific" && (
+        <label className="field">
+          <span className="field-label">Search properties</span>
+          <input
+            type="text"
+            value={searchPropertyNames ?? ""}
+            data-testid="dropdown-search-properties"
+            onChange={(e) =>
+              setProp((p: { searchPropertyNames: string }) =>
+                (p.searchPropertyNames = e.target.value))}
+          />
+          <span className="field-hint">String properties only, which is what p.458 says</span>
+        </label>
+      )}
+      </>}
+    />
+  );
+}
+
+CanvasObjectDropdown.craft = {
+  displayName: "Object dropdown",
+  props: {
+    objectSetVariable: null, selectedVariable: null, label: "", properties: "",
+    hideNull: false, sortProperty: "key", searchMode: "on_screen",
+    searchPropertyNames: "", allowNoSelection: false,
+  },
+  related: { settings: ObjectDropdownSettings },
 };
 
 // ---- Search (roadmap 1.5) ---------------------------------------------------
@@ -9134,6 +9536,7 @@ export const CANVAS_RESOLVER = {
   CanvasPropertyList,
   CanvasLinksWidget,
   CanvasObjectViewWidget,
+  CanvasObjectDropdown,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -9168,6 +9571,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasPropertyList", label: "Property list", hint: "The properties of one object, in a grid" },
   { key: "CanvasLinksWidget", label: "Links", hint: "One object's links, in expandable sections" },
   { key: "CanvasObjectViewWidget", label: "Object view", hint: "The whole object view for one object, embedded" },
+  { key: "CanvasObjectDropdown", label: "Object dropdown", hint: "Pick one object from a searchable list" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

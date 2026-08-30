@@ -44,6 +44,33 @@ export interface Property {
   data_type?: string | null;
 }
 
+/** p.458's "Sort items by", as far as the object-set language can express it.
+ *
+ * **Not a property picker, and that is decision 0006 rather than a shortcut.**
+ * `object_sets.parse_sort` takes four sorts and refuses the rest in a sentence:
+ * instance properties are stored untyped, so Postgres and OpenSearch would put
+ * 250 and 40 in different orders, and text orders differently again. p.458's
+ * per-property sort lands when declared property types do — the same ○ the
+ * Object Table's p.223 default sorts carry.
+ *
+ * **The default is the key, not `recent`.** A picker's list has to be in an
+ * order a person can predict; "whichever rows were touched last" is not one,
+ * and on a freshly synced type every row shares an instant, so the order would
+ * be arbitrary and would change under a viewer for no visible reason.
+ */
+export const SORTS: Record<string, string> = {
+  key: "Primary key (A–Z)",
+  "-key": "Primary key (Z–A)",
+  recent: "Recently updated first",
+  oldest: "Oldest first",
+};
+
+export const DEFAULT_SORT = "key";
+
+export function sortOf(raw: unknown): string {
+  return typeof raw === "string" && Object.hasOwn(SORTS, raw) ? raw : DEFAULT_SORT;
+}
+
 /** p.458's three Search items by modes. */
 export const SEARCH_MODES: Record<string, string> = {
   on_screen: "On-screen properties",

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_SEARCH_MODE, PAGE_LIMIT, SEARCH_MODES,
+  DEFAULT_SEARCH_MODE, DEFAULT_SORT, PAGE_LIMIT, SEARCH_MODES, SORTS,
   allowNoSelectionOf, isSearchable, labelOf, matchesQuery, propertyListOf,
-  searchModeOf, searchProperties, titleOf, truncationNote,
+  searchModeOf, searchProperties, sortOf, titleOf, truncationNote,
 } from "./object-dropdown";
 
 /** p.455-458's Object Dropdown. */
@@ -216,5 +216,33 @@ describe("saying when the list is only part of the set", () => {
 
   it("loads a page a picker can actually be a picker over", () => {
     expect(PAGE_LIMIT).toBe(200);
+  });
+});
+
+describe("p.458's sort", () => {
+  it("offers only the sorts the object-set language has", () => {
+    // **Not a property picker**: `object_sets.parse_sort` refuses those,
+    // because instance properties are stored untyped and the two stores would
+    // order 250 and 40 differently (decision 0006). A widget offering a
+    // property here would produce a request the server answers with a 422.
+    expect(Object.keys(SORTS).sort()).toEqual(["-key", "key", "oldest", "recent"]);
+  });
+
+  it("defaults to the key rather than to recency", () => {
+    // A picker's list has to be in an order a person can predict, and on a
+    // freshly synced type every row shares an `updated_at` — so "recent" is
+    // arbitrary and can reorder under a viewer for no visible reason.
+    expect(DEFAULT_SORT).toBe("key");
+    expect(sortOf(undefined)).toBe("key");
+    expect(sortOf("")).toBe("key");
+  });
+
+  it("keeps a sort the language has and refuses one it does not", () => {
+    expect(sortOf("-key")).toBe("-key");
+    expect(sortOf("oldest")).toBe("oldest");
+    // A property name is exactly what a document written against p.458 would
+    // hold, and sending it on would be a 422 in place of a list.
+    expect(sortOf("name")).toBe("key");
+    expect(sortOf("constructor")).toBe("key");
   });
 });

@@ -1656,6 +1656,41 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-link-picker { display: grid; gap: 6px; }
 .canvas-link-choice { display: grid; gap: 4px; }
 
+/* ---- Object dropdown (p.455-458) ------------------------------------------ */
+.canvas-dropdown { display: grid; gap: 4px; position: relative; }
+.canvas-dropdown-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 7px 10px; font: inherit; font-size: 13px; text-align: left;
+  background: var(--panel); color: inherit;
+  border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer;
+}
+.canvas-dropdown-toggle:hover { border-color: var(--line-strong); }
+.canvas-dropdown-caret { color: var(--ink-soft); font-size: 10px; }
+/* Absolute, so opening the list does not reflow whatever is under the widget —
+   §195's finding: a control that moves out from under the pointer that opened
+   it is a control the browser never sends a click to. */
+.canvas-dropdown-panel {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+  margin-top: 2px; padding: 6px; display: grid; gap: 2px;
+  max-height: 320px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-card-hover);
+}
+.canvas-dropdown-search {
+  width: 100%; padding: 6px 8px; font: inherit; font-size: 12.5px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--paper); color: inherit; margin-bottom: 4px;
+}
+.canvas-dropdown-option {
+  display: grid; gap: 1px; width: 100%; padding: 6px 8px; font: inherit;
+  text-align: left; background: none; color: inherit; border: 0;
+  border-radius: var(--radius); cursor: pointer;
+}
+.canvas-dropdown-option:hover { background: var(--accent-wash); }
+.canvas-dropdown-option[aria-selected="true"] { background: var(--accent-wash); font-weight: 600; }
+.canvas-dropdown-title { font-size: 13px; overflow-wrap: anywhere; }
+.canvas-dropdown-detail { font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+
 
 /* ---- Object set title (p.274) -------------------------------------------- */
 .canvas-set-title {
