@@ -122,9 +122,9 @@ Per-side display names and self-links are both small and both currently impossib
 | Feature | Status | Notes |
 |---|---|---|
 | Built in Workshop, becomes the default view once created | ✅ | §144 — a published module is nominated in the Ontology Manager and stands in for the generated view. The object arrives in the module's `single_object` variable, which is the whole binding |
-| **Users can always switch back to the standard view** | ✅ | §144 — a control on the view itself, and there is no setting that could express the opposite: nothing is stored that hides the generated view |
+| **Users can always switch back to the standard view** | ✅ | §144 — a control on the view itself. **This row used to add "and there is no setting that could express the opposite", and §213 made that untrue**: Workshop p.261 gives a module builder an Object View Mode and an option to toggle between the two, so a widget in one module *can* withhold the switch. The guarantee survives where it was actually about the reader — the Object Explorer and the traversal dialog take the defaults, and the widget's own toggle defaults to on, so withholding it takes a deliberate act about one widget. What is not affected is anywhere a reader reaches an object through the platform rather than through somebody's module |
 | **Full** form factor — comprehensive | ✅ | (p.3) |
-| **Panel** form factor — for embedding in other applications, focused on critical data | ◑ | (p.4) — stored and separately addressable (db 0046), so the two never collide; nothing embeds one yet, which is the half that is missing |
+| **Panel** form factor — for embedding in other applications, focused on critical data | ◑ | (p.4) — stored and separately addressable (db 0046), so the two never collide. **The full form factor is now embedded** by Workshop's Object View widget (§213); the panel one still is not, and what blocks it is not the widget: Workshop p.263's panel behaviours switch between an object view and an object-*set* view, and this platform has no object-set view to switch to |
 | Version management for configured views | ✅ | the module's own — a view is a *pointer* at a module, so publishing, versions, revert and the changelog are all the ones §120 and §71 built |
 | Branching object views | ○ | TOC §6 — out of scope, tracks Global Branching |
 | Generate Object View URLs | ○ | TOC §20 |

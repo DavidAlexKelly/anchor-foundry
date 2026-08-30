@@ -195,6 +195,19 @@ def test_a_type_with_no_configured_view_shows_the_standard_one_and_no_switch(
     expect(page.get_by_role("button", name="Standard view")).to_have_count(0)
 
 
+def ready_view(page):
+    """The standard view **after its object type has loaded**.
+
+    `standard-object-view` is on the element in all three of its states —
+    deliberately, so a failure to load and a failure to render do not look
+    alike — so waiting on the test id alone lets an absence assertion run
+    against the *loading* view, where nothing is there yet. The harness said
+    so: the header test passed against a build that never hid the header.
+    `data-state` is the clock (§202), and it is already provided.
+    """
+    return page.locator("[data-testid='standard-object-view'][data-state='ready']")
+
+
 def test_the_header_can_be_hidden(page, api, plain) -> None:
     """p.262's Hide header. Asserted both ways round on the same object, so the
     absence is about the setting rather than about a view that never had one."""
@@ -202,6 +215,7 @@ def test_the_header_can_be_hidden(page, api, plain) -> None:
                   {"viewMode": "standard"}, who="P1")
     open_module(page, shown)
     settled(page)
+    expect(ready_view(page)).to_be_visible()
     expect(page.locator(".sov-head")).to_be_visible()
     expect(page.locator(".sov-title")).to_have_text("Plain object")
 
@@ -209,7 +223,9 @@ def test_the_header_can_be_hidden(page, api, plain) -> None:
                    {"viewMode": "standard", "hideHeader": True}, who="P1")
     open_module(page, hidden)
     settled(page)
-    expect(page.get_by_test_id("standard-object-view")).to_be_visible()
+    expect(ready_view(page)).to_be_visible()
+    # The view is ready and drew its properties; what is missing is the header.
+    expect(page.get_by_test_id("sov-normal")).to_be_visible()
     expect(page.locator(".sov-head")).to_have_count(0)
 
 

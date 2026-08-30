@@ -4135,6 +4135,12 @@ export function CanvasObjectViewWidget({
     pageSize: 1, variablesPending,
   });
   const instance = setPage.rows?.[0];
+  // The wrapper below carries no class of its own. The first version gave it
+  // `min-width: 0; overflow-x: auto` for §208's reason, and the harness said
+  // nothing could tell: `.canvas-frame-area` already carries `min-width: 0` and
+  // a wide grid already scrolls inside itself, so it was a third copy of a rule
+  // two other places enforce - deleted for the same reason the `hasConfigured`
+  // guard was.
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {!objectSetVariable ? (
@@ -4146,7 +4152,7 @@ export function CanvasObjectViewWidget({
           {objectViewEmptyMessageOf(emptyMessage)}
         </p>
       ) : (
-        <div className="canvas-object-view" data-testid="object-view-widget">
+        <div data-testid="object-view-widget">
           <EmbeddedObjectView
             workspaceId={workspaceId}
             typeId={setPage.typeId}
