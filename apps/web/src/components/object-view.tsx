@@ -9,9 +9,16 @@
  * > after a configured Object View is built." (p.2)
  *
  * Both halves of that sentence are here. A type with a configured view opens
- * on it; the standard view is one button away and cannot be turned off,
- * because the rule is about the reader rather than about configuration - there
- * is no setting that could express "hide it".
+ * on it; the standard view is one button away.
+ *
+ * **That used to say "and cannot be turned off", and §213 made it untrue.**
+ * Workshop p.261 gives a module builder an Object View Mode and "an option to
+ * toggle between them", so there is now a setting that expresses exactly what
+ * this file once said nothing could. The guarantee is kept where it was
+ * actually about the reader: every caller that is not a configured widget -
+ * the Explorer, the traversal dialog - takes the defaults, and `allowToggle`
+ * defaults to `true`, so withholding the standard view requires a builder to
+ * have said so on purpose about one widget in one module.
  *
  * **A configured view is a published module rendered read-only**, on the same
  * workspace-wide path a published app uses (`published-canvas-apps`). Nothing
@@ -139,10 +146,24 @@ export function ObjectView({
   workspaceId,
   typeId,
   instance,
+  initialStandard = false,
+  allowToggle = true,
+  hideHeader = false,
 }: {
   workspaceId: string;
   typeId: string;
   instance: ObjectInstance;
+  /** Workshop p.261's Object View Mode, as the *starting* view. A preference,
+   * not a guarantee: a type with no configured view opens on the standard one
+   * whichever way this is set, which is what the query below decides. */
+  initialStandard?: boolean;
+  /** Workshop p.261's "with an option to toggle between them". The Explorer
+   * and the traversal dialog never pass it, so `object-views` p.2's guarantee
+   * holds everywhere except where a module builder has explicitly said
+   * otherwise. */
+  allowToggle?: boolean;
+  /** Workshop p.262's Hide header. */
+  hideHeader?: boolean;
 }) {
   // Null while unresolved *and* when there is genuinely none, which is why the
   // switch is drawn from the query rather than from this: "no configured view"
@@ -152,7 +173,15 @@ export function ObjectView({
     queryKey: ["object-view", workspaceId, typeId],
     queryFn: () => objApi.getView(workspaceId, typeId),
   });
-  const [standard, setStandard] = useState(false);
+  // Seeded rather than derived, so a reader's click survives every refetch on
+  // the page — and re-seeded when the builder changes the setting, which is the
+  // only other thing that should move it (§212's rule, one widget along).
+  const [standard, setStandard] = useState(initialStandard);
+  const [seeded, setSeeded] = useState(initialStandard);
+  if (seeded !== initialStandard) {
+    setSeeded(initialStandard);
+    setStandard(initialStandard);
+  }
 
   // **Derived properties are only on the single-object read** (§162): a list
   // read returns the instance as it is *stored*, and a derived property is
@@ -178,7 +207,7 @@ export function ObjectView({
   const configured = view.data ?? null;
   return (
     <div className="object-view">
-      {configured && (
+      {configured && allowToggle && (
         <div className="row-actions" style={{ justifyContent: "flex-end", marginBottom: 8 }}>
           {/* p.2's guarantee, as a control. Two buttons rather than a toggle so
               the current state is readable without inferring it from a label
@@ -210,7 +239,12 @@ export function ObjectView({
           instance={shown}
         />
       ) : (
-        <StandardObjectView workspaceId={workspaceId} typeId={typeId} instance={shown} />
+        <StandardObjectView
+          workspaceId={workspaceId}
+          typeId={typeId}
+          instance={shown}
+          hideHeader={hideHeader}
+        />
       )}
     </div>
   );

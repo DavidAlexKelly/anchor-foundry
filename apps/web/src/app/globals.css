@@ -1656,6 +1656,13 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-link-picker { display: grid; gap: 6px; }
 .canvas-link-choice { display: grid; gap: 4px; }
 
+/* ---- Object view (p.259-263) ---------------------------------------------- */
+/* The view brings its own layout; what this adds is containment. `min-width: 0`
+   for §208's reason — an embedded view holding a wide table is a grid item, and
+   a grid item's default minimum is its content, so without this the table
+   pushes the whole module sideways instead of scrolling inside it. */
+.canvas-object-view { min-width: 0; overflow-x: auto; }
+
 /* ---- Object set title (p.274) -------------------------------------------- */
 .canvas-set-title {
   display: flex; align-items: center; gap: 8px;

@@ -162,10 +162,15 @@ export function StandardObjectView({
   workspaceId,
   typeId,
   instance,
+  hideHeader = false,
 }: {
   workspaceId: string;
   typeId: string;
   instance: ObjectInstance;
+  /** Workshop p.262's "Hide header", threaded down rather than reimplemented.
+   * The Explorer and the traversal dialog never pass it; a module embedding
+   * this view under a title of its own does. */
+  hideHeader?: boolean;
 }) {
   const type = useQuery({
     queryKey: ["object-type", typeId],
@@ -198,10 +203,12 @@ export function StandardObjectView({
 
   return (
     <div className="sov" data-testid="standard-object-view" data-state="ready">
-      <header className="sov-head">
-        <p className="sov-type">{type.data.display_name}</p>
-        <h2 className="sov-title">{title}</h2>
-      </header>
+      {!hideHeader && (
+        <header className="sov-head">
+          <p className="sov-type">{type.data.display_name}</p>
+          <h2 className="sov-title">{title}</h2>
+        </header>
+      )}
 
       {prominent.length > 0 && (
         <div className="sov-cards" data-testid="sov-prominent">

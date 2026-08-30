@@ -8,6 +8,7 @@
  * dataset/action it's bound to, never a copy of the data itself. */
 
 import { Editor, Frame, useEditor, useNode } from "@craftjs/core";
+import dynamic from "next/dynamic";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -78,6 +79,14 @@ import {
   linkKey, modeOf as linkModeOf, toggleExpanded, visibleLinks,
   type ChosenLink,
 } from "./links-widget";
+import {
+  // Aliased for §211's reason, and this time the compiler said so rather than
+  // letting it through: `emptyMessageOf` already means the Object Table's,
+  // which takes two arguments. The two survived the same collision differently
+  // only because that one's arity differs — the rule is the same either way.
+  VIEW_MODES, allowToggleOf, emptyMessageOf as objectViewEmptyMessageOf,
+  hideHeaderOf, showsToggle, startsStandard, viewModeOf,
+} from "./object-view-widget";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -4055,6 +4064,231 @@ CanvasLinksWidget.craft = {
     objectSetVariable: null, linkMode: "all", links: [], defaultExpand: 0,
   },
   related: { settings: LinksWidgetSettings },
+};
+
+// ---- Object View (p.259-263) ------------------------------------------------
+/** **Loaded dynamically to break a real import cycle.**
+ *
+ * `object-view.tsx` imports `CANVAS_RESOLVER` from this file, because a
+ * configured object view *is* a module and rendering one needs the widget
+ * table. Importing it back statically would close the loop, and which half
+ * ends up `undefined` then depends on which module the bundler reaches first —
+ * a failure that appears as a blank widget with no error. The dynamic import
+ * defers the edge to render time, which is when both halves exist. It is the
+ * same instrument `repository-app.tsx` uses on Monaco, for a different reason.
+ */
+const EmbeddedObjectView = dynamic(
+  () => import("@/components/object-view").then((m) => m.ObjectView),
+  { loading: () => <p className="canvas-widget-empty">Loading this object&apos;s view…</p> },
+);
+
+/** p.259-263's Object View widget: "detailed information about a single object
+ * by displaying an embedded object view within a Workshop module".
+ *
+ * Which view opens and whether the reader may switch is
+ * `object-view-widget.ts`. What is here is the fetch and the composition —
+ * and the composition is the point: this renders **the same `ObjectView` the
+ * Object Explorer and the traversal dialog render**, rather than a Workshop
+ * copy of it. A second renderer of an object view would be a second place for
+ * a configured view, a prominent geopoint's map and a derived property to
+ * drift, which is the mistake `object-properties.ts` exists to record.
+ *
+ * **Not built, and named rather than approximated**: p.261's **panel form
+ * factor** and p.263's panel behaviours (Object instance / Adaptive / Object
+ * set), because two of the three render an *object set* summary that this
+ * platform has no such thing as — a "panel" that always showed one object
+ * would be the full factor under another name; p.262-263's **Hide tabs**,
+ * **Go to initial tab on object switch** and **Initial object view tab ID**,
+ * because a configured view here is one module rather than a set of tabs;
+ * p.263's **Interface configuration**, which is the embedded-module interface
+ * mapping and belongs with that widget; p.263's **Revert to legacy widget**,
+ * there being no legacy one; and p.262's Empty state **icon**, for the reason
+ * every icon setting is ○ — there is no icon set to pick from.
+ */
+export function CanvasObjectViewWidget({
+  objectSetVariable = null,
+  viewMode = "configured",
+  allowToggle = true,
+  hideHeader = false,
+  emptyMessage = "",
+}: {
+  objectSetVariable?: string | null;
+  /** p.261's Object View Mode. */
+  viewMode?: string;
+  /** p.261's "with an option to toggle between them". */
+  allowToggle?: boolean;
+  /** p.262's Hide header. */
+  hideHeader?: boolean;
+  /** p.262's Empty state message. */
+  emptyMessage?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const { pending: variablesPending } = useCanvasVariables();
+
+  // p.261: "only the first object will be shown if the object set contains
+  // multiple objects."
+  const setPage = useSetPage(workspaceId, setDefinition, {
+    pageSize: 1, variablesPending,
+  });
+  const instance = setPage.rows?.[0];
+  // **Whether there is a configured view is asked here, not inferred from the
+  // document**, because it is a fact about the object type that can change
+  // after the module was saved — and both answers to it change what the
+  // settings below are allowed to mean.
+  const view = useQuery({
+    queryKey: ["object-view", workspaceId, setPage.typeId],
+    queryFn: () => objApi.getView(workspaceId, setPage.typeId!),
+    enabled: !!setPage.typeId,
+  });
+  const hasConfigured = !!view.data;
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">Object view - bind an object set in Settings</p>
+      ) : setPage.unresolved ? (
+        <p className="canvas-widget-empty">Resolving the object set…</p>
+      ) : !instance || !setPage.typeId ? (
+        <p className="canvas-widget-empty" data-testid="object-view-empty">
+          {objectViewEmptyMessageOf(emptyMessage)}
+        </p>
+      ) : (
+        <div className="canvas-object-view" data-testid="object-view-widget">
+          <EmbeddedObjectView
+            workspaceId={workspaceId}
+            typeId={setPage.typeId}
+            instance={instance}
+            initialStandard={startsStandard({ mode: viewMode, hasConfigured })}
+            allowToggle={showsToggle({ allowToggle, hasConfigured })}
+            hideHeader={hideHeaderOf(hideHeader)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ObjectViewWidgetSettings() {
+  const { workspaceId } = useCanvasEnv();
+  const {
+    objectSetVariable, viewMode, allowToggle, hideHeader, emptyMessage,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    viewMode: node.data.props.viewMode,
+    allowToggle: node.data.props.allowToggle,
+    hideHeader: node.data.props.hideHeader,
+    emptyMessage: node.data.props.emptyMessage,
+  }));
+  const { declared, resolved } = useCanvasVariables();
+  const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
+  const bound = objectSetVariable ? resolved[objectSetVariable] : undefined;
+  const typeId = (bound as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  // So the panel can say whether the mode above is going to mean anything.
+  const view = useQuery({
+    queryKey: ["object-view", workspaceId, typeId],
+    queryFn: () => objApi.getView(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Object to display</span>
+        <select
+          value={objectSetVariable || ""}
+          data-testid="object-view-variable"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {setVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          Only the first object is shown, which is what p.261 says a set of several does
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Object view mode</span>
+        <select
+          value={viewModeOf(viewMode)}
+          data-testid="object-view-mode"
+          onChange={(e) => setProp((p: { viewMode: string }) => (p.viewMode = e.target.value))}
+        >
+          {Object.entries(VIEW_MODES).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+        <span className="field-hint" data-testid="object-view-configured-hint">
+          {!typeId
+            ? "Bind an object set first"
+            : view.data
+              ? `This type has a configured view: ${view.data.canvas_app_name}`
+              : "This type has no configured view, so the standard one is shown either way"}
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={allowToggleOf(allowToggle)}
+          data-testid="object-view-allow-toggle"
+          onChange={(e) =>
+            setProp((p: { allowToggle: boolean }) => (p.allowToggle = e.target.checked))}
+        />
+        <span className="field-label">Let the reader switch views</span>
+        <span className="field-hint">
+          On by default: the standard view stays reachable unless you say otherwise
+        </span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={hideHeaderOf(hideHeader)}
+          data-testid="object-view-hide-header"
+          onChange={(e) =>
+            setProp((p: { hideHeader: boolean }) => (p.hideHeader = e.target.checked))}
+        />
+        <span className="field-label">Hide header</span>
+        <span className="field-hint">
+          The type name and object title above the standard view
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Empty state message</span>
+        <input
+          type="text"
+          value={emptyMessage ?? ""}
+          placeholder={objectViewEmptyMessageOf("")}
+          data-testid="object-view-empty-message"
+          onChange={(e) =>
+            setProp((p: { emptyMessage: string }) => (p.emptyMessage = e.target.value))}
+        />
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasObjectViewWidget.craft = {
+  displayName: "Object view",
+  props: {
+    objectSetVariable: null, viewMode: "configured", allowToggle: true,
+    hideHeader: false, emptyMessage: "",
+  },
+  related: { settings: ObjectViewWidgetSettings },
 };
 
 // ---- Search (roadmap 1.5) ---------------------------------------------------
@@ -8898,6 +9132,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectSetTitle,
   CanvasPropertyList,
   CanvasLinksWidget,
+  CanvasObjectViewWidget,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -8931,6 +9166,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectSetTitle", label: "Object set title", hint: "One object's title, or an object type and how many there are" },
   { key: "CanvasPropertyList", label: "Property list", hint: "The properties of one object, in a grid" },
   { key: "CanvasLinksWidget", label: "Links", hint: "One object's links, in expandable sections" },
+  { key: "CanvasObjectViewWidget", label: "Object view", hint: "The whole object view for one object, embedded" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
