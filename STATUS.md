@@ -4290,6 +4290,95 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 217. The Inline Action widget, and asking the server a question it already answers (this session)
+
+p.510-513's widget, the form half: p.512's custom Action title and local parameter defaults,
+p.513's Hide header, form state if invalid, and On successful action submit. It finishes
+`workshop.md`'s build-order item 6 — the item §216 had just found was not blocked after all.
+
+---
+
+**p.513 asks for something the widget had spent a unit refusing to do.**
+
+"Configure how the Action form appears when submission criteria are not met. Choose between
+`disabled` or `hidden`." That needs the answer *before* anything is written — and §130 built this
+form deliberately **not** evaluating criteria, with the argument written beside the code: doing so
+would be "a second implementation of a rule that governs writes, in another language, free to
+disagree with the first".
+
+Both are right, and the way to have both is to ask the server. `POST .../check` binds the
+parameters and runs **the same `check_criteria` the executor runs**, writes nothing, opens no run,
+and requires the role that could submit — p.140 makes criteria a permissions mechanism, so a
+caller who may not run the action has no business learning which criterion would stop them. It
+answers `200 {ok: false}` rather than a 4xx, because "this action is not available" and "the
+question could not be asked" are different facts and the widget has to tell them apart.
+
+The general shape, which is worth more than the feature: **when a client needs to know what a
+server rule would decide, add an endpoint that runs the rule — do not port the rule.** The cost is
+one round trip; the alternative is two implementations that agree until they do not.
+
+---
+
+**The comment was right and the code was not.**
+
+The check is asked **per object, not per keystroke** — and the first version keyed it on the typed
+values while the comment beside it said otherwise. §130's own test caught it within the minute:
+typing a value a criterion refuses disabled the button, so the submission never happened and the
+criterion's own message (p.56) never appeared. A live check does not *add* to that message, it
+**replaces it with silence**, and asks the server once per character to do it.
+
+Worth recording because of which artefact was correct. The comment described the design; the code
+did something else; nothing about the code looked wrong. What found it was an **existing test for
+a different feature** — the kind of coverage that only pays when a change reaches across into it.
+
+---
+
+**Two survivors, and the first was a fixture with nothing to test.**
+
+p.512's local defaults sit between the object's current value and the parameter's own default
+(p.512 calls it a default, and a default applies when there is nothing to show). Both browser
+tests used parameters the object type has properties for — so both asserted *the object winning*,
+which happens whether or not the defaults are passed at all. One of them even carried a comment
+about a parameter named `spare` that was never added; it used `note`, a property. The fixture now
+declares `reason`, which no property is named after, and nothing but p.512's setting can fill it.
+
+This is §215's lesson from the other side. There, the strongest observable was chosen and the
+obvious one went untested. Here the observable was right and **the fixture could not produce the
+state the test was about** — the same failure as §212's link count, where a page limit the data
+never crossed made two numbers identical.
+
+The second survivor was the settings panel's hint about whether an action has criteria at all,
+which nothing opened.
+
+---
+
+**`seedActionForm` had no unit tests before this**, despite a documented three-source precedence
+order that the form depends on and that §217 needed to extend to four. It was reachable only
+through a browser. Worse, `test_action_form.py`'s docstring claimed the function was "checked
+directly in `action-form.test.ts`" — **a file that did not exist**. A citation to a
+non-existent test is the same failure as §216's build order, one level down: prose asserting
+coverage that nothing verifies. Both are corrected; the seeding order now has five unit tests.
+
+---
+
+**23 model mutants, 7 API mutants and 16 widget mutants, 0 survivors, 0 no-ops** after the fixes,
+plus one withdrawn as equivalent — and that one is now a *pattern* rather than a one-off:
+`invalidStateOf(x) !== "hidden"` and `x !== "hidden"` cannot differ, exactly as §213 found for
+`viewModeOf`. **A two-valued setting collapses its own normalising read**, because everything that
+is not one value becomes the other. The read stays for the reason it did there — a third state
+would make the bare comparison treat it as the default, silently.
+
+**1091 unit tests** (was 1081); **519 browser tests** (was 509); **1526 API tests**, 2 skipped
+(was 1521).
+
+`workshop.md`'s build-order item 6 is struck **in the commit that finished it**, which is §216's
+own rule applied for the first time.
+
+---
+---
+---
+---
+
 ### 216. The build orders were wrong, and one of them had just been acted on (this session)
 
 **No code. A correction pass, and it is here because the thing it corrects caused a real mistake
@@ -5359,6 +5448,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
+
+- **When a client needs to know what a server rule would decide, add an endpoint that runs the rule — do not port the rule.** §217's Inline Action widget has p.513's "disable or hide the form when submission criteria are not met", which needs the answer before anything is written; §130 had built the same form deliberately *not* evaluating criteria, because that would be a second implementation of a rule governing writes, free to disagree with the first. Both are right, and `POST .../check` is how to have both: it binds the parameters and runs **the same `check_criteria` the executor runs**, writes nothing, opens no run, and requires the role that could submit. It answers `200 {ok: false}` rather than a 4xx, because "not available" and "could not be asked" are different facts a widget has to tell apart. The cost is one round trip; the alternative is two implementations that agree until they do not. Two details generalise: ask it **per subject, not per keystroke** (the first version keyed it on the typed values and disabled the button before the server could refuse, replacing the criterion's own message with silence — caught by an existing test for a *different* feature), and enable it only where the rule can bite, or every action with no criteria pays for an answer that is known.
+
+- **A citation to a test that does not exist is the same failure as a stale plan, one level down.** §217 found `test_action_form.py`'s docstring claiming `seedActionForm` was "checked directly in `apps/web/src/components/canvas/action-form.test.ts`" — a file that did not exist, for a function that had **no unit tests at all** despite a documented three-source precedence order the form depends on. Prose asserting coverage is not coverage, and it is worse than silence: it answers the question "is this tested?" wrongly, to the one person who thought to ask. The tell is a docstring naming a file rather than a behaviour; `ls` settles it.
 
 - **A plan drifts in one direction only: it always claims more is left than there is.** §216 audited the two parity build orders that have had work done against them and found five wrong entries, one of which — `ontology.md`'s "action parameters and rules… designed and next to build" — had been **built sixteen units earlier, across two decision records that both open with "decided and built"**, and had just been recommended to the user as the next thing to do. The mechanism is structural, not careless: finishing a unit means opening a pull request, not editing a list in another file, so entries are never added by accident and never removed on time. The three build orders that turned out to be accurate were the three **nobody has built against** — a plan is only wrong where work has happened, so the lists that look most trustworthy are the untouched ones. Two rules, both cheap: strike the line in the commit that finishes it, and **open what a line cites before building on it** — a decision record's Status line settles in one sentence what a stale summary gets wrong for a year. The second rule is the one that matters, because the first will be forgotten again.
 
