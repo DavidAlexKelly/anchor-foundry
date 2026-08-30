@@ -388,6 +388,64 @@ async def action_runs(
 
 
 # ---- execute (project-scoped) -------------------------------------------------
+class CheckRequest(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict, max_length=50)
+
+
+class CheckResult(BaseModel):
+    """Whether these parameter values would pass submission criteria.
+
+    `ok` and a message, never a refusal: asking is not submitting, and a 4xx
+    here would make "this action is not available" indistinguishable from "the
+    question could not be asked".
+    """
+
+    ok: bool
+    error: str | None
+
+
+@project_router.post("/{action_type_id}/check", response_model=CheckResult)
+async def check_action(
+    action_type_id: UUID,
+    body: CheckRequest,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> CheckResult:
+    """Would this submission be refused? (Workshop p.513.)
+
+    Workshop's Inline Action widget can be configured to disable or hide a form
+    "when submission criteria are not met", which needs the answer *before*
+    anything is written. **The point of this endpoint is that it runs the same
+    `check_criteria` the executor runs** - the alternative is the browser
+    evaluating p.54-55's operators in another language, free to disagree with
+    the one that governs writes, which `CanvasActionForm` has refused to do
+    since §130 and is right to.
+
+    Requires the same role as executing: a caller who may not run the action
+    has no business learning which criterion would stop them, and p.140 makes
+    criteria a permissions mechanism.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        action_type = await actions_service.get_action_type(
+            conn, access.workspace_id, action_type_id
+        )
+        user = await actions_service.criteria_user(conn, access.auth.user_id)
+    try:
+        bound = actions_service.bind_parameters(
+            body.values, parameters=action_type["parameters"]
+        )
+        actions_service.check_criteria(
+            bound, criteria=action_type["criteria"], user=user
+        )
+    except actions_service.CriteriaRefusal as refusal:
+        return CheckResult(ok=False, error=str(refusal))
+    except ValueError as invalid:
+        # A binding failure - an unknown parameter name, a required one absent
+        # - is also a reason this submission would not go through, and saying
+        # so here is more use than saying nothing until Submit.
+        return CheckResult(ok=False, error=str(invalid))
+    return CheckResult(ok=True, error=None)
+
+
 @project_router.post("/{action_type_id}/execute", response_model=ExecuteResult)
 async def execute_action(
     action_type_id: UUID,
