@@ -92,6 +92,15 @@ export interface FormState {
  */
 export function formVisible({ invalidState, valid }: FormState): boolean {
   if (valid !== false) return true;
+  // `invalidStateOf(x) !== "hidden"` and `x !== "hidden"` cannot differ while
+  // `INVALID_STATES` has two keys, so the harness reports the second as a
+  // survivor — the identical finding §213 recorded about `viewModeOf`, and the
+  // second time in five units. **It is a property of two-valued settings**: a
+  // normalising read collapses to a bare comparison whenever there are exactly
+  // two legal values, because everything that is not one of them becomes the
+  // other. The read stays for the reason it did there — a third state added to
+  // p.513 would make the bare comparison treat it as `disabled`, silently —
+  // and no test can hold it today.
   return invalidStateOf(invalidState) !== "hidden";
 }
 
