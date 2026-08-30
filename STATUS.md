@@ -4290,6 +4290,105 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 214. The Object Dropdown, and a setting the platform refuses (this session)
+
+p.455-458's widget: p.457's Label, Input object set, Selected object output and Allow no
+selection; the property lines under each title; p.458's Hide null properties, Sort items by and
+all three Search items by modes.
+
+---
+
+**Most of this widget is other widgets, and that is the finding.**
+
+p.457's output is "a single object set of the currently selected object" — which is exactly what
+the Object Table's p.224 Active object is, down to the shape: a list of *clauses* that a
+`narrow_set` derivation resolves against the widget's own set, so a selection keeps meaning what
+it means when the set changes underneath it. And p.457's **Allow no selection** turned out to be
+p.224's **Disable active object auto-selection** with the sign flipped: off means pick the first
+object so downstream widgets have something on load. Two settings, on two pages, of two widgets
+in two different categories of Foundry's documentation — one question about one variable shape.
+`autoSelectKey` took `enabled: !allowNone` and nothing else was needed.
+
+The property lines under each title are the Property List's `visibleProperties`, applied once per
+row rather than once, and p.458's "hidden on a **per object** basis" falls out of that for free.
+
+This is §213's finding with the sign flipped too. There, a rule restated one level up was deleted
+because the level below already enforced it. Here, two specifications describing one mechanism
+were **joined** rather than implemented twice. The tell is the same in both cases — a rule you can
+point at somewhere else — and what differs is only whether the other copy is above you or beside
+you.
+
+---
+
+**p.458 asks for a sort this platform deliberately refuses.**
+
+"Sort items by: Specify the order in which objects are sorted." `object_sets.parse_sort` takes
+four sorts and refuses every property name in a sentence: instance properties are stored untyped,
+so Postgres and OpenSearch would order 250 and 40 differently, and text orders differently again
+(decision 0006). A property picker here would have produced a 422 where a list should be, on a
+setting that looked like it worked in the panel.
+
+Three ways to handle that, and only one is honest. Faking it client-side would sort *the loaded
+page* and claim to have sorted the set. Leaving the control out entirely would lose the sorts the
+language does have. What is built offers those four, and — the part worth keeping — **reads a
+property name a document holds back to the default** rather than sending it on. A module written
+against p.458's wording then loses its ordering instead of losing its list.
+
+The rule: when a specification asks for something the platform refuses on purpose, the widget's
+job is to **fail soft on the document and say why in the panel**, not to approximate the feature
+and not to pretend the setting does not exist.
+
+The same shape governs the search. p.458's "all searchable properties in the object set" is an
+*or* across properties, and every clause the object-set language takes is an *and* — so search
+runs over a loaded page of 200, and the widget **says so on screen** when the set is bigger. A
+search box that answers about part of a set looks exactly like one that answered about all of it.
+
+---
+
+**One survivor, and it was about a property called `null`.**
+
+`titleOf` guards `!titleProperty || !values`; the harness removed the first half and nothing
+noticed, because `values[null]` is `values["null"]` and no fixture has a property by that name.
+`null` matches the api-name pattern `^[a-z][a-z0-9_]{0,99}$`, so it is a legal one — and without
+the guard, "this type has no title property" would have depended on whether some property happened
+to be called that. The input is exotic; the confusion is not, and one line of test pins it.
+
+**The server caught a fixture error the browser could not have.** The selection variable was
+declared as an `object_set`, and the save came back with "variable 'The selection' is an object
+set but names no object type to draw from" — it is an `array`, because what the widget writes is
+clauses and the *set* is what `narrow_set` makes of them. A refusal in a sentence, at the point of
+the mistake, instead of a widget that renders and quietly narrows nothing.
+
+---
+
+**Two widget survivors, and both were tests that could not fail.**
+
+The blank-label test used `""`. That is falsy whether or not it has been read through the model,
+so it asked nothing — the case that separates them is `"   "`, which is truthy and would have
+drawn a row of nothing above the widget. And the other half of the same test used Playwright's
+`to_have_text`, which **normalises whitespace**: `"  Site  "` and `"Site"` compare equal to it, so
+the trim was invisible from both directions at once. It reads `text_content` now.
+
+The second was the option list floating. Nothing measured it, and the mutant that puts the panel
+back in flow broke nothing — every option was still clickable, just with the rest of the page
+shoved down as it opened. It is measured on the widget *below* the dropdown, because the toggle
+sits above the panel and would not move even in flow: the control that reflows is not always the
+one that moves.
+
+---
+
+**35 model mutants and 26 widget mutants, 0 survivors, 0 no-ops** after the fixes.
+
+**1076 unit tests** (was 1046); **491 browser tests** (was 473); 1521 API tests, 2 skipped,
+unchanged.
+
+`workshop.md` §10 goes from 24 of ~52 rows to 25, counted from the table.
+
+---
+---
+---
+---
+
 ### 213. The Object View widget, and a guard that was already there (this session)
 
 p.259-263's widget: the input object set, p.261's Object View Mode with the reader's toggle,
@@ -5090,6 +5189,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
+
+- **Playwright's `to_have_text` normalises whitespace, so it cannot see a trim.** §214's label test asserted `to_have_text("Site")` against a widget rendering `"  Site  "` and passed — the matcher collapses leading, trailing and repeated whitespace before comparing, which is usually what you want and is exactly wrong when the trim *is* the behaviour under test. The mutant that removed the read sailed through. Anything asserting normalisation — trimming, collapsing, padding — has to read `text_content` (after a `to_be_visible` wait, since it does not retry) and compare exactly. The other half of the same test had the paired fault: it used `""` for "no label", and the empty string is falsy whether or not it has been read through the model, so the case that separates them is `"   "`. Two ways to write a test about whitespace that cannot see whitespace, in one test.
+
+- **When a specification asks for something the platform refuses on purpose, fail soft on the document — do not approximate the feature, and do not drop the control.** §214's Object Dropdown has p.458's "Sort items by"; `object_sets.parse_sort` refuses per-property sorts in a sentence, because instance properties are stored untyped and the two stores order 250 and 40 differently (decision 0006). A property picker in the panel would have looked like it worked and produced a 422 where a list should be. Sorting the *loaded page* client-side would have been worse: it would have claimed to sort the set. What works is to offer what the language does have, **read a value the document holds but the platform refuses back to the default**, and say why in the panel — so a module written against the spec's wording loses its ordering rather than its list. The same shape covers the search: "all searchable properties in the object set" is an `or` across properties and every clause the set language takes is an `and`, so search runs over a bounded page and the widget says on screen when the set is bigger. The tell is a setting whose value has to be sent somewhere that validates it; the question is what a stale or unsupported value should cost, and the answer is never "the whole widget".
 
 - **A guard duplicated one level up is invisible to every test, because the level below is still right.** §213's Object View widget asked whether the bound type had a configured view and used the answer to fall back and to withhold a switch that led nowhere. Both rules are correct; both were already enforced by `ObjectView`, which the widget renders. Replacing the widget's answer with a constant changed nothing on screen, so the mutant survived — and the survivor was not a missing test but two functions, a query and eight unit tests that could never have been observed. §195's version of this was a fix that fixed nothing; this is subtler, because a duplicated guard reads like ordinary defensiveness and the behaviour is right either way. **The question to ask a surviving guard is not "which test is missing" but "who else already refuses this"** — and when somebody does, delete rather than test. The tell is a survivor whose code restates a rule you can point at in another file.
 
