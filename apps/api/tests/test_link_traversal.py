@@ -461,11 +461,21 @@ def test_a_type_lists_its_links_without_an_instance(
     links = _type_links(client, fx, ontology["person"])
 
     works_in = links[f"works_in_{tag}:outbound"]
-    assert works_in["side_name"] == "Works in"
     assert works_in["far_type_display_name"] == f"Department {tag}"
     assert works_in["near_property"] == "department"
     assert works_in["far_property"] == "$primary_key"
     assert works_in["far_type_id"] == ontology["dept"]
+    # This link names no sides, so `side_name` and `display_name` are the same
+    # string here and neither can stand in for the other — the assertion that
+    # separates them is the self-link's, below.
+    assert works_in["side_name"] == works_in["display_name"] == "Works in"
+    # **The id is checked against the traversal's**, not against itself: every
+    # other id in this row is also a uuid, so an assertion that it is one would
+    # hold if the far type's had been sent instead.
+    people = _instances(client, fx, ontology["person"])
+    traversed = _links(client, fx, ontology["person"], people["1"]["id"])
+    assert works_in["link_type_id"] == traversed[f"works_in_{tag}:outbound"]["link_type_id"]
+    assert works_in["link_type_id"] != works_in["far_type_id"]
     # No traversal happened, so there is nothing about *this* object here.
     assert "items" not in works_in and "total" not in works_in
 

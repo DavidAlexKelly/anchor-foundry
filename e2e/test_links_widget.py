@@ -1,4 +1,4 @@
-"""p.268-272's Links widget (parity `workshop.md` §11).
+"""p.268-272's Links widget (parity `workshop.md` §10).
 
 > "The links widget displays the links relationship between objects and provide
 > exploration into those paths. … **Link types to display**: By default, all
@@ -31,13 +31,20 @@ from playwright.sync_api import expect
 from api import Module, layout, object_set
 from conftest import open_builder, open_module, settled
 
-# Ada manages both of the others and reports to nobody, so her two ends of the
-# self-link have *different counts* - 0 one way, 2 the other. A widget that
-# drew one row for the link type would have to pick one of those numbers.
-PEOPLE = [
-    {"id": "P1", "name": "Ada", "dept": "ENG", "manager_id": ""},
-    {"id": "P2", "name": "Grace", "dept": "RES", "manager_id": "P1"},
-    {"id": "P3", "name": "Alan", "dept": "ENG", "manager_id": "P1"},
+# Ada manages everybody and reports to nobody, so her two ends of the self-link
+# have *different counts* - 0 one way, eleven the other. A widget that drew one
+# row for the link type would have to pick one of those two numbers.
+#
+# **Eleven, not two.** The traversal returns a first page of ten with a count,
+# so a fixture with fewer reports than that page holds cannot tell the count
+# apart from the number of rows drawn - and the header's job is to report the
+# link, not the page (the harness had to say so).
+PREVIEW_LIMIT = 10
+REPORTS = 11
+PEOPLE = [{"id": "P1", "name": "Ada", "dept": "ENG", "manager_id": ""}] + [
+    {"id": f"P{n}", "name": f"Report {n}",
+     "dept": "RES" if n % 2 else "ENG", "manager_id": "P1"}
+    for n in range(2, 2 + REPORTS)
 ]
 DEPARTMENTS = [
     {"code": "ENG", "label": "Engineering"},
@@ -173,7 +180,7 @@ def test_a_self_links_two_ends_are_separate_rows(page, api, seed) -> None:
     settled(page)
 
     expect(section(page, "Manager")).to_contain_text("0 ")
-    expect(section(page, "Direct reports")).to_contain_text("2 ")
+    expect(section(page, "Direct reports")).to_contain_text(f"{REPORTS} ")
 
 
 def test_a_section_opens_and_closes(page, api, seed) -> None:
@@ -187,12 +194,49 @@ def test_a_section_opens_and_closes(page, api, seed) -> None:
 
     header(page, "Direct reports").click()
     expect(header(page, "Direct reports")).to_have_attribute("aria-expanded", "true")
-    expect(page.get_by_test_id("link-object")).to_have_count(2)
+    expect(page.get_by_test_id("link-object")).to_have_count(PREVIEW_LIMIT)
     expect(section(page, "Direct reports")).to_contain_text("P2")
     expect(section(page, "Direct reports")).to_contain_text("P3")
 
     header(page, "Direct reports").click()
     expect(page.get_by_test_id("link-object")).to_have_count(0)
+
+
+def test_the_header_counts_the_link_not_the_page(page, api, seed) -> None:
+    """**The count is the link's `total`, not the rows drawn.**
+
+    The traversal returns a first page of ten and says how many there are; Ada
+    has eleven reports. A header that counted its own list would say ten, be
+    wrong by one, and look completely reasonable — which is why the fixture
+    keeps more reports than a page holds.
+    """
+    mod = build(api, seed, "Links count")
+    open_module(page, mod)
+    settled(page)
+
+    header(page, "Direct reports").click()
+    expect(page.get_by_test_id("link-object")).to_have_count(PREVIEW_LIMIT)
+    expect(section(page, "Direct reports")).to_contain_text(f"{REPORTS} ")
+    expect(section(page, "Direct reports")).to_contain_text(
+        f"Showing {PREVIEW_LIMIT} of {REPORTS}")
+
+
+def test_the_whole_header_row_is_the_control(page, api, seed) -> None:
+    """A section that only opens from a 12px triangle is a section most people
+    never discover opens.
+
+    Asserted as a measurement, because a button that has shrunk to fit its text
+    is still perfectly clickable — just not where the reader aims.
+    """
+    mod = build(api, seed, "Links header width")
+    open_module(page, mod)
+    settled(page)
+
+    row, control = section(page, "Direct reports").evaluate(
+        "e => [e.getBoundingClientRect().width,"
+        " e.querySelector('button').getBoundingClientRect().width]"
+    )
+    assert control > row - 4, (control, row)
 
 
 def test_opening_one_section_leaves_the_others_alone(page, api, seed) -> None:
@@ -206,7 +250,8 @@ def test_opening_one_section_leaves_the_others_alone(page, api, seed) -> None:
     header(page, "Department").click()
     expect(header(page, "Direct reports")).to_have_attribute("aria-expanded", "true")
     expect(header(page, "Department")).to_have_attribute("aria-expanded", "true")
-    expect(page.get_by_test_id("link-object")).to_have_count(3)
+    # A page of reports plus Ada's one department.
+    expect(page.get_by_test_id("link-object")).to_have_count(PREVIEW_LIMIT + 1)
 
 
 def test_a_link_pointing_at_nothing_says_so_when_opened(page, api, seed) -> None:
@@ -233,6 +278,22 @@ def test_default_expand_opens_that_many_sections_on_load(page, api, seed) -> Non
     expect(header(page, "Manager")).to_have_attribute("aria-expanded", "true")
     expect(header(page, "Direct reports")).to_have_attribute("aria-expanded", "true")
     # The third is not opened, which is what makes the number a number.
+    expect(header(page, "Department")).to_have_attribute("aria-expanded", "false")
+
+
+def test_a_negative_expand_count_opens_nothing(page, api, seed) -> None:
+    """**A document can hold a number the panel would not offer** — an older
+    module, the raw JSON editor — and `-1` is the one that separates reading the
+    prop from reading it *through the model*: clamped it opens nothing, taken
+    raw it slices from the front and opens all but the last section. Both are
+    plausible-looking widgets, and only one of them was asked for.
+    """
+    mod = build(api, seed, "Links expand negative", {"defaultExpand": -1})
+    open_module(page, mod)
+    settled(page)
+
+    expect(header(page, "Manager")).to_have_attribute("aria-expanded", "false")
+    expect(header(page, "Direct reports")).to_have_attribute("aria-expanded", "false")
     expect(header(page, "Department")).to_have_attribute("aria-expanded", "false")
 
 
@@ -358,11 +419,18 @@ def test_the_panel_offers_the_types_links_including_both_ends(page, api, seed) -
     today's set happened to be empty, and a widget would become configurable
     and unconfigurable as the data changed underneath it.
     """
-    mod = build(api, seed, "Links panel", {"linkMode": "specify"})
+    mod = build(api, seed, "Links panel")
     open_builder(page, mod)
     settled(page)
 
     page.locator(".canvas-tree-row").filter(has_text="Links").first.click()
+    # p.270: the granular controls belong to "Specify link types". Offering the
+    # picker under "All link types" would let an author tick links that change
+    # nothing — the control would be lying about what it does.
+    expect(page.get_by_test_id("links-mode")).to_be_visible()
+    expect(page.get_by_test_id("links-picker")).to_have_count(0)
+
+    page.get_by_test_id("links-mode").select_option("specify")
     picker = page.get_by_test_id("links-picker")
     expect(picker).to_be_visible()
     expect(picker.locator("input[type=checkbox]")).to_have_count(3)
@@ -388,3 +456,32 @@ def test_ticking_a_link_records_the_end_and_saves_an_override(page, api, seed) -
 
     saved = mod.definition()["layout"]["lw"]["props"]["links"]
     assert saved == [{"key": f"{seed.reports_to}:inbound", "label": "Team"}], saved
+
+
+def test_changing_the_selection_re_expands_what_is_now_shown(page, api, seed) -> None:
+    """p.271's expansion is seeded, and the seed has to follow the configuration.
+
+    An author with Default link expand set to 1 who swaps which link the widget
+    draws should see the new section open. Seeded on the *object* alone, the
+    expansion would still name the link that is no longer there — so the widget
+    would sit fully folded and the setting would look broken until a reload.
+
+    Driven entirely from the panel: nothing here clicks the widget, because in
+    the builder a click on a widget is a selection rather than an interaction.
+    """
+    mod = build(api, seed, "Links reseed", {
+        "linkMode": "specify",
+        "links": [{"key": f"{seed.works_in}:outbound"}],
+        "defaultExpand": 1,
+    })
+    open_builder(page, mod)
+    settled(page)
+
+    page.locator(".canvas-tree-row").filter(has_text="Links").first.click()
+    expect(header(page, "Department")).to_have_attribute("aria-expanded", "true")
+
+    page.get_by_test_id(f"links-pick-{seed.works_in}:outbound").uncheck()
+    page.get_by_test_id(f"links-pick-{seed.reports_to}:inbound").check()
+
+    expect_labels(page, ["Direct reports"])
+    expect(header(page, "Direct reports")).to_have_attribute("aria-expanded", "true")
