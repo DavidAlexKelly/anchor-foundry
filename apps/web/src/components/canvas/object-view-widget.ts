@@ -73,6 +73,14 @@ export interface ViewChoice {
  * `ObjectView` already refuses one level down: the object stays viewable.
  */
 export function startsStandard({ mode, hasConfigured }: ViewChoice): boolean {
+  // `viewModeOf(mode) === "standard"` and `mode === "standard"` cannot differ
+  // while `VIEW_MODES` has two keys, and the harness duly reported the second
+  // as a survivor: `viewModeOf` returns `"configured"` for everything that is
+  // not exactly `"standard"`, which is what the raw comparison says too.
+  // **Recorded as equivalent rather than simplified**, because the two stop
+  // agreeing the moment p.261 grows a third mode — and the raw comparison
+  // would then silently treat it as configured, which is the shape of bug that
+  // never gets reported. The read stays; no test can hold it today.
   return !hasConfigured || viewModeOf(mode) === "standard";
 }
 
