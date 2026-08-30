@@ -163,6 +163,8 @@ export const REFERENCE_PROPS = [
   // p.224's two Object Table outputs, both writes. See the API's copy.
   "activeVariable",
   "selectedVariable",
+  // p.310's Selection as filter, a write. See the API's copy.
+  "filterVariable",
   "name",
 ] as const;
 

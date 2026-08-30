@@ -4290,6 +4290,86 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 218. The Pie Chart, and a pie whose geometry nothing could reach (this session)
+
+p.309-310's widget: the input object set, Group by, p.310's Radius, the Legend and its four
+positions, Segment display overrides, Enable ontology colors, and Selection as filter.
+
+**Checked before starting, per §216.** `/object-sets/group` has answered grouped counts over a
+set since roadmap 1.5, so p.310's "each property type value will be represented by a slice" needed
+no data layer at all — and `charts.tsx` has drawn a pie for Chart XY since then too. The unit was
+mostly *joining* those, which is §214's shape again.
+
+---
+
+**The geometry was unreachable, and nothing had ever asked it a question.**
+
+The angle arithmetic lived inline in `charts.tsx`'s JSX. Nothing but a browser could reach it —
+and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any
+fixture. So "does a 30% slice cover 30%" had never been asked, in either suite, since the pie was
+written. It is `pie-chart.ts` now, with 37 mutants over it, and Chart XY renders through the same
+functions: one pie, two widgets.
+
+Worth naming as a category. Code inside a `.tsx` is not merely awkward to unit-test — in this repo
+it is *invisible* to the unit suite by construction, because `vitest` cannot parse `.tsx` at all
+(§the pure-module pattern). So a function that drifts into a component file does not become
+harder to test; it stops being tested, silently, and no coverage number says so.
+
+---
+
+**Five widget survivors, and four were "one of everything" fixtures.**
+
+* **One pie per page.** Every test had a single chart, so a query keyed on a *constant* showed the
+  right slices. Two pies over different sets is the state that tells them apart — and it is an
+  ordinary page, not a contrived one: a chart of everything beside a chart of one region.
+* **The colours-off case never fetched the object type**, because the widget only asks for it when
+  the setting is on. So "the setting is off" and "the rules are not here" were the same state, and
+  a widget ignoring the setting passed. It now sits beside a table that loads the type — again the
+  ordinary page.
+* **Left and right are both *beside* the chart**, so two legend-position assertions never crossed
+  the boundary that matters. Bottom does.
+* **The filter test's label and value were the same string**, so a widget writing the wrong one
+  narrowed correctly anyway. A label override separates them.
+
+The fifth was p.310's radius: every value in the file was already legal, so the clamp was
+invisible. The case that separates them is a radius that is not a number at all — read through the
+model it is zero; passed on raw it makes every coordinate `NaN` and the browser draws nothing.
+
+**The pattern across four of the five is the same**: a fixture with one of everything cannot
+distinguish "this widget's answer" from "an answer". §212 met it as a page limit the data never
+crossed and §217 as a parameter with nothing to default; here it is a page with one chart on it.
+The fix is never a cleverer assertion — it is a fixture with *two*.
+
+---
+
+**A wedge's bounding-box centre can lie outside the wedge**, which is how Playwright aims a click.
+The three-quarter slice's centre falls in the quarter beside it, so clicking it hit the neighbour
+and the selection test timed out on an element that was visible, enabled and stable. Clicking the
+*quarter* — which does contain its own centre — is both reliable and the sharper assertion, since
+it narrows four rows to one.
+
+---
+
+**§191's drift guard fired for the third time**, on `filterVariable` — p.310's Selection as filter
+is a *write*, and the prop was in none of the four lists that have to agree. Caught by the API
+suite rather than by review, which is what the guard is for; added to `workshop_variables.py`,
+`workshop-module.ts`, `PROP_DIRECTION` and its expectation.
+
+**37 model mutants and 24 widget mutants, 0 survivors, 0 no-ops** after the fixes.
+
+**1118 unit tests** (was 1091); **534 browser tests** (was 519); 1526 API tests, 2 skipped,
+unchanged.
+
+`workshop.md` §10 goes from 26 of ~52 rows to 27, counted from the table. Build-order item 7 is
+struck for Pie **in the commit that finished it**, and records what checking it turned up: two of
+its five widgets — Status Tracker and Waterfall — have no page in the PDF at all, only a line in
+p.276's overview, which is the Object Selector's situation (§215).
+
+---
+---
+---
+---
+
 ### 217. The Inline Action widget, and asking the server a question it already answers (this session)
 
 p.510-513's widget, the form half: p.512's custom Action title and local parameter defaults,
@@ -5448,6 +5528,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A container that shares a class with the things inside it makes index 0 a trap, and the assertion that passes is the one to distrust.** §207's browser tests located widgets as `.canvas-block` by index — and the ROOT `CanvasContainer` renders a `.canvas-block` too, so index 0 was the container and every index after it was off by one. What made it expensive was which assertion survived: "exactly one row is active" *passed*, because the container contains every row on the page, so it was true whichever table the row was actually in. One green assertion vouched for a locator that was wrong everywhere else, and the failures it caused looked like a broken feature rather than a broken selector. The tell is a positional locator over a class an ancestor also carries; the fix is a child combinator (`:has(> .data-grid)`). This is the family again — the passing check and the thing it was meant to check were not actually two.
 
 - **A defence can only be tested on an input the other defences would let through.** §206's `safeHref` had three tests naming three mechanisms — an allowlist, a case fold, and a control-character strip — and all three used `javascript:` as the input. The allowlist refuses that on its own, so the other two tests confirmed the allowlist and learnt nothing about themselves; the harness found all three at once, because deleting the mechanism each one named changed no result. What made it more than a coverage gap is *why* the strip was there: it is the standard defence against a **denylist** `startsWith("javascript:")` being split by a newline, and under an **allowlist** it can only ever add accepted strings — `ht\ntps://evil.test` was becoming an accepted `https://evil.test` that nobody typed. The measure was running backwards and every test of it passed. The tell is a negative test whose input would be rejected with the mechanism removed: pick an input the *other* checks accept, or the test is about them.
+
+- **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed and §217 as a parameter with nothing to default. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table.
+
+- **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
 
 - **When a client needs to know what a server rule would decide, add an endpoint that runs the rule — do not port the rule.** §217's Inline Action widget has p.513's "disable or hide the form when submission criteria are not met", which needs the answer before anything is written; §130 had built the same form deliberately *not* evaluating criteria, because that would be a second implementation of a rule governing writes, free to disagree with the first. Both are right, and `POST .../check` is how to have both: it binds the parameters and runs **the same `check_criteria` the executor runs**, writes nothing, opens no run, and requires the role that could submit. It answers `200 {ok: false}` rather than a 4xx, because "not available" and "could not be asked" are different facts a widget has to tell apart. The cost is one round trip; the alternative is two implementations that agree until they do not. Two details generalise: ask it **per subject, not per keystroke** (the first version keyed it on the typed values and disabled the button before the server could refuse, replacing the criterion's own message with silence — caught by an existing test for a *different* feature), and enable it only where the rule can bite, or every action with no criteria pays for an answer that is known.
 
