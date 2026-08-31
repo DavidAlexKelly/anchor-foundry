@@ -1036,25 +1036,36 @@ async def test_postgres_reads_a_bare_date_as_utc_whatever_the_server_says(
     from src.lib.db import user_connection
     from src.services import instances as instances_service
 
-    # 02:00Z, so the bare `2026-03-01` in row 7 falls on one side of it read as
-    # UTC and the other side read in a western timezone.
-    bound = (object_sets.Filter("seen", "lt", "2026-03-01T02:00:00+00:00", "timestamp"),)
-    answers = []
-    for zone in ("UTC", "America/New_York", "Asia/Kathmandu"):
-        async with user_connection(fx.owner) as conn:
-            await conn.execute(_sql(f"SET TIME ZONE '{zone}'"))
-            rows, _ = await instances_service.evaluate_object_set(
-                conn, object_type_id=uuid.UUID(typed), filters=bound,
-                limit=50, offset=0, sort=object_sets.Sort(),
-            )
-            answers.append(sorted(r["primary_key"] for r in rows))
-    assert answers[0] == answers[1] == answers[2], answers
-    # And it is the right answer, not merely a consistent one.
-    expected = sorted(
-        key for key, props in TYPED_ROWS
-        if object_sets.matches(props, bound)
-    )
-    assert answers[0] == expected
+    # **Two bounds, and the second is the one that matters.** The first carries
+    # an offset, so it pins its own instant however it is read - which makes it
+    # the wrong case to test the rule with, and is why a fixture of
+    # offset-carrying bounds left the *bound* half of this unasserted while
+    # catching the stored-value half. The second is bare, so it is only a fixed
+    # instant if this code makes it one before it reaches Postgres.
+    #
+    # 02:00Z either way, so the bare `2026-03-01` in row 7 falls on one side of
+    # it read as UTC and the other read in a western timezone.
+    bounds = [
+        (object_sets.Filter("seen", "lt", "2026-03-01T02:00:00+00:00", "timestamp"),),
+        (object_sets.Filter("seen", "lte", "2026-03-01", "timestamp"),),
+    ]
+    for bound in bounds:
+        answers = []
+        for zone in ("UTC", "America/New_York", "Asia/Kathmandu"):
+            async with user_connection(fx.owner) as conn:
+                await conn.execute(_sql(f"SET TIME ZONE '{zone}'"))
+                rows, _ = await instances_service.evaluate_object_set(
+                    conn, object_type_id=uuid.UUID(typed), filters=bound,
+                    limit=50, offset=0, sort=object_sets.Sort(),
+                )
+                answers.append(sorted(r["primary_key"] for r in rows))
+        assert answers[0] == answers[1] == answers[2], (bound, answers)
+        # And it is the right answer, not merely a consistent one.
+        expected = sorted(
+            key for key, props in TYPED_ROWS
+            if object_sets.matches(props, bound)
+        )
+        assert answers[0] == expected, bound
 
 
 @pytest.mark.anyio
