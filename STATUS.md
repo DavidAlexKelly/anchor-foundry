@@ -4374,6 +4374,45 @@ compare counts against and no way back.
 
 ---
 
+**The migration lost rows when two sources shared a primary key.**
+
+Instance identity is `(source_id, primary_key)`, not the key alone — `delete_instances` says so
+in as many words, because two datasets feeding one object type can each hold a row keyed `"1"`.
+The paging sorted on `primary_key` only, and **`search_after` on a non-unique sort skips every
+document sharing the cursor's value**. So a type fed by two sources lost one of each colliding
+pair: quietly, and in proportion to how many keys the two datasets happened to share. The store
+already states this rule for a viewer's page — `_sort_clause` ties every sort on `primary_key`
+last "so two rows that share an `updated_at` come back in the same order… on every page" — and
+the migration was written without it.
+
+The test that catches it needs the collision to **straddle a page boundary**: with a batch of
+two, each colliding pair lands wholly inside one page and the bug cannot appear, because the
+cursor only skips documents that share its value and sit *after* it. Three splits the pair.
+Verified against the old sort — five of six documents survived.
+
+---
+
+**A hang is not a catch, and seven of them in one run were not seven coincidences.**
+
+The first harness run reported seven mutants "caught (hang)". None of them were catches: a
+fixture server process had leaked from an earlier run and stayed bound to port 9209, so every
+later suite talked to a **stale process running old code** — and a suite killed by the harness's
+own timeout is exactly what leaves one behind, which is why the failure was self-sustaining
+once it started. I had told the user those mutants were legitimately looping. They were not.
+
+Two changes came out of it, both in the harness: it checks the fixture ports are free **before
+each mutant** rather than once at the start, and a timeout is now reported as `HANG` rather than
+counted with the catches. On the clean re-run one genuine hang remained — a mutant that made
+`search_after` stop advancing — and chasing *that* is what found the paging loop had no progress
+guard: an infinite loop with nothing logged and no way to tell it from a large migration still
+working. It names the store that is not honouring `search_after` now.
+
+**The rule, stated for next time: a red result that is a hang tells you the suite never
+answered, not that an assertion failed.** Counting it as a catch is how a harness reports
+coverage it does not have.
+
+---
+
 **MUTANT_SUMMARY**
 
 **TEST_COUNTS**
@@ -5752,6 +5791,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A hang is not a catch.** §220's harness reported seven mutants "caught (hang)" and none of them were: a fixture server process had leaked from an earlier run and stayed bound to its port, so every later suite talked to a **stale process running old code** — and a suite killed by the harness's own timeout is exactly what leaves one behind, so the failure sustained itself once it started. A timeout says the suite never answered; it does not say an assertion would have failed, and counting it as a catch is how a harness reports coverage it does not have. Two fixes, both cheap: **check the fixture's ports are free before each mutant** rather than once at the start, and report a timeout as `HANG` rather than folding it in with the catches. The one genuine hang that survived that change was worth chasing on its own — it found a paging loop with no progress guard, which is an infinite loop with nothing logged and no way to tell from slow work.
+
+- **`search_after` on a non-unique sort key silently skips rows**, and "unique enough for a page" is not unique. §220's migration paged on `primary_key`, which is unique *per source* — instance identity is `(source_id, primary_key)`, and two datasets feeding one object type can each hold a row keyed `"1"`. Every document sharing the cursor's value and sitting after it is skipped, so the migration lost one of each colliding pair in proportion to how many keys the two datasets happened to share. The store already stated the rule for a viewer's page (`_sort_clause` ties every sort on `primary_key` last so a page cannot repeat or skip) and the new code was written without it — **a rule written down once in a module is not a rule the next function in that module follows.** The test needs the collision to straddle a page boundary: batched so each colliding pair lands inside one page, the bug cannot appear at all.
 
 - **A guard that reads one place a name can appear stops working the moment the name can appear somewhere else.** §191's completeness check scans `node.data.props.X` — what a settings panel reads — and was complete for exactly as long as every variable binding was a top-level prop. §219's Stepper put one *inside* an array: `steps[1].completedVariable` follows the naming convention perfectly and the scan cannot see it, because the name never appears as a prop. So nothing counted it as a usage, the Variables panel said "unused" and offered to delete it, and afterwards every step would read as never completed — §185's `collapsedWhen` and §190's `tabVariable` a third time, by a route neither of their guards reaches. The fix is a catalogue rather than a special case (`NESTED_REFERENCE_PROPS`, mirrored in both runtimes) plus **one shared walk** for what had become five copies of the same loop — usage scanning, dangling-reference refusal, the lineage graph, a clipping's references, a page's bindings — because five copies is five chances for a binding to be a usage in one place and invisible in another. The general tell: when a *shape* changes (a prop becoming a list of objects), ask what each existing guard actually scans, not whether the new thing follows the convention.
 
