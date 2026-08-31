@@ -466,6 +466,39 @@ async def test_the_migration_keeps_two_sources_that_share_a_key(store) -> None:
 
 
 @pytest.mark.anyio
+async def test_the_migration_refuses_to_spin_when_the_cursor_will_not_advance(store) -> None:
+    """**The worst failure a migration can have is a hang**: nothing to read,
+    nothing logged, and no way to tell it from a large one still working. A
+    store that ignores `search_after` gives the same page forever, and the loop
+    would take it forever.
+
+    Reachable only by making the server wrong on purpose, because a correct one
+    cannot produce it — the same shape as §219 reaching into a catalogue to
+    produce a reference nothing classifies. Found by a mutant that did exactly
+    this and spun the harness for four minutes instead of failing.
+    """
+    prefix = "ws-split-stuck-"
+    type_id = str(uuid.uuid4())
+    await _seed_legacy(store, prefix, [
+        (type_id, f"{i}", {"full_name": f"person-{i}"}) for i in range(4)
+    ])
+    urllib.request.urlopen(urllib.request.Request(
+        f"{BASE}/__ignore_search_after", method="POST", data=b""
+    ), timeout=2).read()
+
+    original = store.MIGRATION_BATCH
+    store.MIGRATION_BATCH = 2
+    try:
+        with pytest.raises(RuntimeError, match="search_after"):
+            await store.adopt_legacy_index(
+                search_prefix=prefix, object_type_id=uuid.UUID(type_id),
+                declared=DECLARED,
+            )
+    finally:
+        store.MIGRATION_BATCH = original
+
+
+@pytest.mark.anyio
 async def test_the_migration_is_safe_to_run_twice(store) -> None:
     """**Run it, flip, run it again.** Every document id is derived from
     (source_id, primary_key), so a second pass rewrites the same documents - it

@@ -61,6 +61,11 @@ MAPPINGS: dict[str, dict] = {}
 
 MISSING = object()
 
+# Deliberate misbehaviours a test has asked for. Empty in every other test,
+# and cleared by `__reset`, so nothing here changes what the fixture means
+# unless something explicitly says so.
+STUCK: set[str] = set()
+
 
 def _matching_indices(index: str) -> list[str]:
     """The indices a name or a pattern reaches.
@@ -596,7 +601,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/__reset":
             INDICES.clear()
             MAPPINGS.clear()
+            STUCK.clear()
             return self._send(200, {"reset": True})
+        if path == "/__ignore_search_after":
+            # **A control that exists for one test, and says so.** A caller
+            # paging with `search_after` against a store that does not honour
+            # it loops forever, which is the worst failure a migration can have
+            # - nothing logged, and indistinguishable from a large one still
+            # working. The guard against it is a branch nothing a *correct*
+            # server does can reach, so pinning it means making the server
+            # incorrect on purpose. Same shape as reaching into a catalogue to
+            # produce an unclassifiable reference (§219).
+            STUCK.add("search_after")
+            return self._send(200, {"stuck": True})
         if path == "/_bulk":
             return self._bulk(raw)
         parts = path.strip("/").split("/")
@@ -667,7 +684,7 @@ class Handler(BaseHTTPRequestHandler):
         # stops at `index.max_result_window`, and a migration that silently
         # moved the first ten thousand documents of a larger type would leave a
         # workspace that looks migrated and is missing rows.
-        after = body.get("search_after")
+        after = None if "search_after" in STUCK else body.get("search_after")
         if after is not None:
             keys = [next(iter(sort)) for sort in sorts]
             cursor = [str(v) for v in after]

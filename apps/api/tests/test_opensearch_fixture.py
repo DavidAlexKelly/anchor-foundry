@@ -372,3 +372,78 @@ def test_a_hit_reports_the_index_it_came_from(server):
     assert {hit["_index"] for hit in found["hits"]["hits"]} == {
         "ws-a-objects-1", "ws-a-objects-2"
     }
+
+
+def test_searching_an_index_that_does_not_exist_is_an_error(server):
+    """A concrete index that is absent is a 404 on a real cluster, and the
+    caller says otherwise with `ignore_unavailable`. A fixture that answered
+    "no documents" either way would let a store querying the wrong index name
+    pass here and find nothing against a domain - and "this type has nothing
+    yet" and "this query went somewhere that does not exist" are exactly the
+    pair a naming bug hides between."""
+    call("POST", "/__reset")
+    status, body = search("nowhere", {"match_all": {}})
+    assert status == 404
+    assert body["error"]["type"] == "index_not_found_exception"
+
+    status, body = call("POST", "/nowhere/_search?ignore_unavailable=true",
+                        {"query": {"match_all": {}}})
+    assert status == 200 and body["hits"]["total"]["value"] == 0
+
+    # A *pattern* matching nothing is not an error, which is the difference the
+    # workspace explorer relies on before the first sync.
+    status, body = search("nothing-*", {"match_all": {}})
+    assert status == 200 and body["hits"]["total"]["value"] == 0
+
+
+def test_deleting_an_index_that_does_not_exist_is_an_error(server):
+    """Same rule for `indices.delete`, and the reason the type-drop sends the
+    flag: a type deleted before its first sync has no index, and a delete that
+    raised would make it undeletable."""
+    call("POST", "/__reset")
+    status, body = call("DELETE", "/nowhere")
+    assert status == 404
+    assert body["error"]["type"] == "index_not_found_exception"
+
+    status, _ = call("DELETE", "/nowhere?ignore_unavailable=true")
+    assert status == 200
+
+
+def test_put_mapping_adds_a_field_and_keeps_the_others(server):
+    """A `put_mapping` body names a path - `properties.properties.x` - so a
+    shallow update would replace the whole `properties` object with the one
+    field being added, silently dropping every field the index already had.
+    That is worse than failing: the mapping still exists, it is simply missing
+    most of itself, and the next document is refused for a property that was
+    declared."""
+    name = index("widen", STRICT_MAPPING)
+    status, _ = call("PUT", f"/{name}/_mapping", {
+        "properties": {"properties": {"properties": {"note": {"type": "text"}}}}
+    })
+    assert status == 200
+
+    _, mapping = call("GET", f"/{name}/_mapping")
+    declared = mapping[name]["mappings"]["properties"]["properties"]["properties"]
+    assert declared["note"]["type"] == "text", "the new field is not there"
+    assert declared["capacity"]["type"] == "long", "the existing field was dropped"
+
+    # And the widened mapping actually takes a document using both.
+    status, body = put(name, "1", {"primary_key": "a",
+                                   "properties": {"capacity": 1, "note": "hello"}})
+    assert status == 200 and not body["errors"]
+
+
+def test_delete_by_query_removes_from_the_index_the_document_is_in(server):
+    """`_delete_by_query` accepts a pattern too. Popping from the index named
+    in the *request* rather than the one each document came from would either
+    raise on a pattern or - worse - delete nothing and report a count."""
+    call("POST", "/__reset")
+    for name in ("ws-a-objects-1", "ws-a-objects-2"):
+        call("PUT", f"/{name}", {})
+        put(name, "1", {"primary_key": name, "source_id": "s1", "properties": {}})
+
+    status, body = call("POST", "/ws-a-objects-*/_delete_by_query",
+                        {"query": {"term": {"source_id": "s1"}}})
+    assert status == 200 and body["deleted"] == 2
+    _, found = search("ws-a-objects-*", {"match_all": {}})
+    assert found["hits"]["total"]["value"] == 0, "counted as deleted but still there"
