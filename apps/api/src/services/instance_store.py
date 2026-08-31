@@ -185,14 +185,15 @@ class InstanceStoreGateway(Protocol):
         search_prefix: str,
         object_type_id: UUID,
         filters: "tuple[Any, ...]",
-        aggregation: str,
-        property_name: str | None,
-    ) -> int:
+        aggregation: "Any",
+        property_name: str | None = None,
+    ) -> "float | int | None":
         """One number over a whole set (roadmap 1.5 - what a Metric Card shows).
 
-        Only the text-identity aggregations (`object_sets.AGGREGATIONS`), so
-        both stores answer the same question the same way without knowing what
-        a property's type is.
+        p.310's six: the two text-identity ones, which need no declared type,
+        and §226's four numeric ones, which carry theirs on the
+        `object_sets.Aggregation` the caller validated. `None` means there was
+        nothing to aggregate, which is not zero.
         """
         ...
 
@@ -844,17 +845,38 @@ class OpenSearchInstanceStore:
         search_prefix: str,
         object_type_id: UUID,
         filters: tuple[Any, ...],
-        aggregation: str,
-        property_name: str | None,
-    ) -> int:
-        """Roadmap 1.5. `size: 0` - the number is the answer, the documents are
-        not, and fetching a page to count it would be the client-side filtering
-        object sets exist to avoid."""
+        aggregation: "Any",
+        property_name: str | None = None,
+    ) -> "float | int | None":
+        """Roadmap 1.5; §226. `size: 0` - the number is the answer, the
+        documents are not, and fetching a page to count it would be the
+        client-side filtering object sets exist to avoid."""
+        from .instances import _named, _number
+
+        agg = _named(aggregation)
         body: dict[str, Any] = {
             "query": {"bool": self._set_clauses(object_type_id, filters)},
             "size": 0,
         }
-        if aggregation == "count_distinct":
+        if agg.numeric:
+            # The typed field §220's mapping declares, **not** its `.keyword`
+            # subfield: a numeric aggregation over indexed text is what this
+            # was refused for. A document whose value would not fit the mapping
+            # never indexed, so it is absent here for the same reason Postgres
+            # sees NULL for it.
+            field = f"properties.{agg.property}"
+            # **`value_count` beside it, and it is not redundant.** "How many
+            # documents matched" is the wrong emptiness test: a document can
+            # match the filters and carry no value for this property at all -
+            # or carry one that never indexed - and OpenSearch's `sum` then
+            # answers `0.0` where Postgres answers NULL. `value_count` counts
+            # the values the aggregation actually saw, which is exactly what
+            # Postgres's NULL-skipping aggregates count.
+            body["aggs"] = {
+                "value": {agg.name: {"field": field}},
+                "seen": {"value_count": {"field": field}},
+            }
+        elif agg.name == "count_distinct":
             # The `.keyword` subfield, which `_ensure_index` declares rather
             # than leaving to dynamic mapping - a cardinality aggregation on
             # the analysed text field would count *tokens*, so "Aberdeen Yard"
@@ -866,7 +888,16 @@ class OpenSearchInstanceStore:
             index=_index_name(search_prefix, object_type_id), body=body,
             ignore_unavailable=True,
         )
-        if aggregation == "count_distinct":
+        if agg.numeric:
+            # **`0.0` over nothing is this store's answer, and it is the wrong
+            # one.** OpenSearch's sum aggregation returns zero where Postgres
+            # `sum()` returns NULL - the identical divergence decision 0006
+            # exists to remove, arriving from the store that was supposed to be
+            # the strict one. `seen` is what tells them apart.
+            if int(resp["aggregations"]["seen"]["value"]) == 0:
+                return None
+            return _number(resp["aggregations"]["value"]["value"], agg)
+        if agg.name == "count_distinct":
             return int(resp["aggregations"]["distinct"]["value"])
         return int(resp["hits"]["total"]["value"])
 
@@ -1375,9 +1406,9 @@ class PostgresInstanceStore:
         search_prefix: str,
         object_type_id: UUID,
         filters: tuple[Any, ...],
-        aggregation: str,
-        property_name: str | None,
-    ) -> int:
+        aggregation: "Any",
+        property_name: str | None = None,
+    ) -> "float | int | None":
         from . import instances as instances_service
 
         return await instances_service.aggregate_object_set(

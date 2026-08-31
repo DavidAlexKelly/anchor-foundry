@@ -271,18 +271,25 @@ class Sort:
 # question, same answer.
 AGGREGATIONS = ("count", "count_distinct")
 
-# `sum`, `avg`, `min` and `max` are **not** here, and it is the same reason
-# ordered operators are not: instance properties are stored untyped, so
-# summing one means deciding what "3" and "10" are without being told. Postgres
-# would cast; OpenSearch cannot aggregate numerically over a text-mapped field
-# at all. Shipping it would mean a Metric Card whose number is right on one
-# deployment and absent on another - which is worse than a card that says the
-# platform cannot answer yet.
-#
-# The fix is the same one too, and doing it once unlocks both: honour the
-# *declared* property type (object_type_properties.data_type, db 0003) in the
-# index mapping, with a backfill behind it.
+# p.310's other four: "average, count, min, max, sum, or approximate unique
+# count". They were refused for the same reason ordered operators were -
+# instance properties are stored untyped, so summing one means deciding what
+# "3" and "10" are without being told - and §220's typed index is what removed
+# that reason. Built in §226.
 NUMERIC_AGGREGATIONS = ("sum", "avg", "min", "max")
+
+# What a numeric aggregation may be asked of.
+#
+# **Narrower than `ORDERABLE_TYPES`, and the two dates are the difference.**
+# A `min` over a date column is a perfectly sensible question, and it is left
+# out anyway: Postgres answers it with a timestamp and OpenSearch's `min`
+# aggregation answers it with epoch milliseconds, so the same question would
+# come back as two different values in two different shapes. Making them agree
+# means a conversion on one side that nothing else in this file needs, for a
+# question no widget in the parity spec asks - p.310 wants an *average*, and
+# the average of two dates is not a date. Refused with a sentence naming the
+# reason rather than half-built.
+AGGREGATABLE_TYPES = ("integer", "float")
 
 
 # The most buckets a grouped count will return. A chart with three hundred
@@ -433,22 +440,93 @@ def parse_cross_tab(row_property: str, column_property: str) -> tuple[str, str]:
     return row_property, column_property
 
 
-def parse_aggregation(name: str, property_name: str | None) -> tuple[str, str | None]:
-    """Validate an aggregation, refusing in a sentence."""
+def parse_aggregation(
+    name: str,
+    property_name: str | None,
+    *,
+    property_types: "Mapping[str, str] | None" = None,
+) -> "Aggregation":
+    """Validate an aggregation, refusing in a sentence somebody can act on.
+
+    p.310's six: `count` and `count_distinct` need no declared type, because
+    both are text-identity questions. The other four are **arithmetic on a
+    stored value**, so each needs the property's declared type behind it - the
+    same rule, and the same `property_types` argument, that `parse` and
+    `parse_sort` carry since §221.
+
+    `property_types` is optional and its absence is a **refusal, not a
+    permission** (§221): a caller that has not resolved the ontology has
+    checked no property's type, so it gets `count` and `count_distinct` and a
+    sentence naming what the rest would need.
+    """
     if name in NUMERIC_AGGREGATIONS:
+        if not property_name:
+            raise ValueError(f"{name} needs a property to {name} over")
+        declared = (property_types or {}).get(property_name)
+        if declared in AGGREGATABLE_TYPES:
+            return Aggregation(name=name, property=property_name, data_type=declared)
+        if declared is not None:
+            raise ValueError(
+                f"{property_name!r} is a {declared} property, and {name} needs one of "
+                f"{', '.join(AGGREGATABLE_TYPES)}. " + (
+                    "A date has an order but not an arithmetic both stores agree on: "
+                    "Postgres answers with a timestamp and OpenSearch with epoch "
+                    "milliseconds, and the average of two dates is not a date."
+                    if declared in ("date", "timestamp")
+                    else f"A {declared} has no arithmetic anybody would agree on."
+                )
+            )
         raise ValueError(
-            f"{name} is not supported yet: instance properties are stored untyped, so "
-            f"a {name} would mean one thing on Postgres and nothing at all on "
-            "OpenSearch. count and count_distinct answer the same question about how "
-            "many, and agree on both."
+            f"{name} needs the declared type of {property_name!r} behind it, and this "
+            "caller resolved none. " + AGGREGATION_HINT
         )
     if name not in AGGREGATIONS:
         raise ValueError(
-            f"unknown aggregation {name!r}; expected one of {', '.join(AGGREGATIONS)}"
+            f"unknown aggregation {name!r}; expected one of "
+            f"{', '.join(AGGREGATIONS + NUMERIC_AGGREGATIONS)}"
         )
     if name == "count_distinct" and not property_name:
         raise ValueError("count_distinct needs a property to count distinct values of")
-    return name, property_name if name == "count_distinct" else None
+    return Aggregation(
+        name=name, property=property_name if name == "count_distinct" else None
+    )
+
+
+AGGREGATION_HINT = (
+    "sum, avg, min and max run over a property whose declared type is one of "
+    f"{', '.join(AGGREGATABLE_TYPES)} - instance properties are stored untyped, so "
+    "without the declaration the two stores would disagree about what a value is "
+    "(docs/decisions/0006-typed-instance-properties.md)."
+)
+
+
+# The builtin, captured before `Aggregation` shadows it. A dataclass field
+# named `property` hides `property` for the whole class body, so `@property`
+# below would be `None` and the class would fail to define. Named rather than
+# worked around, because the field name is right: `Filter` and `Sort` both call
+# theirs `property` too, and renaming this one to dodge a decorator would make
+# three value objects disagree about what a property is called.
+_property = property
+
+
+@dataclass(frozen=True)
+class Aggregation:
+    """A validated aggregation, with the declared type it computes in.
+
+    A value object for `Filter.data_type`'s and `Sort`'s reason: the decision
+    that this arithmetic is legal was made once, here, against the ontology the
+    caller resolved. A store that looked the type up again could reach a
+    different answer than the validation did.
+    """
+
+    name: str
+    property: str | None = None
+    #: `None` for `count` and `count_distinct`, which need no type.
+    data_type: str | None = None
+
+    @_property
+    def numeric(self) -> bool:
+        return self.name in NUMERIC_AGGREGATIONS
 
 
 @dataclass(frozen=True)

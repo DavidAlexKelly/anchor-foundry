@@ -2861,7 +2861,15 @@ class ObjectSetAggregateIn(BaseModel):
 
 
 class ObjectSetAggregateOut(BaseModel):
-    value: int
+    #: `None` when there was nothing to aggregate - see
+    #: `instances.aggregate_object_set` for why that is not zero.
+    #:
+    #: **`int` before `float` in the union, and the order is load-bearing**: a
+    #: union is tried left to right, so `float | int` renders a whole-number
+    #: sum as `388.0`. A card over a column of whole numbers would show a value
+    #: the ontology never held, and nothing in the service layer would be
+    #: wrong - the coercion happens on the way out.
+    value: int | float | None
     aggregation: str
     property: str | None
 
@@ -2878,25 +2886,34 @@ async def aggregate_object_set(
     every row. A card that got its number by paging would be wrong the moment
     a set outgrew a page, which is exactly when the number starts mattering.
     """
-    definition = object_sets.parse(body.definition)
-    try:
-        aggregation, property_name = object_sets.parse_aggregation(body.aggregation, body.property)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
+    # **The ontology first, then the definition** - the order `/evaluate` uses
+    # since §221, and for the same reason twice over here: an ordered filter is
+    # validated against the declared types, and so is p.310's numeric
+    # aggregation. Parsing before resolving them meant this route refused every
+    # `gt` filter a Metric Card was pointed at, which was §221's rule applied
+    # to one caller and not to its neighbour.
+    type_id = object_sets.object_type_id_of(body.definition)
     async with user_connection(access.auth.user_id) as conn:
-        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        property_types = await _declared_types(conn, type_id)
+        try:
+            definition = object_sets.parse(body.definition, property_types=property_types)
+            aggregation = object_sets.parse_aggregation(
+                body.aggregation, body.property, property_types=property_types
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         value = await instance_store.store_for(conn).aggregate_object_set(
             search_prefix=prefix,
             object_type_id=definition.object_type_id,
             filters=definition.filters,
             aggregation=aggregation,
-            property_name=property_name,
         )
     return ObjectSetAggregateOut(
-        value=value, aggregation=aggregation, property=property_name
+        value=value, aggregation=aggregation.name, property=aggregation.property
     )
 
 
