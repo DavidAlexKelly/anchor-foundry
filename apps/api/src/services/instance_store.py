@@ -166,7 +166,11 @@ class InstanceStoreGateway(Protocol):
         filters: "tuple[Any, ...]",
         limit: int,
         offset: int,
-        sort: str = "recent",
+        # An `object_sets.Sort`. A bare string is still accepted and means one
+        # of the four fixed sorts, so a caller that has not been updated keeps
+        # working - a property sort is the only thing that needs the value
+        # object, because it is the only sort that carries a declared type.
+        sort: "Any" = object_sets.DEFAULT_SORT,
     ) -> tuple[list[dict[str, Any]], int]:
         """One page of a filtered set, and how many are in it (roadmap 1.2).
 
@@ -312,22 +316,52 @@ def _index_name(search_prefix: str, object_type_id: "UUID | str") -> str:
     return instance_mapping.index_name(search_prefix, object_type_id)
 
 
-def _sort_clause(sort: str) -> list[dict[str, str]]:
-    """One of `object_sets.SORTS`, as an OpenSearch sort.
+def _bound_value(bound: Any) -> Any:
+    """A comparable, in the form a query body carries it.
+
+    `object_sets.comparable` answers in Python's own types so the reference
+    semantics can compare them; a datetime has to go over the wire as the
+    ISO-8601 text the `date` mapping declares it accepts. Bound through the
+    same function the reference compares with, so the value a query carries is
+    the value that definition agreed to.
+    """
+    return bound.isoformat() if isinstance(bound, datetime) else bound
+
+
+def _sort_clause(sort: "Any") -> list[dict[str, Any]]:
+    """An `object_sets.Sort`, as an OpenSearch sort.
 
     Every one of them ties on `primary_key` last, so two rows that share an
     `updated_at` - which a bulk sync makes routine, since it writes them in the
     same instant - come back in the same order on both stores and on every
     page. Without that, "the next page" can repeat a row it already showed and
     skip one it never did, and nothing about the symptom points at the sort.
+
+    A **property sort** (§221) needs the tie-break more, not less: `status` has
+    five distinct values over a million rows, so almost every page boundary
+    falls inside a group of equals.
     """
-    if sort == "key":
+    key = sort if isinstance(sort, str) else sort.key
+    if key == "key":
         return [{"primary_key": "asc"}]
-    if sort == "-key":
+    if key == "-key":
         return [{"primary_key": "desc"}]
-    if sort == "oldest":
+    if key == "oldest":
         return [{"updated_at": "asc"}, {"primary_key": "asc"}]
-    return [{"updated_at": "desc"}, {"primary_key": "asc"}]
+    if isinstance(sort, str) or sort.property is None or key == "recent":
+        return [{"updated_at": "desc"}, {"primary_key": "asc"}]
+    return [
+        # `missing: _last` in **both** directions. OpenSearch's default already
+        # puts missing values last, but a descending sort inverts a great many
+        # defaults and stating it costs nothing - Postgres genuinely does put
+        # NULLs first descending, and a page that opens with the unusable rows
+        # on one store and the largest on the other is the invisible kind of
+        # wrong the cross-store tests exist for.
+        {f"properties.{sort.property}": {
+            "order": "desc" if sort.descending else "asc", "missing": "_last",
+        }},
+        {"primary_key": "asc"},
+    ]
 
 
 # Namespace for deterministic instance ids. Fixed forever: changing it would
@@ -764,6 +798,17 @@ class OpenSearchInstanceStore:
                         "type": "phrase_prefix",
                     }
                 })
+            elif f.op in object_sets.ORDERED_OPERATORS:
+                bound = object_sets.comparable(f.value, f.data_type)
+                if bound is None:
+                    # A bound that does not fit its own declared type — a
+                    # `capacity > "abc"` a raw definition can hold. The
+                    # reference says nothing matches, and an empty `terms` is
+                    # how to say that without a second clause shape: sending a
+                    # range with a null edge is an error rather than an answer.
+                    must.append({"terms": {field: []}})
+                else:
+                    must.append({"range": {field: {f.op: _bound_value(bound)}}})
             else:  # pragma: no cover - object_sets.parse refuses anything else
                 raise ValueError(f"unsupported object-set operator {f.op!r}")
 
@@ -954,7 +999,11 @@ class OpenSearchInstanceStore:
         filters: tuple[Any, ...],
         limit: int,
         offset: int,
-        sort: str = "recent",
+        # An `object_sets.Sort`. A bare string is still accepted and means one
+        # of the four fixed sorts, so a caller that has not been updated keeps
+        # working - a property sort is the only thing that needs the value
+        # object, because it is the only sort that carries a declared type.
+        sort: "Any" = object_sets.DEFAULT_SORT,
     ) -> tuple[list[dict[str, Any]], int]:
         """Roadmap 1.2. Filters become query clauses rather than a post-filter
         over a page, which is the whole reason this is server-side.
@@ -1282,7 +1331,11 @@ class PostgresInstanceStore:
         filters: tuple[Any, ...],
         limit: int,
         offset: int,
-        sort: str = "recent",
+        # An `object_sets.Sort`. A bare string is still accepted and means one
+        # of the four fixed sorts, so a caller that has not been updated keeps
+        # working - a property sort is the only thing that needs the value
+        # object, because it is the only sort that carries a declared type.
+        sort: "Any" = object_sets.DEFAULT_SORT,
     ) -> tuple[list[dict[str, Any]], int]:
         """`search_prefix` ignored, as everywhere else on this store: Postgres
         scopes by RLS and object_type_id."""

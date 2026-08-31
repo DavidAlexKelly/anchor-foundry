@@ -71,7 +71,7 @@ def test_depth_is_capped_because_each_hop_is_a_query() -> None:
 def test_the_base_set_is_validated_like_any_other() -> None:
     """One parser, so a filter that would be refused at the top is refused a
     hop down - otherwise a traversal would be a way round every refusal."""
-    with pytest.raises(ValueError, match="not supported yet"):
+    with pytest.raises(ValueError, match="did not supply them"):
         object_sets.parse(a_set(via={
             "link_type_id": str(uuid.uuid4()),
             "base": a_set(filters=[{"property": "n", "op": "gt", "value": 3}]),

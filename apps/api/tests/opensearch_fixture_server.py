@@ -677,9 +677,30 @@ class Handler(BaseHTTPRequestHandler):
                                               "reason": str(exc)}})
         sorts = body.get("sort", [])
         for sort in reversed(sorts):
-            field, direction = next(iter(sort.items()))
-            matched.sort(key=lambda triple: str(triple[2].get(field, "")),
-                         reverse=direction == "desc")
+            field, spec = next(iter(sort.items()))
+            # `{"field": "asc"}` and `{"field": {"order": "asc", "missing":
+            # "_last"}}` are both what a client sends; §221's property sorts use
+            # the second form because they need `missing`.
+            direction = spec if isinstance(spec, str) else spec.get("order", "asc")
+            missing_last = (
+                True if isinstance(spec, str) else spec.get("missing", "_last") == "_last"
+            )
+
+            def key(triple, field=field, missing_last=missing_last, direction=direction):
+                # **Compared by the mapping, like everything else here.** A
+                # `long` field sorted as text puts 250 before 40, which is the
+                # disagreement decision 0006 exists to remove - and a fixture
+                # that sorted as text would agree with a store that had never
+                # declared anything.
+                value = _resolve(triple[2], field)
+                if value is MISSING or value is None:
+                    # `missing: _last` means last in the *result*, so under a
+                    # descending sort it has to compare as smaller, not larger.
+                    return (0 if missing_last != (direction == "desc") else 1, None)
+                return (1 if missing_last != (direction == "desc") else 0,
+                        _comparable(value, _declared_type(triple[0], field)))
+
+            matched.sort(key=key, reverse=direction == "desc")
         # `search_after`, which the 0006 migration pages with: offset paging
         # stops at `index.max_result_window`, and a migration that silently
         # moved the first ten thousand documents of a larger type would leave a

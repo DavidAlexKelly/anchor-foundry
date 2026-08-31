@@ -1261,7 +1261,7 @@ def test_narrow_set_refuses_clauses_it_cannot_mean_rather_than_dropping_them() -
     """The clauses come from a browser, so they get the same parse every set
     gets. A dropped clause is a set wider than the viewer asked for."""
     variables = narrowing_module()
-    with pytest.raises(wv.VariableError, match="not supported yet"):
+    with pytest.raises(wv.VariableError, match="did not supply them"):
         wv.evaluate(variables, {"v_clauses": [
             {"property": "capacity", "op": "gt", "value": 40}]})
     with pytest.raises(wv.VariableError, match="unknown filter operator"):

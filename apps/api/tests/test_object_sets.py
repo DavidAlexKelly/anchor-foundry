@@ -202,24 +202,91 @@ def test_an_empty_in_list_is_the_empty_set_rather_than_a_refusal() -> None:
         assert object_sets.matches(props, definition.filters) is False
 
 
-def test_ordered_comparison_is_refused_and_says_why() -> None:
-    """The finding this item's cross-store test was written to produce.
+def test_an_ordered_comparison_needs_the_declared_types() -> None:
+    """**The absence of types is a refusal, not a permission** (§221).
 
-    Properties are stored untyped, so `capacity > 40` reads as 250 > 40 on
-    Postgres (which can cast) and as "250" < "40" on OpenSearch (which compares
-    indexed text). The first implementation shipped both and the two stores
-    disagreed on the first run. Refused rather than picked: a numeric-only
-    reading breaks dates and codes, a lexicographic one is indefensible to
-    anyone filtering a number, and doing it properly means honouring the
-    declared property type - a mapping change with a backfill behind it."""
+    Properties are stored untyped in the document, so `capacity > 40` reads as
+    250 > 40 on Postgres (which can cast) and as "250" < "40" on OpenSearch
+    (which compares indexed text) unless something says which. The first
+    implementation shipped both and the two stores disagreed on the first run.
+
+    A caller that has not resolved the ontology has checked no type at all, so
+    it gets the pre-§221 behaviour - which is what keeps every existing caller
+    correct rather than quietly permissive.
+    """
     for op in object_sets.ORDERED_OPERATORS:
-        with pytest.raises(ValueError, match="not supported yet"):
-            object_sets.parse(
-                {
-                    "object_type_id": str(uuid.uuid4()),
-                    "filters": [{"property": "capacity", "op": op, "value": 40}],
-                }
-            )
+        with pytest.raises(ValueError, match="did not supply them"):
+            object_sets.parse({
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "capacity", "op": op, "value": 40}],
+            })
+
+
+def test_an_ordered_comparison_is_allowed_on_an_orderable_type() -> None:
+    """What §220 made possible: the declared type reaches the mapping, so both
+    stores order the same values the same way."""
+    for kind in object_sets.ORDERABLE_TYPES:
+        parsed = object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "capacity", "op": "gte", "value": 40}],
+            },
+            property_types={"capacity": kind},
+        )
+        assert parsed.filters[0].data_type == kind, kind
+
+
+def test_an_ordered_comparison_on_text_is_refused_permanently() -> None:
+    """Decision 0006 §2, and the wording matters: this is not "not yet".
+    Postgres orders by the database collation and OpenSearch by byte order, so
+    `'Z' < 'a'` is true in one and false in the other for any non-C
+    collation."""
+    with pytest.raises(ValueError, match="no order the two stores agree on"):
+        object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "name", "op": "gt", "value": "m"}],
+            },
+            property_types={"name": "string"},
+        )
+
+
+@pytest.mark.parametrize("kind", ["boolean", "json", "attachment", "geopoint"])
+def test_an_ordered_comparison_on_an_unorderable_type_is_refused(kind: str) -> None:
+    """"Greater than false" is not a question, and a composite value has no
+    order anybody would agree on."""
+    with pytest.raises(ValueError, match="has no order"):
+        object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "flag", "op": "gt", "value": 1}],
+            },
+            property_types={"flag": kind},
+        )
+
+
+def test_an_ordered_comparison_on_an_undeclared_property_is_refused() -> None:
+    """Almost always a typo, and the pre-§221 refusal could not tell it from a
+    legal filter - it refused every ordered comparison for one reason."""
+    with pytest.raises(ValueError, match="does not declare"):
+        object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "capcity", "op": "gt", "value": 40}],
+            },
+            property_types={"capacity": "integer"},
+        )
+
+
+def test_the_orderable_types_agree_with_the_index_mapping() -> None:
+    """`ORDERABLE_TYPES` exists twice: here, where it decides what a filter may
+    ask, and in `instance_mapping`, where it is true *because* of the mapping -
+    a `date` field is orderable because it is mapped `date`. Restated rather
+    than imported because this module imports nothing, the same arrangement
+    `PRIMARY_KEY_FILTER` has, so the copies get a test instead of a comment."""
+    from src.services import instance_mapping
+
+    assert object_sets.ORDERABLE_TYPES == instance_mapping.ORDERABLE_TYPES
 
 
 def test_comparison_is_on_the_text_of_a_value() -> None:
@@ -293,6 +360,138 @@ async def test_opensearch_and_the_reference_semantics_agree(opensearch: str, cas
         )
         assert {r["primary_key"] for r in rows} == expected, case
         assert total == len(expected)
+    finally:
+        await store.close()
+
+
+# ---- ordered comparisons and property sorts (§221, decision 0006) ------------
+#
+# **A separate population with typed properties**, because the one above is
+# deliberately untyped: `capacity` holds `"n/a"` there, which is the value that
+# makes "cast it and compare" the wrong answer and which the strict mapping
+# would refuse for an integer. Both facts are worth keeping, so they get a
+# fixture each rather than one that half-serves both.
+#
+# `reading` spans the boundary a filter asks about (40) on both sides, and
+# `seen` mixes an offset-carrying timestamp with a bare date - db 0029 stores
+# "ISO-8601 text, with an offset preserved when the source has one", so a
+# population without both would never ask whether the two compare.
+TYPED_ROWS = [
+    ("1", {"reading": 10, "seen": "2026-01-05"}),
+    ("2", {"reading": 250, "seen": "2026-03-01T09:00:00+00:00"}),
+    ("3", {"reading": 40, "seen": "2026-03-01T12:00:00+02:00"}),
+    ("4", {"reading": 7, "seen": "2026-11-30"}),
+]
+TYPED_DECLARED = [
+    {"api_name": "reading", "data_type": "integer"},
+    {"api_name": "seen", "data_type": "timestamp"},
+]
+TYPED_TYPES = {"reading": "integer", "seen": "timestamp"}
+
+ORDERED_CASES = [
+    {"filters": [{"property": "reading", "op": "gt", "value": 40}]},
+    {"filters": [{"property": "reading", "op": "gte", "value": 40}]},
+    {"filters": [{"property": "reading", "op": "lt", "value": 40}]},
+    {"filters": [{"property": "reading", "op": "lte", "value": 40}]},
+    # **The bound as text**, which is what a URL parameter and a JSON editor
+    # both produce. If either store compared the bound as text rather than
+    # coercing it, "40" would order between "250" and "7".
+    {"filters": [{"property": "reading", "op": "gt", "value": "40"}]},
+    # Two filters on one property: a range, which is the ordinary use and the
+    # one that catches a store applying only the last clause.
+    {"filters": [{"property": "reading", "op": "gte", "value": 10},
+                 {"property": "reading", "op": "lt", "value": 250}]},
+    {"filters": [{"property": "seen", "op": "gte", "value": "2026-03-01T00:00:00+00:00"}]},
+    # A bare date against timestamps carrying offsets - midnight UTC, which is
+    # what makes date and timestamp one ordering rather than two.
+    {"filters": [{"property": "seen", "op": "lt", "value": "2026-03-01"}]},
+    # A bound that does not fit its own type. Nothing matches, rather than
+    # everything or an error.
+    {"filters": [{"property": "reading", "op": "gt", "value": "abc"}]},
+]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "case", ORDERED_CASES,
+    ids=[f"{c['filters'][0]['op']}-{i}" for i, c in enumerate(ORDERED_CASES)],
+)
+async def test_both_stores_compare_an_ordered_filter_the_same_way(
+    opensearch: str, case: dict
+) -> None:
+    """The check that stops `capacity > 40` meaning two things.
+
+    `object_sets.matches` is the written-down definition; the store reaches the
+    same conclusion through a `range` query against a typed mapping, and
+    Postgres through a guarded cast. Three mechanisms, one answer, or the
+    operator goes back to being refused.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-ord-test", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id), **case}, property_types=TYPED_TYPES
+        )
+        expected = {
+            key for key, props in TYPED_ROWS
+            if object_sets.matches(props, definition.filters)
+        }
+        rows, total = await store.evaluate_object_set(
+            search_prefix="ws-ord-test", object_type_id=type_id,
+            filters=definition.filters, limit=50, offset=0,
+        )
+        assert {r["primary_key"] for r in rows} == expected, case
+        assert total == len(expected)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sort", ["reading", "-reading", "seen", "-seen"])
+async def test_the_two_stores_order_by_a_property_identically(
+    opensearch: str, sort: str
+) -> None:
+    """A table sorted one way on Postgres and another on OpenSearch is the
+    invisible kind of wrong - the same class of bug the operator list existed
+    to prevent, which is why the sort was refused alongside it."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-ordsort", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        parsed = object_sets.parse_sort(sort, property_types=TYPED_TYPES)
+        rows, _ = await store.evaluate_object_set(
+            search_prefix="ws-ordsort", object_type_id=type_id, filters=(),
+            limit=50, offset=0, sort=parsed,
+        )
+        got = [r["primary_key"] for r in rows]
+
+        expected = sorted(
+            TYPED_ROWS,
+            key=lambda pair: object_sets.comparable(
+                pair[1][parsed.property], parsed.data_type
+            ),
+            reverse=parsed.descending,
+        )
+        assert got == [key for key, _ in expected], sort
+        # And it is not merely *a* stable order: the numbers order numerically,
+        # so 250 is last ascending rather than first as text would put it.
+        if parsed.property == "reading" and not parsed.descending:
+            assert got[-1] == "2"
     finally:
         await store.close()
 
@@ -416,16 +615,32 @@ def test_a_type_from_another_workspace_is_not_evaluable(
     assert r.status_code == 404, r.text
 
 
-def test_a_bad_definition_is_refused_in_a_sentence(client: TestClient, fx: Fixture) -> None:
+def test_a_bad_definition_is_refused_in_a_sentence(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    # **A type that exists**, which it did not have to be before §221. The
+    # definition is now validated *against the ontology* — an ordered
+    # comparison is checked against declared property types — so the type has
+    # to be resolved before the rest of the definition can be judged at all.
+    # A request naming both a nonexistent type and a bad operator therefore
+    # answers 404 rather than 422, and both are true; what this asserts is that
+    # a bad operator on a real type still blames the operator.
     r = client.post(
         f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
         headers=hdr(fx.owner_sub),
-        json={"definition": {"object_type_id": str(uuid.uuid4()),
+        json={"definition": {"object_type_id": seeded,
                              "filters": [{"property": "r", "op": "nope", "value": 1}]}},
     )
     assert r.status_code == 422, r.text
     assert isinstance(r.json()["detail"], str)
     assert "nope" in r.json()["detail"]
+
+    gone = client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
+        headers=hdr(fx.owner_sub),
+        json={"definition": {"object_type_id": str(uuid.uuid4()), "filters": []}},
+    )
+    assert gone.status_code == 404, gone.text
 
 
 # ---- aggregating a set (roadmap 1.5, what a Metric Card shows) ----------------
@@ -1381,13 +1596,15 @@ def test_a_sorted_page_does_not_repeat_or_skip_a_row(
 def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     client: TestClient, fx: Fixture, seeded: str
 ) -> None:
-    """The same refusal ordered operators get, for the same reason: untyped
-    properties mean the two stores would order 250 and 40 differently.
+    """**Refused because it is text, not because sorting by a property is
+    unsupported** - which it no longer is (§221).
 
-    The refusal also has to say *which* types sorting will cover when it is
-    built, and that text will never be one of them (decision 0006 §2) - the
-    earlier wording implied every property would be sortable one day, which is
-    the kind of promise a refusal should not make."""
+    `capacity` is a string property in this fixture, and decision 0006 §2
+    refuses string ordering *permanently*: Postgres orders by the database
+    collation and OpenSearch by byte order, so `'Z' < 'a'` differs between
+    them. The refusal has to say that rather than "not yet", because "not yet"
+    is a promise this one will never keep.
+    """
     r = client.post(
         f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
         headers=hdr(fx.owner_sub),
@@ -1395,10 +1612,23 @@ def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     )
     assert r.status_code == 422, r.text
     detail = r.json()["detail"]
-    assert "unknown sort" in detail
-    assert "integer, float, date and timestamp" in detail, "says what it will cover"
-    assert "text will stay unsortable" in detail, "and what it never will"
-    assert "declared property type" in detail
+    assert "is a string property" in detail
+    assert "no order the two stores agree on" in detail, "permanent, not pending"
+
+    # A property nothing declares still reports the four fixed sorts, because
+    # there is no declared type to blame instead.
+    unknown = client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
+        headers=hdr(fx.owner_sub),
+        json={"definition": {"object_type_id": seeded, "filters": []}, "sort": "nope"},
+    )
+    assert unknown.status_code == 422, unknown.text
+    hint = unknown.json()["detail"]
+    assert "unknown sort" in hint
+    # `PROPERTY_SORT_HINT` still says which types a property sort covers, and
+    # that text is not among them - it is the sentence somebody reads when they
+    # named a property that does not exist, so it has to point at the rule.
+    assert "text will stay unsortable" in hint, "and what it never will"
 
 
 @pytest.mark.anyio
