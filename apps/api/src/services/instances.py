@@ -424,11 +424,18 @@ async def evaluate_object_set(
     is user input, and the one place this could go wrong is the one place it
     must not.
 
-    Comparison is text-to-text, matching ``object_sets.matches`` and the
-    OpenSearch store. Ordered operators cast both sides to double precision and
-    fall back to no-match on a value that will not cast, so one unparseable row
-    narrows the set rather than failing the query - the same choice
-    ``object_sets._matches_one`` makes, made the same way in both stores.
+    Equality-shaped comparison is text-to-text, matching ``object_sets.matches``
+    and the OpenSearch store. **Ordered operators compare in the declared
+    property type's own ordering** (§221) — see ``_comparable_sql`` for the two
+    rules that keeps identical across the stores.
+
+    This paragraph described ordered operators for months while
+    ``object_sets.parse`` refused every one of them: it was written for the
+    first implementation, which was withdrawn when the cross-store test caught
+    the two stores disagreeing, and the prose stayed. It also described the
+    wrong thing — "cast both sides to double precision" is not what a date
+    needs. §217's lesson in the other direction: a comment can outlive the code
+    it describes, and the only tell is that nothing exercises what it claims.
     """
     predicate, params = _set_predicate(object_type_id, filters)
     # **On its own line, and its binds kept separate from the predicate's.** A
@@ -480,6 +487,44 @@ _CAST_FOR = {
 
 _SQL_COMPARISON = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 
+# A timestamp text that already says which offset it is in. db 0029 keeps one
+# "when the source has one", so this separates the two cases the ontology
+# actually stores rather than guessing at a format.
+_HAS_OFFSET = r"(Z|[+-][0-9]{2}:?[0-9]{2})$"
+
+
+def _comparable_sql(extract: str, data_type: str | None) -> str:
+    """A stored property, as a value its declared type can be ordered by.
+
+    Two rules, and both exist because the alternative is a disagreement nobody
+    can see.
+
+    **`pg_input_is_valid` rather than a regex or a bare cast.** A bare cast
+    raises on the first unparseable row, so one `"n/a"` in a `capacity` column
+    fails a whole page rather than narrowing it. A regex guard is a second,
+    weaker copy of Postgres's own parser - it would accept `2026-13-45` and
+    then throw anyway, on the row it was written to protect. This asks the
+    parser. A value that will not cast becomes NULL, which does not match in
+    either direction and sorts last, exactly as `object_sets._compares` says
+    and as OpenSearch treats a field that failed to index.
+
+    **A timestamp with no offset is UTC, stated rather than left to the
+    server.** `'2026-01-05'::timestamptz` uses the session's `TimeZone`, so the
+    same data would land on a different instant on a deployment configured to
+    anything but UTC - a cross-store divergence hiding in a server setting,
+    which is the exact shape decision 0006 exists to remove. `AT TIME ZONE
+    'UTC'` says it, and matches `object_sets._instant`, which the reference
+    semantics and the OpenSearch bound both go through.
+    """
+    cast = _CAST_FOR[data_type]
+    if cast != "timestamptz":
+        return f"(CASE WHEN pg_input_is_valid({extract}, '{cast}') THEN {extract}::{cast} END)"
+    return (
+        f"(CASE WHEN NOT pg_input_is_valid({extract}, 'timestamptz') THEN NULL"
+        f" WHEN {extract} ~ '{_HAS_OFFSET}' THEN {extract}::timestamptz"
+        f" ELSE {extract}::timestamp AT TIME ZONE 'UTC' END)"
+    )
+
 
 def _order_by(sort: "Any", params: dict[str, Any]) -> str:
     """An `object_sets.Sort`, as SQL.
@@ -516,7 +561,6 @@ def _order_by(sort: "Any", params: dict[str, Any]) -> str:
     if isinstance(sort, str) or sort.property is None:
         return clauses[object_sets.DEFAULT_SORT]
 
-    cast = _CAST_FOR[sort.data_type]
     params["sortprop"] = sort.property
     direction = "DESC" if sort.descending else "ASC"
     # **NULLS LAST in both directions**, which Postgres does not do by default:
@@ -525,9 +569,8 @@ def _order_by(sort: "Any", params: dict[str, Any]) -> str:
     # missing values last either way, and a page that starts with the unusable
     # rows on one store and the largest on the other is the invisible kind of
     # wrong this file exists to prevent.
-    value = (
-        f"(CASE WHEN pg_input_is_valid(jsonb_extract_path_text(i.properties, :sortprop), "
-        f"'{cast}') THEN jsonb_extract_path_text(i.properties, :sortprop)::{cast} END)"
+    value = _comparable_sql(
+        "jsonb_extract_path_text(i.properties, :sortprop)", sort.data_type
     )
     return f"{value} {direction} NULLS LAST, i.primary_key ASC"
 
@@ -574,24 +617,21 @@ def _set_predicate(
             where.append(f"{extract} ILIKE :{val}")
             params[val] = f"{_escape_like(_filter_text(f.value))}%"
         elif f.op in object_sets.ORDERED_OPERATORS:
-            cast = _CAST_FOR[f.data_type]
             comparison = _SQL_COMPARISON[f.op]
-            # **`pg_input_is_valid` rather than a regex or a bare cast**, and
-            # the difference is not tidiness. A bare cast raises on the first
-            # unparseable row, so one `"n/a"` in a `capacity` column would fail
-            # a whole page rather than narrowing it. A regex guard is a second,
-            # weaker implementation of Postgres's own parser - it would accept
-            # `2026-13-45` as a date and then throw anyway, on the row it was
-            # written to protect. This asks the parser.
-            #
-            # A value that will not cast does not match, either way round,
-            # which is what `object_sets._compares` says and what OpenSearch
-            # does with a document whose field failed to index.
+            bound = object_sets.comparable(f.value, f.data_type)
+            if bound is None:
+                # A bound that does not fit its own declared type. Nothing
+                # matches, which is what the reference says - written as a
+                # literal false rather than a comparison against NULL, because
+                # `x > NULL` is NULL and `WHERE NULL` is *also* no rows only by
+                # coincidence of three-valued logic.
+                where.append("false")
+                continue
             where.append(
-                f"(pg_input_is_valid({extract}, '{cast}') "
-                f"AND {extract}::{cast} {comparison} :{val}::{cast})"
+                f"({_comparable_sql(extract, f.data_type)} {comparison} "
+                f"CAST(:{val} AS {_CAST_FOR[f.data_type]}))"
             )
-            params[val] = _filter_text(f.value)
+            params[val] = bound.isoformat() if hasattr(bound, "isoformat") else bound
         else:  # pragma: no cover - object_sets.parse refuses anything else
             raise ValueError(f"unsupported object-set operator {f.op!r}")
 

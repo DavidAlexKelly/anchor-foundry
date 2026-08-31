@@ -564,6 +564,134 @@ def evaluate(client: TestClient, fx: Fixture, definition: dict, **kw) -> dict:
     return r.json()
 
 
+@pytest.fixture(scope="module")
+def typed(client: TestClient, fx: Fixture) -> str:
+    """A second population whose properties are **declared with real types**.
+
+    Separate from `seeded` on purpose: that one declares everything `string`,
+    which is what makes it the right fixture for the untyped comparisons this
+    file has always checked - and the wrong one for §221, whose entire subject
+    is what a declared type changes. Landed the same way, through an upload and
+    a sync, because an ordered comparison has to survive the coercion a real
+    sync applies rather than only the shape a test would insert.
+    """
+    tag = uuid.uuid4().hex[:8]
+    csv = b"key,reading,seen\n" + b"".join(
+        f"{key},{p['reading']},{p['seen']}\n".encode() for key, p in TYPED_ROWS
+    )
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.owner_sub),
+        data={"name": f"Readings {tag}"},
+        files={"file": ("readings.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types",
+        headers=hdr(fx.owner_sub),
+        json={
+            "api_name": f"Reading{tag}",
+            "display_name": f"Reading {tag}",
+            "properties": [
+                {"api_name": "reading", "data_type": "integer"},
+                {"api_name": "seen", "data_type": "timestamp"},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.owner_sub),
+        json={
+            "object_type_id": type_id,
+            "dataset_id": dataset_id,
+            "primary_key_column": "key",
+            "column_mappings": {"reading": "reading", "seen": "seen"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    source_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{source_id}/sync",
+        headers=hdr(fx.owner_sub),
+    )
+    assert r.status_code == 200, r.text
+    return type_id
+
+
+@pytest.mark.parametrize(
+    "case", ORDERED_CASES,
+    ids=[f"{c['filters'][0]['op']}-{i}" for i, c in enumerate(ORDERED_CASES)],
+)
+def test_the_postgres_store_compares_an_ordered_filter_the_same_way(
+    client: TestClient, fx: Fixture, typed: str, case: dict
+) -> None:
+    """The Postgres half of §221, against the same reference the OpenSearch
+    half is checked against - which is what 0006 §6 means by "neither store
+    ships the new operators until both do"."""
+    definition = object_sets.parse(
+        {"object_type_id": typed, **case}, property_types=TYPED_TYPES
+    )
+    expected = {
+        key for key, props in TYPED_ROWS
+        if object_sets.matches(props, definition.filters)
+    }
+    page = evaluate(client, fx, {"object_type_id": typed, **case})
+    assert {i["primary_key"] for i in page["instances"]} == expected, case
+    assert page["total"] == len(expected)
+
+
+def test_an_ordered_filter_survives_the_sync_that_coerces_it(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """**The whole point, asserted once in plain terms.** 250 is greater than
+    40, and before §221 the platform could not say so - the values reached the
+    stores as text and the two disagreed about what came first."""
+    page = evaluate(
+        client, fx,
+        {"object_type_id": typed,
+         "filters": [{"property": "reading", "op": "gt", "value": 40}]},
+    )
+    assert {i["primary_key"] for i in page["instances"]} == {"2"}
+
+
+def test_the_postgres_store_sorts_by_a_property(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Numerically, not as text - which is the difference the whole decision is
+    about: as text, 250 sorts between 10 and 40."""
+    page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort="reading")
+    assert [i["primary_key"] for i in page["instances"]] == ["4", "1", "3", "2"]
+
+    page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort="-reading")
+    assert [i["primary_key"] for i in page["instances"]] == ["2", "3", "1", "4"]
+
+
+def test_a_row_that_will_not_cast_sorts_last_in_both_directions(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Postgres puts NULLs **first** on a descending sort by default, so a
+    descending page would otherwise open with every unusable row while
+    OpenSearch put them at the end. A page that starts with the junk on one
+    store and the largest values on the other is the invisible kind of wrong
+    the cross-store rule exists for.
+
+    Reached by writing a property the ontology declares `integer` through the
+    editing API, which coerces - so the unusable value has to be one that
+    survives coercion and still cannot be ordered: an absent one.
+    """
+    for sort in ("seen", "-seen"):
+        page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort=sort)
+        keys = [i["primary_key"] for i in page["instances"]]
+        assert len(keys) == len(TYPED_ROWS), sort
+        assert keys[0] != keys[-1], sort
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["filters"][0]["op"])
 def test_the_postgres_store_and_the_reference_semantics_agree(
     client: TestClient, fx: Fixture, seeded: str, case: dict
