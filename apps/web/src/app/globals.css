@@ -1896,6 +1896,15 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .canvas-step-editor { display: grid; gap: 6px; }
 .canvas-step-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; }
 
+/* p.223's Default sort(s) editor. `auto` on the last column so Remove keeps its
+   width while the pickers share what is left - a row whose controls all shrank
+   equally would give the direction select as much room as the property name. */
+.canvas-sort-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px;
+}
+.canvas-sort-row > select, .canvas-sort-row > input { flex: 1 1 90px; min-width: 0; }
+.canvas-sort-row > .btn { flex: 0 0 auto; }
+
 /* ---- Markdown (p.314-319) ------------------------------------------------ */
 .canvas-markdown { font-size: 13.5px; line-height: 1.55; color: var(--ink); }
 .canvas-markdown > :first-child { margin-top: 0; }

@@ -132,10 +132,78 @@ PROPERTY_SORT_HINT = (
 )
 
 
+# How many orderings one page may be asked for (p.223's "one or more").
+#
+# A cap rather than none, and the number is a judgement rather than a limit
+# anything imposes: every entry past the first is a jsonb extract and a cast
+# **per row** on Postgres and another sort field on OpenSearch, and a table
+# whose order needs more than a handful of tie-breaks describes an ordering no
+# reader could follow anyway. Refused rather than truncated, because silently
+# dropping the seventh sort is the quiet kind of wrong - an author who wrote it
+# would see a page that is *nearly* in the order they asked for.
+MAX_SORTS = 6
+
+
+def parse_sorts(
+    sort: Any, *, property_types: "Mapping[str, str] | None" = None
+) -> "tuple[Sort, ...]":
+    """p.223's **Default sort(s)**: "one or more default sorts", validated.
+
+    Takes what a document may hold, which is three shapes and not one. A
+    **string** is one sort, the shape every caller wrote before this existed and
+    the shape stored modules still hold - decision 0002 says a document does not
+    change when you open it, so a stored `"recent"` keeps meaning what it meant.
+    A **list of strings** is p.223's several. `None` and `""` are no sort at all.
+
+    **A list, not a delimited string.** A comma convention would have been
+    fewer lines and would put a parsing rule between an author and their own
+    property names; the shapes a document can hold are worth being explicit
+    about, because the document is the thing that outlives this code.
+
+    Returns `()` for no sort, meaning **the caller asked for nothing** rather
+    than meaning any particular order. Both stores read `()` as `DEFAULT_SORT`,
+    which is exactly what they did before this function existed, so no existing
+    caller's pages move.
+
+    **p.223's "if no sort is applied, the data is not sorted" is not expressible
+    here, and the divergence is deliberate.** A page is a `LIMIT`/`OFFSET` over
+    a set of millions; an ordering the store does not state is one the store may
+    change between two requests, so "unsorted" would mean page 2 repeating rows
+    from page 1 and skipping others - the failure `_sort_clause` and `_order_by`
+    both open by describing. Absence therefore means the default ordering, which
+    is deterministic. Foundry can afford the other answer; a paged reader cannot.
+    """
+    if sort is None or sort == "":
+        return ()
+    raw = [sort] if isinstance(sort, str) else sort
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("sort must be a string or a list of strings")
+    if len(raw) > MAX_SORTS:
+        raise ValueError(f"a page may be sorted by at most {MAX_SORTS} things")
+    parsed: list[Sort] = []
+    seen: set[str] = set()
+    for entry in raw:
+        one = parse_sort(entry, property_types=property_types)
+        # **A repeat is refused, not ignored.** The second entry for a property
+        # can never break a tie the first did not, so it does nothing - and a
+        # setting that does nothing is worse than one that refuses, because the
+        # author reads it back and believes it. `key` is the same case: the
+        # primary key is unique, so anything after it is unreachable.
+        if one.key in seen:
+            raise ValueError(f"sort {one.key!r} is repeated, and the second one cannot order anything")
+        seen.add(one.key)
+        parsed.append(one)
+    return tuple(parsed)
+
+
 def parse_sort(
     sort: Any, *, property_types: "Mapping[str, str] | None" = None
 ) -> "Sort":
-    """Validate a sort, refusing in a sentence somebody can act on.
+    """Validate a **single** sort, refusing in a sentence somebody can act on.
+
+    The one-sort door, kept because most callers want exactly one and because
+    `parse_sorts` is written in terms of it. p.223's several go through
+    `parse_sorts`.
 
     Beyond the four fixed sorts, a **property sort** is `name` or `-name` for a
     property whose declared type has an order both stores agree on (§221). The

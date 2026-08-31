@@ -2837,7 +2837,12 @@ class ObjectSetIn(BaseModel):
     # Validated in the handler rather than by an enum here, so an unsupported
     # sort gets the sentence explaining what it would take (`object_sets`)
     # instead of Pydantic's list of permitted literals.
-    sort: str | None = None
+    #
+    # **A string or a list of them** (p.223's "one or more default sorts"). The
+    # string is not deprecated: it is what every stored module holds and what a
+    # caller wanting one ordering should still send, and decision 0002 says a
+    # document does not change when you open it.
+    sort: str | list[str] | None = None
 
 
 class ObjectSetOut(BaseModel):
@@ -3376,7 +3381,7 @@ async def evaluate_object_set(
         await ontology_service.get_type(conn, access.workspace_id, type_id)
         property_types = await _declared_types(conn, type_id)
         definition = object_sets.parse(body.definition, property_types=property_types)
-        sort = object_sets.parse_sort(body.sort, property_types=property_types)
+        sort = object_sets.parse_sorts(body.sort, property_types=property_types)
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
         filters, empty = await _resolve_traversal(

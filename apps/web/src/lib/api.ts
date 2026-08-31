@@ -709,7 +709,10 @@ export const objects = {
   evaluateObjectSet: (
     wid: string,
     definition: unknown,
-    opts: { limit?: number; offset?: number; sort?: string } = {},
+    // `sort` is a string or a list of them - p.223's "one or more default
+    // sorts". The string is not legacy: it is what one ordering should still
+    // send, and what every stored module holds.
+    opts: { limit?: number; offset?: number; sort?: string | string[] } = {},
   ) =>
     request<{
       instances: import("./types").ObjectInstance[];

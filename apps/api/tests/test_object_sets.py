@@ -382,6 +382,69 @@ def test_a_property_sort_needs_the_declared_types_too() -> None:
         object_sets.parse_sort("-capacity")
 
 
+# ---- p.223's "one or more default sorts" -------------------------------------
+def test_one_sort_may_be_written_as_a_string_or_as_a_list() -> None:
+    """The string is what every stored module holds, and decision 0002 says a
+    document does not change when you open it - so both shapes have to mean the
+    same thing rather than one of them being migrated to the other."""
+    assert object_sets.parse_sorts("key") == object_sets.parse_sorts(["key"])
+    assert [s.key for s in object_sets.parse_sorts("key")] == ["key"]
+
+
+def test_no_sort_is_no_sort_rather_than_the_default() -> None:
+    """`()` says the caller asked for nothing. The stores are what turn that
+    into the default ordering, which is where the reason lives: a page with no
+    stated order cannot be paged consistently."""
+    for nothing in (None, ""):
+        assert object_sets.parse_sorts(nothing) == ()
+
+
+def test_several_sorts_keep_the_order_they_were_written_in() -> None:
+    """The order *is* the setting: "by status, then by date" and "by date, then
+    by status" are different tables."""
+    types = {"reading": "integer", "seen": "timestamp"}
+    sorts = object_sets.parse_sorts(["-reading", "seen"], property_types=types)
+    assert [(s.property, s.descending) for s in sorts] == [("reading", True), ("seen", False)]
+
+
+def test_a_repeated_sort_is_refused_rather_than_ignored() -> None:
+    """A second entry for a property can never break a tie the first did not,
+    so it does nothing - and a setting that does nothing is worse than one that
+    refuses, because the author reads it back and believes it."""
+    types = {"reading": "integer"}
+    with pytest.raises(ValueError, match="repeated"):
+        object_sets.parse_sorts(["reading", "reading"], property_types=types)
+    with pytest.raises(ValueError, match="repeated"):
+        object_sets.parse_sorts(["key", "key"])
+
+
+def test_too_many_sorts_are_refused_rather_than_truncated() -> None:
+    """Silently dropping the seventh is the quiet kind of wrong: the author
+    gets a page *nearly* in the order they asked for."""
+    types = {f"p{n}": "integer" for n in range(object_sets.MAX_SORTS + 1)}
+    ok = [f"p{n}" for n in range(object_sets.MAX_SORTS)]
+    assert len(object_sets.parse_sorts(ok, property_types=types)) == object_sets.MAX_SORTS
+    with pytest.raises(ValueError, match="at most"):
+        object_sets.parse_sorts(ok + [f"p{object_sets.MAX_SORTS}"], property_types=types)
+
+
+def test_a_sort_list_refuses_a_member_that_is_not_a_string() -> None:
+    """Each member goes through the same validation one sort always did, so a
+    number in the list is refused by the rule rather than by a type error
+    somewhere further down."""
+    with pytest.raises(ValueError, match="sort must be a string"):
+        object_sets.parse_sorts(["key", 7])
+    with pytest.raises(ValueError, match="a string or a list"):
+        object_sets.parse_sorts({"sort": "key"})
+
+
+def test_every_sort_in_a_list_is_validated_not_just_the_first() -> None:
+    """The refusal that would be easiest to lose: validating the head of the
+    list and trusting the tail passes every test written with one entry."""
+    with pytest.raises(ValueError, match="unknown sort"):
+        object_sets.parse_sorts(["key", "nope"])
+
+
 def test_comparison_is_on_the_text_of_a_value() -> None:
     """The same rule links use: two independently-mapped sources can disagree
     about whether a code is a string or a number."""
@@ -691,6 +754,43 @@ async def test_the_two_stores_order_by_a_property_identically(
         await store.close()
 
 
+@pytest.mark.anyio
+async def test_the_two_stores_agree_on_several_sorts_at_once(opensearch: str) -> None:
+    """p.223's "one or more", across the store boundary.
+
+    The Postgres half of this is `test_a_second_sort_breaks_the_first_one_s_ties`
+    and it asserts a literal order; this asserts OpenSearch reaches **the same**
+    one. A multi-sort is where the two stores have the most room to disagree,
+    because each has to append its tie-break once and last rather than once per
+    ordering - two different mechanisms with one rule between them.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-multisort", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        parsed = object_sets.parse_sorts(["reading", "seen"], property_types=TYPED_TYPES)
+        rows, _ = await store.evaluate_object_set(
+            search_prefix="ws-multisort", object_type_id=type_id, filters=(),
+            limit=50, offset=0, sort=parsed,
+        )
+        # The same list the Postgres test pins, written out rather than derived
+        # - the two stores agreeing on a rule each computed for itself is the
+        # claim, and deriving both from one expression would let a wrong rule
+        # satisfy both halves.
+        assert [r["primary_key"] for r in rows] == [
+            "7", "4", "1", "5", "3", "0", "2", "6"
+        ]
+    finally:
+        await store.close()
+
+
 # ---- through the API (Postgres store, the local-dev default) -----------------
 @pytest.fixture(scope="module")
 def seeded(client: TestClient, fx: Fixture) -> str:
@@ -874,6 +974,75 @@ def test_the_postgres_store_sorts_by_a_property(
     assert [i["primary_key"] for i in page["instances"]] == [
         "2", "0", "3", "5", "1", "4", "7", "6"
     ]
+
+
+def test_a_second_sort_breaks_the_first_one_s_ties(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """**p.223's "one or more", and the assertion the whole unit rests on.**
+
+    Three rows read 40. Sorted by `reading` alone the tie-break puts them in
+    key order - 0, 3, 5 - and that is exactly what a second sort has to
+    override, or it is configured and dead.
+
+    The fixture is chosen so the two answers differ: by `seen` ascending the
+    tie group is 5 (February), 3 (March), 0 (May), which is not key order. A
+    test using `-seen` would have passed either way, because descending seen
+    happens to *be* key order here - the §221 lesson again, an input that
+    satisfies the rule by accident asserts nothing.
+    """
+    page = evaluate(
+        client, fx, {"object_type_id": typed, "filters": []}, sort=["reading", "seen"]
+    )
+    assert [i["primary_key"] for i in page["instances"]] == [
+        "7", "4", "1", "5", "3", "0", "2", "6"
+    ]
+
+
+def test_the_key_tiebreak_is_appended_once_and_last(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """The failure this guards is silent: if each ordering carried its own
+    `primary_key` tie-break, the first one would decide every row - the key is
+    unique - and every sort after it would be unreachable. So this asserts the
+    *second* sort still does something, against a first sort that has ties."""
+    grouped = evaluate(
+        client, fx, {"object_type_id": typed, "filters": []}, sort=["reading"]
+    )
+    two = evaluate(
+        client, fx, {"object_type_id": typed, "filters": []}, sort=["reading", "seen"]
+    )
+    assert [i["primary_key"] for i in grouped["instances"]] != [
+        i["primary_key"] for i in two["instances"]
+    ], "the second sort changed nothing, so it is dead"
+
+
+def test_two_property_sorts_do_not_collide_on_one_bind(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Both property sorts bind a property name, and a shared bind name would
+    let the second overwrite the first - producing a page ordered by `seen`
+    twice, which *looks* like a page rather than an error.
+
+    Told apart by asking for the two orderings in both directions: ordered by
+    one property twice, the two requests would be reverses of each other.
+    """
+    first = evaluate(
+        client, fx, {"object_type_id": typed, "filters": []}, sort=["reading", "seen"]
+    )
+    second = evaluate(
+        client, fx, {"object_type_id": typed, "filters": []}, sort=["seen", "reading"]
+    )
+    a = [i["primary_key"] for i in first["instances"]]
+    b = [i["primary_key"] for i in second["instances"]]
+    assert a != b
+    assert a != list(reversed(b))
+    # And the leading property is the one that actually leads.
+    readings = [
+        int(i["properties"]["reading"]) for i in first["instances"]
+        if i["properties"].get("reading") not in (None, "")
+    ]
+    assert readings == sorted(readings), "the first sort did not lead"
 
 
 def test_a_row_that_will_not_cast_sorts_last_in_both_directions(
