@@ -4290,6 +4290,88 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 226. p.310's numeric aggregations, and nothing that aggregates to zero (this session)
+
+> "Aggregation: Select the aggregation method used, options include average, count, min, max,
+> sum, or approximate unique count." (p.310)
+
+Decision 0006's third of four, and the last of the three that §220's typed index made
+possible. `sum`, `avg`, `min` and `max` over an object set, on Postgres and OpenSearch
+together — which is what 0006 §6 requires and why none of them shipped alone.
+
+`parse_aggregation` now takes `property_types` and returns an **`Aggregation` value object**
+carrying the property's declared type, the shape `Filter.data_type` and `Sort` already use: the
+decision that this arithmetic is legal is made once, against the ontology the caller resolved,
+so a store cannot reach a different answer than the validation did. Absence of the argument is
+a **refusal, not a permission** (§221).
+
+**Two rules decide the whole unit, and both are places the stores would have disagreed
+silently.**
+
+**The aggregatable types are narrower than the orderable ones, and the two dates are the
+difference.** A `min` over a date is a perfectly sensible question. It is refused anyway:
+Postgres answers it with a timestamp and OpenSearch's `min` aggregation answers it with epoch
+milliseconds, so the same question comes back as two different values in two different shapes.
+Reconciling them is a conversion nothing else in this area needs, for a question p.310 does not
+ask — its list includes an *average*, and the average of two dates is not a date. Refused with
+a sentence naming the reason rather than half-built, which is the correction §221 made to the
+sort refusal: "not yet" is a promise this one will never keep.
+
+**Nothing aggregates to nothing, and that includes `sum`.** Zero is the identity of addition,
+SQL would return it, and a reader would accept it — which is exactly the problem: a card
+reading "0" cannot be told from a card reading a real zero. "Total capacity: 0" says the sites
+have no capacity, where the truth is that there are no sites. §210's rule that unresolved is
+not empty, in the one place where the empty answer is a *plausible number*. It is also what
+keeps the stores together, because Postgres `sum()` over no rows is NULL and OpenSearch's sum
+aggregation is `0.0` — the divergence 0006 exists to remove, arriving from the store that was
+supposed to be the strict one.
+
+Getting that right needed one more thing than it looks like. **"How many documents matched" is
+the wrong emptiness test**: a document can match the filters and carry no value for the
+property at all. So the store asks a `value_count` beside every numeric aggregation, which
+counts the values the aggregation actually saw — exactly what Postgres's NULL-skipping
+aggregates count. The fixture has a row with no `reading`, and filtering down to just that row
+is the test: the set has one document and the aggregation has nothing.
+
+An unparseable stored value is left out rather than counted as zero, through the same
+`pg_input_is_valid` extraction ordered filters and property sorts use.
+
+**Two faults found on the way, neither of them in this feature.** The aggregate route parsed
+the definition *before* resolving the declared types, so every ordered filter a Metric Card was
+pointed at came back 422 while `/evaluate` accepted the same one — §221's rule applied to one
+caller and not to its neighbour, for five units. And the response model declared
+`value: float | int`, which renders a whole-number sum as `388.0`, because a union is tried
+left to right: a card over a column of whole numbers would have shown a value the ontology
+never held, with nothing in the service layer wrong.
+
+**16 mutants, 16 caught, 0 survivors, 0 hangs, 0 no-ops.** Six survived the first pass and each
+was a hole rather than a weak assertion — nothing tested the *absence* of `property_types`,
+nothing tested the store's door for a bare aggregation name, and the two OpenSearch rules
+needed the fixture to reproduce a real cluster's behaviour rather than smooth it. The
+unparseable value had to be **written past the API**, because every write path coerces: an
+`integer` property cannot be given `"n/a"` through the platform at all, which is why §221 could
+only reach that rule with an *absent* value. A value that survived an earlier declaration and
+stopped fitting a later one is the real case.
+
+**And two of the six were the §225 lesson repeating one level out.** The harness ran
+`tests/test_object_sets.py` and the tests that catch those two live in
+`tests/test_opensearch_fixture.py`, so they never ran. §225 was a `-k` filter; this was a file
+list. A harness's selection is a second definition of "the tests for this unit", and it will
+disagree with the first in whatever way you did not think to check.
+
+**1674 API tests** (was 1664 at this unit's first commit, 1648 at §225), 2 skipped; 1293 unit
+and 611 browser unchanged — this unit is entirely below the API.
+
+Decision 0006 has **§3's map bounding box** left and nothing else. `workshop.md`'s **Metric
+Card** can now show a number rather than only a count, and the **Pie Chart**'s five ○
+aggregations are down to one missing piece rather than a refusal: `/object-sets/group` answers
+a count per bucket, and a pie needs the aggregation *per slice*.
+
+---
+---
+---
+---
+
 ### 225. p.223's default sorts, and a tie-break that has to be last (this session)
 
 p.223's **Default sort(s)** on the Object Table: "one or more default sorts", on either store,
@@ -6260,6 +6342,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **The empty answer is dangerous exactly when it is a plausible number.** §226's aggregations return `None` over an empty set — including `sum`, whose identity really is zero and which both SQL and a reader would accept as `0`. That is the reason to refuse it: "total capacity: 0" and "there are no sites" are different facts that render identically, so the number a card shows is indistinguishable from a real measurement. `avg`, `min` and `max` are safe by accident, because nobody writes zero for them. The tell is a default that happens to be a legal value in the domain — a count of zero, a total of zero, an empty string where "" is meaningful — and the question is whether a reader could tell the default from the measurement. This is §210's "unresolved is not empty" met where it actually bites, and it is also what kept the two stores together: Postgres `sum()` over no rows is NULL and OpenSearch's is `0.0`, so the plausible-number answer was already a cross-store divergence sitting in a default nobody had chosen.
+
+- **"The set is empty" and "there is nothing to aggregate" are different questions, and only one of them is `hits.total`.** §226's store needed to know when an aggregation saw nothing, and the obvious test — did any document match — is wrong: a document can match every filter and carry no value for the property at all. OpenSearch then answers `0.0` for a sum over one matching document. The right test is a `value_count` on the same field, which counts what the aggregation actually saw and is exactly what a NULL-skipping SQL aggregate counts. The fixture row with no value is what makes the two testable apart, and a fixture where every row has every property cannot see the difference at all — the same "fixture with one of everything" family as §218, in a store rather than a widget.
+
+- **A harness's selection is a second definition of "the tests for this unit", and §226 met it again one level out from §225.** §225 lost a mutant to `pytest -k sort` when the test that caught it was named `..._tiebreak_...`. §226 lost two to a harness that ran `tests/test_object_sets.py` and nothing else, while the tests that catch them live in `tests/test_opensearch_fixture.py`. Same fault, different mechanism — a filter, then a file list — which is what makes it worth recording twice: the lesson is not "widen the `-k`", it is that **every narrowing in a harness is a claim about coverage that nothing checks**. Default to running more than seems necessary; the harness is slow, and a survivor you have to explain twice is slower.
 
 - **A tie-break that is redundant is invisible in results, so it has to be asserted on what the store is asked.** §225 composes several orderings, and the rule is that the key tie-break goes on once, after all of them: `primary_key` is unique, so an ordering carrying its own decides every row and makes every sort after it unreachable. Three mutants that put the tie-break back inside each ordering all survived — because the *page* is identical either way until a fixture happens to hold a tie in exactly the right place, and for the OpenSearch fixture it never did: the rows are written in key order, so a stable sort leaves them there and the tie-break has nothing to do. That is the "accidentally stable" trap the Postgres paging test already carried a comment about, met from the other side by a different store. The fix is the principle §221 already recorded — for a store gateway the request it forms is the contract — applied to ordering: assert the clause, not only the rows. The general tell: a rule that only changes the answer for inputs your fixture does not contain is a rule your fixture cannot check, and "ordering" is full of those because most orders are total.
 
