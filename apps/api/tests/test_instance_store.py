@@ -14,6 +14,7 @@ Two halves:
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import subprocess
@@ -489,10 +490,19 @@ async def test_the_migration_refuses_to_spin_when_the_cursor_will_not_advance(st
     original = store.MIGRATION_BATCH
     store.MIGRATION_BATCH = 2
     try:
+        # **Bounded, because the thing being tested is a loop that would not
+        # stop.** Without the wait, the guard can be deleted and this test
+        # *hangs* rather than failing — a red result that says the suite never
+        # answered, not that an assertion did. That is the same weak signal the
+        # leaked fixture server produced, and refusing to accept it is what
+        # turned four fake catches into real survivors.
         with pytest.raises(RuntimeError, match="search_after"):
-            await store.adopt_legacy_index(
-                search_prefix=prefix, object_type_id=uuid.UUID(type_id),
-                declared=DECLARED,
+            await asyncio.wait_for(
+                store.adopt_legacy_index(
+                    search_prefix=prefix, object_type_id=uuid.UUID(type_id),
+                    declared=DECLARED,
+                ),
+                timeout=10,
             )
     finally:
         store.MIGRATION_BATCH = original
