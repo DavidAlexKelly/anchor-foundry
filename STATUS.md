@@ -4290,6 +4290,150 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 220. One index per object type, and the blocker four features share (this session)
+
+Decision 0006 §1 and §2, built: an object type gets its own OpenSearch index, mapped from the
+types the ontology declares. No operator ships with it — see the last section for why that is
+the point rather than a shortfall.
+
+**Chosen over the next widget, and the reasoning is the unit's most reusable part.**
+`workshop.md` build-order item 7 said Timeline next. p.348 makes a timeline layer's central
+setting a "date or timestamp property to be used for visualizing **and ordering** the objects
+by" — and ordering by a property is exactly what decision 0006 refuses. A Timeline built on
+what the platform can do today would fetch a page ordered by *when a row last changed* and
+draw it against the property's dates: correct for that page, and showing "the 200 most
+recently changed objects" where a viewer reads "the earliest 200". That is the quietly-wrong
+failure this file keeps recording, in a widget whose whole job is to be read as a chronology.
+So the blocker came first. **Checked before starting, per §216**: 0006's own prerequisite
+(§7, the fixture's mapping enforcement) was already built in §112, which is what made this a
+unit rather than two.
+
+---
+
+**The problem, which is not "we never got round to typing the properties".**
+
+> "So the same filter reads `250 > 40` on one store and `"250" < "40"` on the other. The first
+> implementation shipped both and the cross-store test caught them disagreeing on the first
+> run, which is why the operators were withdrawn rather than picked."
+
+One index served every object type in a workspace. A workspace holding an Order whose `status`
+is a string and a Reading whose `status` is an integer **cannot have one mapping for
+`properties.status`** — so honouring the declared types in the old shape was not merely hard,
+it was inexpressible. That is why four features (ordered filters, numeric aggregations,
+property sorts, the map's area selection) have each carried the same refusal for as long as
+they have existed: they were all waiting on one sentence about index topology.
+
+`instance_mapping.py` is the whole type decision and is **pure** — what index a type lives in,
+what field each declared type becomes, which types may ever be ordered, and whether a
+declaration change is an addition or a reindex. 30 tests, no client and no cluster. The
+judgement worth carrying out of it: `integer` maps to `long` and `float` to `double`, because
+OpenSearch's `integer` is 32-bit and its `float` single-precision, and an id column past two
+billion is an ordinary thing for a source dataset to hold.
+
+**The mapping is `dynamic: "strict"`**, which is the point of declaring types at all. Left
+dynamic, the first document carrying an undeclared property decides its type for every
+document after it — and the declaration would have been for nothing. So an upsert now carries
+its type's declared properties, and each of the three callers that can create an index (a
+sync, an action creating the first object of a type, the backfill) had to be given them.
+
+---
+
+**Two things the split turned up that decision 0006 did not predict.**
+
+* **Deleting an object type never touched the index.** The Postgres rows went by cascade and
+  the documents stayed, where the workspace explorer — which filters by type only when asked —
+  went on returning them: objects of a type nobody could name. The decision's own line, "this
+  is cleaner than the delete-by-query it does today", was describing a delete-by-query that
+  did not exist. It is `indices.delete` now. **A decision document is a plan, and a plan
+  describes what it expects to find**; §216's lesson applies to a document's account of the
+  present as much as to a build order's account of the future.
+* **A type that has never synced now has no index at all**, where before it read from the
+  workspace's — which existed the moment anything had synced. "No instances yet" and "no index
+  yet" used to be the same state and neither was an error; they are different states now, and
+  a read that did not say which it tolerates would 404 the instance browser for every type
+  nobody had synced. Caught by a migration test asserting the *unmigrated* type was empty.
+
+---
+
+**The migration reads the old index, not Postgres, and that is the correctness of it.**
+
+`backfill` reads `object_instances` because it moves a workspace still *on* Postgres. A
+workspace already on OpenSearch has not written to those rows since its own cutover, so they
+are a snapshot of whenever that happened — reading them here would quietly restore a workspace
+to an old state and report it as a migration. Reading the index back is safe in the way that
+matters: `_source` is stored verbatim, so a `capacity` indexed as text is still the number it
+arrived as.
+
+Paged with **`search_after`, not from/size**: offset paging stops at
+`index.max_result_window`, and a migration that moved the first ten thousand documents of a
+larger type would leave a workspace that *looks* migrated and is missing rows. Document ids
+are carried rather than recomputed, because `action_runs.instance_id` points at them. A value
+the new mapping refuses fails the migration by name (0006 §5) rather than being skipped, and
+the old index is not deleted — a migration that removes its own source leaves nothing to
+compare counts against and no way back.
+
+---
+
+**The migration lost rows when two sources shared a primary key.**
+
+Instance identity is `(source_id, primary_key)`, not the key alone — `delete_instances` says so
+in as many words, because two datasets feeding one object type can each hold a row keyed `"1"`.
+The paging sorted on `primary_key` only, and **`search_after` on a non-unique sort skips every
+document sharing the cursor's value**. So a type fed by two sources lost one of each colliding
+pair: quietly, and in proportion to how many keys the two datasets happened to share. The store
+already states this rule for a viewer's page — `_sort_clause` ties every sort on `primary_key`
+last "so two rows that share an `updated_at` come back in the same order… on every page" — and
+the migration was written without it.
+
+The test that catches it needs the collision to **straddle a page boundary**: with a batch of
+two, each colliding pair lands wholly inside one page and the bug cannot appear, because the
+cursor only skips documents that share its value and sit *after* it. Three splits the pair.
+Verified against the old sort — five of six documents survived.
+
+---
+
+**A hang is not a catch, and seven of them in one run were not seven coincidences.**
+
+The first harness run reported seven mutants "caught (hang)". None of them were catches: a
+fixture server process had leaked from an earlier run and stayed bound to port 9209, so every
+later suite talked to a **stale process running old code** — and a suite killed by the harness's
+own timeout is exactly what leaves one behind, which is why the failure was self-sustaining
+once it started. I had told the user those mutants were legitimately looping. They were not.
+
+Two changes came out of it, both in the harness: it checks the fixture ports are free **before
+each mutant** rather than once at the start, and a timeout is now reported as `HANG` rather than
+counted with the catches. On the clean re-run one genuine hang remained — a mutant that made
+`search_after` stop advancing — and chasing *that* is what found the paging loop had no progress
+guard: an infinite loop with nothing logged and no way to tell it from a large migration still
+working. It names the store that is not honouring `search_after` now.
+
+**The rule, stated for next time: a red result that is a hang tells you the suite never
+answered, not that an assertion failed.** Counting it as a catch is how a harness reports
+coverage it does not have.
+
+---
+
+**49 mutants across three layers — 26 on the mapping module, 12 on the store, 11 on the fixture
+— 49 caught, 0 survivors, 0 hangs, 0 no-ops** after the fixes above. That took five runs: the
+first two were the leaked server, the third turned four fake catches into real survivors, the
+fourth found the migration's non-unique sort, and the fifth is the clean one.
+
+**1583 API tests** (was 1571 at §220's first commit, 1533 at §219), 2 skipped; 1175 unit and
+559 browser tests unchanged — this unit is entirely below the API.
+
+**No operator ships here, and that is 0006 §6 rather than an unfinished unit.** Ordered
+comparisons, numeric aggregations, property sorts and the map's bounding box all stay refused
+until *both* stores implement them: the Postgres half is a day's work and fully testable here,
+and shipping it first would mean results that depend on which store a deployment happens to
+run — which is the original bug, reintroduced by the fix for it. What §220 changes is that
+they are now possible rather than inexpressible. That is the next unit, and the Timeline is
+the one after it.
+
+---
+---
+---
+---
+
 ### 219. The Stepper, and a variable binding no scan could see (this session)
 
 p.312-313's widget: p.312's Linear and Non-linear types, p.313's Steps with a label, an On click
@@ -5651,6 +5795,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A hang is not a catch.** §220's harness reported seven mutants "caught (hang)" and none of them were: a fixture server process had leaked from an earlier run and stayed bound to its port, so every later suite talked to a **stale process running old code** — and a suite killed by the harness's own timeout is exactly what leaves one behind, so the failure sustained itself once it started. A timeout says the suite never answered; it does not say an assertion would have failed, and counting it as a catch is how a harness reports coverage it does not have. Two fixes, both cheap: **check the fixture's ports are free before each mutant** rather than once at the start, and report a timeout as `HANG` rather than folding it in with the catches. The one genuine hang that survived that change was worth chasing on its own — it found a paging loop with no progress guard, which is an infinite loop with nothing logged and no way to tell from slow work.
+
+- **`search_after` on a non-unique sort key silently skips rows**, and "unique enough for a page" is not unique. §220's migration paged on `primary_key`, which is unique *per source* — instance identity is `(source_id, primary_key)`, and two datasets feeding one object type can each hold a row keyed `"1"`. Every document sharing the cursor's value and sitting after it is skipped, so the migration lost one of each colliding pair in proportion to how many keys the two datasets happened to share. The store already stated the rule for a viewer's page (`_sort_clause` ties every sort on `primary_key` last so a page cannot repeat or skip) and the new code was written without it — **a rule written down once in a module is not a rule the next function in that module follows.** The test needs the collision to straddle a page boundary: batched so each colliding pair lands inside one page, the bug cannot appear at all.
 
 - **A guard that reads one place a name can appear stops working the moment the name can appear somewhere else.** §191's completeness check scans `node.data.props.X` — what a settings panel reads — and was complete for exactly as long as every variable binding was a top-level prop. §219's Stepper put one *inside* an array: `steps[1].completedVariable` follows the naming convention perfectly and the scan cannot see it, because the name never appears as a prop. So nothing counted it as a usage, the Variables panel said "unused" and offered to delete it, and afterwards every step would read as never completed — §185's `collapsedWhen` and §190's `tabVariable` a third time, by a route neither of their guards reaches. The fix is a catalogue rather than a special case (`NESTED_REFERENCE_PROPS`, mirrored in both runtimes) plus **one shared walk** for what had become five copies of the same loop — usage scanning, dangling-reference refusal, the lineage graph, a clipping's references, a page's bindings — because five copies is five chances for a binding to be a usage in one place and invisible in another. The general tell: when a *shape* changes (a prop becoming a list of objects), ask what each existing guard actually scans, not whether the new thing follows the convention.
 

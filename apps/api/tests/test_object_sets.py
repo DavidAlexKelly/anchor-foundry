@@ -47,6 +47,25 @@ ROWS = [
     ("5", {"region": "east", "status": "open", "capacity": "n/a"}),
 ]
 
+# What the ontology declares for the type these rows belong to.
+#
+# **`capacity` is a string, and that is not a shortcut.** The rows hold `10`,
+# `250`, `40`, `7` and `"n/a"` on purpose: this file's whole subject is the
+# untyped comparison decision 0006 refuses to make, and `"n/a"` is the value
+# that makes "cast it and compare" the wrong answer. A `capacity` declared
+# `integer` would be refused by the strict mapping - correctly, and it would
+# destroy the fixture. The property is a string in this workspace, so the
+# declaration says so.
+#
+# Passed on every upsert below because an index now carries its type's mapping
+# (0006 §1): without it the index is created strict-and-empty and refuses the
+# very documents the cross-store comparison is about.
+DECLARED = [
+    {"api_name": "region", "data_type": "string"},
+    {"api_name": "status", "data_type": "string"},
+    {"api_name": "capacity", "data_type": "string"},
+]
+
 CASES = [
     {"filters": [{"property": "region", "op": "eq", "value": "north"}]},
     {"filters": [{"property": "region", "op": "neq", "value": "north"}]},
@@ -260,6 +279,7 @@ async def test_opensearch_and_the_reference_semantics_agree(opensearch: str, cas
             source_id=source_id,
             rows=ROWS,
             synced_at=datetime.now(timezone.utc),
+            declared=DECLARED,
         )
         definition = object_sets.parse({"object_type_id": str(type_id), **case})
 
@@ -515,6 +535,7 @@ async def test_both_stores_aggregate_a_set_the_same_way(opensearch: str, case: d
             source_id=source_id,
             rows=ROWS,
             synced_at=datetime.now(timezone.utc),
+            declared=DECLARED,
         )
         definition = object_sets.parse(
             {"object_type_id": str(type_id), "filters": case["filters"]}
@@ -626,6 +647,7 @@ async def test_both_stores_group_a_set_the_same_way(opensearch: str, case: dict)
             source_id=source_id,
             rows=ROWS,
             synced_at=datetime.now(timezone.utc),
+            declared=DECLARED,
         )
         definition = object_sets.parse(
             {"object_type_id": str(type_id), "filters": case["filters"]}
@@ -883,6 +905,7 @@ async def test_both_stores_cross_tab_a_set_the_same_way(opensearch: str, case: d
             source_id=source_id,
             rows=rows,
             synced_at=datetime.now(timezone.utc),
+            declared=DECLARED,
         )
         definition = object_sets.parse(
             {"object_type_id": str(type_id), "filters": case["filters"]}
@@ -929,6 +952,7 @@ async def test_opensearch_answers_only_the_axes_it_was_given(opensearch: str) ->
             source_id=uuid.uuid4(),
             rows=ROWS,
             synced_at=datetime.now(timezone.utc),
+            declared=DECLARED,
         )
         assert await store.cross_tab_object_set(
             search_prefix="ws-pivot-pin",
@@ -961,6 +985,7 @@ async def test_an_empty_axis_is_an_empty_grid_rather_than_a_query(opensearch: st
             source_id=uuid.uuid4(),
             rows=ROWS,
             synced_at=datetime.now(timezone.utc),
+            declared=DECLARED,
         )
         assert await store.cross_tab_object_set(
             search_prefix="ws-pivot-empty",
@@ -1287,6 +1312,7 @@ async def test_both_stores_bucket_a_set_the_same_way(opensearch: str, interval: 
                 source_id=source_id,
                 rows=[(f"k{index}", {"region": "north"})],
                 synced_at=when,
+                declared=DECLARED,
             )
 
         buckets = await store.time_series_object_set(
@@ -1393,6 +1419,7 @@ async def test_the_two_stores_sort_a_page_identically(opensearch: str, sort: str
             source_id=source_id,
             rows=ROWS,
             synced_at=datetime.now(timezone.utc),
+            declared=DECLARED,
         )
         rows, _ = await store.evaluate_object_set(
             search_prefix="ws-sort-test",

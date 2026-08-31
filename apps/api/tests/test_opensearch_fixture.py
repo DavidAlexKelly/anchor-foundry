@@ -290,3 +290,160 @@ def test_the_keyword_subfield_comes_from_the_template_not_from_luck(server):
     # compares as such - the untyped behaviour every property has today.
     put(name, "2", {"primary_key": "b", "properties": {"dept": 250}})
     assert keys(search(name, {"term": {"properties.dept.keyword": "250"}})[1]) == ["b"]
+
+
+# ---- 6. what one index per object type needs (decision 0006 §1) --------------
+STRICT_MAPPING = {
+    "mappings": {
+        "properties": {
+            "object_type_id": {"type": "keyword"},
+            "primary_key": {"type": "keyword"},
+            "properties": {
+                "type": "object",
+                "dynamic": "strict",
+                "properties": {"capacity": {"type": "long"}},
+            },
+        }
+    }
+}
+
+
+def test_a_property_the_mapping_does_not_declare_is_refused(server):
+    """`dynamic: "strict"` is the point of declaring types at all: left
+    dynamic, the first document carrying an undeclared property decides its
+    type for every document after it. A fixture that stored it anyway would
+    make the declaration look like it was working while the cluster it stands
+    in for refused the write."""
+    name = index("strict", STRICT_MAPPING)
+    status, body = put(name, "1", {"primary_key": "a", "properties": {"capacity": 10}})
+    assert status == 200 and not body["errors"]
+
+    status, body = put(name, "2", {"primary_key": "b",
+                                   "properties": {"capacity": 10, "surprise": "x"}})
+    assert status == 200, "a bulk reports per item rather than failing the call"
+    assert body["errors"], "the undeclared property was accepted"
+    assert "strict" in body["items"][0]["update"]["error"]["reason"]
+    # And the document is not half-stored: a cluster refuses the whole thing.
+    assert keys(search(name, {"match_all": {}})[1]) == ["a"]
+
+
+def test_creating_an_index_that_exists_is_refused(server):
+    """What a real cluster answers, with `resource_already_exists_exception`.
+    The fixture used to overwrite it - so a store that had lost its
+    exists-check passed here and would have destroyed a live mapping against a
+    domain."""
+    name = index("twice", STRICT_MAPPING)
+    status, body = call("PUT", f"/{name}", {"mappings": {}})
+    assert status == 400
+    assert body["error"]["type"] == "resource_already_exists_exception"
+    # The mapping it already had is intact, which is the thing the refusal
+    # protects: a silent overwrite would leave the index accepting anything.
+    _, mapping = call("GET", f"/{name}/_mapping")
+    assert "capacity" in mapping[name]["mappings"]["properties"]["properties"]["properties"]
+
+
+def test_a_pattern_reaches_only_the_indices_it_names(server):
+    """The workspace explorer searches `{prefix}objects-*`, and the prefix is
+    the workspace boundary (db 0002). A pattern that reached further would make
+    the explorer return another tenant's objects - structural isolation being
+    the whole reason the index is named from the prefix at all."""
+    call("POST", "/__reset")
+    for name in ("ws-a-objects-1", "ws-a-objects-2", "ws-b-objects-1",
+                 "ws-a-object-instances"):
+        call("PUT", f"/{name}", {})
+        put(name, "1", {"primary_key": name, "properties": {}})
+
+    _, found = search("ws-a-objects-*", {"match_all": {}})
+    assert keys(found) == ["ws-a-objects-1", "ws-a-objects-2"], (
+        "the pattern crossed a workspace, or swept in the index it replaces"
+    )
+
+
+def test_a_hit_reports_the_index_it_came_from(server):
+    """Not the pattern it was asked for. A search across several indices whose
+    hits all named the pattern would look single-index in every assertion - and
+    `_index` is the only thing on a hit that says which type's index answered."""
+    call("POST", "/__reset")
+    for name in ("ws-a-objects-1", "ws-a-objects-2"):
+        call("PUT", f"/{name}", {})
+        put(name, "1", {"primary_key": name, "properties": {}})
+
+    _, found = search("ws-a-objects-*", {"match_all": {}})
+    assert {hit["_index"] for hit in found["hits"]["hits"]} == {
+        "ws-a-objects-1", "ws-a-objects-2"
+    }
+
+
+def test_searching_an_index_that_does_not_exist_is_an_error(server):
+    """A concrete index that is absent is a 404 on a real cluster, and the
+    caller says otherwise with `ignore_unavailable`. A fixture that answered
+    "no documents" either way would let a store querying the wrong index name
+    pass here and find nothing against a domain - and "this type has nothing
+    yet" and "this query went somewhere that does not exist" are exactly the
+    pair a naming bug hides between."""
+    call("POST", "/__reset")
+    status, body = search("nowhere", {"match_all": {}})
+    assert status == 404
+    assert body["error"]["type"] == "index_not_found_exception"
+
+    status, body = call("POST", "/nowhere/_search?ignore_unavailable=true",
+                        {"query": {"match_all": {}}})
+    assert status == 200 and body["hits"]["total"]["value"] == 0
+
+    # A *pattern* matching nothing is not an error, which is the difference the
+    # workspace explorer relies on before the first sync.
+    status, body = search("nothing-*", {"match_all": {}})
+    assert status == 200 and body["hits"]["total"]["value"] == 0
+
+
+def test_deleting_an_index_that_does_not_exist_is_an_error(server):
+    """Same rule for `indices.delete`, and the reason the type-drop sends the
+    flag: a type deleted before its first sync has no index, and a delete that
+    raised would make it undeletable."""
+    call("POST", "/__reset")
+    status, body = call("DELETE", "/nowhere")
+    assert status == 404
+    assert body["error"]["type"] == "index_not_found_exception"
+
+    status, _ = call("DELETE", "/nowhere?ignore_unavailable=true")
+    assert status == 200
+
+
+def test_put_mapping_adds_a_field_and_keeps_the_others(server):
+    """A `put_mapping` body names a path - `properties.properties.x` - so a
+    shallow update would replace the whole `properties` object with the one
+    field being added, silently dropping every field the index already had.
+    That is worse than failing: the mapping still exists, it is simply missing
+    most of itself, and the next document is refused for a property that was
+    declared."""
+    name = index("widen", STRICT_MAPPING)
+    status, _ = call("PUT", f"/{name}/_mapping", {
+        "properties": {"properties": {"properties": {"note": {"type": "text"}}}}
+    })
+    assert status == 200
+
+    _, mapping = call("GET", f"/{name}/_mapping")
+    declared = mapping[name]["mappings"]["properties"]["properties"]["properties"]
+    assert declared["note"]["type"] == "text", "the new field is not there"
+    assert declared["capacity"]["type"] == "long", "the existing field was dropped"
+
+    # And the widened mapping actually takes a document using both.
+    status, body = put(name, "1", {"primary_key": "a",
+                                   "properties": {"capacity": 1, "note": "hello"}})
+    assert status == 200 and not body["errors"]
+
+
+def test_delete_by_query_removes_from_the_index_the_document_is_in(server):
+    """`_delete_by_query` accepts a pattern too. Popping from the index named
+    in the *request* rather than the one each document came from would either
+    raise on a pattern or - worse - delete nothing and report a count."""
+    call("POST", "/__reset")
+    for name in ("ws-a-objects-1", "ws-a-objects-2"):
+        call("PUT", f"/{name}", {})
+        put(name, "1", {"primary_key": name, "source_id": "s1", "properties": {}})
+
+    status, body = call("POST", "/ws-a-objects-*/_delete_by_query",
+                        {"query": {"term": {"source_id": "s1"}}})
+    assert status == 200 and body["deleted"] == 2
+    _, found = search("ws-a-objects-*", {"match_all": {}})
+    assert found["hits"]["total"]["value"] == 0, "counted as deleted but still there"

@@ -61,6 +61,49 @@ MAPPINGS: dict[str, dict] = {}
 
 MISSING = object()
 
+# Deliberate misbehaviours a test has asked for. Empty in every other test,
+# and cleared by `__reset`, so nothing here changes what the fixture means
+# unless something explicitly says so.
+STUCK: set[str] = set()
+
+
+def _matching_indices(index: str) -> list[str]:
+    """The indices a name or a pattern reaches.
+
+    **Not called `_resolve`**, which this file already uses for reading a field
+    out of a document. Python allowed the redefinition silently and the second
+    definition won, so every search died on a `TypeError` about an argument
+    nobody had written — §211's collision, in the one namespace that *does*
+    have a compiler and still does not check this.
+
+    Decision 0006 §1 splits one index per workspace into one per object type,
+    so the workspace explorer searches `{prefix}objects-*`. Sorted, because a
+    search across several indices has to return the same order twice - a
+    fixture ordering by dict insertion would make a paging test pass on the run
+    that wrote the documents and fail on the run that did not.
+    """
+    if "*" not in index:
+        return [index] if index in INDICES else []
+    import fnmatch
+
+    return sorted(name for name in INDICES if fnmatch.fnmatch(name, index))
+
+
+def _merge_mapping(existing: dict, addition: dict) -> dict:
+    """A `put_mapping` body folded into the stored mapping, field by field.
+
+    Recursive because the addition names a path — `properties.properties.x` —
+    and a shallow update would replace the whole `properties` object with the
+    one field being added.
+    """
+    out = dict(existing)
+    for key, value in addition.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge_mapping(out[key], value)
+        else:
+            out[key] = value
+    return out
+
 
 class MappingError(ValueError):
     """A document or query that contradicts the index's declared mapping.
@@ -178,11 +221,40 @@ def _validate(index: str, doc: dict, prefix: str = "") -> dict:
     out: dict = {}
     for key, value in doc.items():
         path = f"{prefix}{key}"
+        _refuse_if_strict(index, path)
         if isinstance(value, dict) and _declared_type(index, path) != "geo_point":
             out[key] = _validate(index, value, prefix=f"{path}.")
         else:
             out[key] = _coerce(value, _declared_type(index, path), path)
     return out
+
+
+def _refuse_if_strict(index: str, path: str) -> None:
+    """`dynamic: "strict"` on an object refuses a field it does not declare.
+
+    Decision 0006 §1 puts it on `properties`, which is the whole point of
+    declaring types at all: left dynamic, the first document carrying an
+    undeclared property decides its type for every document after it. A fixture
+    that stored it anyway would make the declaration look like it was working
+    while the cluster it stands in for refused the write.
+    """
+    if "." not in path:
+        return
+    parent, _, _leaf = path.rpartition(".")
+    node = ((MAPPINGS.get(index) or {}).get("mappings") or {}).get("properties") or {}
+    for part in parent.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return
+        node = node[part]
+        if not isinstance(node, dict):
+            return
+        if node.get("dynamic") == "strict" and part == parent.rsplit(".", 1)[-1]:
+            if _leaf not in (node.get("properties") or {}):
+                raise MappingError(
+                    f"mapping set to strict, dynamic introduction of [{_leaf}] "
+                    f"within [{parent}] is not allowed"
+                )
+        node = node.get("properties") or {}
 
 
 def _comparable(value, declared: str | None):
@@ -332,8 +404,21 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
     raise ValueError(f"fixture does not implement clause {clause!r}")
 
 
-def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
-    docs = list(INDICES.get(index, {}).items())
+def _filtered(index: str, query: dict) -> list[tuple[str, str, dict]]:
+    """`(index, doc_id, source)` for every document a query matches.
+
+    **The index travels with the document**, because `index` may now be a
+    pattern (decision 0006 §1 put one index per object type behind the
+    workspace explorer). Two things depend on it: a hit reports the index it
+    actually came from, and every typed comparison is made against *that*
+    index's mapping. Comparing against the pattern would find no mapping at
+    all, so a `long` field would compare as text and the fixture would agree
+    with a store that had never declared anything - which is the disagreement
+    the mapping enforcement exists to catch.
+    """
+    docs = [(name, doc_id, source)
+            for name in _matching_indices(index)
+            for doc_id, source in INDICES[name].items()]
     if not query or "match_all" in query:
         return docs
     if "bool" in query:
@@ -350,29 +435,25 @@ def _filtered(index: str, query: dict) -> list[tuple[str, dict]]:
         # wrong query.
         minimum = int(bool_query.get("minimum_should_match", 0))
         if should and minimum:
-            def enough(source: dict) -> bool:
-                return sum(1 for c in should if _match(source, c, index)) >= minimum
-        elif should:
-            def enough(source: dict) -> bool:
-                return True
+            def enough(name: str, source: dict) -> bool:
+                return sum(1 for c in should if _match(source, c, name)) >= minimum
         else:
-            def enough(source: dict) -> bool:
+            def enough(name: str, source: dict) -> bool:
                 return True
     else:
         clauses = [query]
         must_not = []
 
-        def enough(source: dict) -> bool:
+        def enough(name: str, source: dict) -> bool:
             return True
-    def allowed(source: dict) -> bool:
-        return not any(_match(source, c, index) for c in must_not)
 
-    if not clauses:
-        return [(i, s) for i, s in docs if enough(s) and allowed(s)]
+    def allowed(name: str, source: dict) -> bool:
+        return not any(_match(source, c, name) for c in must_not)
+
     return [
-        (i, s)
-        for i, s in docs
-        if all(_match(s, c, index) for c in clauses) and enough(s) and allowed(s)
+        (n, i, s)
+        for n, i, s in docs
+        if all(_match(s, c, n) for c in clauses) and enough(n, s) and allowed(n, s)
     ]
 
 
@@ -444,15 +525,75 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"_index": index, "_id": doc_id, "found": False})
             return self._send(200, {"_index": index, "_id": doc_id, "found": True,
                                     "_source": source})
+        if len(parts) == 2 and parts[1] == "_mapping":
+            # Keyed by index name, which is the shape a real cluster answers in
+            # and the shape `instance_mapping._mapped_properties` has to read.
+            found = {name: MAPPINGS.get(name, {}) for name in _matching_indices(parts[0])}
+            if not found:
+                return self._send(404, {"error": {"type": "index_not_found_exception"}})
+            return self._send(200, found)
         self._send(404, {"error": f"fixture has no GET {path}"})
 
     def do_PUT(self) -> None:  # noqa: N802
-        index = urlparse(self.path).path.strip("/")
+        path = urlparse(self.path).path.strip("/")
         raw = self._body()
+        parts = path.split("/")
+        if len(parts) == 2 and parts[1] == "_mapping":
+            # Adding a field to a live mapping, which a real cluster allows and
+            # a *changed* field's type is not (decision 0006 §4). Merged rather
+            # than replaced: a put_mapping that overwrote would silently drop
+            # every field the index already had.
+            index = parts[0]
+            if index not in INDICES:
+                return self._send(404, {"error": {"type": "index_not_found_exception"}})
+            MAPPINGS[index] = _merge_mapping(MAPPINGS.get(index, {}),
+                                             {"mappings": json.loads(raw or "{}")})
+            return self._send(200, {"acknowledged": True})
+        index = path
+        if index in INDICES:
+            # **A real cluster refuses to create an index that exists**, with
+            # `resource_already_exists_exception`. The fixture used to overwrite
+            # it, which made a store that had lost its exists-check pass here
+            # and destroy a live mapping against a domain - the exact class of
+            # gap decision 0006 §7 added mapping enforcement to close.
+            return self._send(400, {"error": {
+                "type": "resource_already_exists_exception",
+                "reason": f"index [{index}] already exists",
+            }})
         INDICES.setdefault(index, {})
         # Remembered rather than discarded: everything below compares by it.
         MAPPINGS[index] = json.loads(raw or "{}")
         self._send(200, {"acknowledged": True, "index": index})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        """`indices.delete`, which is how an object type's instances are
+        forgotten now that a type has an index of its own (decision 0006 §1)."""
+        index = urlparse(self.path).path.strip("/")
+        names = _matching_indices(index)
+        if not names and not self._flag("ignore_unavailable"):
+            # **404 unless the caller asked otherwise**, because that is what a
+            # real cluster does. A fixture that shrugged at a missing index
+            # either way would let a caller that forgot the flag pass here and
+            # fail against a domain - and this whole file exists so the gap
+            # between the two is small enough to name.
+            return self._send(404, {"error": {"type": "index_not_found_exception"}})
+        for name in names:
+            INDICES.pop(name, None)
+            MAPPINGS.pop(name, None)
+        self._send(200, {"acknowledged": True})
+
+    def _flag(self, name: str) -> bool:
+        """A boolean query parameter, as the client sends it.
+
+        The REST subset had no need for the query string until per-type indices
+        arrived: `ignore_unavailable` is how a caller says a missing index is
+        an empty result rather than an error, and it travels there rather than
+        in the body.
+        """
+        from urllib.parse import parse_qs
+
+        values = parse_qs(urlparse(self.path).query).get(name, [])
+        return bool(values) and str(values[0]).lower() in ("true", "1", "")
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
@@ -460,7 +601,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/__reset":
             INDICES.clear()
             MAPPINGS.clear()
+            STUCK.clear()
             return self._send(200, {"reset": True})
+        if path == "/__ignore_search_after":
+            # **A control that exists for one test, and says so.** A caller
+            # paging with `search_after` against a store that does not honour
+            # it loops forever, which is the worst failure a migration can have
+            # - nothing logged, and indistinguishable from a large one still
+            # working. The guard against it is a branch nothing a *correct*
+            # server does can reach, so pinning it means making the server
+            # incorrect on purpose. Same shape as reaching into a catalogue to
+            # produce an unclassifiable reference (§219).
+            STUCK.add("search_after")
+            return self._send(200, {"stuck": True})
         if path == "/_bulk":
             return self._bulk(raw)
         parts = path.strip("/").split("/")
@@ -505,6 +658,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"errors": any("error" in i["update"] for i in items), "items": items})
 
     def _search(self, index: str, body: dict) -> None:
+        # A concrete index that does not exist is a 404 on a real cluster, and
+        # `_matching_indices` alone would report it as no documents - which is
+        # the difference between "this type has nothing yet" and "this query
+        # went somewhere that does not exist", and exactly the pair a store
+        # bug hides between. A *pattern* matching nothing is not an error.
+        if "*" not in index and not _matching_indices(index) and not self._flag(
+            "ignore_unavailable"
+        ):
+            return self._send(404, {"error": {"type": "index_not_found_exception"}})
         try:
             matched = _filtered(index, body.get("query", {}))
         except MappingError as exc:
@@ -513,17 +675,47 @@ class Handler(BaseHTTPRequestHandler):
             # a wrong query that looks like a true answer.
             return self._send(400, {"error": {"type": "search_phase_execution_exception",
                                               "reason": str(exc)}})
-        for sort in reversed(body.get("sort", [])):
+        sorts = body.get("sort", [])
+        for sort in reversed(sorts):
             field, direction = next(iter(sort.items()))
-            matched.sort(key=lambda pair: str(pair[1].get(field, "")),
+            matched.sort(key=lambda triple: str(triple[2].get(field, "")),
                          reverse=direction == "desc")
+        # `search_after`, which the 0006 migration pages with: offset paging
+        # stops at `index.max_result_window`, and a migration that silently
+        # moved the first ten thousand documents of a larger type would leave a
+        # workspace that looks migrated and is missing rows.
+        after = None if "search_after" in STUCK else body.get("search_after")
+        if after is not None:
+            keys = [next(iter(sort)) for sort in sorts]
+            cursor = [str(v) for v in after]
+            descending = [next(iter(sort.values())) == "desc" for sort in sorts]
+
+            def past(source: dict) -> bool:
+                current = [str(source.get(k, "")) for k in keys]
+                for now, then, down in zip(current, cursor, descending):
+                    if now != then:
+                        return now < then if down else now > then
+                return False  # equal on every sort key is not past it
+
+            matched = [t for t in matched if past(t[2])]
         start = int(body.get("from", 0))
         size = int(body.get("size", 10))
         window = matched[start:start + size]
         response: dict = {
             "hits": {
                 "total": {"value": len(matched), "relation": "eq"},
-                "hits": [{"_index": index, "_id": i, "_source": s} for i, s in window],
+                # The index the document actually came from, not the pattern
+                # that was asked for. A hit that named the pattern would make a
+                # cross-index search look single-index in every assertion.
+                # `sort` on every hit, because that is the cursor a caller
+                # feeds back as `search_after` - a fixture omitting it would
+                # make the second page of a migration silently be the first.
+                "hits": [
+                    {"_index": n, "_id": i, "_source": s,
+                     **({"sort": [str(s.get(next(iter(sort)), "")) for sort in sorts]}
+                        if sorts else {})}
+                    for n, i, s in window
+                ],
             }
         }
         # Cardinality and terms - the aggregations this platform issues
@@ -541,7 +733,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(exc)})
         self._send(200, response)
 
-    def _aggregate(self, aggs: dict, matched: list[tuple[str, dict]]) -> dict:
+    def _aggregate(self, aggs: dict, matched: list[tuple[str, str, dict]]) -> dict:
         """One level of aggregations over the matched documents.
 
         Recursive, because a cross-tab is a terms aggregation *inside* a terms
@@ -565,9 +757,9 @@ class Handler(BaseHTTPRequestHandler):
             # thing a fixture cannot check.
             path = field[: -len(".keyword")] if field.endswith(".keyword") else field
             parts = path.split(".")
-            grouped: dict[str, list[tuple[str, dict]]] = {}
+            grouped: dict[str, list[tuple[str, str, dict]]] = {}
             for pair in matched:
-                cursor = pair[1]
+                cursor = pair[2]
                 for part in parts:
                     cursor = cursor.get(part) if isinstance(cursor, dict) else None
                 if cursor is not None:
@@ -603,7 +795,7 @@ class Handler(BaseHTTPRequestHandler):
             }
         return computed
 
-    def _date_histogram(self, spec: dict, matched: list[tuple[str, dict]]) -> dict:
+    def _date_histogram(self, spec: dict, matched: list[tuple[str, str, dict]]) -> dict:
         """Calendar buckets over a date field, keyed in epoch milliseconds.
 
         **Only `calendar_interval`, and only UTC** - which is not laziness, it
@@ -627,7 +819,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("fixture returns populated buckets only (min_doc_count 1)")
 
         counts: dict[datetime, int] = {}
-        for _, source in matched:
+        for _, _doc_id, source in matched:
             raw = source.get(spec["field"])
             if raw is None:
                 continue
@@ -661,8 +853,12 @@ class Handler(BaseHTTPRequestHandler):
         except MappingError as exc:
             return self._send(400, {"error": {"type": "mapper_parsing_exception",
                                               "reason": str(exc)}})
-        for doc_id, _ in matched:
-            INDICES[index].pop(doc_id, None)
+        # Deleted from the index each document was found in, not from the one
+        # named in the request: `_delete_by_query` accepts a pattern too, and
+        # popping from `INDICES[index]` would KeyError on one - or, worse,
+        # delete nothing and report a count.
+        for name, doc_id, _ in matched:
+            INDICES[name].pop(doc_id, None)
         self._send(200, {"deleted": len(matched)})
 
     def _update(self, index: str, doc_id: str, body: dict) -> None:

@@ -1,7 +1,14 @@
 # 0006 — Typed instance properties
 
-**Status:** accepted, not built
+**Status:** accepted; §1, §2 and §7 built (`STATUS.md` §112, §220), §3–§6 outstanding
 **Context:** the blocker `STATUS.md` names as holding four separate features
+
+**What is built, and what is deliberately not.** The structural half is done: one index per
+object type, mapped from the declared types, with the migration out of the single workspace
+index (§220). **No operator ships with it** — no ordered comparison, no numeric aggregation,
+no property sort, no map box — because §6 refuses to put any of them on one store before the
+other, and the Postgres half is still a day's work. The mapping is what makes them *possible*;
+§220 stopped there on purpose so that the day they ship, they ship together.
 
 Four things are refused today, each with the same sentence in its refusal, and each with a
 one-line implementation that was deliberately not written:
@@ -49,8 +56,19 @@ hard, it is not expressible.
 
 ## 1. One index per object type
 
-`{search_prefix}objects-{object_type_id}`, mapping each `properties.<name>` to the field type
-its declaration asks for.
+**Built** (`STATUS.md` §220). `{search_prefix}objects-{object_type_id}`, mapping each
+`properties.<name>` to the field type its declaration asks for — `instance_mapping.py`, which
+is pure and holds the whole type decision. The mapping is `dynamic: "strict"` on `properties`,
+so a value whose property is not declared is refused rather than mapped by guess: left
+dynamic, the first document carrying an undeclared property would decide its type for every
+document after it, and the declaration would have been for nothing.
+
+Two things the split turned up that this document did not predict. **Deleting an object type
+never touched the index at all** — the Postgres rows went by cascade and the documents stayed,
+where the workspace explorer went on returning them; the "cleaner than a delete-by-query"
+below was describing a delete-by-query that did not exist. And **a type that has never synced
+now has no index**, where before it read from the workspace's, so "no instances yet" and "no
+index yet" stopped being the same state and every read had to say which it tolerates.
 
 **Why this and not the alternatives.**
 
@@ -82,6 +100,10 @@ its declaration asks for.
   does today.
 
 ## 2. Which types become orderable, and which never do
+
+**The table is built** as `instance_mapping.ORDERABLE_TYPES` (§220) and nothing consumes it
+yet — see §6. It is stated in code because the mapping is what makes it true: a `date` field
+is orderable *because* it is mapped `date`.
 
 | Declared type | Ordered comparison | Why |
 |---|---|---|
