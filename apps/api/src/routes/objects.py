@@ -3129,6 +3129,20 @@ async def time_series_object_set(
 
 
 
+async def _declared_types(conn, object_type_id: UUID) -> dict[str, str]:
+    """One object type's `api_name -> data_type`, for validating a set (§221).
+
+    The shape `object_sets.parse` wants, built where the ontology is readable —
+    that module imports nothing, which is what keeps the *meaning* of a set out
+    of reach of a database.
+    """
+    return {
+        str(row["api_name"]): str(row["data_type"])
+        for row in await ontology_service.list_properties(conn, object_type_id)
+        if row.get("api_name") and row.get("data_type")
+    }
+
+
 async def _resolve_traversal(
     conn: Any,
     store: Any,
@@ -3350,12 +3364,19 @@ async def evaluate_object_set(
     answer "how many match" or "show me the next page of the filtered set" -
     which is the whole reason object sets are a server concept.
     """
-    definition = object_sets.parse(body.definition)
-    sort = object_sets.parse_sort(body.sort)
+    # **The id first, then the ontology, then the rest of the definition.** An
+    # ordered comparison is validated against the declared property types
+    # (§221), and reading those needs to know whose properties to read - so the
+    # parse that needs them cannot be the parse that finds the type. The scope
+    # check still happens before anything is used as a filter.
+    type_id = object_sets.object_type_id_of(body.definition)
     async with user_connection(access.auth.user_id) as conn:
         # Confirms the type is in this workspace before it is used as a filter
         # - an id from a request body is never trusted to be in scope (§10).
-        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        property_types = await _declared_types(conn, type_id)
+        definition = object_sets.parse(body.definition, property_types=property_types)
+        sort = object_sets.parse_sort(body.sort, property_types=property_types)
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
         filters, empty = await _resolve_traversal(

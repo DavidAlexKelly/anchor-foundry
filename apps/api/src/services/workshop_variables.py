@@ -457,7 +457,9 @@ class Variable:
         return self.derivation is not None
 
 
-def parse(raw: Any) -> dict[str, Variable]:
+def parse(
+    raw: Any, *, property_types: "dict[str, dict[str, str]] | None" = None
+) -> dict[str, Variable]:
     """Validate the `variables` map of a module document."""
     if raw is None:
         return {}
@@ -509,7 +511,8 @@ def parse(raw: Any) -> dict[str, Variable]:
         )
         recompute = _parse_recompute(
             label, value.get("recompute"), derivation,
-            _parse_object_set(vid, kind, label, value.get("object_set"), derivation),
+            _parse_object_set(vid, kind, label, value.get("object_set"), derivation,
+                              property_types),
         )
         variables[vid] = Variable(
             id=vid,
@@ -517,7 +520,8 @@ def parse(raw: Any) -> dict[str, Variable]:
             label=label,
             default=value.get("default"),
             derivation=derivation,
-            object_set=_parse_object_set(vid, kind, label, value.get("object_set"), derivation),
+            object_set=_parse_object_set(vid, kind, label, value.get("object_set"), derivation,
+                              property_types),
             external_id=external_id,
             interface=interface,
             url_behavior=url_behavior,
@@ -973,7 +977,8 @@ def interface_variables(variables: dict[str, Variable]) -> dict[str, Variable]:
 
 
 def _parse_object_set(
-    vid: str, kind: Any, label: str, raw: Any, derivation: Derivation | None
+    vid: str, kind: Any, label: str, raw: Any, derivation: Derivation | None,
+    property_types: "dict[str, dict[str, str]] | None" = None,
 ) -> dict[str, Any] | None:
     """The set an `object_set` variable starts from.
 
@@ -1006,10 +1011,33 @@ def _parse_object_set(
         # Parsed rather than trusted: the same validation `/object-sets/evaluate`
         # applies, so a definition that would be refused at read time is refused
         # at save time instead - which is where somebody can still fix it.
-        object_sets.parse(raw)
+        object_sets.parse(raw, property_types=_types_for(raw, property_types))
     except ValueError as exc:
         raise VariableError(f"variable {label!r}: {exc}") from exc
     return dict(raw)
+
+
+def _types_for(
+    raw: Any, property_types: "dict[str, dict[str, str]] | None"
+) -> "dict[str, str] | None":
+    """The declared property types for the object type a set names (§221).
+
+    Keyed by object type because one document holds sets over several, so the
+    catalogue the caller resolved is per-workspace and this picks the entry out
+    of it. `None` all the way through when the caller supplied nothing, which
+    is the pre-§221 behaviour: ordered comparisons refused, everything else
+    unchanged.
+
+    A set naming a type the catalogue does not have gets an **empty mapping,
+    not `None`**, and the difference is the sentence somebody reads. `None`
+    means "nobody looked the types up", which would be a false accusation
+    against a caller that did and found nothing - a document can name a type
+    that no longer exists, or never did. The empty mapping produces "this
+    object type does not declare `capacity`", which is true either way.
+    """
+    if property_types is None or not isinstance(raw, dict):
+        return None
+    return property_types.get(str(raw.get("object_type_id")), {})
 
 
 def _parse_derivation(vid: str, raw: Any) -> Derivation | None:
@@ -1239,6 +1267,7 @@ def evaluate(
     bound: frozenset[str] = frozenset(),
     held: dict[str, Any] | None = None,
     recompute_now: frozenset[str] = frozenset(),
+    property_types: "dict[str, dict[str, str]] | None" = None,
 ) -> dict[str, Any]:
     """Resolve every variable, computing derived ones from their inputs.
 
@@ -1308,13 +1337,15 @@ def evaluate(
             # unambiguously for `only_on_event`.
             if vid in recompute_now:
                 resolved[vid] = _apply(
-                    variable, [resolved[i] for i in variable.derivation.inputs]
+                    variable, [resolved[i] for i in variable.derivation.inputs],
+                    property_types,
                 )
             elif held is not None and vid in held:
                 resolved[vid] = held[vid]
             elif fresh:
                 resolved[vid] = _apply(
-                    variable, [resolved[i] for i in variable.derivation.inputs]
+                    variable, [resolved[i] for i in variable.derivation.inputs],
+                    property_types,
                 )
             else:
                 resolved[vid] = None
@@ -1330,11 +1361,16 @@ def evaluate(
                 else values.get(vid, variable.default)
             )
             continue
-        resolved[vid] = _apply(variable, [resolved[i] for i in variable.derivation.inputs])
+        resolved[vid] = _apply(
+            variable, [resolved[i] for i in variable.derivation.inputs], property_types
+        )
     return resolved
 
 
-def _apply(variable: Variable, inputs: list[Any]) -> Any:
+def _apply(
+    variable: Variable, inputs: list[Any],
+    property_types: "dict[str, dict[str, str]] | None" = None,
+) -> Any:
     d = variable.derivation
     assert d is not None
     if d.transform == "concat":
@@ -1355,7 +1391,7 @@ def _apply(variable: Variable, inputs: list[Any]) -> Any:
     if d.transform == "filter_set":
         return _filter_set(variable, inputs[0], inputs[1], d.config)
     if d.transform == "narrow_set":
-        return _narrow_set(variable, inputs[0], inputs[1])
+        return _narrow_set(variable, inputs[0], inputs[1], property_types)
     if d.transform == "object_property":
         return _object_property(variable, inputs[0], str(d.config["property"]))
     if d.transform == "filter_value":
@@ -1538,7 +1574,10 @@ def _object_series(
     }
 
 
-def _narrow_set(variable: Variable, base: Any, clauses: Any) -> dict[str, Any]:
+def _narrow_set(
+    variable: Variable, base: Any, clauses: Any,
+    property_types: "dict[str, dict[str, str]] | None" = None,
+) -> dict[str, Any]:
     """Narrow an object set by a *list* of clauses a widget wrote.
 
     `filter_set` is one property and one operator, both fixed when the app was
@@ -1569,7 +1608,7 @@ def _narrow_set(variable: Variable, base: Any, clauses: Any) -> dict[str, Any]:
         )
     combined = {**base, "filters": [*(base.get("filters") or []), *clauses]}
     try:
-        object_sets.parse(combined)
+        object_sets.parse(combined, property_types=_types_for(combined, property_types))
     except ValueError as exc:
         raise VariableError(f"{variable.label!r}: {exc}") from exc
     return combined
@@ -1981,7 +2020,10 @@ def _check_tab_sections(layout: Any, variables: dict[str, Variable], events_modu
 
 
 def validate_module(
-    document: Any, *, actions: dict[str, list[str]] | None = None
+    document: Any,
+    *,
+    actions: dict[str, list[str]] | None = None,
+    property_types: "dict[str, dict[str, str]] | None" = None,
 ) -> dict[str, Variable]:
     """Everything the save path checks, in one call.
 
@@ -1997,7 +2039,7 @@ def validate_module(
     """
     if not isinstance(document, dict) or document.get("format") != 2:
         return {}
-    variables = parse(document.get("variables"))
+    variables = parse(document.get("variables"), property_types=property_types)
     routing(document)  # shape only; raises on a `routing` block nothing can read
     state_saving(document)  # likewise
     # Not shape-only: this one names a variable, so it is checked against the

@@ -555,7 +555,12 @@ def test_bad_filter_clauses_blame_the_request_not_the_saved_app(
                       json={"values": {"v_clauses": [
                           {"property": "capacity", "op": "gt", "value": 40}]}})
     assert bad.status_code == 422, bad.text
-    assert "not supported yet" in bad.json()["detail"]
+    # **Refused because the type does not declare `capacity`**, not because
+    # ordered comparisons are unsupported - they are supported as of §221, on
+    # a property whose declared type has an order both stores agree on. This
+    # module names a fabricated type, so nothing declares anything, and the
+    # refusal says which of the two it is.
+    assert "does not declare" in bad.json()["detail"]
 
 
 # ---- publishing pins a version (roadmap 1.7) ---------------------------------

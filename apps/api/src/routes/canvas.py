@@ -27,6 +27,7 @@ from ..lib.errors import ForbiddenError, NotFoundError
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import actions as actions_service
 from ..services import audit
+from ..services import ontology as ontology_service
 from ..services import canvas as canvas_service
 from ..services import module_states as states_service
 from ..services import workshop_format
@@ -175,6 +176,34 @@ def _summary(row: dict[str, Any]) -> CanvasAppOut:
 
 
 # ---- project-scoped CRUD ------------------------------------------------------
+async def _workspace_property_types(conn, workspace_id) -> dict[str, dict[str, str]]:
+    """`{object_type_id: {api_name: data_type}}` for a whole workspace (§221).
+
+    **One query, not one per object type**, which is why
+    `list_properties_for_workspace` exists at all: a document can hold sets
+    over any number of types, and the per-type version made a workspace with
+    226 of them do 226 round trips.
+
+    Passed on **both** the write and the read path, unlike `actions`. An action
+    deleted after an app was saved must not stop the app opening, because the
+    record of what somebody built stays valid; a property whose declared type
+    changed is different in kind - the ordered comparison saved against it can
+    no longer be evaluated by either store, so an app that opened anyway would
+    be showing a set narrowed by a filter that silently did nothing, which is
+    decision 0002's failure exactly.
+    """
+    return {
+        str(type_id): {
+            str(row["api_name"]): str(row["data_type"])
+            for row in rows
+            if row.get("api_name") and row.get("data_type")
+        }
+        for type_id, rows in (
+            await ontology_service.list_properties_for_workspace(conn, workspace_id)
+        ).items()
+    }
+
+
 @router.get("", response_model=list[CanvasAppOut])
 async def list_apps(
     access: ProjectAccess = Depends(require_project_role("viewer")),
@@ -470,7 +499,12 @@ async def save_definition(
             for a in await actions_service.list_action_types(conn, access.workspace_id)
         }
         try:
-            variables_service.validate_module(body.definition, actions=known)
+            variables_service.validate_module(
+                body.definition, actions=known,
+                property_types=await _workspace_property_types(
+                    conn, access.workspace_id
+                ),
+            )
         except variables_service.VariableError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
@@ -650,9 +684,15 @@ async def evaluate_variables(
     """
     async with user_connection(access.auth.user_id) as conn:
         row = await canvas_service.get(conn, access.project_id, app_id)
+        # Read inside the connection that fetched the row, because validating a
+        # saved ordered comparison needs the declared types (§221) - and the
+        # *store* needs them too, to know what to cast.
+        property_types = await _workspace_property_types(conn, access.workspace_id)
     document = _parse_json(row["definition"])
     try:
-        variables = variables_service.validate_module(document)
+        variables = variables_service.validate_module(
+            document, property_types=property_types
+        )
     except variables_service.VariableError as exc:
         # A saved app whose document no longer validates. Reachable: the module
         # could have been written before a rule existed, or by something other
@@ -668,6 +708,11 @@ async def evaluate_variables(
             bound=frozenset(body.bound),
             held=body.held,
             recompute_now=frozenset(body.recompute),
+            # A `narrow_set` derivation combines the widget's clauses with the
+            # base set and re-validates the result, so an ordered clause needs
+            # the declared types here too (§221) - not only where the document
+            # was checked.
+            property_types=property_types,
         )
     except variables_service.VariableError as exc:
         # Not the same failure, and not the same fault. The document is fine;
@@ -767,9 +812,12 @@ async def evaluate_published_variables(
     """
     async with user_connection(access.auth.user_id) as conn:
         row = await canvas_service.get_published(conn, access.workspace_id, app_id)
+        property_types = await _workspace_property_types(conn, access.workspace_id)
     document = _parse_json(row["definition"])
     try:
-        variables = variables_service.validate_module(document)
+        variables = variables_service.validate_module(
+            document, property_types=property_types
+        )
     except variables_service.VariableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     try:
@@ -779,6 +827,11 @@ async def evaluate_published_variables(
             bound=frozenset(body.bound),
             held=body.held,
             recompute_now=frozenset(body.recompute),
+            # A `narrow_set` derivation combines the widget's clauses with the
+            # base set and re-validates the result, so an ordered clause needs
+            # the declared types here too (§221) - not only where the document
+            # was checked.
+            property_types=property_types,
         )
     except variables_service.VariableError as exc:
         # The values, not the document - see the note on the project-scoped one.
@@ -836,7 +889,9 @@ def _state_summary(row: dict[str, Any]) -> StateOut:
     )
 
 
-def _module_variables(row: dict[str, Any]) -> dict[str, Any]:
+def _module_variables(
+    row: dict[str, Any], property_types: dict[str, dict[str, str]] | None = None
+) -> dict[str, Any]:
     """This module's variables, and a refusal if it does not save state.
 
     Checked on every path rather than only on the write: a state saved while
@@ -846,7 +901,9 @@ def _module_variables(row: dict[str, Any]) -> dict[str, Any]:
     """
     document = _parse_json(row["definition"])
     try:
-        variables = variables_service.validate_module(document)
+        variables = variables_service.validate_module(
+            document, property_types=property_types
+        )
         settings = variables_service.state_saving(document)
     except variables_service.VariableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

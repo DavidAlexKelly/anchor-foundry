@@ -27,9 +27,12 @@ properties. The rest are refused with a sentence rather than picked - see
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:  # this module imports nothing at runtime, on purpose
+    from collections.abc import Mapping
 
 # The operators a filter may use. Deliberately short: every one of these has
 # the same meaning in both stores. An operator that behaved differently on
@@ -59,11 +62,32 @@ PRIMARY_KEY_FILTER = "$primary_key"
 #
 # Refused rather than picked, because either choice is wrong somewhere: a
 # numeric-only reading breaks dates and codes, and a lexicographic one is
-# indefensible to anyone filtering a number. Doing it properly means honouring
-# the *declared* property type (object_type_properties.data_type, db 0003) and
-# indexing accordingly - a mapping change with a backfill behind it, which is
-# its own item rather than a footnote in this one.
+# indefensible to anyone filtering a number.
+#
+# **Allowed now, for the types whose order both stores agree on** (§221). The
+# answer was always "honour the *declared* property type", and §220 built what
+# that needs: one index per object type, mapped from the ontology, so a
+# `capacity` declared `integer` is a `long` in OpenSearch and a cast in
+# Postgres rather than two readings of the same text. An ordered comparison on
+# a property that is **not** declared orderable is still refused, in the same
+# sentence as before - and a caller that does not supply the declared types at
+# all gets the old refusal for everything, because a filter validated without
+# them is one nothing has checked the types of.
 ORDERED_OPERATORS = ("gt", "gte", "lt", "lte")
+
+# Which declared types an ordered comparison may be asked of.
+#
+# **Restated rather than imported**, the same way `PRIMARY_KEY_FILTER` is: this
+# module keeps importing nothing, and a test asserts the two copies agree. The
+# original is `instance_mapping.ORDERABLE_TYPES`, where it is true *because* of
+# the mapping - a `date` field is orderable because it is mapped `date`.
+#
+# `string` is absent permanently, not pending (decision 0006 §2): lexicographic
+# order is the database collation on Postgres and byte order on OpenSearch, so
+# `'Z' < 'a'` differs between them. Allowing `gt` on a string would reintroduce
+# the exact class of bug this comment block exists to describe, one layer down
+# and much harder to see.
+ORDERABLE_TYPES = ("integer", "float", "date", "timestamp")
 
 # `starts_with` rather than `contains`, and for a related reason. A substring
 # match is `ILIKE '%x%'` on Postgres and a wildcard query on OpenSearch, which
@@ -108,15 +132,66 @@ PROPERTY_SORT_HINT = (
 )
 
 
-def parse_sort(sort: Any) -> str:
-    """Validate a sort, refusing in a sentence somebody can act on."""
+def parse_sort(
+    sort: Any, *, property_types: "Mapping[str, str] | None" = None
+) -> "Sort":
+    """Validate a sort, refusing in a sentence somebody can act on.
+
+    Beyond the four fixed sorts, a **property sort** is `name` or `-name` for a
+    property whose declared type has an order both stores agree on (§221). The
+    leading `-` is descending, matching `-key`, which is the shape every caller
+    in this codebase already writes.
+
+    `property_types` is optional for the same reason it is on `parse`: a caller
+    that has not resolved the ontology has checked no type, so it gets the four
+    fixed sorts and the refusal that names what a property sort would need.
+    """
     if sort is None or sort == "":
-        return DEFAULT_SORT
+        return Sort()
     if not isinstance(sort, str):
         raise ValueError("sort must be a string")
     if sort in SORTS:
-        return sort
-    raise ValueError(f"unknown sort {sort!r} (supported: {', '.join(SORTS)}). {PROPERTY_SORT_HINT}")
+        return Sort(key=sort)
+    if property_types is not None:
+        descending = sort.startswith("-")
+        name = sort[1:] if descending else sort
+        declared = property_types.get(name)
+        if declared in ORDERABLE_TYPES:
+            return Sort(key=sort, property=name, descending=descending, data_type=declared)
+        if declared is not None:
+            raise ValueError(
+                f"{name!r} is a {declared} property, and a sort needs one of "
+                f"{', '.join(ORDERABLE_TYPES)}. " + (
+                    "Text has no order the two stores agree on - Postgres orders by "
+                    "the database collation and OpenSearch by byte order."
+                    if declared == "string"
+                    else f"A {declared} has no order anybody would agree on."
+                )
+            )
+    raise ValueError(
+        f"unknown sort {sort!r} (supported: {', '.join(SORTS)}). {PROPERTY_SORT_HINT}"
+    )
+
+
+@dataclass(frozen=True)
+class Sort:
+    """A validated page ordering, with the declared type it orders by.
+
+    **A value object rather than a string, for the reason `Filter.data_type`
+    is a field**: the decision that this ordering is legal was made once, in
+    `parse_sort`, against the ontology the caller resolved. A store that looked
+    the property's type up again could reach a different answer than the
+    validation did.
+
+    `property` is `None` for the four fixed sorts, which need no type: the
+    primary key is text on both stores and `updated_at` is a real timestamp on
+    one and an indexed date on the other.
+    """
+
+    key: str = DEFAULT_SORT
+    property: str | None = None
+    descending: bool = False
+    data_type: str | None = None
 
 # What a Metric Card can ask of a set (roadmap 1.5).
 #
@@ -313,6 +388,18 @@ class Filter:
     property: str
     op: str
     value: Any
+    # The property's **declared** type, for an ordered comparison (§221).
+    #
+    # Carried on the filter rather than looked up by each store, because the
+    # decision that this comparison is legal was made once, in `parse`, against
+    # the ontology the caller resolved. A store that looked the type up again
+    # could reach a different answer than the validation did - which is the
+    # two-implementations problem this whole area exists to avoid, moved one
+    # level down.
+    #
+    # `None` for every equality-shaped operator, which need no type: they
+    # compare the *text* of a value (`_text`), the same rule links already use.
+    data_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -358,11 +445,87 @@ class Traversal:
     base: ObjectSet
 
 
-def parse(definition: dict[str, Any]) -> ObjectSet:
+def object_type_id_of(definition: Any) -> UUID:
+    """Just the object type an unvalidated definition names.
+
+    **A pre-parse, and it exists because validation now needs the ontology.**
+    An ordered comparison is checked against the declared property types
+    (§221), and reading those needs to know which type's properties to read -
+    which is in the definition being validated. So the id comes out first, the
+    caller resolves the types, and `parse` gets both.
+
+    Kept to *only* the id: everything else this function could check would be a
+    second copy of a rule `parse` states, free to drift from it.
+    """
+    if not isinstance(definition, dict):
+        raise ValueError("an object set definition must be an object")
+    raw = definition.get("object_type_id")
+    if not raw:
+        raise ValueError("an object set needs an object_type_id")
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ValueError(f"{raw!r} is not a valid object type id") from exc
+
+
+def _orderable_type(
+    prop: str, op: str, property_types: "Mapping[str, str] | None"
+) -> str:
+    """The declared type an ordered comparison may use, or a refusal (§221).
+
+    Three different refusals, because they are three different mistakes and
+    only one of them is the caller's to fix by changing the filter:
+
+    * **No declared types supplied at all.** The caller did not resolve the
+      ontology, so nothing has checked this property's type — and validating an
+      ordered comparison without that is the untyped comparison decision 0006
+      refuses. Every pre-§221 caller lands here and keeps its old behaviour.
+    * **A property the type does not declare.** Almost always a typo, and the
+      old code could not tell it from a legal one.
+    * **A property whose type has no agreed order** — `string` above all, which
+      is refused permanently rather than pending (0006 §2).
+    """
+    if property_types is None:
+        raise ValueError(
+            f"the {op!r} operator needs the declared property types, and this caller "
+            "did not supply them - an ordered comparison over untyped values means "
+            '250 > 40 on one store and "250" < "40" on the other'
+        )
+    declared = property_types.get(prop)
+    if declared is None:
+        raise ValueError(
+            f"the {op!r} operator names {prop!r}, which this object type does not declare"
+        )
+    if declared not in ORDERABLE_TYPES:
+        raise ValueError(
+            f"{prop!r} is a {declared} property, and {op!r} needs one of "
+            f"{', '.join(ORDERABLE_TYPES)}. "
+            + (
+                "Text has no order the two stores agree on - Postgres orders by the "
+                "database collation and OpenSearch by byte order, so 'Z' < 'a' is true "
+                "in one and false in the other. Derive an orderable property instead."
+                if declared == "string"
+                else f"A {declared} has no order anybody would agree on."
+            )
+        )
+    return declared
+
+
+def parse(
+    definition: dict[str, Any],
+    *,
+    property_types: "Mapping[str, str] | None" = None,
+) -> ObjectSet:
     """Validate a set definition, refusing in a sentence.
 
     Refusals are read by somebody building an app, not by a client library, so
     they name the offending value and the alternatives (STATUS.md §52).
+
+    `property_types` maps an api_name to its declared `data_type`, and is what
+    an ordered comparison is checked against (§221). **Optional, and its
+    absence is a refusal rather than a permission**: a caller that has not
+    resolved the ontology has not checked any type, so it gets the pre-§221
+    behaviour of refusing every ordered operator.
     """
     if not isinstance(definition, dict):
         raise ValueError("an object set definition must be an object")
@@ -388,15 +551,13 @@ def parse(definition: dict[str, Any]) -> ObjectSet:
         if not prop or not isinstance(prop, str):
             raise ValueError("each filter needs a property name")
         op = entry.get("op", "eq")
+        data_type: str | None = None
         if op in ORDERED_OPERATORS:
+            data_type = _orderable_type(prop, op, property_types)
+        elif op not in OPERATORS:
             raise ValueError(
-                f"the {op!r} operator is not supported yet: instance properties are stored "
-                "untyped, so an ordered comparison would mean 250 > 40 on one store and "
-                '"250" < "40" on the other. It needs the declared property type behind it.'
-            )
-        if op not in OPERATORS:
-            raise ValueError(
-                f"unknown filter operator {op!r} (supported: {', '.join(OPERATORS)})"
+                f"unknown filter operator {op!r} "
+                f"(supported: {', '.join((*OPERATORS, *ORDERED_OPERATORS))})"
             )
         value = entry.get("value")
         if op in LIST_OPERATORS:
@@ -433,7 +594,9 @@ def parse(definition: dict[str, Any]) -> ObjectSet:
                 f"filter on {prop!r} has no value - omit the filter rather than "
                 "sending an empty one, so an unset variable cannot silently widen the set"
             )
-        filters.append(Filter(property=prop, op=op, value=value))
+        filters.append(
+            Filter(property=prop, op=op, value=value, data_type=data_type)
+        )
 
     raw_via = definition.get("via")
     via: Traversal | None = None
@@ -527,8 +690,94 @@ def _matches_one(actual: Any, f: Filter) -> bool:
         return _text(actual) in {_text(v) for v in f.value}
     if f.op == "starts_with":
         return actual is not None and _text(actual).lower().startswith(_text(f.value).lower())
+    if f.op in ORDERED_OPERATORS:
+        return _compares(actual, f)
     # Unreachable while `parse` is the only way to build a Filter, which it is.
     raise ValueError(f"no reference semantics for operator {f.op!r}")
+
+
+def _compares(actual: Any, f: Filter) -> bool:
+    """An ordered comparison, in the declared type's own ordering (§221).
+
+    **A value that does not fit its declared type does not match**, either way
+    round. A `capacity` holding `"n/a"` is not greater than 40 and not less than
+    40 - it is not on the number line at all, and the alternatives are both
+    worse: sorting it to one end makes a filter silently include rows nobody
+    asked for, and raising makes one bad row break a whole page.
+
+    That is `NULL`'s behaviour in SQL and a missing field's in OpenSearch, so
+    the two stores agree with this without being told to.
+    """
+    left = comparable(actual, f.data_type)
+    right = comparable(f.value, f.data_type)
+    if left is None or right is None:
+        return False
+    if f.op == "gt":
+        return left > right
+    if f.op == "gte":
+        return left >= right
+    if f.op == "lt":
+        return left < right
+    return left <= right
+
+
+def comparable(value: Any, data_type: str | None) -> Any:
+    """A value in the form its declared type orders by, or `None`.
+
+    `None` means "this value has no place in that ordering" - a blank, a word
+    where a number belongs, an unparseable date. Every caller treats that as
+    "does not match" rather than as an error; see `_compares`.
+
+    Exported because the OpenSearch store binds the *bound* of a range query
+    through it, so the value a query carries is the one this definition
+    compared. Postgres casts in SQL instead and is checked against this by the
+    cross-store tests, which is the standard every operator in this file is
+    held to.
+    """
+    if value is None or isinstance(value, bool):
+        # A bool is not a number here even though Python says it is: `True > 0`
+        # is not a question anybody filtering data meant to ask, and `boolean`
+        # is not an orderable type (0006 §2).
+        return None
+    if data_type in ("integer", "float"):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    if data_type in ("date", "timestamp"):
+        return _instant(value)
+    return None
+
+
+def _instant(value: Any) -> datetime | None:
+    """An ISO-8601 date or timestamp as a comparable instant.
+
+    **Naive and aware values are made comparable by assuming UTC for a naive
+    one**, because Python refuses to compare the two and a source dataset
+    routinely holds both - db 0029 stores "ISO-8601 text, with an offset
+    preserved when the source has one", so the offset is present exactly when
+    the source had one. A page that raised on the mixture would fail on real
+    data for a reason no filter author could act on.
+
+    A bare date is midnight UTC, which is what makes `date` and `timestamp` one
+    ordering rather than two.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            # `fromisoformat` takes a trailing `Z` itself from Python 3.11, and
+            # this runs on 3.11 locally and 3.12 in CI. It used to be rewritten
+            # to `+00:00` here first - dead code the mutation harness found by
+            # being unable to make it fail, which is the same standard the
+            # tests are held to.
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _text(value: Any) -> str:

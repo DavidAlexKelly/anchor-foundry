@@ -1,24 +1,40 @@
 # 0006 — Typed instance properties
 
-**Status:** accepted; §1, §2 and §7 built (`STATUS.md` §112, §220), §3–§6 outstanding
+**Status:** accepted; §1, §2, §4 (partly), §5, §6 and §7 built (`STATUS.md` §112, §220, §221).
+Outstanding: §3's map bounding box, and numeric aggregations
 **Context:** the blocker `STATUS.md` names as holding four separate features
 
-**What is built, and what is deliberately not.** The structural half is done: one index per
-object type, mapped from the declared types, with the migration out of the single workspace
-index (§220). **No operator ships with it** — no ordered comparison, no numeric aggregation,
-no property sort, no map box — because §6 refuses to put any of them on one store before the
-other, and the Postgres half is still a day's work. The mapping is what makes them *possible*;
-§220 stopped there on purpose so that the day they ship, they ship together.
+**What is built, and what is not.** §220 built the structural half — one index per object
+type, mapped from the declared types, with the migration out of the single workspace index —
+and shipped **no operator at all**, because §6 refuses to put any of them on one store before
+the other.
+
+§221 then shipped **ordered filters and property sorts on both stores at once**: `gt`/`gte`/
+`lt`/`lte` and a `prop` / `-prop` sort, for the types in §2's table. Two rules from that work
+belong here rather than only in the code, because both are places the stores would otherwise
+disagree invisibly:
+
+* **A value that does not fit its declared type does not match, either way round, and sorts
+  last in either direction.** It is not on the ordering at all. Postgres needs `NULLS LAST`
+  stated explicitly for the descending case, where its default is first.
+* **A timestamp with no offset is UTC, said in the SQL rather than left to the server.**
+  `'2026-01-05'::timestamptz` uses the session's `TimeZone`, so identical data compares
+  differently on a deployment configured to anything else — a cross-store divergence hiding in
+  a server setting, which is the shape this whole document exists to remove.
+
+Still outstanding: **§3's map bounding box**, and the **numeric aggregations** (`sum`, `avg`,
+`min`, `max`). Both are now possible for the same reason ordered filters were; neither has
+been built.
 
 Four things are refused today, each with the same sentence in its refusal, and each with a
 one-line implementation that was deliberately not written:
 
-| Refused | Where |
-|---|---|
-| Ordered filters — `gt`, `gte`, `lt`, `lte` | `object_sets.ORDERED_OPERATORS` |
-| Numeric aggregations — `sum`, `avg`, `min`, `max` | `object_sets.parse_aggregation` (`STATUS.md` §74) |
-| Sorting a table by a property | `object_sets.SORTS`, `PROPERTY_SORT_HINT` (§83) |
-| Selecting an area on a map to filter by it | roadmap 1.5, the Map row (§86) |
+| Refused | Where | Now |
+|---|---|---|
+| Ordered filters — `gt`, `gte`, `lt`, `lte` | `object_sets.ORDERED_OPERATORS` | **built** (§221) |
+| Numeric aggregations — `sum`, `avg`, `min`, `max` | `object_sets.parse_aggregation` (`STATUS.md` §74) | outstanding |
+| Sorting a table by a property | `object_sets.SORTS`, `PROPERTY_SORT_HINT` (§83) | **built** (§221) |
+| Selecting an area on a map to filter by it | roadmap 1.5, the Map row (§86) | outstanding (§3) |
 
 The refusals are correct and this document does not soften them. What it settles is the
 question underneath, so that whoever builds this is not deciding it at three in the morning
@@ -101,9 +117,10 @@ index yet" stopped being the same state and every read had to say which it toler
 
 ## 2. Which types become orderable, and which never do
 
-**The table is built** as `instance_mapping.ORDERABLE_TYPES` (§220) and nothing consumes it
-yet — see §6. It is stated in code because the mapping is what makes it true: a `date` field
-is orderable *because* it is mapped `date`.
+**Built and consumed** (§220, §221). `instance_mapping.ORDERABLE_TYPES` is the original —
+stated there because the mapping is what makes it true, a `date` field being orderable
+*because* it is mapped `date` — and `object_sets` restates it, since that module imports
+nothing and a test asserts the two agree.
 
 | Declared type | Ordered comparison | Why |
 |---|---|---|

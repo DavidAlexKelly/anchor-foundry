@@ -202,24 +202,184 @@ def test_an_empty_in_list_is_the_empty_set_rather_than_a_refusal() -> None:
         assert object_sets.matches(props, definition.filters) is False
 
 
-def test_ordered_comparison_is_refused_and_says_why() -> None:
-    """The finding this item's cross-store test was written to produce.
+def test_an_ordered_comparison_needs_the_declared_types() -> None:
+    """**The absence of types is a refusal, not a permission** (§221).
 
-    Properties are stored untyped, so `capacity > 40` reads as 250 > 40 on
-    Postgres (which can cast) and as "250" < "40" on OpenSearch (which compares
-    indexed text). The first implementation shipped both and the two stores
-    disagreed on the first run. Refused rather than picked: a numeric-only
-    reading breaks dates and codes, a lexicographic one is indefensible to
-    anyone filtering a number, and doing it properly means honouring the
-    declared property type - a mapping change with a backfill behind it."""
+    Properties are stored untyped in the document, so `capacity > 40` reads as
+    250 > 40 on Postgres (which can cast) and as "250" < "40" on OpenSearch
+    (which compares indexed text) unless something says which. The first
+    implementation shipped both and the two stores disagreed on the first run.
+
+    A caller that has not resolved the ontology has checked no type at all, so
+    it gets the pre-§221 behaviour - which is what keeps every existing caller
+    correct rather than quietly permissive.
+    """
     for op in object_sets.ORDERED_OPERATORS:
-        with pytest.raises(ValueError, match="not supported yet"):
-            object_sets.parse(
-                {
-                    "object_type_id": str(uuid.uuid4()),
-                    "filters": [{"property": "capacity", "op": op, "value": 40}],
-                }
-            )
+        with pytest.raises(ValueError, match="did not supply them"):
+            object_sets.parse({
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "capacity", "op": op, "value": 40}],
+            })
+
+
+def test_an_ordered_comparison_is_allowed_on_an_orderable_type() -> None:
+    """What §220 made possible: the declared type reaches the mapping, so both
+    stores order the same values the same way."""
+    for kind in object_sets.ORDERABLE_TYPES:
+        parsed = object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "capacity", "op": "gte", "value": 40}],
+            },
+            property_types={"capacity": kind},
+        )
+        assert parsed.filters[0].data_type == kind, kind
+
+
+def test_an_ordered_comparison_on_text_is_refused_permanently() -> None:
+    """Decision 0006 §2, and the wording matters: this is not "not yet".
+    Postgres orders by the database collation and OpenSearch by byte order, so
+    `'Z' < 'a'` is true in one and false in the other for any non-C
+    collation."""
+    with pytest.raises(ValueError, match="no order the two stores agree on"):
+        object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "name", "op": "gt", "value": "m"}],
+            },
+            property_types={"name": "string"},
+        )
+
+
+@pytest.mark.parametrize("kind", ["boolean", "json", "attachment", "geopoint"])
+def test_an_ordered_comparison_on_an_unorderable_type_is_refused(kind: str) -> None:
+    """"Greater than false" is not a question, and a composite value has no
+    order anybody would agree on."""
+    with pytest.raises(ValueError, match="has no order"):
+        object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "flag", "op": "gt", "value": 1}],
+            },
+            property_types={"flag": kind},
+        )
+
+
+def test_an_ordered_comparison_on_an_undeclared_property_is_refused() -> None:
+    """Almost always a typo, and the pre-§221 refusal could not tell it from a
+    legal filter - it refused every ordered comparison for one reason."""
+    with pytest.raises(ValueError, match="does not declare"):
+        object_sets.parse(
+            {
+                "object_type_id": str(uuid.uuid4()),
+                "filters": [{"property": "capcity", "op": "gt", "value": 40}],
+            },
+            property_types={"capacity": "integer"},
+        )
+
+
+def test_the_orderable_types_agree_with_the_index_mapping() -> None:
+    """`ORDERABLE_TYPES` exists twice: here, where it decides what a filter may
+    ask, and in `instance_mapping`, where it is true *because* of the mapping -
+    a `date` field is orderable because it is mapped `date`. Restated rather
+    than imported because this module imports nothing, the same arrangement
+    `PRIMARY_KEY_FILTER` has, so the copies get a test instead of a comment."""
+    from src.services import instance_mapping
+
+    assert object_sets.ORDERABLE_TYPES == instance_mapping.ORDERABLE_TYPES
+
+
+# ---- what a value orders by (§221) -------------------------------------------
+@pytest.mark.parametrize("kind", ["integer", "float"])
+def test_a_number_orders_numerically(kind: str) -> None:
+    assert object_sets.comparable("250", kind) == 250.0
+    assert object_sets.comparable(40, kind) == 40.0
+    assert object_sets.comparable("250", kind) > object_sets.comparable("40", kind)
+
+
+def test_a_value_that_is_not_a_number_is_not_on_the_ordering() -> None:
+    """`None`, and every caller reads that as "does not match" rather than as
+    an error. **Not zero**: a `capacity` holding `"n/a"` is not less than 40,
+    it is not on the number line - and zero would quietly include it in every
+    `lt` filter somebody wrote."""
+    for value in ("n/a", "", "  ", None, [1], {"a": 1}):
+        assert object_sets.comparable(value, "integer") is None, value
+
+
+def test_a_boolean_is_not_a_number() -> None:
+    """Python says `True == 1`, and `boolean` is not an orderable type (0006
+    §2). "Greater than false" is not a question anybody filtering data meant to
+    ask."""
+    assert object_sets.comparable(True, "integer") is None
+    assert object_sets.comparable(False, "float") is None
+
+
+def test_a_string_property_has_no_comparable_form() -> None:
+    """The permanent refusal, at the value level rather than at validation.
+    Even if a `string` reached here, there is no ordering to give it - which is
+    what stops the refusal being one `if` away from being lost."""
+    # **A number-shaped string, not "banana".** `float("banana")` raises either
+    # way, so a `string` quietly routed down the numeric path would look
+    # correct on it - the mutant that did exactly that survived a fixture
+    # asserting only the unparseable case.
+    assert object_sets.comparable("250", "string") is None
+    assert object_sets.comparable("banana", "string") is None
+    assert object_sets.comparable("2026-01-01", None) is None
+
+
+def test_a_timestamp_orders_chronologically() -> None:
+    later = object_sets.comparable("2026-03-01T09:00:00+00:00", "timestamp")
+    earlier = object_sets.comparable("2026-01-05", "date")
+    assert later > earlier
+
+
+def test_a_bare_date_is_midnight_utc() -> None:
+    """What makes `date` and `timestamp` one ordering rather than two - and the
+    rule the Postgres cast has to state explicitly, since `::timestamptz` would
+    otherwise read it in the session's timezone."""
+    from datetime import datetime, timezone as tz
+
+    assert object_sets.comparable("2026-01-05", "date") == datetime(
+        2026, 1, 5, tzinfo=tz.utc
+    )
+
+
+def test_a_naive_timestamp_is_read_as_utc() -> None:
+    """db 0029 preserves an offset "when the source has one", so a source
+    routinely holds both shapes. Python refuses to compare naive with aware, so
+    a page that did not settle this would raise on real data for a reason no
+    filter author could act on."""
+    naive = object_sets.comparable("2026-03-01T09:00:00", "timestamp")
+    aware = object_sets.comparable("2026-03-01T09:00:00+00:00", "timestamp")
+    assert naive == aware
+
+
+def test_z_is_an_offset() -> None:
+    """`datetime.fromisoformat` did not accept `Z` before Python 3.11 and this
+    codebase writes it - `synced_at.isoformat()` does not, but a source dataset
+    does, constantly."""
+    assert object_sets.comparable("2026-03-01T09:00:00Z", "timestamp") == (
+        object_sets.comparable("2026-03-01T09:00:00+00:00", "timestamp")
+    )
+
+
+def test_a_timestamp_that_will_not_parse_is_not_on_the_ordering() -> None:
+    """**Not the epoch.** A date nobody can read is not "before everything" -
+    that would put every unparseable row into the results of every `lt` filter,
+    which is the silent widening decision 0002 exists to remove."""
+    for value in ("2026-13-45", "yesterday", "", "   ", None):
+        assert object_sets.comparable(value, "timestamp") is None, value
+
+
+def test_a_property_sort_needs_the_declared_types_too() -> None:
+    """The same rule as an ordered filter, and it has to be stated separately
+    because a sort takes a different path through validation: a caller that
+    supplied no types has checked none, so `capacity` is not a sort it may
+    have."""
+    with pytest.raises(ValueError, match="unknown sort"):
+        object_sets.parse_sort("capacity")
+    with pytest.raises(ValueError, match="unknown sort"):
+        object_sets.parse_sort("-capacity")
 
 
 def test_comparison_is_on_the_text_of_a_value() -> None:
@@ -297,6 +457,240 @@ async def test_opensearch_and_the_reference_semantics_agree(opensearch: str, cas
         await store.close()
 
 
+def test_the_query_carries_the_value_the_reference_compared(opensearch: str) -> None:
+    """**The bound is normalised before it goes over the wire**, so the value a
+    range query carries is the one `object_sets.comparable` agreed to.
+
+    Asserted on the query body rather than on results, because the fixture and
+    a real cluster both coerce a bound generously - `"40"` on a `long` field
+    and a bare date on a `date` field are accepted either way, so *results*
+    cannot tell a normalised bound from a raw one. What differs is what a
+    cluster is asked, and for a store gateway the request it forms is the
+    contract (this file's own opening claim).
+
+    The date case is the one that matters: a bare `2026-03-01` leaves this
+    process as `2026-03-01T00:00:00+00:00`, so the instant the query means is
+    fixed here rather than by whatever the cluster's own default offset is.
+    """
+    from src.services.instance_store import OpenSearchInstanceStore
+
+    clauses = OpenSearchInstanceStore._set_clauses(
+        uuid.uuid4(),
+        (
+            object_sets.Filter("reading", "gt", "40", "integer"),
+            object_sets.Filter("seen", "lt", "2026-03-01", "timestamp"),
+        ),
+    )
+    ranges = {
+        next(iter(c["range"])): next(iter(c["range"].values()))
+        for c in clauses["filter"] if "range" in c
+    }
+    assert ranges["properties.reading"] == {"gt": 40.0}, "a text bound is coerced"
+    assert ranges["properties.seen"] == {"lt": "2026-03-01T00:00:00+00:00"}, (
+        "a bare date is pinned to UTC before it leaves"
+    )
+
+
+def test_a_bound_that_does_not_fit_its_type_asks_for_nothing(opensearch: str) -> None:
+    """`capacity > "abc"` matches nothing, and the query has to *say* nothing
+    rather than send a range with a null edge - which is an error rather than
+    an answer."""
+    from src.services.instance_store import OpenSearchInstanceStore
+
+    clauses = OpenSearchInstanceStore._set_clauses(
+        uuid.uuid4(), (object_sets.Filter("reading", "gt", "abc", "integer"),)
+    )
+    assert {"terms": {"properties.reading": []}} in clauses["filter"]
+    assert not any("range" in c for c in clauses["filter"])
+
+
+# ---- ordered comparisons and property sorts (§221, decision 0006) ------------
+#
+# **A separate population with typed properties**, because the one above is
+# deliberately untyped: `capacity` holds `"n/a"` there, which is the value that
+# makes "cast it and compare" the wrong answer and which the strict mapping
+# would refuse for an integer. Both facts are worth keeping, so they get a
+# fixture each rather than one that half-serves both.
+#
+# `reading` spans the boundary a filter asks about (40) on both sides, and
+# `seen` mixes an offset-carrying timestamp with a bare date - db 0029 stores
+# "ISO-8601 text, with an offset preserved when the source has one", so a
+# population without both would never ask whether the two compare.
+# **A tie and an absence, on purpose.** Rows 3 and 5 share a `reading`, so a
+# sort with no tie-break pages inconsistently rather than merely oddly; row 6
+# has no `reading` at all, which is the only "not on the ordering" value a
+# strict integer mapping will accept - and it is what the `NULLS LAST` and
+# `missing: _last` rules are for. Without both, a fixture of four distinct
+# parseable values leaves those rules asserting nothing (§212, §217, §218,
+# §219's finding, a fifth time).
+TYPED_ROWS = [
+    ("1", {"reading": 10, "seen": "2026-01-05"}),
+    ("2", {"reading": 250, "seen": "2026-03-01T09:00:00+00:00"}),
+    ("3", {"reading": 40, "seen": "2026-03-01T12:00:00+02:00"}),
+    ("4", {"reading": 7, "seen": "2026-11-30"}),
+    ("5", {"reading": 40, "seen": "2026-02-02"}),
+    ("6", {"seen": "2026-04-04"}),
+    # **A bare timestamp on the boundary a filter asks about.** Read in UTC it
+    # is 00:00Z and matches `lt 02:00Z`; read in `America/New_York` it is
+    # 05:00Z and does not. Without a row here, every timezone the tests try
+    # gives the same answer and the rule asserts nothing.
+    ("7", {"reading": 1, "seen": "2026-03-01"}),
+    # A tie whose key sorts *before* the rows it ties with, and which is
+    # written last - so the incidental order a store returns without a
+    # tie-break is not the order the rule requires.
+    ("0", {"reading": 40, "seen": "2026-05-05"}),
+]
+TYPED_DECLARED = [
+    {"api_name": "reading", "data_type": "integer"},
+    {"api_name": "seen", "data_type": "timestamp"},
+]
+TYPED_TYPES = {"reading": "integer", "seen": "timestamp"}
+
+ORDERED_CASES = [
+    {"filters": [{"property": "reading", "op": "gt", "value": 40}]},
+    {"filters": [{"property": "reading", "op": "gte", "value": 40}]},
+    {"filters": [{"property": "reading", "op": "lt", "value": 40}]},
+    {"filters": [{"property": "reading", "op": "lte", "value": 40}]},
+    # **The bound as text**, which is what a URL parameter and a JSON editor
+    # both produce. If either store compared the bound as text rather than
+    # coercing it, "40" would order between "250" and "7".
+    {"filters": [{"property": "reading", "op": "gt", "value": "40"}]},
+    # Two filters on one property: a range, which is the ordinary use and the
+    # one that catches a store applying only the last clause.
+    {"filters": [{"property": "reading", "op": "gte", "value": 10},
+                 {"property": "reading", "op": "lt", "value": 250}]},
+    {"filters": [{"property": "seen", "op": "gte", "value": "2026-03-01T00:00:00+00:00"}]},
+    # A bare date against timestamps carrying offsets - midnight UTC, which is
+    # what makes date and timestamp one ordering rather than two.
+    {"filters": [{"property": "seen", "op": "lt", "value": "2026-03-01"}]},
+    # A bound that does not fit its own type. Nothing matches, rather than
+    # everything or an error.
+    {"filters": [{"property": "reading", "op": "gt", "value": "abc"}]},
+]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "case", ORDERED_CASES,
+    ids=[f"{c['filters'][0]['op']}-{i}" for i, c in enumerate(ORDERED_CASES)],
+)
+async def test_both_stores_compare_an_ordered_filter_the_same_way(
+    opensearch: str, case: dict
+) -> None:
+    """The check that stops `capacity > 40` meaning two things.
+
+    `object_sets.matches` is the written-down definition; the store reaches the
+    same conclusion through a `range` query against a typed mapping, and
+    Postgres through a guarded cast. Three mechanisms, one answer, or the
+    operator goes back to being refused.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-ord-test", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id), **case}, property_types=TYPED_TYPES
+        )
+        expected = {
+            key for key, props in TYPED_ROWS
+            if object_sets.matches(props, definition.filters)
+        }
+        rows, total = await store.evaluate_object_set(
+            search_prefix="ws-ord-test", object_type_id=type_id,
+            filters=definition.filters, limit=50, offset=0,
+        )
+        assert {r["primary_key"] for r in rows} == expected, case
+        assert total == len(expected)
+    finally:
+        await store.close()
+
+
+def _tie_broken(ranked: list, parsed) -> list[str]:
+    """Keys in the order both stores must produce, ties broken ascending.
+
+    **The tie-break does not invert with the sort.** Both stores append
+    `primary_key ASC` after the property, in both directions, so that "the next
+    page" cannot repeat a row it already showed - which is the whole reason the
+    four fixed sorts have carried a tie-break since they were written.
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(ranked):
+        run = [ranked[index]]
+        while index + 1 < len(ranked) and (
+            object_sets.comparable(ranked[index + 1][1].get(parsed.property), parsed.data_type)
+            == object_sets.comparable(run[0][1].get(parsed.property), parsed.data_type)
+        ):
+            index += 1
+            run.append(ranked[index])
+        out.extend(sorted(key for key, _ in run))
+        index += 1
+    return out
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("sort", ["reading", "-reading", "seen", "-seen"])
+async def test_the_two_stores_order_by_a_property_identically(
+    opensearch: str, sort: str
+) -> None:
+    """A table sorted one way on Postgres and another on OpenSearch is the
+    invisible kind of wrong - the same class of bug the operator list existed
+    to prevent, which is why the sort was refused alongside it."""
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-ordsort", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        parsed = object_sets.parse_sort(sort, property_types=TYPED_TYPES)
+        rows, _ = await store.evaluate_object_set(
+            search_prefix="ws-ordsort", object_type_id=type_id, filters=(),
+            limit=50, offset=0, sort=parsed,
+        )
+        got = [r["primary_key"] for r in rows]
+
+        # Sorted the way the stores are required to: on the comparable value,
+        # ties broken by primary key ascending **in both directions**, and rows
+        # with no comparable value last **in both directions**. Expressed as a
+        # key rather than as a literal list, so the expectation is the rule
+        # rather than a transcription of one run's output.
+        def ordering(pair):
+            value = object_sets.comparable(pair[1].get(parsed.property), parsed.data_type)
+            return (value is None, value)
+
+        ranked = sorted(
+            [p for p in TYPED_ROWS
+             if object_sets.comparable(p[1].get(parsed.property), parsed.data_type)
+             is not None],
+            key=ordering, reverse=parsed.descending,
+        )
+        missing = sorted(
+            [p for p in TYPED_ROWS
+             if object_sets.comparable(p[1].get(parsed.property), parsed.data_type) is None],
+            key=lambda p: p[0],
+        )
+        expected = _tie_broken(ranked, parsed) + [key for key, _ in missing]
+        assert got == expected, sort
+        # And it is not merely *a* stable order: the numbers order numerically,
+        # so 250 is last ascending rather than first as text would put it.
+        if parsed.property == "reading" and not parsed.descending:
+            assert got[-2] == "2", "250 is the largest, and the absent row is last"
+    finally:
+        await store.close()
+
+
 # ---- through the API (Postgres store, the local-dev default) -----------------
 @pytest.fixture(scope="module")
 def seeded(client: TestClient, fx: Fixture) -> str:
@@ -365,6 +759,143 @@ def evaluate(client: TestClient, fx: Fixture, definition: dict, **kw) -> dict:
     return r.json()
 
 
+@pytest.fixture(scope="module")
+def typed(client: TestClient, fx: Fixture) -> str:
+    """A second population whose properties are **declared with real types**.
+
+    Separate from `seeded` on purpose: that one declares everything `string`,
+    which is what makes it the right fixture for the untyped comparisons this
+    file has always checked - and the wrong one for §221, whose entire subject
+    is what a declared type changes. Landed the same way, through an upload and
+    a sync, because an ordered comparison has to survive the coercion a real
+    sync applies rather than only the shape a test would insert.
+    """
+    tag = uuid.uuid4().hex[:8]
+    csv = b"key,reading,seen\n" + b"".join(
+        f"{key},{p.get('reading', '')},{p['seen']}\n".encode() for key, p in TYPED_ROWS
+    )
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.owner_sub),
+        data={"name": f"Readings {tag}"},
+        files={"file": ("readings.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types",
+        headers=hdr(fx.owner_sub),
+        json={
+            "api_name": f"Reading{tag}",
+            "display_name": f"Reading {tag}",
+            "properties": [
+                {"api_name": "reading", "data_type": "integer"},
+                {"api_name": "seen", "data_type": "timestamp"},
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.owner_sub),
+        json={
+            "object_type_id": type_id,
+            "dataset_id": dataset_id,
+            "primary_key_column": "key",
+            "column_mappings": {"reading": "reading", "seen": "seen"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    source_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{source_id}/sync",
+        headers=hdr(fx.owner_sub),
+    )
+    assert r.status_code == 200, r.text
+    return type_id
+
+
+@pytest.mark.parametrize(
+    "case", ORDERED_CASES,
+    ids=[f"{c['filters'][0]['op']}-{i}" for i, c in enumerate(ORDERED_CASES)],
+)
+def test_the_postgres_store_compares_an_ordered_filter_the_same_way(
+    client: TestClient, fx: Fixture, typed: str, case: dict
+) -> None:
+    """The Postgres half of §221, against the same reference the OpenSearch
+    half is checked against - which is what 0006 §6 means by "neither store
+    ships the new operators until both do"."""
+    definition = object_sets.parse(
+        {"object_type_id": typed, **case}, property_types=TYPED_TYPES
+    )
+    expected = {
+        key for key, props in TYPED_ROWS
+        if object_sets.matches(props, definition.filters)
+    }
+    page = evaluate(client, fx, {"object_type_id": typed, **case})
+    assert {i["primary_key"] for i in page["instances"]} == expected, case
+    assert page["total"] == len(expected)
+
+
+def test_an_ordered_filter_survives_the_sync_that_coerces_it(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """**The whole point, asserted once in plain terms.** 250 is greater than
+    40, and before §221 the platform could not say so - the values reached the
+    stores as text and the two disagreed about what came first."""
+    page = evaluate(
+        client, fx,
+        {"object_type_id": typed,
+         "filters": [{"property": "reading", "op": "gt", "value": 40}]},
+    )
+    assert {i["primary_key"] for i in page["instances"]} == {"2"}
+
+
+def test_the_postgres_store_sorts_by_a_property(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Numerically, not as text - which is the difference the whole decision is
+    about: as text, 250 sorts between 10 and 40."""
+    page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort="reading")
+    # 3 and 5 both read 40, so the tie-break decides their order; 6 has no
+    # reading at all and goes last.
+    assert [i["primary_key"] for i in page["instances"]] == [
+        "7", "4", "1", "0", "3", "5", "2", "6"
+    ]
+
+    page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort="-reading")
+    # **The tie still breaks ascending, and the absent row is still last.**
+    # Postgres puts NULLs first descending by default, so the last element here
+    # is what `NULLS LAST` buys.
+    assert [i["primary_key"] for i in page["instances"]] == [
+        "2", "0", "3", "5", "1", "4", "7", "6"
+    ]
+
+
+def test_a_row_that_will_not_cast_sorts_last_in_both_directions(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Postgres puts NULLs **first** on a descending sort by default, so a
+    descending page would otherwise open with every unusable row while
+    OpenSearch put them at the end. A page that starts with the junk on one
+    store and the largest values on the other is the invisible kind of wrong
+    the cross-store rule exists for.
+
+    Reached by writing a property the ontology declares `integer` through the
+    editing API, which coerces - so the unusable value has to be one that
+    survives coercion and still cannot be ordered: an absent one.
+    """
+    for sort in ("seen", "-seen"):
+        page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort=sort)
+        keys = [i["primary_key"] for i in page["instances"]]
+        assert len(keys) == len(TYPED_ROWS), sort
+        assert keys[0] != keys[-1], sort
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["filters"][0]["op"])
 def test_the_postgres_store_and_the_reference_semantics_agree(
     client: TestClient, fx: Fixture, seeded: str, case: dict
@@ -416,16 +947,149 @@ def test_a_type_from_another_workspace_is_not_evaluable(
     assert r.status_code == 404, r.text
 
 
-def test_a_bad_definition_is_refused_in_a_sentence(client: TestClient, fx: Fixture) -> None:
+def test_a_bad_definition_is_refused_in_a_sentence(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    # **A type that exists**, which it did not have to be before §221. The
+    # definition is now validated *against the ontology* — an ordered
+    # comparison is checked against declared property types — so the type has
+    # to be resolved before the rest of the definition can be judged at all.
+    # A request naming both a nonexistent type and a bad operator therefore
+    # answers 404 rather than 422, and both are true; what this asserts is that
+    # a bad operator on a real type still blames the operator.
     r = client.post(
         f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
         headers=hdr(fx.owner_sub),
-        json={"definition": {"object_type_id": str(uuid.uuid4()),
+        json={"definition": {"object_type_id": seeded,
                              "filters": [{"property": "r", "op": "nope", "value": 1}]}},
     )
     assert r.status_code == 422, r.text
     assert isinstance(r.json()["detail"], str)
     assert "nope" in r.json()["detail"]
+
+    gone = client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
+        headers=hdr(fx.owner_sub),
+        json={"definition": {"object_type_id": str(uuid.uuid4()), "filters": []}},
+    )
+    assert gone.status_code == 404, gone.text
+
+
+# ---- the two Postgres rules a cluster cannot be asked about ------------------
+#
+# Both are reached by calling the store directly with a `Filter` built by hand
+# rather than through `parse`. That is not a shortcut around validation: the
+# store's contract is "given a filter carrying a declared type, compare
+# correctly", and these two cases are unreachable through the API by
+# construction - the first because a strict OpenSearch mapping refuses to store
+# the value at all, and the second because it depends on a server setting no
+# request can change.
+@pytest.mark.anyio
+async def test_postgres_does_not_fail_a_page_over_one_unparseable_value(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """`seeded` holds `capacity` values 10, 250, 40, 7 and **"n/a"**, declared
+    `string`. Treated as an integer - which is what a property retyped after a
+    sync looks like (decision 0006 §4) - the unparseable one must narrow the
+    set rather than raise.
+
+    **A bare cast raises on it**, so one bad row would fail the whole page; a
+    regex guard would accept `2026-13-45` and throw anyway. `pg_input_is_valid`
+    asks the parser.
+
+    Postgres-only, and that asymmetry is itself the guarantee: OpenSearch
+    cannot hold this state, because the strict mapping refuses the document
+    (0006 §5). The guard is what makes the *other* store behave the same way
+    for data written before its mapping existed.
+    """
+    from src.lib.db import user_connection
+    from src.services import instances as instances_service
+
+    numeric = (object_sets.Filter("capacity", "gt", 40, "integer"),)
+    async with user_connection(fx.owner) as conn:
+        rows, total = await instances_service.evaluate_object_set(
+            conn, object_type_id=uuid.UUID(seeded), filters=numeric,
+            limit=50, offset=0, sort=object_sets.Sort(),
+        )
+    assert total == 1, "250 is the only capacity over 40"
+    assert {r["primary_key"] for r in rows} == {"2"}
+
+
+@pytest.mark.anyio
+async def test_postgres_reads_a_bare_date_as_utc_whatever_the_server_says(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """**The divergence that hides in a server setting.**
+
+    `'2026-01-05'::timestamptz` is not a fixed instant - Postgres reads it in
+    the session's `TimeZone`. The dev database is `Etc/UTC`, so every other
+    test in this file would pass with the rule left unstated and the same data
+    would compare differently on a deployment configured to anything else.
+
+    Asked by moving the session a long way from UTC and requiring the identical
+    answer. `America/New_York` is five hours behind, so a bare `2026-01-05`
+    read in it lands *after* `2026-01-05T00:00:00+00:00` and a `lt` filter on
+    that bound would lose the row.
+    """
+    from sqlalchemy import text as _sql
+
+    from src.lib.db import user_connection
+    from src.services import instances as instances_service
+
+    # **Two bounds, and the second is the one that matters.** The first carries
+    # an offset, so it pins its own instant however it is read - which makes it
+    # the wrong case to test the rule with, and is why a fixture of
+    # offset-carrying bounds left the *bound* half of this unasserted while
+    # catching the stored-value half. The second is bare, so it is only a fixed
+    # instant if this code makes it one before it reaches Postgres.
+    #
+    # 02:00Z either way, so the bare `2026-03-01` in row 7 falls on one side of
+    # it read as UTC and the other read in a western timezone.
+    bounds = [
+        (object_sets.Filter("seen", "lt", "2026-03-01T02:00:00+00:00", "timestamp"),),
+        (object_sets.Filter("seen", "lte", "2026-03-01", "timestamp"),),
+    ]
+    for bound in bounds:
+        answers = []
+        for zone in ("UTC", "America/New_York", "Asia/Kathmandu"):
+            async with user_connection(fx.owner) as conn:
+                await conn.execute(_sql(f"SET TIME ZONE '{zone}'"))
+                rows, _ = await instances_service.evaluate_object_set(
+                    conn, object_type_id=uuid.UUID(typed), filters=bound,
+                    limit=50, offset=0, sort=object_sets.Sort(),
+                )
+                answers.append(sorted(r["primary_key"] for r in rows))
+        assert answers[0] == answers[1] == answers[2], (bound, answers)
+        # And it is the right answer, not merely a consistent one.
+        expected = sorted(
+            key for key, props in TYPED_ROWS
+            if object_sets.matches(props, bound)
+        )
+        assert answers[0] == expected, bound
+
+
+@pytest.mark.anyio
+async def test_postgres_sorts_by_a_date_the_same_way_whatever_the_server_says(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """The same rule on the ordering side, where it decides which page a row
+    lands on rather than whether it matches."""
+    from sqlalchemy import text as _sql
+
+    from src.lib.db import user_connection
+    from src.services import instances as instances_service
+
+    parsed = object_sets.parse_sort("seen", property_types=TYPED_TYPES)
+    orders = []
+    for zone in ("UTC", "Pacific/Kiritimati"):
+        async with user_connection(fx.owner) as conn:
+            await conn.execute(_sql(f"SET TIME ZONE '{zone}'"))
+            rows, _ = await instances_service.evaluate_object_set(
+                conn, object_type_id=uuid.UUID(typed), filters=(),
+                limit=50, offset=0, sort=parsed,
+            )
+            orders.append([r["primary_key"] for r in rows])
+    assert orders[0] == orders[1], orders
 
 
 # ---- aggregating a set (roadmap 1.5, what a Metric Card shows) ----------------
@@ -1381,13 +2045,15 @@ def test_a_sorted_page_does_not_repeat_or_skip_a_row(
 def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     client: TestClient, fx: Fixture, seeded: str
 ) -> None:
-    """The same refusal ordered operators get, for the same reason: untyped
-    properties mean the two stores would order 250 and 40 differently.
+    """**Refused because it is text, not because sorting by a property is
+    unsupported** - which it no longer is (§221).
 
-    The refusal also has to say *which* types sorting will cover when it is
-    built, and that text will never be one of them (decision 0006 §2) - the
-    earlier wording implied every property would be sortable one day, which is
-    the kind of promise a refusal should not make."""
+    `capacity` is a string property in this fixture, and decision 0006 §2
+    refuses string ordering *permanently*: Postgres orders by the database
+    collation and OpenSearch by byte order, so `'Z' < 'a'` differs between
+    them. The refusal has to say that rather than "not yet", because "not yet"
+    is a promise this one will never keep.
+    """
     r = client.post(
         f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
         headers=hdr(fx.owner_sub),
@@ -1395,10 +2061,23 @@ def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     )
     assert r.status_code == 422, r.text
     detail = r.json()["detail"]
-    assert "unknown sort" in detail
-    assert "integer, float, date and timestamp" in detail, "says what it will cover"
-    assert "text will stay unsortable" in detail, "and what it never will"
-    assert "declared property type" in detail
+    assert "is a string property" in detail
+    assert "no order the two stores agree on" in detail, "permanent, not pending"
+
+    # A property nothing declares still reports the four fixed sorts, because
+    # there is no declared type to blame instead.
+    unknown = client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
+        headers=hdr(fx.owner_sub),
+        json={"definition": {"object_type_id": seeded, "filters": []}, "sort": "nope"},
+    )
+    assert unknown.status_code == 422, unknown.text
+    hint = unknown.json()["detail"]
+    assert "unknown sort" in hint
+    # `PROPERTY_SORT_HINT` still says which types a property sort covers, and
+    # that text is not among them - it is the sentence somebody reads when they
+    # named a property that does not exist, so it has to point at the rule.
+    assert "text will stay unsortable" in hint, "and what it never will"
 
 
 @pytest.mark.anyio
