@@ -382,6 +382,46 @@ def test_a_property_sort_needs_the_declared_types_too() -> None:
         object_sets.parse_sort("-capacity")
 
 
+# ---- p.310's aggregations, as rules -----------------------------------------
+def test_a_numeric_aggregation_needs_the_declared_types_too() -> None:
+    """§221's rule, one route along: a caller that has not resolved the
+    ontology has checked no property's type, so **absence of `property_types`
+    is a refusal rather than a permission**. The tempting default is the other
+    one - absent means unrestricted, so nothing breaks - and it is exactly
+    wrong, because the caller that did not pass the argument is the caller that
+    checked nothing."""
+    with pytest.raises(ValueError, match="resolved none"):
+        object_sets.parse_aggregation("sum", "reading")
+    # And it still says what the aggregation would need, rather than only "no".
+    with pytest.raises(ValueError, match="stored untyped"):
+        object_sets.parse_aggregation("avg", "reading")
+    # An empty mapping is the same answer as none: §221's `_types_for` returns
+    # `{}` for a type absent from the catalogue, and that must not read as
+    # permission either.
+    with pytest.raises(ValueError, match="resolved none"):
+        object_sets.parse_aggregation("max", "reading", property_types={})
+
+
+def test_the_text_aggregations_need_no_declared_type() -> None:
+    """The other half of the same rule: `count` and `count_distinct` are
+    text-identity questions, so a caller with no ontology in hand still gets
+    them."""
+    assert object_sets.parse_aggregation("count", None).name == "count"
+    assert object_sets.parse_aggregation("count_distinct", "region").property == "region"
+
+
+def test_a_store_refuses_a_bare_numeric_aggregation_name() -> None:
+    """The store's door for the callers that predate §226 stays open for
+    `count`, and shuts for the four that need a declared type: a bare `"sum"`
+    carries no property and no type, so running it would be the validation
+    skipped rather than passed."""
+    from src.services.instances import _named
+
+    assert _named("count").name == "count"
+    with pytest.raises(ValueError, match="validated aggregation"):
+        _named("sum")
+
+
 # ---- p.223's "one or more default sorts" -------------------------------------
 def test_one_sort_may_be_written_as_a_string_or_as_a_list() -> None:
     """The string is what every stored module holds, and decision 0002 says a
@@ -938,6 +978,55 @@ async def test_the_two_stores_agree_that_nothing_has_no_aggregate(
             filters=definition.filters, aggregation=agg,
         )
         assert got is None, name
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_a_matching_document_with_no_value_is_not_an_aggregate_of_zero(
+    opensearch: str,
+) -> None:
+    """**"How many documents matched" is the wrong emptiness test**, and this
+    is the row that proves it.
+
+    One fixture row has no `reading` at all. Filtered down to just that row the
+    set is *not* empty - one document matches - and the aggregation still sees
+    nothing, so OpenSearch answers `0.0` for a sum. A store that read
+    `hits.total` would report zero where Postgres reports NULL, which is the
+    divergence this whole area exists to remove, hiding in the one case where
+    "the set is empty" and "there is nothing to aggregate" come apart.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-agg-novalue", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        # The one row with no `reading`, picked by its key so the set is
+        # certainly non-empty.
+        no_reading = [props for _, props in TYPED_ROWS if "reading" not in props]
+        assert len(no_reading) == 1, "the fixture stopped having a row without a value"
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id),
+             "filters": [{"property": "seen", "op": "eq",
+                          "value": no_reading[0]["seen"]}]},
+        )
+        rows, total = await store.evaluate_object_set(
+            search_prefix="ws-agg-novalue", object_type_id=type_id,
+            filters=definition.filters, limit=10, offset=0,
+        )
+        assert total == 1, "the set is empty, so this asserts the wrong thing"
+        agg = object_sets.parse_aggregation("sum", "reading", property_types=TYPED_TYPES)
+        got = await store.aggregate_object_set(
+            search_prefix="ws-agg-novalue", object_type_id=type_id,
+            filters=definition.filters, aggregation=agg,
+        )
+        assert got is None
     finally:
         await store.close()
 
@@ -1576,6 +1665,59 @@ def test_an_aggregation_over_nothing_is_nothing_rather_than_zero(
     # A count over the same nothing is still 0 - "how many" has an answer where
     # "what is the average" does not.
     assert aggregate(client, fx, nowhere, aggregation="count").json()["value"] == 0
+
+
+def test_a_stored_value_that_will_not_cast_is_left_out_rather_than_failing(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """**One bad row must narrow the answer, not destroy it.**
+
+    A bare `::double precision` raises on the first unparseable value, so a
+    single `"n/a"` in a `reading` column would turn every Metric Card over that
+    set into a 500 - and the aggregate is exactly where a long-lived column
+    with one bad row shows up.
+
+    **Written past the API deliberately, and only here.** Every write path
+    coerces (`property_values.coerce_property_value`), so an `integer` property
+    cannot be given `"n/a"` through the platform at all - which is also why
+    §221 could only reach this rule with an *absent* value. A stored value that
+    survived an earlier declaration and stopped fitting a later one is the real
+    case, and this is the only way to build one.
+    """
+    import psycopg
+    from test_api import ADMIN_DSN
+
+    with psycopg.connect(ADMIN_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE object_instances
+                   SET properties = jsonb_set(properties, '{reading}', '"n/a"')
+                 WHERE object_type_id = %s AND primary_key = %s
+                """,
+                (typed, "1"),
+            )
+            assert cur.rowcount == 1, "the fixture row moved"
+        conn.commit()
+
+    try:
+        r = aggregate(client, fx, {"object_type_id": typed, "filters": []},
+                      aggregation="sum", property="reading")
+        assert r.status_code == 200, r.text
+        # 10 was that row's reading, and it is simply not in the sum.
+        assert r.json()["value"] == sum(READINGS) - 10
+    finally:
+        with psycopg.connect(ADMIN_DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE object_instances
+                       SET properties = jsonb_set(properties, '{reading}', '10')
+                     WHERE object_type_id = %s AND primary_key = %s
+                    """,
+                    (typed, "1"),
+                )
+            conn.commit()
 
 
 def test_a_numeric_aggregation_narrows_with_the_set(

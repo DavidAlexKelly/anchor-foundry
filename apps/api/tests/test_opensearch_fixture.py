@@ -447,3 +447,65 @@ def test_delete_by_query_removes_from_the_index_the_document_is_in(server):
     assert status == 200 and body["deleted"] == 2
     _, found = search("ws-a-objects-*", {"match_all": {}})
     assert found["hits"]["total"]["value"] == 0, "counted as deleted but still there"
+
+
+# ---- 8. the metric aggregations (§226) ---------------------------------------
+def agg(name: str, body: dict):
+    return call("POST", f"/{name}/_search", {"size": 0, **body})
+
+
+def test_a_numeric_aggregation_over_a_text_field_is_refused(server):
+    """**The refusal decision 0006 §7 asked this fixture for.**
+
+    A real cluster answers `Field [x] of type [text] is not supported for
+    aggregation [sum]`, and that refusal is the entire reason the numeric
+    aggregations were withheld until §220 gave each object type a typed index.
+    A fixture that summed text would let the store point at `properties.x`
+    instead of the typed field, pass here, and fail on a deployment - which is
+    the shape of every disagreement this file exists to catch.
+    """
+    name = index("typed")
+    put(name, "1", {"primary_key": "a", "label": "40"})
+    status, body = agg(name, {"aggs": {"v": {"sum": {"field": "label"}}}})
+    assert status == 400, body
+    assert "not supported for aggregation" in json.dumps(body)
+
+
+def test_the_metric_aggregations_read_the_typed_values(server):
+    name = index("typed")
+    for n, capacity in enumerate([10, 250, 40], start=1):
+        put(name, str(n), {"primary_key": f"k{n}", "capacity": capacity})
+    for kind, expected in (("sum", 300.0), ("avg", 100.0), ("min", 10.0), ("max", 250.0)):
+        _, body = agg(name, {"aggs": {"v": {kind: {"field": "capacity"}}}})
+        assert body["aggregations"]["v"]["value"] == expected, kind
+
+
+def test_a_value_count_counts_values_not_documents(server):
+    """The aggregation the store asks for beside every numeric one, and the
+    reason it needs a fixture that tells them apart: a document can match a
+    query and carry no value for the property at all."""
+    name = index("typed")
+    put(name, "1", {"primary_key": "has", "capacity": 40})
+    put(name, "2", {"primary_key": "hasnt"})
+    _, body = agg(name, {"aggs": {"seen": {"value_count": {"field": "capacity"}}}})
+    assert body["hits"]["total"]["value"] == 2
+    assert body["aggregations"]["seen"]["value"] == 1
+
+
+def test_an_empty_sum_is_zero_and_an_empty_min_is_null(server):
+    """**The fixture reproduces the disagreement rather than smoothing it.**
+
+    This is a real cluster's behaviour and it is *wrong* for this platform:
+    Postgres `sum()` over no rows is NULL, so a set with nothing in it would
+    read "0" on one deployment and "no data" on the other. The store is what
+    reconciles them (`instance_store.aggregate_object_set` asks a
+    `value_count`), and a fixture that had quietly returned `None` for the sum
+    would make that reconciliation untestable - the bug would only ever appear
+    against a real cluster.
+    """
+    name = index("typed")
+    put(name, "1", {"primary_key": "a"})
+    _, body = agg(name, {"aggs": {"s": {"sum": {"field": "capacity"}},
+                                  "m": {"min": {"field": "capacity"}}}})
+    assert body["aggregations"]["s"]["value"] == 0.0
+    assert body["aggregations"]["m"]["value"] is None
