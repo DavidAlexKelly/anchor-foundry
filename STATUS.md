@@ -4364,9 +4364,14 @@ this is §217's shape again — prose asserting something nothing exercised.
 
 ---
 
-**MUTANT_SUMMARY**
+**47 mutants across two layers — 35 on the model, 12 on the widget — 47 caught, 0 survivors, 0
+hangs, 0 no-ops** after the fix above. The model half was clean on the first pass, which is
+what a pure module bought; the one survivor was in the browser half and was worth more than the
+other forty-six.
 
-**TEST_COUNTS**
+**1229 unit tests** (was 1175); **583 browser tests** (was 559); 1632 API tests, 2 skipped,
+unchanged — this unit added no server behaviour, which is the point: §220 and §221 had already
+added it.
 
 Not built, and named rather than approximated: p.348's **Load data from scenario** — this
 platform has no scenarios, and a control listing nothing is worse than its absence — and
