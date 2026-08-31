@@ -1746,6 +1746,23 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   width: 12px; height: 12px; border-radius: 50%; flex: none;
 }
 
+/* ---- Media preview (p.363-364) -------------------------------------------- */
+.canvas-media { margin: 0; display: grid; gap: 6px; justify-items: start; }
+/* `max-height` is the author's setting and comes from the element's own style;
+   `max-width: 100%` is not negotiable, because a media file is whatever size
+   its source made it and a page that scrolls sideways is a page nobody asked
+   for. `height: auto` keeps the aspect ratio while the height is capped. */
+.canvas-media img,
+.canvas-media video {
+  max-width: 100%; height: auto; border-radius: var(--radius); display: block;
+}
+.canvas-media audio { width: 100%; max-width: 420px; }
+.canvas-media-link {
+  display: inline-block; font-size: 13px; overflow-wrap: anywhere;
+}
+.canvas-media-size { color: var(--ink-soft); }
+.canvas-media-caption { font-size: 11.5px; color: var(--ink-soft); }
+
 /* ---- Timeline (p.347-349) ------------------------------------------------- */
 .canvas-timeline { display: grid; gap: 10px; }
 /* p.349's orientation. Vertical is a column of events with the rail down the

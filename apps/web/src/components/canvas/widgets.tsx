@@ -136,6 +136,13 @@ import {
   titleModeOf as timelineTitleModeOf, toggleLayer, visibleEvents,
   type Layer as TimelineLayer,
 } from "./timeline";
+import {
+  // Aliased on §211's rule: `SOURCES` and `sourceOf` are names three widgets in
+  // this file could each want, and `labelOf`/`kindOf` are the kind of name a
+  // fourth would.
+  SOURCES as MEDIA_SOURCES, attachmentOf, resolveMedia, sizeLabel,
+  sourceOf as mediaSourceOf,
+} from "./media";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -5444,6 +5451,308 @@ CanvasTimeline.craft = {
     highlightSelection: true, pageSize: 50,
   },
   related: { settings: TimelineSettings },
+};
+
+// ---- Media Preview (p.363-364) ----------------------------------------------
+/** p.363-364's Media Preview: "display image, audio, video, and document media,
+ * given a supported media source".
+ *
+ * The rules are `media.ts`, and the one worth naming here is that **what a
+ * media string may be is a security rule**: an app author types it and every
+ * viewer's browser follows it, so `resolveMedia` refuses `javascript:` and a
+ * `data:` URL for anything this platform does not already render inline. This
+ * component never sees a URL that rule rejected.
+ *
+ * **p.363's attachment source is a `single_object` variable**, which is this
+ * platform's spelling of "an object set with a single object": the viewer picks
+ * one, the variable holds its properties, and the named `attachment` property
+ * is the file. No fetch of its own — the object is already resolved.
+ *
+ * **Not built, and named rather than approximated**:
+ *
+ * - p.363's **Blobster RID** and **media-set URL** formats. Both are Foundry
+ *   resource identifiers with a Foundry service behind them; there is nothing
+ *   here to resolve them against, and accepting the string would draw a broken
+ *   image rather than say so.
+ * - p.363's **media reference property**, for the same reason: it is a media
+ *   set by another name.
+ * - p.363's "document media" reaches a viewer as a **link**. A PDF can run
+ *   script, and serving one inline from the app's own origin is the stored-XSS
+ *   shape `download_attachment` exists to describe — so the allowlist excludes
+ *   it on both sides, and widening it is the PDF Viewer's decision to make
+ *   deliberately rather than this widget's to make in passing.
+ */
+export function CanvasMediaPreview({
+  source = "string",
+  url = "",
+  textVariable = null,
+  subjectVariable = null,
+  property = "",
+  label = "",
+  maxHeight = 320,
+}: {
+  /** p.363's media source. */
+  source?: string;
+  /** p.363's Media string, written by the author. */
+  url?: string;
+  /** …or read from a string variable, the shape §209's Markdown already takes. */
+  textVariable?: string | null;
+  /** p.363's "object set with a single object". */
+  subjectVariable?: string | null;
+  /** p.363's attachment typed property. */
+  property?: string;
+  label?: string;
+  maxHeight?: number;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId } = useCanvasEnv();
+  const { resolved } = useCanvasVariables();
+
+  const subject = subjectVariable
+    ? (resolved[subjectVariable] as { properties?: Record<string, unknown> } | undefined)
+    : undefined;
+  const fromVariable = textVariable ? resolved[textVariable] : undefined;
+
+  // **An attachment is fetched, not pointed at, and that is not a style
+  // choice.** Cookie authentication here requires the `X-Anchor-Session`
+  // header - the CSRF defence that makes a cookie safe to accept at all - and
+  // an `<img src>` cannot set headers, so a plain URL in an element attribute
+  // is an unauthenticated request and a 401. A *media string* needs none of
+  // this: it points at somewhere else, or carries its own bytes.
+  const wanted = attachmentOf((subject?.properties ?? {})[property]);
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const key = mediaSourceOf(source) === "attachment" ? wanted?.key : undefined;
+  const contentType = wanted?.contentType ?? "";
+
+  useEffect(() => {
+    if (!key) {
+      setObjectUrl(null);
+      return;
+    }
+    let stale = false;
+    let created: string | null = null;
+    objApi
+      .attachmentBlob(workspaceId, key, contentType)
+      .then((blob) => {
+        if (stale) return;
+        created = URL.createObjectURL(blob);
+        setObjectUrl(created);
+      })
+      .catch(() => setObjectUrl(null));
+    return () => {
+      stale = true;
+      // Revoked on the way out, or every re-render of a table of these leaks a
+      // blob for the lifetime of the page.
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [workspaceId, key, contentType]);
+
+  const media = resolveMedia({
+    source,
+    // The variable wins when one is bound, the same precedence §209's Markdown
+    // uses: an author who has bound a variable has said the text is not theirs
+    // to write, and reading the literal instead would show a value nothing on
+    // screen can change.
+    url: textVariable ? fromVariable : url,
+    attachment: (subject?.properties ?? {})[property],
+    label,
+    // The blob's own URL, once it has arrived. `""` while it is in flight,
+    // which `resolveMedia` reads as nothing to draw yet rather than as an
+    // error - the difference a viewer sees between "loading" and "broken".
+    attachmentHref: () => objectUrl ?? "",
+  });
+
+  const style = { maxHeight: `${Math.max(80, Math.min(Number(maxHeight) || 320, 1200))}px` };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      <figure className="canvas-media" data-testid="media" data-kind={media.kind}>
+        {media.problem ? (
+          <p className="canvas-widget-empty" data-testid="media-problem">{media.problem}</p>
+        ) : !media.url ? (
+          <p className="canvas-widget-empty" data-testid="media-loading">Loading…</p>
+        ) : media.kind === "image" ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={media.url ?? ""}
+            alt={media.label}
+            style={style}
+            data-testid="media-image"
+          />
+        ) : media.kind === "video" ? (
+          <video src={media.url ?? ""} controls style={style} data-testid="media-video">
+            <track kind="captions" />
+          </video>
+        ) : media.kind === "audio" ? (
+          <audio src={media.url ?? ""} controls data-testid="media-audio" />
+        ) : (
+          // **A link, which is the one answer that is never wrong.** An `<img>`
+          // pointed at a PDF is a broken image and an `<audio>` pointed at one
+          // is a player that will never play; a link says what it is and lets
+          // the browser decide.
+          <a
+            className="canvas-media-link"
+            href={media.url ?? "#"}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="media-link"
+          >
+            {media.label}
+            {sizeLabel(media.size) && (
+              <span className="canvas-media-size"> ({sizeLabel(media.size)})</span>
+            )}
+          </a>
+        )}
+        {label && !media.problem && (
+          <figcaption className="canvas-media-caption" data-testid="media-caption">
+            {label}
+          </figcaption>
+        )}
+      </figure>
+    </div>
+  );
+}
+
+function MediaPreviewSettings() {
+  const {
+    source, url, textVariable, subjectVariable, property, label, maxHeight,
+    actions: { setProp },
+  } = useNode((node) => ({
+    source: node.data.props.source,
+    url: node.data.props.url,
+    textVariable: node.data.props.textVariable,
+    subjectVariable: node.data.props.subjectVariable,
+    property: node.data.props.property,
+    label: node.data.props.label,
+    maxHeight: node.data.props.maxHeight,
+  }));
+  const { declared } = useCanvasVariables();
+  const strings = Object.values(declared).filter((v) => v.kind === "string");
+  const objects = Object.values(declared).filter((v) => v.kind === "single_object");
+  const chosen = mediaSourceOf(source);
+
+  return (
+    <WidgetSetup
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Media source</span>
+        <select
+          value={chosen}
+          data-testid="media-source"
+          onChange={(e) => setProp((p: { source: string }) => (p.source = e.target.value))}
+        >
+          {Object.entries(MEDIA_SOURCES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      {chosen === "string" ? (
+        <>
+          <label className="field">
+            <span className="field-label">Media string</span>
+            <input
+              type="text"
+              value={url ?? ""}
+              placeholder="https://… or data:image/png;base64,…"
+              disabled={!!textVariable}
+              data-testid="media-url"
+              onChange={(e) => setProp((p: { url: string }) => (p.url = e.target.value))}
+            />
+            <span className="field-hint">
+              A URL or a data URL. p.363&apos;s Blobster RIDs and media-set URLs need a
+              Foundry service to resolve them, so this platform will not follow one
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">…or from a variable</span>
+            <select
+              value={textVariable ?? ""}
+              data-testid="media-variable"
+              onChange={(e) =>
+                setProp((p: { textVariable: string | null }) =>
+                  (p.textVariable = e.target.value || null))}
+            >
+              <option value="">Use the string above</option>
+              {strings.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          <label className="field">
+            <span className="field-label">Object</span>
+            <select
+              value={subjectVariable ?? ""}
+              data-testid="media-subject"
+              onChange={(e) =>
+                setProp((p: { subjectVariable: string | null }) =>
+                  (p.subjectVariable = e.target.value || null))}
+            >
+              <option value="">Pick an object variable…</option>
+              {objects.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+            <span className="field-hint">
+              p.363&apos;s &ldquo;object set with a single object&rdquo;, which is a single-object
+              variable here
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">Attachment property</span>
+            <input
+              type="text"
+              value={property ?? ""}
+              placeholder="api name"
+              data-testid="media-property"
+              onChange={(e) => setProp((p: { property: string }) => (p.property = e.target.value))}
+            />
+          </label>
+        </>
+      )}
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Caption</span>
+        <input
+          type="text"
+          value={label ?? ""}
+          data-testid="media-label"
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+        <span className="field-hint">
+          Also the accessible name. Without one the filename is used, because a
+          preview with no name is invisible to a screen reader
+        </span>
+      </label>
+      <label className="field">
+        <span className="field-label">Maximum height</span>
+        <input
+          type="number"
+          min={80}
+          max={1200}
+          value={Number(maxHeight) || 320}
+          data-testid="media-height"
+          onChange={(e) =>
+            setProp((p: { maxHeight: number }) => (p.maxHeight = Number(e.target.value)))}
+        />
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasMediaPreview.craft = {
+  displayName: "Media preview",
+  props: {
+    source: "string", url: "", textVariable: null, subjectVariable: null,
+    property: "", label: "", maxHeight: 320,
+  },
+  related: { settings: MediaPreviewSettings },
 };
 
 // ---- Object dropdown (p.455-458) --------------------------------------------
@@ -11176,6 +11485,7 @@ export const CANVAS_RESOLVER = {
   CanvasPieChart,
   CanvasStepper,
   CanvasTimeline,
+  CanvasMediaPreview,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -11215,6 +11525,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasPieChart", label: "Pie chart", hint: "Objects grouped by a property, as proportional slices" },
   { key: "CanvasStepper", label: "Stepper", hint: "Progress through a multi-step workflow, in order or not" },
   { key: "CanvasTimeline", label: "Timeline", hint: "Objects from any number of sets, as events in time order" },
+  { key: "CanvasMediaPreview", label: "Media preview", hint: "An image, video or audio file, from a URL or an attachment" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },
