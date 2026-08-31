@@ -1064,6 +1064,9 @@ async def test_the_two_stores_size_the_same_slices(opensearch: str, name: str) -
         readings = sorted((p["reading"] for _, p in TYPED_ROWS if "reading" in p),
                           reverse=True)
         assert [b[2] for b in buckets] == readings
+        # And in the shape the other store gives: an `integer` property does
+        # not come back from one as 250 and from the other as 250.0.
+        assert all(isinstance(b[2], float if name == "avg" else int) for b in buckets)
         # The row with no reading is not a slice, on this store as on the other.
         assert len(buckets) == len(readings)
         assert all(b[1] == 1 for b in buckets), "a bucket stopped holding one row"
@@ -1907,6 +1910,42 @@ def test_a_grouped_metric_sizes_the_slices_rather_than_counting_them(
     assert all({"value", "count", "metric"} <= set(g) for g in groups)
     metrics = [g["metric"] for g in groups]
     assert metrics == sorted(metrics, reverse=True), "not ordered by the metric"
+    # **Whole numbers, not `40.0`.** `reading` is declared `integer`, and a
+    # slice labelled with a value the ontology never held is the same fault the
+    # ungrouped aggregation had - `metric` goes through the same `_number`.
+    assert all(isinstance(m, int) for m in metrics), metrics
+
+
+def test_slices_that_tie_on_the_metric_fall_through_to_their_label(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """Three fixture rows read 40, and each is its own `seen` bucket - so three
+    slices are exactly the same size and *something* has to order them.
+
+    Without the second key that something is whichever order each store happens
+    to produce, and two deployments draw the same pie with its slices in a
+    different sequence. The legend beside it is then in a different sequence
+    too, and one of them looks wrong to anybody who knew the other.
+    """
+    r = group(client, fx, {"object_type_id": typed, "filters": []},
+              property="seen", aggregation="sum", aggregation_property="reading")
+    tied = [g["value"] for g in r.json()["groups"] if g["metric"] == 40]
+    assert len(tied) == 3, "the fixture stopped having three slices of one size"
+    assert tied == sorted(tied), "tied slices did not fall through to the label"
+
+
+def test_the_truncation_flag_counts_only_the_slices_that_can_be_measured(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """`truncated` is derived from `distinct_total`, so that total has to be
+    over the *same* question the buckets are. Counted over every distinct value
+    it would include the bucket with nothing to measure - and a chart showing
+    every slice it has would say it was showing only some of them."""
+    r = group(client, fx, {"object_type_id": typed, "filters": []},
+              property="seen", aggregation="sum", aggregation_property="reading")
+    body = r.json()
+    assert body["distinct_total"] == len(body["groups"])
+    assert body["truncated"] is False
 
 
 def test_grouping_without_an_aggregation_is_unchanged(

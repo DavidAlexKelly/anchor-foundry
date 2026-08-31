@@ -2980,7 +2980,11 @@ async def group_object_set(
             filters=definition.filters,
             property_name=body.property,
             limit=body.limit,
-            aggregation=aggregation if aggregation.numeric else None,
+            # Passed whatever it is: a `count` carries no property and no
+            # type, and both stores read it as "no metric" - so the conditional
+            # that used to sit here could not change an answer, which is the
+            # standard this codebase holds its checks to.
+            aggregation=aggregation,
         )
     return ObjectSetGroupOut(
         groups=[{"value": value, "count": count, "metric": metric}
