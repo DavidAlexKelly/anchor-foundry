@@ -158,6 +158,17 @@ describe("editing a row", () => {
     expect(toRequest([cleared])).toBeUndefined();
   });
 
+  it("empties a *descending* row's key too, rather than leaving a bare minus", () => {
+    // The case that separates the rule from the shortcut. On an ascending row
+    // "clear the key" and "rebuild the key from an empty name" both produce
+    // `""`, so an ascending row asserts nothing; a descending one produces `-`,
+    // which is truthy, gets sent, and comes back as a refusal about property
+    // types for what is an empty field.
+    const cleared = withProperty(entryOf("-priority")!, "");
+    expect(cleared.key).toBe("");
+    expect(toRequest([cleared])).toBeUndefined();
+  });
+
   it("switches a row between a fixed sort and a property", () => {
     const prop = entryOf("-priority")!;
     expect(withFixed(prop, "oldest")).toEqual({
