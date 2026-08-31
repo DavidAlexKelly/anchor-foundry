@@ -4290,6 +4290,93 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 223. The Media Preview, and a storage decision already made (this session)
+
+p.363-364's widget: p.363's two media sources — a **media string** (a media URL, a data URL
+with base64-encoded media, or a variable holding either) and an **attachment property** on
+p.363-364's "object set with a single object" — drawn as an image, a video, an audio player or
+a link according to what the content type actually is.
+
+**The build-order line this unit sat behind was stale, for the third time.** `workshop.md`'s
+item 8 put the whole media group behind "one storage decision serves all four", and that
+decision had been made three roadmaps earlier: `attachment` is a declared property type
+(db 0029), `POST /attachments` stores one, and `GET /attachments/download` serves it back
+behind the workspace-prefix check that is the isolation boundary. Nothing needed choosing.
+§216 found item 1 done for eleven units and item 6's dependency built for sixteen; this is the
+same failure in the other direction — not a line that should have been struck, but a line whose
+blocker had quietly been removed, which is worse because it reads as a reason to wait. **Open
+what a line cites before building on it, and that includes the lines that say "not yet".**
+
+**What a media string may be is a security rule, not a formatting one.** An app author types
+this into a settings panel and every viewer's browser follows it, which makes the widget's
+input an author-controlled URL in a viewer's session — so the refusals are the feature and
+`safeMediaUrl` is where all of them live. `javascript:` is a script. `data:text/html` is a
+document served with the app's own origin behind it, the same thing by a longer route, so a
+data URL is taken only for a media type this platform already renders inline. Everything that
+is not `http`/`https` is refused rather than enumerated, because a list of *bad* schemes is a
+list somebody has to keep complete. A relative path is allowed — it resolves against this app's
+own origin, which is where the attachment route lives — and a protocol-relative `//host/x` is
+not, because it is a different origin wearing a path's clothes.
+
+One function rather than a check at each element, and that is the argument: there are four
+elements and one rule, and a rule written four times is four places to get it wrong.
+
+**An attachment reaches the element as a Blob, not as a `src`.** The bytes are private and the
+download route wants a CSRF header, which an `<img src>` cannot send — so the widget fetches,
+makes an object URL and revokes it on cleanup. This is the one thing in the unit that no unit
+test can reach, so it is what the browser layer asserts: `naturalWidth` on a decoded image,
+which is a round trip that was actually authorised, plus a `src` that starts with `blob:`. An
+element that exists would have proved nothing.
+
+**`application/pdf` is inline on neither side, and a test pins that agreement across the two
+runtimes.** `media.ts`'s `INLINE_TYPES` mirrors `objects.py`'s `INLINE_CONTENT_TYPES`, and the
+unit test reads the Python file to assert the lists are equal — because a browser copy that
+drifted *wider* would draw a player for bytes the server sends as a download, and the drift
+would show up as a widget that silently stopped working. A PDF is a document that can run
+script, so p.363's "document media" arrives as a link with its filename and size. Widening that
+is the **PDF Viewer's** decision to make deliberately, and leaving it here would have been
+making it in passing.
+
+**36 mutants, 36 caught, 0 survivors, 0 no-ops, 0 hangs** — 29 on the model and 7 on the
+widget. Two survived the first pass, and both were about the *input* to a check rather than the
+check:
+
+* **`kindOfUrl` guessing `image` for an extensionless URL survived a test written to catch
+  exactly it.** The test used `https://example.test/media/1234`, which has no extension — and a
+  dot, in its host. `lastIndexOf(".")` finds it, so the fallback branch is never reached and
+  the test passes through the extension lookup missing instead. The input contained the very
+  thing it claimed to lack. **A test for a fallback needs an input that actually reaches the
+  fallback**, and "no extension" and "no dot" are not the same sentence.
+
+* **An `Array.isArray` guard that no test could make fail, and pulling it revealed two more.**
+  `attachmentOf` opened with `!raw || typeof raw !== "object" || Array.isArray(raw)`, and an
+  array has no `key`, so it falls out on the key check either way. Removing it — §221's
+  precedent, a check you cannot make fail is not a check, and the same standard applies to the
+  code being checked — exposed that `typeof raw !== "object"` was unreachable for the same
+  reason: a string, a number and a boolean have no `key` either. What was actually load-bearing
+  was the guard against `null`, since `null.key` is the one value that *throws* rather than
+  returning `undefined`. Three lines of shape-checking collapsed to `(raw ?? {})`. **A guard
+  for a shape is not a check when a later check already rejects that shape** — and the tell is
+  that the guard and the check answer the same question, so only the first one to run has an
+  effect.
+
+**1267 unit tests** (was 1229); **597 browser tests** (was 583); 1632 API tests, 2 skipped,
+unchanged — the storage this widget reads was built before it.
+
+Not built, and named rather than approximated: p.363's **Blobster RID**, since this platform
+has no media-set service and an attachment key is the same idea under another name; and
+**media reference properties**, which are a property type the ontology does not have and
+therefore an ontology unit rather than a widget one.
+
+`workshop.md` build-order item 8 has **PDF Viewer** (p.379-382), **Video Display** (p.371) and
+**Image Annotation** (p.386-388) left. All three have real pages, checked per §216. The PDF
+Viewer starts with the question this unit deferred rather than with a widget.
+
+---
+---
+---
+---
+
 ### 222. The Timeline, and the widget two units were for (this session)
 
 p.347-349's widget: p.348's layers with their own object set, date property, title rule, event
@@ -6017,6 +6104,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **"No extension" and "no dot" are not the same sentence, and a test for a fallback needs an input that actually reaches it.** §223's `kindOfUrl` falls back to `unknown` when a URL carries no extension, and the test written to pin that used `https://example.test/media/1234` — which has no extension and a dot, in its host. `lastIndexOf(".")` finds it, so the fallback branch never runs and the test passes through the extension lookup missing instead; the mutant returning `image` from that branch survived a test whose whole purpose was to catch it. The input contained the very thing it claimed to lack. This is §206's family from the other side: there, an input was rejected too early to reach the mechanism under test; here, an input satisfied the *precondition* too well to reach it. The tell in both is the same — write down which line the input is supposed to execute, then check that it does.
+
+- **A guard for a shape is not a check when a later check already rejects that shape, and pulling one can reveal that its neighbours were the same.** §223's `attachmentOf` opened with `!raw || typeof raw !== "object" || Array.isArray(raw)`, and the `Array.isArray` mutant could not be made to fail: an array has no `key`, so the key check below rejects it either way. Removing it under §221's precedent — a check you cannot make fail is not a check, and the same standard applies to the code being checked — exposed that `typeof raw !== "object"` was unreachable for exactly the same reason, since a string, a number and a boolean have no `key` either. What was actually load-bearing was the `null` half, because `null.key` is the one value that **throws** rather than returning `undefined`. Three lines of shape-checking collapsed to `(raw ?? {})`, and every remaining line is one a test can make fail. The tell is a guard and a later check that answer the same question: only the first to run has an effect, and defensive parsing accumulates these because each one looks individually prudent.
+
+- **A build-order line can go stale in the direction that costs more: not "this is done" but "this is blocked".** §216 struck lines claiming work was left that had been finished. §223 found the opposite — `workshop.md` held the media group behind "one storage decision serves all four", written before attachments existed, and `attachment` had been a property type with an upload route and an isolation check since db 0029. Nothing needed deciding and nothing had for roadmaps. A stale *done* line wastes the time it takes to discover the work exists; a stale *blocked* line is a reason not to start, so it costs everything after it and leaves no trace, because a unit nobody began produces no evidence that it could have been. §216's rule already covers it and is worth restating with the emphasis moved: **open what a line cites — and that includes the lines that say "not yet".**
 
 - **"The server decides the order" and "the server decides the page" are different claims, and only the second survives a browser that re-sorts.** §222's Timeline asks the server for a property sort and then merges its layers in the browser — so on a page holding the whole set, removing the sort from the request changes nothing observable. It decides *which objects are on the page*, which is the difference between "the earliest twenty events" and "twenty events, and here are their dates". The fixture that catches it is **a page smaller than the set**, and the docstring claiming otherwise was overstated until the harness said so. The general tell: when a client re-derives something the server also computed, the server's version is only observable at a boundary — a page edge, a limit, a truncation — and a test that never reaches one is testing the client.
 
