@@ -120,6 +120,22 @@ import {
   showsStepNumber, stateOf, stepsOf, templateOf as stepperTemplateOf,
   typeOf as stepperTypeOf,
 } from "./stepper";
+import {
+  // Aliased on §211's rule, and this widget needs it more than most: `ORDERS`,
+  // `TITLE_MODES`, `labelFor`, `layersOf`, `orderOf` and `eventsOf` are each a
+  // name another widget in this file could want, and `eventsOf` in particular
+  // already means "the module's events" one import away.
+  COLOUR_MODES as TIMELINE_COLOUR_MODES, ICON_MODES as TIMELINE_ICON_MODES,
+  ORDERS as TIMELINE_ORDERS, ORIENTATIONS as TIMELINE_ORIENTATIONS,
+  PROPERTY_MODES as TIMELINE_PROPERTY_MODES, TITLE_MODES as TIMELINE_TITLE_MODES,
+  colourModeOf as timelineColourModeOf, eventProperties,
+  eventsOf as timelineEventsOf, gapLabel, iconModeOf as timelineIconModeOf,
+  labelFor as timelineLabelFor, layerColour, layersOf as timelineLayersOf,
+  orderOf as timelineOrderOf, orientationOf as timelineOrientationOf,
+  propertyModeOf as timelinePropertyModeOf, showsIcon, sortFor,
+  titleModeOf as timelineTitleModeOf, toggleLayer, visibleEvents,
+  type Layer as TimelineLayer,
+} from "./timeline";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -4894,6 +4910,540 @@ CanvasStepper.craft = {
     completedColour: "", activeColour: "",
   },
   related: { settings: StepperSettings },
+};
+
+// ---- Timeline (p.347-349) ---------------------------------------------------
+/** p.347-349's Timeline: "visualize temporal data, rendering objects as events
+ * in a chronologically ordered timeline".
+ *
+ * The rules are `timeline.ts`. What is here is the wiring, and two parts of it
+ * are worth naming.
+ *
+ * **One query for every layer, not one per layer.** A layer is an entry in an
+ * array, so a hook per layer is not a thing React allows - and the alternative
+ * of a fixed number of hooks would cap p.348's "multiple timeline layers" at
+ * whatever number somebody guessed. `Promise.all` inside one query is the shape
+ * that has no cap.
+ *
+ * **The server orders each layer and this merges them.** p.348's date property
+ * is "visualizing *and ordering*", which is the sort decision 0006 refused
+ * until §221 - so each layer is fetched already ordered, and `eventsOf` does
+ * the interleave that no single query can.
+ *
+ * **Not built, and named rather than approximated**:
+ *
+ * - p.348's **Load data from scenario**. This platform has no scenarios - there
+ *   is nothing to point the setting at, and a control that listed nothing would
+ *   be worse than its absence.
+ * - p.349's per-layer **Override selection event**. An event trigger is
+ *   `{node, on}`, so a per-layer override needs a trigger addressed at
+ *   something finer than a node. That is a change to the event system rather
+ *   than to this widget, and inventing `select:0` here would make one widget's
+ *   private vocabulary out of something four other widgets share.
+ * - p.348's **Icon override** draws a mark rather than a named icon, the call
+ *   §210 and §219 both made: the field holds a name like `cart` and this
+ *   platform has no icon set, so the name travels as the mark's accessible
+ *   label rather than being lost.
+ */
+export function CanvasTimeline({
+  layers = [],
+  orientation = "vertical",
+  order = "newest_first",
+  showLegend = true,
+  showGaps = false,
+  activeVariable = null,
+  highlightSelection = true,
+  pageSize = 50,
+}: {
+  /** p.348's timeline layers. */
+  layers?: unknown;
+  /** p.349's Timeline orientation. */
+  orientation?: string;
+  /** p.349's Timeline events order. */
+  order?: string;
+  /** p.349's Show legend. */
+  showLegend?: boolean;
+  /** p.349's Show time between events in tooltip on hover. */
+  showGaps?: boolean;
+  /** p.349's Active object. */
+  activeVariable?: string | null;
+  /** p.349's Enable highlight of event on selection. */
+  highlightSelection?: boolean;
+  pageSize?: number;
+}) {
+  const {
+    id: nodeId,
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, mode } = useCanvasEnv();
+  const { resolved, events: moduleEvents } = useCanvasVariables();
+  const { values, set } = useCanvasParameters();
+  const selected = eventsFor(moduleEvents, nodeId, "row_select");
+  const eventContext = useEventContext(undefined, useOverlayIds());
+
+  const drawn = useMemo(() => timelineLayersOf(layers), [layers]);
+  const [hidden, setHidden] = useState<ReadonlySet<number>>(() => new Set<number>());
+
+  // Each layer's set definition and the sort its date property asks for. Kept
+  // together so the query key is exactly what the request depends on.
+  const asked = useMemo(
+    () => drawn.map((layer) => ({
+      definition: resolved[layer.objectSetVariable],
+      sort: sortFor(order, layer.dateProperty),
+    })),
+    [drawn, resolved, order],
+  );
+
+  const page = useQuery({
+    queryKey: ["canvas-timeline", workspaceId, JSON.stringify(asked), pageSize],
+    // Each layer's page **and its object type**, because p.348's prominent
+    // properties are the ontology's answer rather than this widget's - so the
+    // declaration has to be in hand before an event can say what it shows.
+    queryFn: () => Promise.all(asked.map(async (ask) => {
+      if (!ask.definition || !ask.sort) {
+        return {
+          instances: [],
+          properties: [] as { api_name: string; visibility?: string; id?: string }[],
+          titleProperty: null as string | null,
+        };
+      }
+      const typeId = (ask.definition as { object_type_id?: string }).object_type_id;
+      const [rows, type] = await Promise.all([
+        objApi.evaluateObjectSet(workspaceId, ask.definition, {
+          limit: pageSize, sort: ask.sort,
+        }),
+        typeId ? objApi.getType(workspaceId, typeId) : Promise.resolve(null),
+      ]);
+      const declared = type?.properties ?? [];
+      return {
+        instances: rows.instances ?? [],
+        properties: declared,
+        // p.348's **Object title** is the ontology's title property, not the
+        // primary key. An object set page carries neither, so the type is what
+        // says which property to read - and without this every event would be
+        // labelled with its key, which is a title only a database has.
+        titleProperty:
+          declared.find((p) => p.id === type?.title_property_id)?.api_name ?? null,
+      };
+    })),
+    enabled: drawn.length > 0 && asked.some((a) => !!a.definition && !!a.sort),
+    placeholderData: (previous) => previous,
+  });
+
+  const rows = useMemo(
+    () => (page.data ?? []).map((answer) => answer.instances.map((row) => {
+      const properties = (row.properties ?? {}) as Record<string, unknown>;
+      const named = answer.titleProperty ? properties[answer.titleProperty] : undefined;
+      return {
+        key: String(row.primary_key),
+        title: named === null || named === undefined ? undefined : String(named),
+        primaryKey: String(row.primary_key),
+        properties,
+      };
+    })),
+    [page.data],
+  );
+  const declaredByLayer = useMemo(
+    () => (page.data ?? []).map((answer) => answer.properties),
+    [page.data],
+  );
+
+  const events = useMemo(
+    () => visibleEvents(timelineEventsOf(drawn, rows, order), hidden),
+    [drawn, rows, order, hidden],
+  );
+
+  const chosenKeys = keysOf(activeVariable ? values[activeVariable] : undefined);
+  const chosen = chosenKeys[0] ?? null;
+
+  const pick = (key: string) => {
+    if (mode !== "run") return;
+    if (activeVariable) set(activeVariable, selectionClauses([key]));
+    if (selected.length > 0) {
+      runEvents(selected, { ...eventContext, payload: { key } });
+    }
+  };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {drawn.length === 0 ? (
+        <p className="canvas-widget-empty">Timeline - add a layer in Settings</p>
+      ) : (
+        <div
+          className="canvas-timeline"
+          data-testid="timeline"
+          data-orientation={timelineOrientationOf(orientation)}
+        >
+          {showLegend && (
+            <ul className="canvas-timeline-legend" data-testid="timeline-legend">
+              {drawn.map((layer, index) => (
+                <li key={index}>
+                  <button
+                    type="button"
+                    data-testid={`timeline-legend-${index}`}
+                    data-hidden={hidden.has(index) ? "yes" : "no"}
+                    // p.349: the legend is "interactive… to show or hide
+                    // selected timeline layers", so it is a control in run mode
+                    // and a label in the builder, where a click selects the
+                    // widget instead.
+                    disabled={mode !== "run"}
+                    onClick={() => setHidden((was) => toggleLayer(was, index))}
+                  >
+                    <span
+                      className="canvas-timeline-swatch"
+                      style={{ background: layerColour(layer, index, null) ?? undefined }}
+                    />
+                    {timelineLabelFor(layer, index)}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {page.isPending ? (
+            <p className="canvas-widget-empty">Loading events…</p>
+          ) : events.length === 0 ? (
+            <p className="canvas-widget-empty" data-testid="timeline-empty">
+              No events to show
+            </p>
+          ) : (
+            <ol className="canvas-timeline-track">
+              {events.map((event, index) => {
+                const layer = drawn[event.layer] as TimelineLayer;
+                const colour = layerColour(layer, event.layer, null);
+                const previous = events[index - 1];
+                return (
+                  <li
+                    className="canvas-timeline-event"
+                    key={`${event.layer}:${event.key}`}
+                    data-testid="timeline-event"
+                    data-layer={String(event.layer)}
+                    data-selected={
+                      highlightSelection && chosen === event.key ? "yes" : "no"
+                    }
+                  >
+                    {showGaps && previous && (
+                      // p.349's tooltip, drawn as a rung between the two events
+                      // it measures rather than as a hover-only string: a
+                      // tooltip nobody hovers is a fact nobody reads, and the
+                      // gap between two events is most of what a timeline is
+                      // for.
+                      <span className="canvas-timeline-gap" data-testid="timeline-gap">
+                        {gapLabel(previous.at, event.at)}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="canvas-timeline-mark"
+                      data-testid={`timeline-mark-${event.key}`}
+                      style={colour ? { background: colour, borderColor: colour } : undefined}
+                      aria-label={
+                        showsIcon(layer) ? (layer.icon || timelineLabelFor(layer, event.layer))
+                          : undefined
+                      }
+                      disabled={mode !== "run"}
+                      onClick={() => pick(event.key)}
+                    />
+                    <div className="canvas-timeline-body">
+                      <span className="canvas-timeline-when" data-testid="timeline-when">
+                        {new Date(event.at).toISOString().slice(0, 10)}
+                      </span>
+                      <button
+                        type="button"
+                        className="canvas-timeline-title"
+                        data-testid={`timeline-title-${event.key}`}
+                        style={colour ? { color: colour } : undefined}
+                        disabled={mode !== "run"}
+                        onClick={() => pick(event.key)}
+                      >
+                        {event.title}
+                      </button>
+                      <TimelineProperties
+                        layer={layer}
+                        declared={declaredByLayer[event.layer] ?? []}
+                        properties={event.properties}
+                      />
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** p.348's Event properties, for one event.
+ *
+ * `eventProperties` decides *which*; this drops the ones the object has no
+ * value for, which p.348 does not mention and every other property display in
+ * this codebase does - an event card listing three empty rows says less than
+ * one listing none.
+ */
+function TimelineProperties({ layer, declared, properties }: {
+  layer: TimelineLayer;
+  declared: readonly { api_name: string; visibility?: string }[];
+  properties: Record<string, unknown>;
+}) {
+  const names = eventProperties(layer, declared);
+  const shown = names.filter((name) => {
+    const value = properties[name];
+    return value !== null && value !== undefined && String(value) !== "";
+  });
+  if (shown.length === 0) return null;
+  return (
+    <dl className="canvas-timeline-props" data-testid="timeline-props">
+      {shown.map((name) => (
+        <div key={name}>
+          <dt>{name}</dt>
+          <dd>{String(properties[name])}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function TimelineSettings() {
+  const {
+    layers, orientation, order, showLegend, showGaps, activeVariable,
+    highlightSelection,
+    actions: { setProp },
+  } = useNode((node) => ({
+    layers: node.data.props.layers,
+    orientation: node.data.props.orientation,
+    order: node.data.props.order,
+    showLegend: node.data.props.showLegend,
+    showGaps: node.data.props.showGaps,
+    activeVariable: node.data.props.activeVariable,
+    highlightSelection: node.data.props.highlightSelection,
+  }));
+  const { declared } = useCanvasVariables();
+  const sets = Object.values(declared).filter((v) => v.kind === "object_set");
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const drawn = timelineLayersOf(layers);
+  const raw: Record<string, unknown>[] = Array.isArray(layers)
+    ? (layers as Record<string, unknown>[])
+    : [];
+  // **Edited against the raw list, drawn against the parsed one.** A layer
+  // missing its set or its date property is dropped by `layersOf` - correctly,
+  // for the canvas - and editing through that list would make such a layer
+  // impossible to finish: the row would vanish the moment it was added.
+  const write = (next: unknown[]) =>
+    setProp((p: { layers: unknown[] }) => (p.layers = next));
+  const edit = (index: number, patch: Record<string, unknown>) =>
+    write(raw.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)));
+
+  return (
+    <WidgetSetup
+      inputs={<>
+      <div className="field">
+        <span className="field-label">Layers</span>
+        <div className="canvas-layer-editor" data-testid="timeline-layers">
+          {raw.map((entry, index) => (
+            <div className="canvas-layer-row" key={index}>
+              <input
+                type="text"
+                value={String(entry.label ?? "")}
+                placeholder={`Layer ${index + 1}`}
+                data-testid={`timeline-label-${index}`}
+                onChange={(e) => edit(index, { label: e.target.value })}
+              />
+              <select
+                value={String(entry.objectSetVariable ?? "")}
+                data-testid={`timeline-set-${index}`}
+                onChange={(e) => edit(index, { objectSetVariable: e.target.value })}
+              >
+                <option value="">Pick an object set…</option>
+                {sets.map((v) => (
+                  <option key={v.id} value={v.id}>{v.label}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={String(entry.dateProperty ?? "")}
+                placeholder="Date property"
+                data-testid={`timeline-date-${index}`}
+                onChange={(e) => edit(index, { dateProperty: e.target.value })}
+              />
+              <select
+                value={timelineTitleModeOf(entry.titleMode)}
+                data-testid={`timeline-title-mode-${index}`}
+                onChange={(e) => edit(index, { titleMode: e.target.value })}
+              >
+                {Object.entries(TIMELINE_TITLE_MODES).map(([key, name]) => (
+                  <option key={key} value={key}>{name}</option>
+                ))}
+              </select>
+              {timelineTitleModeOf(entry.titleMode) !== "object" && (
+                <input
+                  type="text"
+                  value={String(entry.titleValue ?? "")}
+                  placeholder={
+                    timelineTitleModeOf(entry.titleMode) === "custom"
+                      ? "Title text" : "Property api name"
+                  }
+                  data-testid={`timeline-title-value-${index}`}
+                  onChange={(e) => edit(index, { titleValue: e.target.value })}
+                />
+              )}
+              <select
+                value={timelinePropertyModeOf(entry.propertyMode)}
+                data-testid={`timeline-props-mode-${index}`}
+                onChange={(e) => edit(index, { propertyMode: e.target.value })}
+              >
+                {Object.entries(TIMELINE_PROPERTY_MODES).map(([key, name]) => (
+                  <option key={key} value={key}>{name}</option>
+                ))}
+              </select>
+              {timelinePropertyModeOf(entry.propertyMode) === "specific" && (
+                <input
+                  type="text"
+                  value={String(entry.properties ?? "")}
+                  placeholder="api names, comma separated"
+                  data-testid={`timeline-props-${index}`}
+                  onChange={(e) => edit(index, { properties: e.target.value })}
+                />
+              )}
+              <select
+                value={timelineColourModeOf(entry.colourMode)}
+                data-testid={`timeline-colour-mode-${index}`}
+                onChange={(e) => edit(index, { colourMode: e.target.value })}
+              >
+                {Object.entries(TIMELINE_COLOUR_MODES).map(([key, name]) => (
+                  <option key={key} value={key}>{name}</option>
+                ))}
+              </select>
+              {timelineColourModeOf(entry.colourMode) === "static" && (
+                <input
+                  type="text"
+                  value={String(entry.colour ?? "")}
+                  placeholder="#14646e"
+                  data-testid={`timeline-colour-${index}`}
+                  onChange={(e) => edit(index, { colour: e.target.value })}
+                />
+              )}
+              <select
+                value={timelineIconModeOf(entry.iconMode)}
+                data-testid={`timeline-icon-mode-${index}`}
+                onChange={(e) => edit(index, { iconMode: e.target.value })}
+              >
+                {Object.entries(TIMELINE_ICON_MODES).map(([key, name]) => (
+                  <option key={key} value={key}>{name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid={`timeline-remove-${index}`}
+                onClick={() => write(raw.filter((_, i) => i !== index))}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="timeline-add"
+            onClick={() => write([...raw, { label: "", objectSetVariable: "", dateProperty: "" }])}
+          >
+            Add layer
+          </button>
+        </div>
+        <span className="field-hint">
+          {drawn.length} of {raw.length} layer{raw.length === 1 ? "" : "s"} will draw —
+          a layer needs both an object set and a date property
+        </span>
+      </div>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Orientation</span>
+        <select
+          value={timelineOrientationOf(orientation)}
+          data-testid="timeline-orientation"
+          onChange={(e) => setProp((p: { orientation: string }) => (p.orientation = e.target.value))}
+        >
+          {Object.entries(TIMELINE_ORIENTATIONS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Events order</span>
+        <select
+          value={timelineOrderOf(order)}
+          data-testid="timeline-order"
+          onChange={(e) => setProp((p: { order: string }) => (p.order = e.target.value))}
+        >
+          {Object.entries(TIMELINE_ORDERS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={showLegend !== false}
+          data-testid="timeline-show-legend"
+          onChange={(e) => setProp((p: { showLegend: boolean }) => (p.showLegend = e.target.checked))}
+        />
+        <span className="field-label">Show legend</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={showGaps === true}
+          data-testid="timeline-show-gaps"
+          onChange={(e) => setProp((p: { showGaps: boolean }) => (p.showGaps = e.target.checked))}
+        />
+        <span className="field-label">Show time between events</span>
+      </label>
+      <label className="field canvas-toggle">
+        <input
+          type="checkbox"
+          checked={highlightSelection !== false}
+          data-testid="timeline-highlight"
+          onChange={(e) =>
+            setProp((p: { highlightSelection: boolean }) => (p.highlightSelection = e.target.checked))}
+        />
+        <span className="field-label">Highlight the selected event</span>
+      </label>
+      </>}
+      outputs={
+        <label className="field">
+          <span className="field-label">Active object</span>
+          <select
+            value={activeVariable ?? ""}
+            data-testid="timeline-active"
+            onChange={(e) =>
+              setProp((p: { activeVariable: string | null }) =>
+                (p.activeVariable = e.target.value || null))}
+          >
+            <option value="">Nothing</option>
+            {arrays.map((v) => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+          <span className="field-hint">
+            p.349&apos;s Active object: the selected event&apos;s key, as filter clauses a
+            narrowed set can read
+          </span>
+        </label>
+      }
+    />
+  );
+}
+
+CanvasTimeline.craft = {
+  displayName: "Timeline",
+  props: {
+    layers: [], orientation: "vertical", order: "newest_first",
+    showLegend: true, showGaps: false, activeVariable: null,
+    highlightSelection: true, pageSize: 50,
+  },
+  related: { settings: TimelineSettings },
 };
 
 // ---- Object dropdown (p.455-458) --------------------------------------------
@@ -10625,6 +11175,7 @@ export const CANVAS_RESOLVER = {
   CanvasObjectSelector,
   CanvasPieChart,
   CanvasStepper,
+  CanvasTimeline,
   CanvasDatasetTable,
   CanvasObjectTable,
   CanvasObjectCards,
@@ -10663,6 +11214,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasObjectSelector", label: "Object selector", hint: "Pick several objects from a searchable list" },
   { key: "CanvasPieChart", label: "Pie chart", hint: "Objects grouped by a property, as proportional slices" },
   { key: "CanvasStepper", label: "Stepper", hint: "Progress through a multi-step workflow, in order or not" },
+  { key: "CanvasTimeline", label: "Timeline", hint: "Objects from any number of sets, as events in time order" },
   { key: "CanvasDatasetTable", label: "Dataset table", hint: "Preview rows from a dataset" },
   { key: "CanvasObjectTable", label: "Object table", hint: "Live rows from an ontology object type" },
   { key: "CanvasObjectCards", label: "Card list", hint: "The same objects as cards, one heading each" },

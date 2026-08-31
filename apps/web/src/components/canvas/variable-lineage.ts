@@ -97,6 +97,10 @@ export const NESTED_PROP_DIRECTION: Record<string, "read" | "write"> = {
   // completion is read and never stored, and an arrow pointing the other way
   // would say the opposite in the one view built to be trusted while debugging.
   "steps.completedVariable": "read",
+  // p.348: a layer *displays* the set it names, so the set is upstream of the
+  // widget - the same direction as every other `objectSetVariable`, which is
+  // why the flat catalogue calls that one a read too.
+  "layers.objectSetVariable": "read",
 };
 
 /** The direction of a reference `referencesOf` reported, nested or not. */

@@ -49,8 +49,17 @@ const TRIGGERS: {
   {
     on: "row_select",
     label: "Row selected",
-    widgets: ["CanvasObjectTable", "CanvasObjectCards", "CanvasMap"],
-    labels: { CanvasMap: "Pin selected", CanvasObjectCards: "Card selected" },
+    widgets: [
+      "CanvasObjectTable", "CanvasObjectCards", "CanvasMap", "CanvasTimeline",
+    ],
+    labels: {
+      CanvasMap: "Pin selected", CanvasObjectCards: "Card selected",
+      // p.349's "On active timeline event selection". **The same trigger, not
+      // a second one** - the comment on `labels` above argues exactly this: a
+      // second trigger name meaning "an object was selected" would be a second
+      // thing every document, panel and refusal has to know about.
+      CanvasTimeline: "Event selected",
+    },
   },
   {
     on: "change",
