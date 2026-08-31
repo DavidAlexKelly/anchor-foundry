@@ -788,32 +788,58 @@ async def group_object_set(
     filters: tuple[Any, ...],
     property_name: str,
     limit: int,
-) -> tuple[list[tuple[str, int]], int]:
-    """How many in each distinct value of one property, Postgres edition
-    (roadmap 1.5).
+    aggregation: "Any" = None,
+) -> "tuple[list[tuple[str, int, float | int | None]], int]":
+    """One number per distinct value of a property, Postgres edition (roadmap
+    1.5; §227's metric).
 
-    Ordered by count descending *then value ascending*. The second key is not
-    decoration: without it, ties fall to whatever order each store happens to
-    produce, so two deployments would draw the same data differently and one of
-    them would look wrong to somebody who knew the other.
+    Without an `aggregation` this is p.310's `count` and the shape it has always
+    had. With one it is p.310's other five: each bucket also carries the
+    **metric** that sizes a pie's slice.
 
-    Rows whose property is absent are excluded rather than grouped under an
-    empty label - OpenSearch's terms aggregation skips missing fields, and a
-    bar labelled "" appearing on one store only is exactly the disagreement
-    this whole module is arranged to avoid.
+    Ordered by count descending *then value ascending* - or by the metric, when
+    there is one, since that is what a slice's size actually is and truncation
+    has to keep the *largest* slices rather than the most populous. The second
+    key is not decoration either way: without it, ties fall to whatever order
+    each store happens to produce, so two deployments would draw the same data
+    differently and one of them would look wrong to somebody who knew the other.
+
+    Rows whose *group* property is absent are excluded rather than grouped under
+    an empty label - OpenSearch's terms aggregation skips missing fields, and a
+    bar labelled "" appearing on one store only is exactly the disagreement this
+    whole module is arranged to avoid.
+
+    **And rows with no value for the *metric* property are excluded too.** A
+    slice sized by average capacity is a slice of the objects that have a
+    capacity: keeping them would leave buckets whose metric is null, and the two
+    stores order those differently - Postgres puts NULL where you tell it, while
+    OpenSearch's `sum` of nothing is `0.0` and sorts among the real numbers. It
+    is the same rule the group property already follows, applied to the second
+    property the question now has.
     """
+    agg = _named(aggregation) if aggregation is not None else None
     predicate, params = _set_predicate(object_type_id, filters)
     params["prop"] = property_name
     params["limit"] = max(1, limit)
+    metric, present, order = "NULL", "", "n DESC, value ASC"
+    if agg is not None and agg.numeric:
+        params["aggprop"] = agg.property
+        value = _comparable_sql(
+            "jsonb_extract_path_text(i.properties, :aggprop)", agg.data_type
+        )
+        metric = f"{agg.name}({value})"
+        present = f" AND {value} IS NOT NULL"
+        order = "metric DESC, value ASC"
     rows = await fetch_all(
         conn,
         f"""
-        SELECT jsonb_extract_path_text(i.properties, :prop) AS value, count(*) AS n
+        SELECT jsonb_extract_path_text(i.properties, :prop) AS value,
+               count(*) AS n, {metric} AS metric
           FROM object_instances i
          WHERE {predicate}
-           AND jsonb_extract_path_text(i.properties, :prop) IS NOT NULL
+           AND jsonb_extract_path_text(i.properties, :prop) IS NOT NULL{present}
          GROUP BY 1
-         ORDER BY n DESC, value ASC
+         ORDER BY {order}
          LIMIT :limit
         """,
         params,
@@ -823,12 +849,13 @@ async def group_object_set(
         f"""
         SELECT count(DISTINCT jsonb_extract_path_text(i.properties, :prop)) AS n
           FROM object_instances i
-         WHERE {predicate}
+         WHERE {predicate}{present}
         """,
         {k: v for k, v in params.items() if k != "limit"},
     )
     return (
-        [(str(r["value"]), int(r["n"])) for r in rows],
+        [(str(r["value"]), int(r["n"]),
+          _number(r["metric"], agg) if agg is not None else None) for r in rows],
         int(total_row["n"]) if total_row else 0,
     )
 

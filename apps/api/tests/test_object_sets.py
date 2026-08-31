@@ -1031,6 +1031,46 @@ async def test_a_matching_document_with_no_value_is_not_an_aggregate_of_zero(
         await store.close()
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("name", ["sum", "avg", "min", "max"])
+async def test_the_two_stores_size_the_same_slices(opensearch: str, name: str) -> None:
+    """p.310's Aggregation across the store boundary (§227).
+
+    A grouped metric is where the two have the most room to disagree: each has
+    to exclude the documents with nothing to measure, compute a metric per
+    bucket, and order the buckets by it - three mechanisms on each side with one
+    rule between them. The expectation is computed from the rows here, so it is
+    the rule rather than a transcription of either store.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-slices", object_type_id=type_id, source_id=source_id,
+            rows=TYPED_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=TYPED_DECLARED,
+        )
+        agg = object_sets.parse_aggregation(name, "reading", property_types=TYPED_TYPES)
+        buckets, _ = await store.group_object_set(
+            search_prefix="ws-slices", object_type_id=type_id, filters=(),
+            property_name="seen", limit=object_sets.MAX_GROUPS, aggregation=agg,
+        )
+        # Every `seen` is distinct in this fixture, so each bucket holds one
+        # row - which makes the metric that row's own reading whatever the
+        # aggregation is, and the ordering purely a question of the metric.
+        readings = sorted((p["reading"] for _, p in TYPED_ROWS if "reading" in p),
+                          reverse=True)
+        assert [b[2] for b in buckets] == readings
+        # The row with no reading is not a slice, on this store as on the other.
+        assert len(buckets) == len(readings)
+        assert all(b[1] == 1 for b in buckets), "a bucket stopped holding one row"
+    finally:
+        await store.close()
+
+
 # ---- through the API (Postgres store, the local-dev default) -----------------
 @pytest.fixture(scope="module")
 def seeded(client: TestClient, fx: Fixture) -> str:
@@ -1849,6 +1889,102 @@ def group(client: TestClient, fx: Fixture, definition: dict, **kw):
     )
 
 
+# ---- p.310's Aggregation, per slice (§227) -----------------------------------
+# `band` groups the typed fixture into slices; `reading` is what sizes them.
+# The two are deliberately *not* correlated: the band with the most objects is
+# not the band with the largest total, so "ordered by count" and "ordered by
+# metric" produce different pies and a test can tell which one it got.
+def test_a_grouped_metric_sizes_the_slices_rather_than_counting_them(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    r = group(client, fx, {"object_type_id": typed, "filters": []},
+              property="seen", aggregation="sum", aggregation_property="reading")
+    assert r.status_code == 200, r.text
+    groups = r.json()["groups"]
+    # Every bucket carries all three: a slice's label, how many objects are in
+    # it, and how big it is. A pie needs the third and a legend often shows the
+    # second, so dropping either would make one of them a second request.
+    assert all({"value", "count", "metric"} <= set(g) for g in groups)
+    metrics = [g["metric"] for g in groups]
+    assert metrics == sorted(metrics, reverse=True), "not ordered by the metric"
+
+
+def test_grouping_without_an_aggregation_is_unchanged(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The shape this endpoint has always had, still counting and still ordered
+    by count - because every existing caller sends no aggregation and must keep
+    getting the chart it got before."""
+    r = group(client, fx, {"object_type_id": seeded, "filters": []}, property="region")
+    assert r.status_code == 200, r.text
+    groups = r.json()["groups"]
+    counts = [g["count"] for g in groups]
+    assert counts == sorted(counts, reverse=True)
+    # `None`, not the count: "how many" and "how much" are the two questions
+    # p.310 offers, and a reader has to be able to tell which one they got.
+    assert all(g["metric"] is None for g in groups)
+
+
+def test_the_metric_is_the_aggregate_of_each_bucket_s_own_rows(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """The sum of the slices is the sum of the set - which is the arithmetic a
+    pie makes a claim about, and the one thing a per-bucket aggregation can get
+    wrong while every bucket still looks plausible."""
+    r = group(client, fx, {"object_type_id": typed, "filters": []},
+              property="seen", aggregation="sum", aggregation_property="reading")
+    total = aggregate(client, fx, {"object_type_id": typed, "filters": []},
+                      aggregation="sum", property="reading").json()["value"]
+    assert sum(g["metric"] for g in r.json()["groups"]) == total
+
+
+def test_a_bucket_with_nothing_to_measure_is_not_a_bucket(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """**The rule that keeps the two stores in the same order.**
+
+    One fixture row has a `seen` but no `reading`, so grouping by `seen` and
+    summing `reading` would leave a bucket with no values in it. Postgres gives
+    that bucket NULL and OpenSearch's `sum` gives it `0.0`, and the two sort it
+    to opposite ends of the chart - a slice that is first on one deployment and
+    last on the other.
+
+    So the objects with no value for the aggregated property are filtered out
+    of the whole question, which is also the honest reading: a slice sized by
+    total reading is a slice of the objects that have a reading. It is the same
+    rule the *group* property has always followed, applied to the second
+    property the question now has.
+    """
+    without = [props for _, props in TYPED_ROWS if "reading" not in props]
+    assert len(without) == 1, "the fixture stopped having a row without a reading"
+
+    # Compared as *sets of buckets* rather than by naming the value: `seen` is
+    # a declared timestamp, so the sync coerces it and the bucket label is not
+    # the string the fixture wrote. Asserting on the difference says the same
+    # thing without depending on a stored format.
+    counted = group(client, fx, {"object_type_id": typed, "filters": []}, property="seen")
+    summed = group(client, fx, {"object_type_id": typed, "filters": []},
+                   property="seen", aggregation="sum", aggregation_property="reading")
+    labels = {g["value"] for g in counted.json()["groups"]}
+    sized = {g["value"] for g in summed.json()["groups"]}
+
+    assert len(labels - sized) == 1, "exactly the bucket with nothing to measure goes"
+    assert not sized - labels, "the aggregation invented a bucket"
+    assert all(g["metric"] is not None for g in summed.json()["groups"])
+
+
+def test_a_grouped_metric_needs_the_declared_type_too(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """The same refusal `/aggregate` makes, because it is the same validation -
+    a grouped sum over a string property would disagree between the stores
+    exactly as an ungrouped one would."""
+    r = group(client, fx, {"object_type_id": seeded, "filters": []},
+              property="region", aggregation="sum", aggregation_property="capacity")
+    assert r.status_code == 422, r.text
+    assert "is a string property" in r.json()["detail"]
+
+
 def test_grouping_counts_each_value_and_orders_biggest_first(
     client: TestClient, fx: Fixture, seeded: str
 ) -> None:
@@ -1940,7 +2076,12 @@ async def test_both_stores_group_a_set_the_same_way(opensearch: str, case: dict)
             value = p.get(case["property"])
             if value is not None:
                 tally[str(value)] = tally.get(str(value), 0) + 1
-        expected = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+        # `None` for the metric: no aggregation was asked for, and a bucket
+        # says so rather than substituting the count - "how many" and "how much"
+        # are the two questions p.310 offers and a reader has to be able to tell
+        # which one they were given.
+        expected = [(value, count, None)
+                    for value, count in sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))]
 
         buckets, distinct_total = await store.group_object_set(
             search_prefix="ws-group-test",

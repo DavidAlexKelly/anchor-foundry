@@ -2921,11 +2921,24 @@ class ObjectSetGroupIn(BaseModel):
     definition: dict[str, Any]
     property: str = Field(min_length=1, max_length=200)
     limit: int = Field(default=object_sets.MAX_GROUPS, ge=1, le=object_sets.MAX_GROUPS)
+    #: p.310's Aggregation, per bucket. `count` is the default and the shape
+    #: this endpoint has always had.
+    aggregation: str = "count"
+    #: The property the aggregation runs over - a *second* property, distinct
+    #: from the one being grouped by. p.310's panel has both.
+    aggregation_property: str | None = None
 
 
 class ObjectSetGroupOut(BaseModel):
     groups: list[dict[str, Any]]
-    """`[{value, count}]`, count descending then value ascending."""
+    """`[{value, count, metric}]` - count descending then value ascending, or
+    **metric** descending when an aggregation was asked for, since that is what
+    sizes a slice and truncation has to keep the largest ones.
+
+    `metric` is `None` when no aggregation was asked for. It is never `None`
+    *within* a bucket otherwise: documents with no value for the aggregated
+    property are filtered out of the whole question, so a bucket exists only if
+    it has something to measure."""
     distinct_total: int
     """How many distinct values the set actually has. `truncated` is derived
     from it rather than from "did we fill the page", which would be wrong on a
@@ -2941,13 +2954,25 @@ async def group_object_set(
     """How many in each distinct value of one property - what a chart over a
     set plots (roadmap 1.5).
 
-    A grouped *count* only. A grouped sum has the same problem a plain sum
-    does: instance properties are stored untyped, so the two stores would
-    disagree about what the bar heights are. See `object_sets`.
+    p.310's **Aggregation**, per bucket: a count, or one of §226's four numeric
+    ones over a second property. A pie's slices are sized by this, which is why
+    the ordering follows it - the top 20 of 300 has to be the twenty largest
+    slices rather than the twenty most populous.
     """
-    definition = object_sets.parse(body.definition)
+    type_id = object_sets.object_type_id_of(body.definition)
     async with user_connection(access.auth.user_id) as conn:
-        await ontology_service.get_type(conn, access.workspace_id, definition.object_type_id)
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        property_types = await _declared_types(conn, type_id)
+        try:
+            definition = object_sets.parse(body.definition, property_types=property_types)
+            aggregation = object_sets.parse_aggregation(
+                body.aggregation, body.aggregation_property,
+                property_types=property_types,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         buckets, distinct_total = await instance_store.store_for(conn).group_object_set(
             search_prefix=prefix,
@@ -2955,9 +2980,11 @@ async def group_object_set(
             filters=definition.filters,
             property_name=body.property,
             limit=body.limit,
+            aggregation=aggregation if aggregation.numeric else None,
         )
     return ObjectSetGroupOut(
-        groups=[{"value": value, "count": count} for value, count in buckets],
+        groups=[{"value": value, "count": count, "metric": metric}
+                for value, count, metric in buckets],
         distinct_total=distinct_total,
         truncated=distinct_total > len(buckets),
     )
@@ -3049,23 +3076,27 @@ async def cross_tab_object_set(
             **shared,
             row_property=row_property,
             column_property=column_property,
-            row_values=tuple(value for value, _ in row_buckets),
-            column_values=tuple(value for value, _ in column_buckets),
+            row_values=tuple(value for value, _, _ in row_buckets),
+            column_values=tuple(value for value, _, _ in column_buckets),
         )
         total = await store.aggregate_object_set(
             **shared, aggregation="count", property_name=None
         )
 
     return ObjectSetCrossTabOut(
-        rows=[ObjectSetAxis(value=value, count=count) for value, count in row_buckets],
-        columns=[ObjectSetAxis(value=value, count=count) for value, count in column_buckets],
+        # A cross-tab's axes are counts, never metrics: p.310's aggregation is a
+        # pie's setting, and a grid whose row labels were sized by one thing
+        # while its cells counted another would be two questions in one table.
+        rows=[ObjectSetAxis(value=value, count=count) for value, count, _ in row_buckets],
+        columns=[ObjectSetAxis(value=value, count=count)
+                 for value, count, _ in column_buckets],
         row_distinct_total=row_distinct,
         column_distinct_total=column_distinct,
         rows_truncated=row_distinct > len(row_buckets),
         columns_truncated=column_distinct > len(column_buckets),
         cells=[
-            [cells.get((row, column), 0) for column, _ in column_buckets]
-            for row, _ in row_buckets
+            [cells.get((row, column), 0) for column, _, _ in column_buckets]
+            for row, _, _ in row_buckets
         ],
         total=total,
     )

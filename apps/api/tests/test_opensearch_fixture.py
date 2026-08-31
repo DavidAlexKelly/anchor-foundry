@@ -509,3 +509,51 @@ def test_an_empty_sum_is_zero_and_an_empty_min_is_null(server):
                                   "m": {"min": {"field": "capacity"}}}})
     assert body["aggregations"]["s"]["value"] == 0.0
     assert body["aggregations"]["m"]["value"] is None
+
+
+def test_terms_can_be_ordered_by_a_sub_aggregation(server):
+    """§227's pie: slices ordered by how big they are, not by how many objects
+    are in them. A real terms aggregation takes `{"<sub-agg>": "desc"}`, and a
+    fixture that ignored it would sort by count while the cluster sorted by
+    metric - the two drawing different charts from the same data."""
+    name = index("typed")
+    # `small` has two objects and a small total; `big` has one and a large one.
+    put(name, "1", {"primary_key": "a", "label": "small", "capacity": 1})
+    put(name, "2", {"primary_key": "b", "label": "small", "capacity": 2})
+    put(name, "3", {"primary_key": "c", "label": "big", "capacity": 100})
+    _, body = agg(name, {"aggs": {"groups": {
+        "terms": {"field": "label.keyword", "size": 10,
+                  "order": [{"metric": "desc"}, {"_key": "asc"}]},
+        "aggs": {"metric": {"sum": {"field": "capacity"}}},
+    }}})
+    buckets = body["aggregations"]["groups"]["buckets"]
+    assert [b["key"] for b in buckets] == ["big", "small"]
+    # Ordered by count it would be the other way round, which is what makes
+    # this assertion about the order rather than about the numbers.
+    assert [b["doc_count"] for b in buckets] == [1, 2]
+
+
+def test_a_sub_aggregation_order_keeps_its_key_tiebreak_ascending(server):
+    """The order the store asks for is `[{metric: desc}, {_key: asc}]`, and
+    those are **two directions**. One `reverse=True` over a compound key gets
+    the first right and silently flips the second, so equal slices come back
+    Z-A where a real cluster gives A-Z."""
+    name = index("typed")
+    for key, label in (("1", "zulu"), ("2", "alpha"), ("3", "mike")):
+        put(name, key, {"primary_key": key, "label": label, "capacity": 5})
+    _, body = agg(name, {"aggs": {"groups": {
+        "terms": {"field": "label.keyword", "size": 10,
+                  "order": [{"metric": "desc"}, {"_key": "asc"}]},
+        "aggs": {"metric": {"sum": {"field": "capacity"}}},
+    }}})
+    assert [b["key"] for b in body["aggregations"]["groups"]["buckets"]] == [
+        "alpha", "mike", "zulu"
+    ]
+
+
+def test_an_exists_clause_selects_the_documents_with_a_value(server):
+    """How §227 asks for the objects a slice can actually be sized by."""
+    name = index("typed")
+    put(name, "1", {"primary_key": "has", "capacity": 40})
+    put(name, "2", {"primary_key": "hasnt"})
+    assert keys(search(name, {"exists": {"field": "capacity"}})[1]) == ["has"]
