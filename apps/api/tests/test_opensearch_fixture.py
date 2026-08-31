@@ -290,3 +290,85 @@ def test_the_keyword_subfield_comes_from_the_template_not_from_luck(server):
     # compares as such - the untyped behaviour every property has today.
     put(name, "2", {"primary_key": "b", "properties": {"dept": 250}})
     assert keys(search(name, {"term": {"properties.dept.keyword": "250"}})[1]) == ["b"]
+
+
+# ---- 6. what one index per object type needs (decision 0006 §1) --------------
+STRICT_MAPPING = {
+    "mappings": {
+        "properties": {
+            "object_type_id": {"type": "keyword"},
+            "primary_key": {"type": "keyword"},
+            "properties": {
+                "type": "object",
+                "dynamic": "strict",
+                "properties": {"capacity": {"type": "long"}},
+            },
+        }
+    }
+}
+
+
+def test_a_property_the_mapping_does_not_declare_is_refused(server):
+    """`dynamic: "strict"` is the point of declaring types at all: left
+    dynamic, the first document carrying an undeclared property decides its
+    type for every document after it. A fixture that stored it anyway would
+    make the declaration look like it was working while the cluster it stands
+    in for refused the write."""
+    name = index("strict", STRICT_MAPPING)
+    status, body = put(name, "1", {"primary_key": "a", "properties": {"capacity": 10}})
+    assert status == 200 and not body["errors"]
+
+    status, body = put(name, "2", {"primary_key": "b",
+                                   "properties": {"capacity": 10, "surprise": "x"}})
+    assert status == 200, "a bulk reports per item rather than failing the call"
+    assert body["errors"], "the undeclared property was accepted"
+    assert "strict" in body["items"][0]["update"]["error"]["reason"]
+    # And the document is not half-stored: a cluster refuses the whole thing.
+    assert keys(search(name, {"match_all": {}})[1]) == ["a"]
+
+
+def test_creating_an_index_that_exists_is_refused(server):
+    """What a real cluster answers, with `resource_already_exists_exception`.
+    The fixture used to overwrite it - so a store that had lost its
+    exists-check passed here and would have destroyed a live mapping against a
+    domain."""
+    name = index("twice", STRICT_MAPPING)
+    status, body = call("PUT", f"/{name}", {"mappings": {}})
+    assert status == 400
+    assert body["error"]["type"] == "resource_already_exists_exception"
+    # The mapping it already had is intact, which is the thing the refusal
+    # protects: a silent overwrite would leave the index accepting anything.
+    _, mapping = call("GET", f"/{name}/_mapping")
+    assert "capacity" in mapping[name]["mappings"]["properties"]["properties"]["properties"]
+
+
+def test_a_pattern_reaches_only_the_indices_it_names(server):
+    """The workspace explorer searches `{prefix}objects-*`, and the prefix is
+    the workspace boundary (db 0002). A pattern that reached further would make
+    the explorer return another tenant's objects - structural isolation being
+    the whole reason the index is named from the prefix at all."""
+    call("POST", "/__reset")
+    for name in ("ws-a-objects-1", "ws-a-objects-2", "ws-b-objects-1",
+                 "ws-a-object-instances"):
+        call("PUT", f"/{name}", {})
+        put(name, "1", {"primary_key": name, "properties": {}})
+
+    _, found = search("ws-a-objects-*", {"match_all": {}})
+    assert keys(found) == ["ws-a-objects-1", "ws-a-objects-2"], (
+        "the pattern crossed a workspace, or swept in the index it replaces"
+    )
+
+
+def test_a_hit_reports_the_index_it_came_from(server):
+    """Not the pattern it was asked for. A search across several indices whose
+    hits all named the pattern would look single-index in every assertion - and
+    `_index` is the only thing on a hit that says which type's index answered."""
+    call("POST", "/__reset")
+    for name in ("ws-a-objects-1", "ws-a-objects-2"):
+        call("PUT", f"/{name}", {})
+        put(name, "1", {"primary_key": name, "properties": {}})
+
+    _, found = search("ws-a-objects-*", {"match_all": {}})
+    assert {hit["_index"] for hit in found["hits"]["hits"]} == {
+        "ws-a-objects-1", "ws-a-objects-2"
+    }

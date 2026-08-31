@@ -545,6 +545,16 @@ class Handler(BaseHTTPRequestHandler):
                                              {"mappings": json.loads(raw or "{}")})
             return self._send(200, {"acknowledged": True})
         index = path
+        if index in INDICES:
+            # **A real cluster refuses to create an index that exists**, with
+            # `resource_already_exists_exception`. The fixture used to overwrite
+            # it, which made a store that had lost its exists-check pass here
+            # and destroy a live mapping against a domain - the exact class of
+            # gap decision 0006 §7 added mapping enforcement to close.
+            return self._send(400, {"error": {
+                "type": "resource_already_exists_exception",
+                "reason": f"index [{index}] already exists",
+            }})
         INDICES.setdefault(index, {})
         # Remembered rather than discarded: everything below compares by it.
         MAPPINGS[index] = json.loads(raw or "{}")

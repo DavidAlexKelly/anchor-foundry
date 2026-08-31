@@ -168,6 +168,42 @@ async def test_stale_instances_are_removed_and_others_are_not(store) -> None:
 
 
 @pytest.mark.anyio
+async def test_declaring_a_new_property_widens_the_index(store) -> None:
+    """**Creating is not the only thing an upsert has to do.** Somebody adds a
+    property to a type that already has instances, then the next sync carries
+    it - and under `dynamic: "strict"` a mapping that was only ever *created*
+    refuses that document. The refusal is correct in general (0006 §5) and
+    completely wrong here: the property is declared, it is simply newer than
+    the index.
+
+    A *changed* type is the other case and is not this: OpenSearch cannot remap
+    a field in place, so that is a reindex (0006 §4) with a cost that belongs
+    in the impact report rather than inside a sync.
+    """
+    type_id, source_id = uuid.uuid4(), uuid.uuid4()
+    now = datetime.now(timezone.utc)
+    await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=[("1", {"full_name": "Ada"})], synced_at=now,
+        declared=[{"api_name": "full_name", "data_type": "string"}],
+    )
+
+    widened = [*DECLARED, {"api_name": "triage_note", "data_type": "string"}]
+    await store.upsert_instances(
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        rows=[("2", {"full_name": "Grace", "rank": 2, "triage_note": "call"})],
+        synced_at=now + timedelta(seconds=1), declared=widened,
+    )
+    rows, total = await store.list_for_type(
+        search_prefix=PREFIX, object_type_id=type_id, limit=50, offset=0
+    )
+    assert total == 2
+    added = next(r for r in rows if r["primary_key"] == "2")
+    assert added["properties"]["triage_note"] == "call"
+    assert added["properties"]["rank"] == 2
+
+
+@pytest.mark.anyio
 async def test_reads_are_scoped_by_object_type(store) -> None:
     mine, theirs, source_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     now = datetime.now(timezone.utc)
@@ -313,6 +349,42 @@ async def test_the_migration_keeps_the_document_id(store) -> None:
         search_prefix=prefix, object_type_id=uuid.UUID(type_id), limit=50, offset=0
     )
     assert rows[0]["id"] == instance_store._doc_id(uuid.UUID(SOURCE), "1")
+
+
+@pytest.mark.anyio
+async def test_the_migration_carries_an_id_it_could_not_have_derived(store) -> None:
+    """**The id is copied, not recomputed**, and this is the only fixture that
+    can tell the difference: every document the current code writes already has
+    the derived id, so recomputing one gives the same answer and a test seeded
+    the ordinary way proves nothing.
+
+    A deployment predating the derivation rule has documents with random ids,
+    and `action_runs.instance_id` points at them. Renumbering those loses which
+    instance every historical write-back touched - the FK is ON DELETE SET
+    NULL, so it degrades to null rather than failing loudly.
+    """
+    prefix = "ws-split-old-ids-"
+    type_id = str(uuid.uuid4())
+    legacy = instance_mapping.legacy_index_name(prefix)
+    old_id = "9f1d2c3b-4a5e-6f70-8192-a3b4c5d6e7f8"
+    assert old_id != instance_store._doc_id(uuid.UUID(SOURCE), "1"), "the fixture is vacuous"
+
+    await store._client.indices.create(index=legacy, body={"mappings": {}})
+    await store._client.bulk(refresh="wait_for", body=[
+        {"update": {"_index": legacy, "_id": old_id}},
+        {"doc": {"object_type_id": type_id, "source_id": SOURCE, "primary_key": "1",
+                 "properties": {"full_name": "Ada"},
+                 "updated_at": "2026-01-01T00:00:00+00:00"},
+         "doc_as_upsert": True},
+    ])
+
+    await store.adopt_legacy_index(
+        search_prefix=prefix, object_type_id=uuid.UUID(type_id), declared=DECLARED
+    )
+    rows, _ = await store.list_for_type(
+        search_prefix=prefix, object_type_id=uuid.UUID(type_id), limit=50, offset=0
+    )
+    assert [r["id"] for r in rows] == [old_id]
 
 
 @pytest.mark.anyio
