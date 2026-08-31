@@ -4370,9 +4370,38 @@ same: nothing exercised what it claimed.
 
 ---
 
-**MUTANT_SUMMARY**
+**35 mutants across three layers — 20 on the reference semantics and validation, 8 on the
+Postgres store, 7 on the OpenSearch one — 35 caught, 0 survivors, 0 hangs, 0 no-ops** after
+four rounds. The first round found **fifteen**, which is the most this session and worth
+saying plainly: the tests looked thorough and were not.
 
-**TEST_COUNTS**
+They fell into three kinds, and only the first is the ordinary sort of gap:
+
+* **Nothing exercised `comparable` directly.** Every rule inside it survived — a string
+  comparing numerically, an unparseable number becoming zero, a blank timestamp becoming the
+  epoch. Each is a silent widening: `"n/a"` is not less than 40, and a date nobody can read is
+  not before everything.
+* **The fixture had four distinct, parseable values**, so the rules about ties and absences
+  asserted nothing at all. That is the under-the-boundary fixture for the **fifth** time this
+  session (§212, §217, §218, §219). Fixing it turned up the OpenSearch fixture server ranking
+  missing values *backwards* — `missing: _last` means last in the **result**, so it has to
+  compare smaller under a descending sort, and it was putting the unusable rows at the top of
+  every descending page.
+* **Two survivors were cases a passing test cannot distinguish.** Results cannot tell a
+  normalised bound from a raw one, because both stores coerce generously — what differs is what
+  the cluster is *asked*, and for a store gateway the request it forms is the contract. And the
+  timezone test proved the *stored* value was read as UTC while proving nothing about the
+  **bound**, because every bound it used already carried an offset. **A test for "this value is
+  pinned" needs a value that is not already pinned by something else.**
+
+One mutant could not be made to fail at all, and that was the code's fault rather than the
+test's: `text.replace("Z", "+00:00")` before `fromisoformat`, which has taken a trailing `Z`
+itself since Python 3.11 — and this runs 3.11 locally and 3.12 in CI. Removed rather than
+recorded as equivalent. **A check you cannot make fail is not a check, and the same standard
+applies to the code being checked.**
+
+**1632 API tests** (was 1616 at §221's first commit, 1578 at §220), 2 skipped; 1175 unit and
+559 browser unchanged — this unit is entirely below the API.
 
 Two of 0006's four features remain: the **numeric aggregations** (`sum`, `avg`, `min`, `max`)
 and **§3's map bounding box**. Both are now possible for the same reason these were, and
@@ -5889,6 +5918,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A test for "this value is pinned" needs a value that is not already pinned by something else.** §221's timezone test ran the same query under UTC, New York and Kathmandu and required one answer — and proved it of the *stored* value while proving nothing about the **bound**, because every bound it used already carried an offset. Raw text and a normalised instant are the same value there, so the mutant that skipped normalisation survived a test written to catch exactly it. A bare `2026-03-01` is the case, and it fails under Kathmandu. The general shape: an input that satisfies the rule *by accident* asserts nothing about the code meant to enforce it, and the tell is that the input already has the property the code is supposed to give it.
 
 - **A new optional argument is a permission unless you make it a refusal.** §221 gave `object_sets.parse` an optional `property_types`, and the whole correctness of the change is which way round its *absence* means: a caller that has not resolved the ontology has checked no property's type, so it gets the old behaviour of refusing every ordered comparison. The tempting default is the other one — absent means unrestricted, so nothing breaks — and it is exactly wrong, because **the caller that did not pass the new argument is the caller that checked nothing.** The same shape appears wherever validation grows a dependency: ask what the callers you did not update are now allowed to do.
 
