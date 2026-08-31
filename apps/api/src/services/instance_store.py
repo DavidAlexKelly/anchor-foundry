@@ -205,15 +205,18 @@ class InstanceStoreGateway(Protocol):
         filters: "tuple[Any, ...]",
         property_name: str,
         limit: int,
-    ) -> tuple[list[tuple[str, int]], int]:
-        """How many in each distinct value of one property - what a chart over
-        a set plots (roadmap 1.5).
+        aggregation: "Any" = None,
+    ) -> "tuple[list[tuple[str, int, float | int | None]], int]":
+        """One number per distinct value of a property - what a chart over a set
+        plots (roadmap 1.5; §227's metric).
 
-        Returns `(buckets, distinct_total)`, ordered by count descending then
-        value ascending. **Both parts of that ordering matter**: count alone
-        leaves ties to each store's own tie-break, so two deployments would
-        draw the same data in a different order and one of them would look
-        wrong to whoever knew the other.
+        Returns `(buckets, distinct_total)` where a bucket is
+        `(value, count, metric)`. Ordered by count descending then value
+        ascending - or by the **metric** when there is one, since that is what
+        sizes a slice and truncation has to keep the largest. **Both parts of
+        that ordering matter**: one key alone leaves ties to each store's own
+        tie-break, so two deployments would draw the same data in a different
+        order and one of them would look wrong to whoever knew the other.
         """
         ...
 
@@ -909,20 +912,38 @@ class OpenSearchInstanceStore:
         filters: tuple[Any, ...],
         property_name: str,
         limit: int,
-    ) -> tuple[list[tuple[str, int]], int]:
-        """Roadmap 1.5. A terms aggregation on the `.keyword` subfield, with an
-        explicit two-key order so ties do not depend on the store."""
+        aggregation: "Any" = None,
+    ) -> "tuple[list[tuple[str, int, float | int | None]], int]":
+        """Roadmap 1.5; §227's metric. A terms aggregation on the `.keyword`
+        subfield, with an explicit two-key order so ties do not depend on the
+        store."""
+        from .instances import _named, _number
+
+        agg = _named(aggregation) if aggregation is not None else None
         field = f"properties.{property_name}.keyword"
+        clauses = self._set_clauses(object_type_id, filters)
+        order: list[dict[str, str]] = [{"_count": "desc"}, {"_key": "asc"}]
+        sub: dict[str, Any] = {}
+        if agg is not None and agg.numeric:
+            metric_field = f"properties.{agg.property}"
+            # **The documents with no value for the metric are filtered out of
+            # the whole query**, not just out of the metric - which is what
+            # keeps the two stores in the same order. Left in, a bucket whose
+            # documents all lack the property has a null metric on Postgres and
+            # a `0.0` sum here, and the two sort it to opposite ends. It is
+            # also the honest reading: a slice sized by average capacity is a
+            # slice of the objects that have a capacity.
+            clauses = {**clauses, "filter": [*clauses.get("filter", []),
+                                             {"exists": {"field": metric_field}}]}
+            sub = {"metric": {agg.name: {"field": metric_field}}}
+            order = [{"metric": "desc"}, {"_key": "asc"}]
         body: dict[str, Any] = {
-            "query": {"bool": self._set_clauses(object_type_id, filters)},
+            "query": {"bool": clauses},
             "size": 0,
             "aggs": {
                 "groups": {
-                    "terms": {
-                        "field": field,
-                        "size": limit,
-                        "order": [{"_count": "desc"}, {"_key": "asc"}],
-                    }
+                    "terms": {"field": field, "size": limit, "order": order},
+                    **({"aggs": sub} if sub else {}),
                 },
                 "distinct": {"cardinality": {"field": field}},
             },
@@ -932,7 +953,8 @@ class OpenSearchInstanceStore:
             ignore_unavailable=True,
         )
         buckets = [
-            (str(b["key"]), int(b["doc_count"]))
+            (str(b["key"]), int(b["doc_count"]),
+             _number(b["metric"]["value"], agg) if sub else None)
             for b in resp["aggregations"]["groups"]["buckets"]
         ]
         return buckets, int(resp["aggregations"]["distinct"]["value"])
@@ -1427,7 +1449,8 @@ class PostgresInstanceStore:
         filters: tuple[Any, ...],
         property_name: str,
         limit: int,
-    ) -> tuple[list[tuple[str, int]], int]:
+        aggregation: "Any" = None,
+    ) -> "tuple[list[tuple[str, int, float | int | None]], int]":
         from . import instances as instances_service
 
         return await instances_service.group_object_set(
@@ -1436,6 +1459,7 @@ class PostgresInstanceStore:
             filters=filters,
             property_name=property_name,
             limit=limit,
+            aggregation=aggregation,
         )
 
     async def cross_tab_object_set(

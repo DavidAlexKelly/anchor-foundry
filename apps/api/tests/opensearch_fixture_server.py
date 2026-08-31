@@ -384,6 +384,12 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
         return any(needle in value.lower() for value in haystack)
     if "match_all" in clause:
         return True
+    if "exists" in clause:
+        # "Has a value for this field", which is how §227 asks for the objects
+        # a slice can actually be sized by. A real cluster treats a document
+        # whose value failed to index as not existing; this fixture refuses
+        # such a document on write, so the two agree by a different route.
+        return _resolve(source, clause["exists"]["field"]) is not MISSING
     if "range" in clause:
         field, bounds = next(iter(clause["range"].items()))
         found = _resolve(source, field)
@@ -819,7 +825,44 @@ class Handler(BaseHTTPRequestHandler):
             # count desc, then key asc - the order the real terms aggregation
             # is asked for explicitly, so the fixture is not the reason a test
             # passes.
-            ordered = sorted(grouped.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+            #
+            # **Or by a sub-aggregation**, which is how §227 orders a pie's
+            # slices by their size rather than by how many objects are in them.
+            # A real terms aggregation takes `{"<sub-agg name>": "desc"}` in its
+            # order, and a fixture that ignored it would sort by count while the
+            # cluster sorted by metric - the two drawing different charts from
+            # the same data, which is the disagreement this file exists for.
+            order = spec["terms"].get("order")
+            metric_key = None
+            if isinstance(order, list):
+                first = next(iter(order[0].items()))
+                if first[0] not in ("_count", "_key"):
+                    metric_key = first
+            if metric_key is not None:
+                sub_name, direction = metric_key
+                sub_spec = (spec.get("aggs") or {}).get(sub_name)
+                if sub_spec is None:
+                    raise ValueError(f"order names {sub_name!r}, which is not an aggregation")
+
+                def metric_of(docs, _spec=sub_spec, _name=sub_name):
+                    return self._aggregate({_name: _spec}, docs)[_name]["value"]
+
+                # **Key ascending first, then a stable sort by the metric** -
+                # not one `reverse=True` over a compound key, which would
+                # reverse the tie-break too and order equal slices Z-A where a
+                # real cluster orders them A-Z. The order the store asks for is
+                # `[{metric: desc}, {_key: asc}]`, and those are two directions.
+                with_metric = [(k, v) for k, v in grouped.items()
+                               if metric_of(v) is not None]
+                without = [(k, v) for k, v in grouped.items() if metric_of(v) is None]
+                with_metric.sort(key=lambda kv: kv[0])
+                with_metric.sort(key=lambda kv: metric_of(kv[1]),
+                                 reverse=direction == "desc")
+                # A bucket with nothing to measure sorts last whichever way the
+                # metric runs, the rule every ordering in this platform follows.
+                ordered = with_metric + sorted(without, key=lambda kv: kv[0])
+            else:
+                ordered = sorted(grouped.items(), key=lambda kv: (-len(kv[1]), kv[0]))
             size = int(spec["terms"].get("size", 10))
             # Real OpenSearch rejects this rather than returning nothing, and
             # the difference matters: a caller that reaches a terms aggregation
