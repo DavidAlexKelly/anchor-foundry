@@ -45,7 +45,7 @@ export function useSetPage(
   definition: unknown,
   { pageSize, sort, variablesPending }: {
     pageSize: number;
-    sort?: string;
+    sort?: string | string[];
     variablesPending: boolean;
   },
 ): SetPage {
@@ -58,7 +58,12 @@ export function useSetPage(
   }
 
   const page = useQuery({
-    queryKey: ["canvas-object-set", key, pageSize, offset, sort ?? null],
+    // The sort is part of the key, and a **list** has to be serialised into
+    // it: two different orderings are two different pages, and an array
+    // compares by identity in a query key, so a fresh one each render would
+    // refetch every time.
+    queryKey: ["canvas-object-set", key, pageSize, offset,
+               Array.isArray(sort) ? sort.join(",") : sort ?? null],
     queryFn: () =>
       objApi.evaluateObjectSet(workspaceId, definition, { limit: pageSize, offset, sort }),
     // Not until the definition has resolved: asking the server to evaluate

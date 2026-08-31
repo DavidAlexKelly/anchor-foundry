@@ -329,27 +329,47 @@ def _bound_value(bound: Any) -> Any:
 
 
 def _sort_clause(sort: "Any") -> list[dict[str, Any]]:
-    """An `object_sets.Sort`, as an OpenSearch sort.
+    """p.223's **Default sort(s)**, as an OpenSearch sort: one, or several.
 
-    Every one of them ties on `primary_key` last, so two rows that share an
-    `updated_at` - which a bulk sync makes routine, since it writes them in the
-    same instant - come back in the same order on both stores and on every
+    The whole list ties on `primary_key` **once, last**, so two rows that share
+    an `updated_at` - which a bulk sync makes routine, since it writes them in
+    the same instant - come back in the same order on both stores and on every
     page. Without that, "the next page" can repeat a row it already showed and
     skip one it never did, and nothing about the symptom points at the sort.
+
+    Once, and last, for the reason `instances._order_by` gives: `primary_key` is
+    unique, so any sort field after it can never fire. A per-entry tie-break
+    would leave an author's second and third orderings configured and dead.
 
     A **property sort** (§221) needs the tie-break more, not less: `status` has
     five distinct values over a million rows, so almost every page boundary
     falls inside a group of equals.
     """
+    from . import object_sets
+
+    sorts = sort if isinstance(sort, tuple) else (sort,)
+    if not sorts:
+        sorts = (object_sets.DEFAULT_SORT,)
+    fields: list[dict[str, Any]] = []
+    for one in sorts:
+        fields.extend(_sort_field(one))
+    key_of = lambda s: s if isinstance(s, str) else s.key  # noqa: E731
+    if not any(key_of(one) in ("key", "-key") for one in sorts):
+        fields.append({"primary_key": "asc"})
+    return fields
+
+
+def _sort_field(sort: "Any") -> list[dict[str, Any]]:
+    """One ordering, with no tie-break of its own - see `_sort_clause`."""
     key = sort if isinstance(sort, str) else sort.key
     if key == "key":
         return [{"primary_key": "asc"}]
     if key == "-key":
         return [{"primary_key": "desc"}]
     if key == "oldest":
-        return [{"updated_at": "asc"}, {"primary_key": "asc"}]
+        return [{"updated_at": "asc"}]
     if isinstance(sort, str) or sort.property is None or key == "recent":
-        return [{"updated_at": "desc"}, {"primary_key": "asc"}]
+        return [{"updated_at": "desc"}]
     return [
         # `missing: _last` in **both** directions. OpenSearch's default already
         # puts missing values last, but a descending sort inverts a great many
@@ -360,7 +380,6 @@ def _sort_clause(sort: "Any") -> list[dict[str, Any]]:
         {f"properties.{sort.property}": {
             "order": "desc" if sort.descending else "asc", "missing": "_last",
         }},
-        {"primary_key": "asc"},
     ]
 
 

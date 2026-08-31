@@ -4290,6 +4290,150 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 225. p.223's default sorts, and a tie-break that has to be last (this session)
+
+p.223's **Default sort(s)** on the Object Table: "one or more default sorts", on either store,
+including p.223's own allowance that a builder may order by a **hidden property not
+displayed**.
+
+**Build-order item 4 said the sorting belonged with the ontology work rather than here, and
+that was right about where it started and wrong about what would be left.** §220 built the
+typed index and §221 the property sort, which is what made this possible - and the line read
+as though the widget half were the wiring afterwards. It was a **data-layer change of its own**:
+p.223 asks for "one or more" and both stores composed exactly one. That is the third time this
+item has under-read a line, after §206's "trivially cheap" Markdown and §208's "just CSS"
+display group.
+
+**The whole correctness of the unit is one rule: the key tie-break is appended once, after all
+of them.** `primary_key` is unique, so an ordering that carries its own tie-break decides every
+row and makes every sort after it unreachable - and both stores were shaped exactly that way,
+because with one sort it makes no difference. Postgres had four finished `ORDER BY` clauses
+(`updated_at DESC, primary_key ASC`); OpenSearch had per-entry field lists ending in
+`{"primary_key": "asc"}`. Composed naively, an author's second and third orderings would have
+been configured and dead, on a page that still looked like a page.
+
+The second trap was quieter and would not have looked like a bug at all: **two property sorts
+both bound `:sortprop`**, so the second would have overwritten the first and produced a page
+ordered by one property twice. Not an error - a plausible page. The bind is keyed by position
+now, which is the only reason `_order_fragment` takes one.
+
+**`parse_sorts` takes a string or a list**, because every stored module holds a string and
+decision 0002 says a document does not change when you open it. A list rather than a
+comma-delimited string: a delimiter would put a parsing rule between an author and their own
+property names, and the shapes a document can hold are worth being explicit about, because the
+document outlives this code. Repeats and anything past six are **refused rather than
+truncated** - silently dropping the seventh sort gives the author a page *nearly* in the order
+they asked for.
+
+**p.223's "if no sort is applied, the data is not sorted" is a stated divergence.** A page is a
+`LIMIT`/`OFFSET` over a set of millions, so an ordering the store does not state is one it may
+change between two requests: "unsorted" would mean page 2 repeating rows from page 1 and
+skipping others, which is the failure both stores' sort functions open by describing. Absence
+means the default ordering, which is deterministic. Foundry can afford the other answer; a
+paged reader cannot.
+
+The panel is a **row list rather than a select**, and the property is **typed rather than
+picked** - §222's call for its date property. p.223 also asks for something a column picker
+could not give: "module builders can sort on both visible property types shown within the table
+**or hidden property types not displayed**". A picker over the ontology's orderable properties
+is one decision for every widget that wants one (this, p.458's Object Dropdown sort, §222's
+Timeline), and building it three times privately is how three widgets end up disagreeing about
+what they offer.
+
+**37 mutants, 37 caught, 0 survivors, 0 hangs, 0 no-ops** - 15 on the browser model, 15 on the
+server, 7 on the widget. Four survived a first pass:
+
+* **An emptied property left the key rebuilt from an empty name rather than cleared.** On an
+  *ascending* row both produce `""`, which is why the test written for it asserted nothing; on
+  a descending one the shortcut produces a bare `-`, which is truthy, gets sent, and comes back
+  as a refusal about property types for what is an empty field. §221's rule again: an input
+  that satisfies the rule by accident asserts nothing about the code meant to enforce it.
+* **Three tie-break mutants survived because a redundant tie-break is invisible in results.**
+  The page is identical either way until a fixture happens to hold a tie in the right place -
+  and for the OpenSearch fixture it never did, because the rows are written in key order and a
+  stable sort leaves them there. That is the "accidentally stable" trap the Postgres paging
+  test already carried a comment about, met from the other side. Now asserted on the *clause*
+  each store builds: once, last, and absent when the sort is already the primary key. Plus the
+  sharper behavioural half - one sync writes every row in one instant, so `["recent",
+  "reading"]` ties every row on the first sort and the second has to decide the whole page.
+
+**And one of those three was not a hole in the tests at all - it was the harness's `-k`
+filter.** The test that catches it is named `..._tiebreak_appears_once_and_last_...` and the
+harness ran `-k sort`, so the one assertion written for that mutant was never executed. A
+filter is a second, invisible definition of "the tests for this unit", and it disagreed with
+the first.
+
+**1293 unit tests** (was 1292); **611 browser tests** (was 597); **1648 API tests** (was
+1632), 2 skipped.
+
+`workshop.md` item 4 has **inline editing** left, which is writeback with permissions behind it
+and its own unit. Decision 0006 still has the **numeric aggregations** and **§3's map bounding
+box** outstanding.
+
+---
+---
+---
+---
+
+### 224. Fifteen widgets out of scope, and a mark that says so (this session)
+
+Ten widgets dropped on the user's call, plus the five already dropped this session, all now
+carrying a **⊘** mark in `workshop.md` §10 with the reason on the row: Header text, Comments,
+Vega Chart, Audio and Transcription Display, Audio Recorder, Resource List, Linked Compass
+Resources, Data Freshness, Edit History, Observability Chart — and Status Tracker, Waterfall
+Chart, PDF Viewer, Video Display, Image Annotation.
+
+**Nothing was deleted, and that is the whole of the decision.** A deleted row makes the next
+tally read better and tells nobody that a call was taken; the parity README already says
+out-of-scope things are "named so that skipping them is a decision rather than an omission",
+and that rule did not previously reach *inside* an application in scope. A whole product is
+easy to put out of scope in one line. A widget inside Workshop is not, so each of the fifteen
+carries its own sentence.
+
+**○ and ⊘ are different states**, and the mark exists to stop them merging: "not built yet"
+and "not being built" look identical in a checklist and mean opposite things to whoever reads
+it next. The tally now reads 30 built, 15 out of scope, 8 open, out of 53 — where before it
+read "30 of ~52" over a denominator that quietly included things nobody intended to build.
+
+The reasons sort into four kinds, and only the first is about the widget:
+
+* **The specification is somebody else's.** Vega Chart is eleven pages pointing at the Vega
+  and Vega-Lite grammars. Implementing it is implementing Vega, and "we have a Vega Chart"
+  would be a claim about a grammar rather than about Workshop.
+* **The source is one sentence in an overview list.** Header text, Comments, Status Tracker,
+  Waterfall Chart. §215's Object Selector was built from exactly one such sentence, so this is
+  a threshold rather than a rule — but "enables collaboration in a Workshop module" chooses
+  none of threads, mentions, notifications or permissions, and building it means inventing the
+  specification and then claiming parity against it.
+* **They rest on a service this platform does not have.** Compass (Resource List, Linked
+  Compass Resources), platform telemetry (Observability Chart), per-datasource index times
+  (Data Freshness), per-object-type edit tracking (Edit History), and the `media reference`
+  property type (Audio and Transcription Display, Audio Recorder). Each is a platform unit
+  wearing a widget's clothes.
+* **A scope call, plainly.** PDF Viewer, Video Display and Image Annotation have real pages
+  and real specifications and are not being built.
+
+**Two rows were nearly recorded wrong, in opposite directions.** Spreadsheet Display was marked
+⊘ and is not on the list — it needs the same `media reference` property type as the two audio
+widgets, which makes it *blocked*, not declined, and it stays ○. And Audio Recorder was missed,
+because the table row read `| Audio |` while the user's line said "Audio Recorder": the row
+title had been transcribed from p.480's overview list rather than from p.514's section header.
+Two other titles were wrong the same way and are corrected here — "Audio and Video Display" is
+p.375's **Audio and Transcription Display**, which is a different widget from Video Display
+sitting two rows below it.
+
+No code changed; 1267 unit, 597 browser, 1632 API (2 skipped) unaffected.
+
+Build-order item 9 is now eight widgets rather than twenty-three, and is written out in
+priority order with what each rests on. Items 4 and 6 still hold widget *depth* rather than new
+widgets: the Object Table's p.223 multi-column default sorts, its inline editing, and Inline
+Action depth.
+
+---
+---
+---
+---
+
 ### 223. The Media Preview, and a storage decision already made (this session)
 
 p.363-364's widget: p.363's two media sources — a **media string** (a media URL, a data URL
@@ -4368,9 +4512,21 @@ has no media-set service and an attachment key is the same idea under another na
 **media reference properties**, which are a property type the ontology does not have and
 therefore an ontology unit rather than a widget one.
 
-`workshop.md` build-order item 8 has **PDF Viewer** (p.379-382), **Video Display** (p.371) and
-**Image Annotation** (p.386-388) left. All three have real pages, checked per §216. The PDF
-Viewer starts with the question this unit deferred rather than with a widget.
+`workshop.md` build-order item 8 is **finished**, and the other three are **dropped on the
+user's call** — a narrowing of the boundary, not a gap in the source, which is the opposite of
+why Status Tracker and Waterfall went. **PDF Viewer** (p.379-384), **Video Display**
+(p.371-373) and **Image Annotation** (p.386-388) all have real pages, so the honest record is
+that this platform chose not to build three documented widgets rather than that it could not.
+The row for each stays ○, which remains true either way.
+
+Reading them to write that down corrected two citations made an hour earlier in this same
+file. The PDF Viewer runs **p.379-384**, not 379-382: p.383-384 is its **annotation layers**,
+which read and write annotation *objects*, fire events on selection, and edit or delete them
+through **Actions**, binding the selection's page number and bounding boxes to action
+parameters. It is a writeback surface with a document viewer on top, not a viewer with extras
+— so "starts with the stored-XSS question" was true and was also the smallest thing about it.
+**A page range is a claim about how big a unit is**, and one taken from a section header
+measures the header.
 
 ---
 ---
@@ -6104,6 +6260,18 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A tie-break that is redundant is invisible in results, so it has to be asserted on what the store is asked.** §225 composes several orderings, and the rule is that the key tie-break goes on once, after all of them: `primary_key` is unique, so an ordering carrying its own decides every row and makes every sort after it unreachable. Three mutants that put the tie-break back inside each ordering all survived — because the *page* is identical either way until a fixture happens to hold a tie in exactly the right place, and for the OpenSearch fixture it never did: the rows are written in key order, so a stable sort leaves them there and the tie-break has nothing to do. That is the "accidentally stable" trap the Postgres paging test already carried a comment about, met from the other side by a different store. The fix is the principle §221 already recorded — for a store gateway the request it forms is the contract — applied to ordering: assert the clause, not only the rows. The general tell: a rule that only changes the answer for inputs your fixture does not contain is a rule your fixture cannot check, and "ordering" is full of those because most orders are total.
+
+- **A test filter is a second, invisible definition of "the tests for this unit", and it can disagree with the first.** One §225 mutant survived with a test written specifically to catch it: the mutation harness ran `pytest -k sort`, and the test was named `..._tiebreak_appears_once_and_last_on_both_stores`, which does not contain "sort". The assertion existed, passed when run, and was never run. This is worse than a missing test, because the test's presence is what stops anybody looking — the file reads as covered. Two cheap defences: make the harness's selection wider than you think it needs to be, and read the harness's own output for the *count* of tests it ran, not only its pass/fail. A harness that silently selects nothing reports a clean run.
+
+- **A new argument that composes has to be checked for what happens to the second one.** §225's real bug was not that several sorts failed — it was that the second and third would have been *accepted, stored, displayed in the panel, sent to the server, and ignored*, because the first ordering's tie-break decided everything. Nothing errors, nothing looks wrong, and the author reads their own setting back. The same shape appeared twice in one unit: two property sorts also shared one bind name, so the second would have overwritten the first and produced a page ordered by one property twice. When a scalar becomes a list, the question is not "does the list work" but **"can I prove the last element did something"** — and the test for it needs a first element that genuinely ties, which is why `["recent", …]` over a single sync is the sharpest fixture here.
+
+- **"Not built yet" and "not being built" are different states, and a checklist with one mark for both loses the decision rather than the work.** §224 put fifteen Workshop widgets out of scope and the temptation was to delete their rows: the tally reads better and the document gets shorter. What that loses is not the widget — nobody wanted it — but the *fact that somebody decided*, which is the only thing a reader a year later cannot reconstruct. The parity README had the rule already ("named so that skipping them is a decision rather than an omission") and applied it only to whole products, never inside an application in scope. So the fix was a mark (⊘) and a sentence per row, not an edit to the inventory. The tell that a checklist needs this: a denominator that quietly includes things nobody intends to build, which makes every percentage in it a claim about a target that no longer exists.
+
+- **A row title transcribed from a summary is not the same string as the thing it names.** §224 nearly missed dropping the Audio Recorder because `workshop.md`'s row read `| Audio |` — taken from p.480's one-line overview list rather than from p.514's section header. Two more were wrong the same way: "Audio and Video Display" is p.375's **Audio and Transcription Display**, a different widget from the Video Display two rows below it, and "Prominent Terms" is p.475's **Prominent Term**. Overview lists compress; section headers name. The failure is quiet because a shortened title still *looks* like the widget, so it matches when you read it and misses when you grep it or when somebody hands you a list — which is exactly what happened.
+
+- **A page range is a claim about how big a unit is, and one read off a section header measures the header.** §223 cited the PDF Viewer as p.379-382 from where its heading starts and where the next widget's content appeared to begin. Reading the pages to write down what dropping it would cost put it at **p.379-384**, and the two extra pages are not more of the same: p.383-384 is the viewer's **annotation layers**, which read and write annotation objects and edit them through Actions, with a selection's page number and bounding boxes bound to action parameters. The widget is a writeback surface with a document viewer on top. A range that was two pages short described a unit that was a fraction of the real one, and every estimate downstream of it would have inherited that. The tell is a citation produced by locating a heading rather than by reading to the end of the section — and the fix is the same rule §216 wrote for build orders, applied to page numbers: **open what a line cites.**
 
 - **"No extension" and "no dot" are not the same sentence, and a test for a fallback needs an input that actually reaches it.** §223's `kindOfUrl` falls back to `unknown` when a URL carries no extension, and the test written to pin that used `https://example.test/media/1234` — which has no extension and a dot, in its host. `lastIndexOf(".")` finds it, so the fallback branch never runs and the test passes through the extension lookup missing instead; the mutant returning `image` from that branch survived a test whose whole purpose was to catch it. The input contained the very thing it claimed to lack. This is §206's family from the other side: there, an input was rejected too early to reach the mechanism under test; here, an input satisfied the *precondition* too well to reach it. The tell in both is the same — write down which line the input is supposed to execute, then check that it does.
 

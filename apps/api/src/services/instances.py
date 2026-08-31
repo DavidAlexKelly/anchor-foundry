@@ -527,7 +527,36 @@ def _comparable_sql(extract: str, data_type: str | None) -> str:
 
 
 def _order_by(sort: "Any", params: dict[str, Any]) -> str:
-    """An `object_sets.Sort`, as SQL.
+    """p.223's **Default sort(s)**, as SQL: one `object_sets.Sort`, or several.
+
+    **The tie-break is appended once, after all of them.** Each fragment orders
+    by one thing and nothing else, because `primary_key` is unique — so a
+    fragment that carried its own tie-break would make every sort after it
+    unreachable, and a second and third ordering an author configured would
+    silently do nothing. That is the whole reason the four fixed clauses below
+    are fragments now rather than the finished `ORDER BY` they used to be.
+    """
+    from . import object_sets
+
+    sorts = sort if isinstance(sort, tuple) else (sort,)
+    if not sorts:
+        sorts = (object_sets.DEFAULT_SORT,)
+    fragments = [_order_fragment(one, params, n) for n, one in enumerate(sorts)]
+    # Skipped when the primary key is already in the list: it is unique, so a
+    # tie-break after it can never fire, and `ORDER BY ... i.primary_key DESC,
+    # i.primary_key ASC` reads like a contradiction to whoever meets it next.
+    if not any(_orders_by_key(one) for one in sorts):
+        fragments.append("i.primary_key ASC")
+    return ", ".join(fragments)
+
+
+def _orders_by_key(sort: "Any") -> bool:
+    key = sort if isinstance(sort, str) else sort.key
+    return key in ("key", "-key")
+
+
+def _order_fragment(sort: "Any", params: dict[str, Any], n: int) -> str:
+    """One ordering, with no tie-break of its own — see `_order_by`.
 
     Interpolated into the statement rather than bound, which is safe only
     because every part of it comes from a fixed table: one of four literal
@@ -540,20 +569,23 @@ def _order_by(sort: "Any", params: dict[str, Any]) -> str:
     bypassed it, and ordering by the default is a better answer than a 500 for
     a difference nobody can see.
 
-    **Every ordering ties on `primary_key`**, so rows sharing a value — routine
-    after a bulk sync, which writes them in one instant — page consistently and
-    identically to the OpenSearch store. That matters more for a property sort
-    than for the four fixed ones: `status` has five distinct values over a
-    million rows, so without the tie-break almost every page boundary falls
-    inside a group of equals.
+    The tie-break on `primary_key` that makes a page consistent — and identical
+    to the OpenSearch store — is `_order_by`'s job, not this function's, because
+    with several sorts there is exactly one of it and it goes last.
+
+    **`n` is the fragment's position, and it is what keeps the binds apart.**
+    Two property sorts in one `ORDER BY` would otherwise both write `:sortprop`,
+    and the second would overwrite the first: the page would come back ordered
+    by the same property twice, which is a *plausible-looking* page rather than
+    an error.
     """
     from . import object_sets
 
     clauses = {
         "key": "i.primary_key ASC",
         "-key": "i.primary_key DESC",
-        "oldest": "i.updated_at ASC, i.primary_key ASC",
-        "recent": "i.updated_at DESC, i.primary_key ASC",
+        "oldest": "i.updated_at ASC",
+        "recent": "i.updated_at DESC",
     }
     key = sort if isinstance(sort, str) else sort.key
     if key in clauses:
@@ -561,7 +593,8 @@ def _order_by(sort: "Any", params: dict[str, Any]) -> str:
     if isinstance(sort, str) or sort.property is None:
         return clauses[object_sets.DEFAULT_SORT]
 
-    params["sortprop"] = sort.property
+    bind = f"sortprop{n}"
+    params[bind] = sort.property
     direction = "DESC" if sort.descending else "ASC"
     # **NULLS LAST in both directions**, which Postgres does not do by default:
     # it sorts NULLs last ascending and first descending, so a descending sort
@@ -570,9 +603,9 @@ def _order_by(sort: "Any", params: dict[str, Any]) -> str:
     # rows on one store and the largest on the other is the invisible kind of
     # wrong this file exists to prevent.
     value = _comparable_sql(
-        "jsonb_extract_path_text(i.properties, :sortprop)", sort.data_type
+        f"jsonb_extract_path_text(i.properties, :{bind})", sort.data_type
     )
-    return f"{value} {direction} NULLS LAST, i.primary_key ASC"
+    return f"{value} {direction} NULLS LAST"
 
 
 def _set_predicate(

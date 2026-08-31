@@ -143,6 +143,14 @@ import {
   SOURCES as MEDIA_SOURCES, attachmentOf, resolveMedia, sizeLabel,
   sourceOf as mediaSourceOf,
 } from "./media";
+import {
+  // Aliased for the same reason: `sortsOf`, `labelOf` and `toRequest` are names
+  // any widget with an ordering could want.
+  FIXED_SORTS as TABLE_FIXED_SORTS, MAX_SORTS as TABLE_MAX_SORTS,
+  blankEntry as blankTableSort, labelOf as tableSortLabel, sortsOf as tableSortsOf,
+  toRequest as tableSortsToRequest, withDirection as withSortDirection,
+  withFixed as withSortFixed, withProperty as withSortProperty,
+} from "./table-sorts";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -2564,8 +2572,12 @@ export function CanvasObjectTable({
   /** One of the server's `object_sets.SORTS`. Sorting *by a property* is
    * refused there rather than here, because untyped properties would order
    * differently on the two stores; the settings panel therefore offers what
-   * the server accepts rather than a column-header click that sometimes 422s. */
-  sort?: string;
+   * the server accepts rather than a column-header click that sometimes 422s.
+   *
+   * **p.223's "one or more"**: a list of them, and a plain string for the one
+   * every module stored before this. Both read through `table-sorts.ts`, so
+   * there is no migration and no moment when a saved table reorders itself. */
+  sort?: string | string[];
   /** p.224's **Active object**: the row a viewer highlighted, as clauses a
    * `narrow_set` derivation turns into an object set. Clauses rather than a
    * finished definition so the meaning is recomputed against whatever the
@@ -2643,9 +2655,13 @@ export function CanvasObjectTable({
   // §3): a saved app opens on the first page for every viewer. The hook holds
   // it, and the reset-when-the-set-changes rule with it - shared with the Card
   // List rather than written twice (see `object-set.ts`).
+  // p.223's Default sort(s), read from whichever shape the document holds and
+  // sent as whichever shape the request wants - one ordering still goes as the
+  // string the API has always taken.
+  const sortRequest = useMemo(() => tableSortsToRequest(tableSortsOf(sort)), [sort]);
   const setPage = useSetPage(workspaceId, usingSet ? setDefinition : null, {
     pageSize,
-    sort,
+    sort: sortRequest,
     variablesPending,
   });
   const { offset, setOffset } = setPage;
@@ -2986,6 +3002,117 @@ export function CanvasObjectTable({
   );
 }
 
+/** p.223's **Default sort(s)**: "one or more default sorts to be applied to the
+ * table".
+ *
+ * A list of rows rather than one select, because p.223's setting is a list and
+ * the *order* of it is the setting. Each row is one of the four fixed sorts or
+ * a property with a direction — the rules are in `table-sorts.ts`, so what
+ * this component holds is the editing and nothing else.
+ *
+ * **The property is typed, not picked.** §222's Timeline made the same call for
+ * its date property: a picker over the ontology's orderable properties is one
+ * decision for every widget that wants one — the Timeline, the Object Dropdown's
+ * p.458 sort, this — and building it three times privately is how three widgets
+ * end up disagreeing about which properties are offered. p.223 also asks for
+ * something a column list cannot give: "module builders can sort on **hidden
+ * property types not displayed**", so the names here are deliberately not
+ * limited to the columns on screen.
+ */
+function TableSortsField({ sort, setProp }: {
+  sort: unknown;
+  setProp: (cb: (props: { sort: string | string[] }) => void) => void;
+}) {
+  const entries = tableSortsOf(sort);
+  const write = (next: ReturnType<typeof tableSortsOf>) => {
+    const keys = next.map((e) => e.key);
+    // **A row still being typed is kept, not dropped**, so the author can
+    // finish it — `toRequest` is what refuses to send it. Written back as a
+    // string when there is one, so a table with a single ordering keeps the
+    // document shape every module before p.223 had.
+    const only = keys.length === 1 ? keys[0] : "";
+    setProp((p) => (p.sort = only ? only : keys));
+  };
+  const edit = (index: number, entry: ReturnType<typeof blankTableSort>) =>
+    write(entries.map((e, n) => (n === index ? entry : e)));
+
+  return (
+    <div className="field" data-testid="table-sorts">
+      <span className="field-label">Default sort(s)</span>
+      {entries.length === 0 && (
+        <p className="field-hint" data-testid="table-sorts-empty">
+          No sort set — rows come back newest-changed first.
+        </p>
+      )}
+      {entries.map((entry, index) => (
+        <div className="canvas-sort-row" key={index}>
+          <select
+            value={entry.fixed ? entry.key : ""}
+            data-testid={`table-sort-kind-${index}`}
+            onChange={(e) => edit(index, withSortFixed(entry, e.target.value))}
+          >
+            <option value="">A property…</option>
+            {Object.entries(TABLE_FIXED_SORTS).map(([key, name]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
+          </select>
+          {!entry.fixed && (
+            <>
+              <input
+                type="text"
+                value={entry.property}
+                placeholder="property api name"
+                data-testid={`table-sort-property-${index}`}
+                onChange={(e) => edit(index, withSortProperty(entry, e.target.value))}
+              />
+              <select
+                value={entry.descending ? "desc" : "asc"}
+                data-testid={`table-sort-direction-${index}`}
+                onChange={(e) =>
+                  edit(index, withSortDirection(entry, e.target.value === "desc"))}
+              >
+                <option value="asc">Low to high</option>
+                <option value="desc">High to low</option>
+              </select>
+            </>
+          )}
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid={`table-sort-remove-${index}`}
+            onClick={() => write(entries.filter((_, n) => n !== index))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      {entries.length < TABLE_MAX_SORTS && (
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="table-sort-add"
+          onClick={() => write([...entries, blankTableSort()])}
+        >
+          Add a sort
+        </button>
+      )}
+      {entries.length > 1 && (
+        <span className="field-hint" data-testid="table-sorts-summary">
+          {entries.map(tableSortLabel).join(", then ")}
+        </span>
+      )}
+      {/* Not a click on a column header, deliberately. A header that sometimes
+          422s — on a property whose declared type has no order both stores
+          agree on — would be worse than one that never invited the click. See
+          `object_sets.PROPERTY_SORT_HINT`. */}
+      <span className="field-hint">
+        A property needs a declared type both stores can order: integer, float,
+        date or timestamp. Text is refused permanently.
+      </span>
+    </div>
+  );
+}
+
 function ObjectTableSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared } = useCanvasVariables();
@@ -3157,25 +3284,7 @@ function ObjectTableSettings() {
           Property names in the order to show them. Blank shows all of them.
         </span>
       </label>
-      <label className="field">
-        <span className="field-label">Sort by</span>
-        <select
-          value={sort ?? "recent"}
-          onChange={(e) => setProp((p: { sort: string }) => (p.sort = e.target.value))}
-        >
-          <option value="recent">Last changed, newest first</option>
-          <option value="oldest">Last changed, oldest first</option>
-          <option value="key">Key, A–Z</option>
-          <option value="-key">Key, Z–A</option>
-        </select>
-        {/* Not a click on a column header, deliberately. Properties are stored
-            untyped, so the server refuses to order by one - and a header that
-            sometimes errored would be worse than one that never invited the
-            click. See `object_sets.SORTS`. */}
-        <span className="field-hint">
-          Sorting by a property needs its declared type behind it — see the ontology roadmap
-        </span>
-      </label>
+      <TableSortsField sort={sort} setProp={setProp} />
       {/* p.224-225's Display & formatting, in p.224's order. */}
       <label className="field">
         <span className="field-label">Number of lines to display per row</span>
