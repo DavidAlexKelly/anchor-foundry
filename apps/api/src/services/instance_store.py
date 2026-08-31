@@ -97,6 +97,33 @@ class InstanceStoreGateway(Protocol):
         primary_keys: list[str],
     ) -> int: ...
 
+    async def adopt_legacy_index(
+        self, *, search_prefix: str, object_type_id: UUID,
+        declared: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Copy one type's documents out of the pre-0006 workspace index.
+
+        Returns how many were moved. See `split_workspace_index` for why the
+        old index is the source and why running it twice is safe.
+        """
+        ...
+
+    async def drop_type(self, *, search_prefix: str, object_type_id: UUID) -> None:
+        """Forget every instance of an object type that no longer exists.
+
+        **Nothing did this before**, and on the OpenSearch path that was a real
+        leak rather than a tidiness problem: deleting an object type dropped
+        its Postgres rows by cascade and left its documents in the index, where
+        the workspace explorer - which filters by type only when asked - went
+        on returning them. Objects of a type nobody could name.
+
+        It is one line now because there is an index to delete (decision 0006
+        §1), which is the same argument the decision makes: "deleting an object
+        type deletes an index, which is cleaner than the delete-by-query it
+        does today."
+        """
+        ...
+
     async def list_for_type(
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]: ...
@@ -467,6 +494,79 @@ class OpenSearchInstanceStore:
         )
         return int(resp.get("deleted", 0))
 
+    # How many documents one migration round trip carries. Not the page size
+    # a browser gets: this is a batch bound by the bulk body it produces, and
+    # a thousand instances is a request a cluster is comfortable with while
+    # still bounding memory here.
+    MIGRATION_BATCH = 1000
+
+    async def adopt_legacy_index(
+        self, *, search_prefix: str, object_type_id: UUID,
+        declared: list[dict[str, Any]] | None = None,
+    ) -> int:
+        legacy = instance_mapping.legacy_index_name(search_prefix)
+        if not await self._client.indices.exists(index=legacy):
+            # Nothing to migrate: a workspace created after the split, or one
+            # already moved. Zero rather than an error, so the migration can be
+            # run over every workspace without knowing which are which.
+            return 0
+        target = _index_name(search_prefix, object_type_id)
+        await self._ensure_index(target, declared)
+
+        moved = 0
+        after: list[Any] | None = None
+        while True:
+            body: dict[str, Any] = {
+                "query": {"term": {"object_type_id": str(object_type_id)}},
+                # **`search_after`, not `from`/`size`.** Offset paging stops at
+                # `index.max_result_window` — ten thousand documents — and a
+                # migration that silently moved the first ten thousand of a
+                # larger type would be the worst possible outcome here: a
+                # workspace that looks migrated and is missing rows.
+                "sort": [{"primary_key": "asc"}],
+                "size": self.MIGRATION_BATCH,
+            }
+            if after is not None:
+                body["search_after"] = after
+            resp = await self._client.search(index=legacy, body=body)
+            hits = resp["hits"]["hits"]
+            if not hits:
+                break
+            bulk_body: list[dict[str, Any]] = []
+            for hit in hits:
+                # **The document id is carried, not recomputed.** It is derived
+                # from (source_id, primary_key) either way, but re-deriving it
+                # would silently renumber anything whose id predates that rule -
+                # and `action_runs.instance_id` points at these.
+                bulk_body.append({"update": {"_index": target, "_id": hit["_id"]}})
+                bulk_body.append({"doc": hit["_source"], "doc_as_upsert": True})
+            result = await self._client.bulk(body=bulk_body, refresh="wait_for")
+            if result.get("errors"):
+                failed = [
+                    item["update"]["error"]
+                    for item in result["items"] if "error" in item.get("update", {})
+                ]
+                # 0006 §5: loudly broken beats quietly wrong. A document the new
+                # mapping refuses is a value that does not fit its declared
+                # type, and skipping it would leave an index quietly missing
+                # rows a filter should have matched.
+                raise RuntimeError(
+                    f"migrating {object_type_id} had {len(failed)} refusal(s): {failed[:3]}"
+                )
+            moved += len(hits)
+            after = hits[-1]["sort"]
+        return moved
+
+    async def drop_type(self, *, search_prefix: str, object_type_id: UUID) -> None:
+        await self._client.indices.delete(
+            index=_index_name(search_prefix, object_type_id),
+            # A type deleted before it ever synced has no index, and a delete
+            # that raised would make the type undeletable - the ontology's
+            # record gone or kept depending on whether anything had been
+            # indexed yet.
+            ignore_unavailable=True,
+        )
+
     async def list_for_type(
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]:
@@ -486,6 +586,14 @@ class OpenSearchInstanceStore:
                 "from": offset,
                 "size": limit,
             },
+            # **An object type that has never synced now has no index at all.**
+            # Before the split it read from the workspace's index, which existed
+            # the moment anything at all had synced, so "no instances yet" and
+            # "no index yet" were the same state and neither was an error. They
+            # are different states now, and a browser that 404'd on a type
+            # nobody had synced would be reporting a broken cluster to describe
+            # an empty table.
+            ignore_unavailable=True,
         )
         hits = resp["hits"]["hits"]
         rows = [
@@ -1047,6 +1155,22 @@ class PostgresInstanceStore:
             self._conn, source_id=source_id, primary_keys=primary_keys
         )
 
+    async def adopt_legacy_index(
+        self, *, search_prefix: str, object_type_id: UUID,
+        declared: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Nothing to migrate: this store has no indices to split. A workspace
+        on Postgres reaches per-type indices by `backfill` when it cuts over,
+        which now writes them by construction."""
+        return 0
+
+    async def drop_type(self, *, search_prefix: str, object_type_id: UUID) -> None:
+        """Nothing to do: `object_instances.object_type_id` is `ON DELETE
+        CASCADE`, so Postgres has already forgotten them by the time the route
+        gets here. Implemented rather than omitted, so the route can call one
+        method without knowing which store it has."""
+        return None
+
     async def list_for_type(
         self, *, search_prefix: str, object_type_id: UUID, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]:
@@ -1227,6 +1351,61 @@ class PostgresInstanceStore:
             filters=filters,
             interval=interval,
         )
+
+
+async def split_workspace_index(
+    conn: "AsyncConnection",
+    gateway: "InstanceStoreGateway",
+    *,
+    workspace_id: UUID,
+    search_prefix: str,
+) -> dict[str, int]:
+    """Move one workspace from the single index to one per object type.
+
+    **Decision 0006 §1's data movement**, and the reason that document exists
+    rather than a commit. Every instance is rewritten into the index its type
+    now owns, with the mapping its declared types ask for.
+
+    **Read from the old index, not from Postgres**, and the distinction is the
+    whole correctness of this. `backfill` reads `object_instances` because it
+    moves a workspace that is still *on* Postgres. A workspace already on
+    OpenSearch has not written to those rows since its own cutover, so they are
+    a snapshot of whenever that happened — reading them here would silently
+    restore a workspace to an old state and call it a migration.
+
+    Reading the index back is safe in the way that matters: OpenSearch stores
+    `_source` verbatim, so the values come back as they were written rather
+    than as the mapping indexed them. A `capacity` that was indexed as text is
+    still the number it arrived as.
+
+    Every document id is derived from `(source_id, primary_key)` and is not
+    recomputed here, so running this twice rewrites exactly the same documents.
+    **Run it, flip, run it again**: the second pass is a catch-up for anything
+    written in between, not a duplicate — the same procedure the original
+    cutover used, and the reason neither needs dual-write machinery.
+
+    The old index is **not deleted.** A migration that removes its own source
+    leaves nothing to compare counts against and nothing to fall back to, and
+    an index costing disk is a smaller problem than a rollback that cannot
+    happen. Dropping `{search_prefix}object-instances` is a step for whoever
+    has checked the counts.
+    """
+    types = await fetch_all(
+        conn,
+        "SELECT id FROM object_types WHERE workspace_id = :wid ORDER BY id",
+        {"wid": str(workspace_id)},
+    )
+    from . import ontology
+
+    moved = 0
+    for row in types:
+        type_id = UUID(str(row["id"]))
+        moved += await gateway.adopt_legacy_index(
+            search_prefix=search_prefix,
+            object_type_id=type_id,
+            declared=await ontology.list_properties(conn, type_id),
+        )
+    return {"instances": moved, "object_types": len(types)}
 
 
 async def backfill(

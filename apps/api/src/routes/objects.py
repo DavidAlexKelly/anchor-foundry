@@ -668,6 +668,16 @@ async def delete_object_type(
 ) -> None:
     async with user_connection(access.auth.user_id) as conn:
         await ontology_service.delete_type(conn, access.workspace_id, type_id)
+        # **After the ontology row, not before.** The record is what says the
+        # type existed; the index is a projection of it (decision 0008). If the
+        # delete below fails, the type is gone and an orphan index remains -
+        # invisible to every read, since nothing can name the type any more,
+        # and removable by hand. The other order would leave a type whose
+        # objects had silently vanished.
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        await instance_store.store_for(conn).drop_type(
+            search_prefix=prefix, object_type_id=type_id
+        )
         await audit.record(
             conn,
             organisation_id=access.auth.organisation_id,

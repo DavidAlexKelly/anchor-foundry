@@ -550,6 +550,36 @@ class Handler(BaseHTTPRequestHandler):
         MAPPINGS[index] = json.loads(raw or "{}")
         self._send(200, {"acknowledged": True, "index": index})
 
+    def do_DELETE(self) -> None:  # noqa: N802
+        """`indices.delete`, which is how an object type's instances are
+        forgotten now that a type has an index of its own (decision 0006 §1)."""
+        index = urlparse(self.path).path.strip("/")
+        names = _matching_indices(index)
+        if not names and not self._flag("ignore_unavailable"):
+            # **404 unless the caller asked otherwise**, because that is what a
+            # real cluster does. A fixture that shrugged at a missing index
+            # either way would let a caller that forgot the flag pass here and
+            # fail against a domain - and this whole file exists so the gap
+            # between the two is small enough to name.
+            return self._send(404, {"error": {"type": "index_not_found_exception"}})
+        for name in names:
+            INDICES.pop(name, None)
+            MAPPINGS.pop(name, None)
+        self._send(200, {"acknowledged": True})
+
+    def _flag(self, name: str) -> bool:
+        """A boolean query parameter, as the client sends it.
+
+        The REST subset had no need for the query string until per-type indices
+        arrived: `ignore_unavailable` is how a caller says a missing index is
+        an empty result rather than an error, and it travels there rather than
+        in the body.
+        """
+        from urllib.parse import parse_qs
+
+        values = parse_qs(urlparse(self.path).query).get(name, [])
+        return bool(values) and str(values[0]).lower() in ("true", "1", "")
+
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         raw = self._body()
@@ -601,6 +631,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"errors": any("error" in i["update"] for i in items), "items": items})
 
     def _search(self, index: str, body: dict) -> None:
+        # A concrete index that does not exist is a 404 on a real cluster, and
+        # `_matching_indices` alone would report it as no documents - which is
+        # the difference between "this type has nothing yet" and "this query
+        # went somewhere that does not exist", and exactly the pair a store
+        # bug hides between. A *pattern* matching nothing is not an error.
+        if "*" not in index and not _matching_indices(index) and not self._flag(
+            "ignore_unavailable"
+        ):
+            return self._send(404, {"error": {"type": "index_not_found_exception"}})
         try:
             matched = _filtered(index, body.get("query", {}))
         except MappingError as exc:
@@ -609,10 +648,29 @@ class Handler(BaseHTTPRequestHandler):
             # a wrong query that looks like a true answer.
             return self._send(400, {"error": {"type": "search_phase_execution_exception",
                                               "reason": str(exc)}})
-        for sort in reversed(body.get("sort", [])):
+        sorts = body.get("sort", [])
+        for sort in reversed(sorts):
             field, direction = next(iter(sort.items()))
             matched.sort(key=lambda triple: str(triple[2].get(field, "")),
                          reverse=direction == "desc")
+        # `search_after`, which the 0006 migration pages with: offset paging
+        # stops at `index.max_result_window`, and a migration that silently
+        # moved the first ten thousand documents of a larger type would leave a
+        # workspace that looks migrated and is missing rows.
+        after = body.get("search_after")
+        if after is not None:
+            keys = [next(iter(sort)) for sort in sorts]
+            cursor = [str(v) for v in after]
+            descending = [next(iter(sort.values())) == "desc" for sort in sorts]
+
+            def past(source: dict) -> bool:
+                current = [str(source.get(k, "")) for k in keys]
+                for now, then, down in zip(current, cursor, descending):
+                    if now != then:
+                        return now < then if down else now > then
+                return False  # equal on every sort key is not past it
+
+            matched = [t for t in matched if past(t[2])]
         start = int(body.get("from", 0))
         size = int(body.get("size", 10))
         window = matched[start:start + size]
@@ -622,7 +680,15 @@ class Handler(BaseHTTPRequestHandler):
                 # The index the document actually came from, not the pattern
                 # that was asked for. A hit that named the pattern would make a
                 # cross-index search look single-index in every assertion.
-                "hits": [{"_index": n, "_id": i, "_source": s} for n, i, s in window],
+                # `sort` on every hit, because that is the cursor a caller
+                # feeds back as `search_after` - a fixture omitting it would
+                # make the second page of a migration silently be the first.
+                "hits": [
+                    {"_index": n, "_id": i, "_source": s,
+                     **({"sort": [str(s.get(next(iter(sort)), "")) for sort in sorts]}
+                        if sorts else {})}
+                    for n, i, s in window
+                ],
             }
         }
         # Cardinality and terms - the aggregations this platform issues
