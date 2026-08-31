@@ -4290,6 +4290,100 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 221. Ordered filters and property sorts, on both stores (this session)
+
+Decision 0006 §3-§6, for two of the four features they were holding: `gt`/`gte`/`lt`/`lte`, and
+a `prop` / `-prop` sort. §220 made them *possible* by putting one index per object type behind
+the ontology's declared types; this makes them true on Postgres and OpenSearch at once, which
+is what 0006 §6 means by neither store shipping before the other.
+
+**The absence of declared types is a refusal, not a permission.**
+
+`parse` and `parse_sort` take an optional `property_types`, and a caller that does not supply
+one gets the pre-§221 behaviour: every ordered comparison refused, everything else unchanged.
+That is what keeps a caller nobody updated *correct* rather than quietly permissive — the
+failure mode a new optional argument usually has, and the one worth designing against, because
+the caller that forgot is exactly the caller that has checked nothing.
+
+There are three refusals now where there was one, and they are three different mistakes: the
+types were never resolved; the property is not declared (almost always a typo, which the old
+single refusal could not distinguish from a legal filter); or the type has no agreed order.
+**`string` is refused permanently rather than pending** — Postgres orders by the database
+collation and OpenSearch by byte order, so `'Z' < 'a'` differs between them, and "not yet"
+would be a promise this one will never keep.
+
+The declared type is **carried** on the `Filter` and on a new `Sort` value object rather than
+looked up again by each store. The decision that a comparison is legal was made once, against
+the ontology the caller resolved; a store that looked it up again could reach a different
+answer than the validation did, which is the two-implementations problem this whole area exists
+to avoid, moved one level down.
+
+---
+
+**Three rules the two stores would otherwise have disagreed about, invisibly.**
+
+* **A value that does not fit its declared type does not match, either way round.** A
+  `capacity` holding `"n/a"` is not greater than 40 *and* not less than 40 — it is not on the
+  number line. Sorting it to one end would make a filter silently include rows nobody asked
+  for; raising would make one bad row break a whole page. It sorts **last in both directions**,
+  which Postgres has to be told: its default is NULLs first descending, so a descending page
+  would have opened with every unusable row on one store and the largest values on the other.
+* **`pg_input_is_valid`, not a regex and not a bare cast.** A bare cast raises on the first
+  unparseable row. A regex guard is a second, weaker copy of Postgres's own parser — it accepts
+  `2026-13-45` and then throws anyway, on the row it was written to protect. Ask the parser.
+* **A timestamp with no offset is UTC, said in the SQL rather than left to the server.**
+  `'2026-01-05'::timestamptz` uses the session's `TimeZone`, so identical data compares
+  differently on a deployment configured to anything but UTC. The dev database happens to be
+  UTC, which is exactly how this would have shipped. **A cross-store divergence hiding in a
+  server setting is still a cross-store divergence**, and it is the shape 0006 exists to
+  remove.
+
+---
+
+**Two behaviour changes worth naming, both consequences of validation needing the ontology.**
+
+`/object-sets/evaluate` now resolves the object type *before* judging the definition, because
+judging it needs the declared types. So a request naming a nonexistent type answers 404 rather
+than 422 even when the definition is also malformed. Both are true; the order changed because
+the type stopped being something the definition could be judged without.
+
+And a saved Workshop module is validated against the workspace's declared types on **read as
+well as write**, which `actions` deliberately is not. The distinction is real: an action
+deleted after a save must not stop an app opening, because the record of what somebody built
+stays valid — but a property whose declared type changed makes a saved ordered comparison
+unevaluable by *either* store, and an app that opened anyway would show a set narrowed by a
+filter that silently did nothing. That is decision 0002's failure exactly.
+
+---
+
+**A bind followed by `::` is not a bind.** `:v0::double precision` reaches Postgres
+unsubstituted — SQLAlchemy stops looking at the colon pair — so the first real query was a
+syntax error rather than a wrong answer, which is the lucky version of this bug. `CAST(:v0 AS
+…)` says the same thing unambiguously. Worth recording because the unlucky version is a bind
+that *looks* substituted.
+
+**And a docstring had described ordered operators for months while `parse` refused every one of
+them** — written for the withdrawn first implementation and left behind when the code went,
+and wrong about dates besides ("cast both sides to double precision"). §217 found a comment
+that was right where the code was wrong; this is the same failure inverted, and the tell is the
+same: nothing exercised what it claimed.
+
+---
+
+**MUTANT_SUMMARY**
+
+**TEST_COUNTS**
+
+Two of 0006's four features remain: the **numeric aggregations** (`sum`, `avg`, `min`, `max`)
+and **§3's map bounding box**. Both are now possible for the same reason these were, and
+neither is built. `workshop.md`'s **Timeline** (p.347-350) is unblocked — it was blocked on
+exactly the property sort this ships — and is the next widget.
+
+---
+---
+---
+---
+
 ### 220. One index per object type, and the blocker four features share (this session)
 
 Decision 0006 §1 and §2, built: an object type gets its own OpenSearch index, mapped from the
@@ -5795,6 +5889,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A new optional argument is a permission unless you make it a refusal.** §221 gave `object_sets.parse` an optional `property_types`, and the whole correctness of the change is which way round its *absence* means: a caller that has not resolved the ontology has checked no property's type, so it gets the old behaviour of refusing every ordered comparison. The tempting default is the other one — absent means unrestricted, so nothing breaks — and it is exactly wrong, because **the caller that did not pass the new argument is the caller that checked nothing.** The same shape appears wherever validation grows a dependency: ask what the callers you did not update are now allowed to do.
+
+- **A cross-store divergence hiding in a server setting is still a cross-store divergence.** `'2026-01-05'::timestamptz` is not a fixed instant — Postgres reads it in the session's `TimeZone`, so identical data compares differently on a deployment configured to anything but UTC. §221 nearly shipped it because the dev database happens to be `Etc/UTC` and every test therefore passed. The tell is a SQL construct whose meaning depends on configuration rather than on its arguments — casts to `timestamptz`, `now()` versus `now() AT TIME ZONE`, collation-dependent comparison — and the fix is to say the rule in the statement (`AT TIME ZONE 'UTC'`) rather than to rely on the deployment agreeing with the test box.
+
+- **A bind followed by `::` is not a bind.** `:v0::double precision` reaches Postgres unsubstituted, because SQLAlchemy stops looking at the colon pair. §221 got the lucky version — a syntax error on the first real query — where the unlucky version is a parameter that *looks* substituted. `CAST(:v0 AS …)` is unambiguous, and is what to write whenever a bound value needs a type.
 
 - **A hang is not a catch.** §220's harness reported seven mutants "caught (hang)" and none of them were: a fixture server process had leaked from an earlier run and stayed bound to its port, so every later suite talked to a **stale process running old code** — and a suite killed by the harness's own timeout is exactly what leaves one behind, so the failure sustained itself once it started. A timeout says the suite never answered; it does not say an assertion would have failed, and counting it as a catch is how a harness reports coverage it does not have. Two fixes, both cheap: **check the fixture's ports are free before each mutant** rather than once at the start, and report a timeout as `HANG` rather than folding it in with the catches. The one genuine hang that survived that change was worth chasing on its own — it found a paging loop with no progress guard, which is an infinite loop with nothing logged and no way to tell from slow work.
 

@@ -693,11 +693,16 @@ class Handler(BaseHTTPRequestHandler):
                 # that sorted as text would agree with a store that had never
                 # declared anything.
                 value = _resolve(triple[2], field)
+                # `missing: _last` means last in the **result**, and the result
+                # is reversed for a descending sort - so a missing value has to
+                # compare *smaller* there and *larger* ascending. Written as
+                # one expression because the four cases are one rule, and
+                # because getting it backwards puts the unusable rows at the
+                # top of the page rather than nowhere anybody looks.
+                missing_rank = 1 if missing_last == (direction != "desc") else 0
                 if value is MISSING or value is None:
-                    # `missing: _last` means last in the *result*, so under a
-                    # descending sort it has to compare as smaller, not larger.
-                    return (0 if missing_last != (direction == "desc") else 1, None)
-                return (1 if missing_last != (direction == "desc") else 0,
+                    return (missing_rank, 0)
+                return (1 - missing_rank,
                         _comparable(value, _declared_type(triple[0], field)))
 
             matched.sort(key=key, reverse=direction == "desc")
