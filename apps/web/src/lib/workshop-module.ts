@@ -184,6 +184,9 @@ export const NESTED_REFERENCE_PROPS: Record<string, readonly string[]> = {
   // p.313's Steps: "Is completed: Set a boolean variable to be used a check to
   // determine when a step has been completed."
   steps: ["completedVariable"],
+  // p.348's Timeline layers, each with its own object set. See the API's copy
+  // for why a second entry is the point rather than an afterthought.
+  layers: ["objectSetVariable"],
 };
 
 export interface Reference {

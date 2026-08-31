@@ -4290,6 +4290,105 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 222. The Timeline, and the widget two units were for (this session)
+
+p.347-349's widget: p.348's layers with their own object set, date property, title rule, event
+properties, colour and icon; p.349's orientation, events order, legend, time between events,
+active object and selection highlight.
+
+**Three units for one parity row, and that is what a real dependency costs.** p.348 makes a
+layer's central setting a "date or timestamp property to be used for visualizing **and
+ordering** the objects by", and ordering by a property was refused by decision 0006. §220 built
+the typed index, §221 shipped the sort on both stores, and this is the widget. Building it
+first would have produced a timeline drawn from a page ordered by *when a row last changed* —
+"the 200 most recently changed objects" where a viewer reads "the earliest 200" — which is
+exactly the quietly-wrong failure this file keeps recording, in a widget whose whole job is to
+be read as a chronology.
+
+The browser fixture is **written in an order that is not its date order**, so that failure
+would be visible rather than plausible: on the old platform the timeline would have come back
+Bravo, Delta, Alpha, Charlie.
+
+---
+
+**`NESTED_REFERENCE_PROPS` gets its second entry, which is the point rather than an
+afterthought.** §219 wrote that catalogue so the next widget with repeating configuration would
+find a list to be added to rather than a precedent to copy — and a Timeline layer's object set
+is exactly a binding inside an array. It took three lines and a direction: the catalogue in
+both runtimes, and `layers.objectSetVariable` classified as a read. That is what the guard was
+for, and it is the first time this session an abstraction built for a future case met the case.
+
+---
+
+**Three judgements worth carrying.**
+
+* **A layer with no set or no date property is dropped; a layer with no label is not.** §219's
+  steps drop on a missing *label*, and the difference is what the thing is made of: a step
+  without a label is an unidentifiable circle, where a layer's content is its events and the
+  label only names a legend entry. The same-shaped rule, decided oppositely, because the
+  question is what the widget would be lying about.
+* **"Prominent" reads the ontology rather than meaning "all".** p.348 says "**only** display
+  the ontology-defined prominent properties", this platform has that flag
+  (`property_visibility`, db 0042), and a type with none marked shows **nothing** — falling
+  back to every property would turn an event card into a property dump the moment somebody
+  forgot to mark one.
+* **The server orders each layer and the browser merges them.** Not a contradiction of the
+  sort: each layer is a separate query, so something has to interleave them, and a merge that
+  trusted the concatenation would draw every event of layer one then every event of layer two.
+  The merge bug is *doing nothing*, which is why the fixture's two types have dates that
+  interleave rather than dates that follow.
+
+The selection reuses `row_select` rather than inventing a trigger. The events panel's own
+comment argues exactly that: a second name meaning "an object was selected" is a second thing
+every document, every panel and every refusal has to know about.
+
+---
+
+**The one survivor was the claim this whole three-unit chain rests on.**
+
+Removing the sort from the widget's request survived every browser test in the file. Two
+reasons, and both are the same fixture mistake in different clothes:
+
+* **The browser re-sorts.** `eventsOf` merges the layers and orders them, so on a page holding
+  the whole set the server's order changes nothing anybody can see. The sort decides **which
+  objects are on the page** — "the earliest twenty events" versus "twenty events, and here are
+  their dates" — and with four objects and a page of fifty there is no page to decide.
+* **The fixture's keys ran in date order.** A sync stamps every row in one batch with one
+  `updated_at`, so the platform's default `recent` sort falls through to its `primary_key`
+  tie-break — which meant "sorted by date" and "not sorted at all" produced the same list.
+  Three orderings that had to differ, and only two did.
+
+So the docstring claiming the server sort was load-bearing was **overstated**, and the test
+that makes it true is a page smaller than the set. Corrected in the code as well as tested:
+this is §217's shape again — prose asserting something nothing exercised.
+
+---
+
+**47 mutants across two layers — 35 on the model, 12 on the widget — 47 caught, 0 survivors, 0
+hangs, 0 no-ops** after the fix above. The model half was clean on the first pass, which is
+what a pure module bought; the one survivor was in the browser half and was worth more than the
+other forty-six.
+
+**1229 unit tests** (was 1175); **583 browser tests** (was 559); 1632 API tests, 2 skipped,
+unchanged — this unit added no server behaviour, which is the point: §220 and §221 had already
+added it.
+
+Not built, and named rather than approximated: p.348's **Load data from scenario** — this
+platform has no scenarios, and a control listing nothing is worse than its absence — and
+p.349's per-layer **Override selection event**, which needs an event trigger addressed at
+something finer than a node. That is a change to the event system rather than to this widget,
+and inventing `select:0` here would make one widget's private vocabulary out of something four
+widgets share.
+
+`workshop.md` build-order item 7 has **Status Tracker and Waterfall** left, and neither has a
+page in the PDF — only a line in p.276's overview, which is the Object Selector's situation
+(§215).
+
+---
+---
+---
+---
+
 ### 221. Ordered filters and property sorts, on both stores (this session)
 
 Decision 0006 §3-§6, for two of the four features they were holding: `gt`/`gte`/`lt`/`lte`, and
@@ -5918,6 +6017,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **"The server decides the order" and "the server decides the page" are different claims, and only the second survives a browser that re-sorts.** §222's Timeline asks the server for a property sort and then merges its layers in the browser — so on a page holding the whole set, removing the sort from the request changes nothing observable. It decides *which objects are on the page*, which is the difference between "the earliest twenty events" and "twenty events, and here are their dates". The fixture that catches it is **a page smaller than the set**, and the docstring claiming otherwise was overstated until the harness said so. The general tell: when a client re-derives something the server also computed, the server's version is only observable at a boundary — a page edge, a limit, a truncation — and a test that never reaches one is testing the client.
+
+- **The same-shaped rule can be right in opposite directions, and the question that settles it is what the widget would be lying about.** §219's Stepper drops a step with no *label*, because a numbered circle with nothing beside it is unidentifiable. §222's Timeline keeps a layer with no label and drops one with no *object set or date property*, because a layer's content is its events and the label only names a legend entry — a labelled layer with nowhere to put its events takes a colour and a legend row while contributing nothing, which reads as "no data in this period" rather than "this layer is unfinished". Copying §219's rule would have been the natural move and would have been wrong both ways round.
+
+- **An abstraction built for a future case is only worth what it costs when the case arrives.** §219 wrote `NESTED_REFERENCE_PROPS` as a catalogue rather than a special case, on the argument that a widget with repeating configuration is not a one-off. §222 was that widget three units later, and the cost was three lines and a direction — the catalogue in both runtimes and `layers.objectSetVariable` classified as a read. Worth recording because the alternative case is the common one: an abstraction whose second user needs it reshaped is one that should have stayed a special case, and the tell is whether the second use is an *entry* or an *edit*.
 
 - **A test for "this value is pinned" needs a value that is not already pinned by something else.** §221's timezone test ran the same query under UTC, New York and Kathmandu and required one answer — and proved it of the *stored* value while proving nothing about the **bound**, because every bound it used already carried an offset. Raw text and a normalised instant are the same value there, so the mutant that skipped normalisation survived a test written to catch exactly it. A bare `2026-03-01` is the case, and it fails under Kathmandu. The general shape: an input that satisfies the rule *by accident* asserts nothing about the code meant to enforce it, and the tell is that the input already has the property the code is supposed to give it.
 

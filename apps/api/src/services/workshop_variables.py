@@ -341,6 +341,14 @@ NESTED_REFERENCE_PROPS: dict[str, tuple[str, ...]] = {
     # p.313's Steps: "**Is completed**: Set a boolean variable to be used a
     # check to determine when a step has been completed."
     "steps": ("completedVariable",),
+    # p.348's Timeline layers: "**Object set**: inputted object set definition
+    # that will be displayed for a timeline layer." **The second entry, and the
+    # reason this is a catalogue** - §219 wrote it so the next widget with
+    # repeating configuration would find a list to be added to rather than a
+    # precedent to copy, and §222 is that widget. A layer bound to a deleted
+    # set would draw an empty band with a legend entry and a colour, which
+    # reads as "no events in this period" rather than "this binding is gone".
+    "layers": ("objectSetVariable",),
 }
 
 

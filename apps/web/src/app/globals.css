@@ -1746,6 +1746,93 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   width: 12px; height: 12px; border-radius: 50%; flex: none;
 }
 
+/* ---- Timeline (p.347-349) ------------------------------------------------- */
+.canvas-timeline { display: grid; gap: 10px; }
+/* p.349's orientation. Vertical is a column of events with the rail down the
+   left; horizontal is a row that scrolls sideways — inside its own container,
+   because the page body must never scroll horizontally. */
+.canvas-timeline[data-orientation="horizontal"] .canvas-timeline-track {
+  grid-auto-flow: column; grid-auto-columns: minmax(160px, 1fr);
+  overflow-x: auto; padding-bottom: 6px;
+}
+.canvas-timeline[data-orientation="horizontal"] .canvas-timeline-event {
+  grid-template-columns: minmax(0, 1fr); text-align: center;
+}
+.canvas-timeline[data-orientation="horizontal"] .canvas-timeline-mark {
+  margin: 0 auto 6px;
+}
+.canvas-timeline-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  margin: 0; padding: 0; list-style: none;
+}
+.canvas-timeline-legend button {
+  display: flex; align-items: center; gap: 6px;
+  border: 0; background: none; padding: 2px 0; font: inherit; font-size: 12px;
+  color: var(--ink); cursor: pointer;
+}
+.canvas-timeline-legend button:disabled { cursor: default; }
+/* A hidden layer stays legible and stays listed — p.349's legend is how it
+   comes back, so greying it out of readability would hide its own switch. */
+.canvas-timeline-legend button[data-hidden="yes"] { opacity: 0.45; }
+.canvas-timeline-legend button[data-hidden="yes"] .canvas-timeline-swatch {
+  background: transparent !important; box-shadow: inset 0 0 0 2px var(--line-strong);
+}
+.canvas-timeline-swatch {
+  width: 10px; height: 10px; border-radius: 2px; flex: none;
+}
+.canvas-timeline-track { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.canvas-timeline-event {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px;
+  align-items: start; position: relative;
+}
+/* The rail: drawn by each event as a line up to the one before it, so a
+   timeline of one event has no dangling rule and a wrapped horizontal one does
+   not draw a line into the margin. */
+.canvas-timeline-event + .canvas-timeline-event::before {
+  content: ""; position: absolute; left: 10px; top: -2px; width: 1px; height: 100%;
+  background: var(--line);
+}
+.canvas-timeline[data-orientation="horizontal"] .canvas-timeline-event::before {
+  display: none;
+}
+.canvas-timeline-mark {
+  width: 21px; height: 21px; border-radius: 50%; flex: none; padding: 0;
+  border: 1px solid var(--line); background: var(--panel);
+  position: relative; z-index: 1; cursor: pointer;
+}
+.canvas-timeline-mark:disabled { cursor: default; }
+.canvas-timeline-body { display: grid; gap: 2px; min-width: 0; padding-bottom: 10px; }
+.canvas-timeline-when {
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-soft);
+}
+.canvas-timeline-title {
+  border: 0; background: none; padding: 0; font: inherit; font-size: 13.5px;
+  font-weight: 600; text-align: left; cursor: pointer; overflow-wrap: anywhere;
+}
+.canvas-timeline-title:disabled { cursor: default; }
+.canvas-timeline-event[data-selected="yes"] .canvas-timeline-body {
+  background: var(--accent-wash); border-radius: var(--radius); padding: 4px 8px;
+}
+.canvas-timeline-props {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px;
+  margin: 2px 0 0; font-size: 11.5px;
+}
+.canvas-timeline-props > div { display: contents; }
+.canvas-timeline-props dt { color: var(--ink-soft); }
+.canvas-timeline-props dd { margin: 0; overflow-wrap: anywhere; }
+/* p.349's time between events. A rung between the two it measures rather than a
+   hover-only tooltip: a tooltip nobody hovers is a fact nobody reads. */
+.canvas-timeline-gap {
+  position: absolute; left: 26px; top: -9px;
+  font-size: 10.5px; color: var(--ink-soft); background: var(--paper); padding: 0 4px;
+}
+/* The settings panel's layer editor. */
+.canvas-layer-editor { display: grid; gap: 10px; }
+.canvas-layer-row {
+  display: grid; gap: 4px; padding: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+
 /* ---- Stepper (p.312-313) ------------------------------------------------- */
 /* A row of steps with a connecting rule between them. `flex-wrap` rather than a
    scroller: a workflow's later stages are the part a viewer most needs to see,
