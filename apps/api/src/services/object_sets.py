@@ -769,7 +769,12 @@ def _instant(value: Any) -> datetime | None:
         if not text:
             return None
         try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            # `fromisoformat` takes a trailing `Z` itself from Python 3.11, and
+            # this runs on 3.11 locally and 3.12 in CI. It used to be rewritten
+            # to `+00:00` here first - dead code the mutation harness found by
+            # being unable to make it fail, which is the same standard the
+            # tests are held to.
+            parsed = datetime.fromisoformat(text)
         except ValueError:
             return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

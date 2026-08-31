@@ -318,6 +318,11 @@ def test_a_string_property_has_no_comparable_form() -> None:
     """The permanent refusal, at the value level rather than at validation.
     Even if a `string` reached here, there is no ordering to give it - which is
     what stops the refusal being one `if` away from being lost."""
+    # **A number-shaped string, not "banana".** `float("banana")` raises either
+    # way, so a `string` quietly routed down the numeric path would look
+    # correct on it - the mutant that did exactly that survived a fixture
+    # asserting only the unparseable case.
+    assert object_sets.comparable("250", "string") is None
     assert object_sets.comparable("banana", "string") is None
     assert object_sets.comparable("2026-01-01", None) is None
 
@@ -452,6 +457,53 @@ async def test_opensearch_and_the_reference_semantics_agree(opensearch: str, cas
         await store.close()
 
 
+def test_the_query_carries_the_value_the_reference_compared(opensearch: str) -> None:
+    """**The bound is normalised before it goes over the wire**, so the value a
+    range query carries is the one `object_sets.comparable` agreed to.
+
+    Asserted on the query body rather than on results, because the fixture and
+    a real cluster both coerce a bound generously - `"40"` on a `long` field
+    and a bare date on a `date` field are accepted either way, so *results*
+    cannot tell a normalised bound from a raw one. What differs is what a
+    cluster is asked, and for a store gateway the request it forms is the
+    contract (this file's own opening claim).
+
+    The date case is the one that matters: a bare `2026-03-01` leaves this
+    process as `2026-03-01T00:00:00+00:00`, so the instant the query means is
+    fixed here rather than by whatever the cluster's own default offset is.
+    """
+    from src.services.instance_store import OpenSearchInstanceStore
+
+    clauses = OpenSearchInstanceStore._set_clauses(
+        uuid.uuid4(),
+        (
+            object_sets.Filter("reading", "gt", "40", "integer"),
+            object_sets.Filter("seen", "lt", "2026-03-01", "timestamp"),
+        ),
+    )
+    ranges = {
+        next(iter(c["range"])): next(iter(c["range"].values()))
+        for c in clauses["filter"] if "range" in c
+    }
+    assert ranges["properties.reading"] == {"gt": 40.0}, "a text bound is coerced"
+    assert ranges["properties.seen"] == {"lt": "2026-03-01T00:00:00+00:00"}, (
+        "a bare date is pinned to UTC before it leaves"
+    )
+
+
+def test_a_bound_that_does_not_fit_its_type_asks_for_nothing(opensearch: str) -> None:
+    """`capacity > "abc"` matches nothing, and the query has to *say* nothing
+    rather than send a range with a null edge - which is an error rather than
+    an answer."""
+    from src.services.instance_store import OpenSearchInstanceStore
+
+    clauses = OpenSearchInstanceStore._set_clauses(
+        uuid.uuid4(), (object_sets.Filter("reading", "gt", "abc", "integer"),)
+    )
+    assert {"terms": {"properties.reading": []}} in clauses["filter"]
+    assert not any("range" in c for c in clauses["filter"])
+
+
 # ---- ordered comparisons and property sorts (§221, decision 0006) ------------
 #
 # **A separate population with typed properties**, because the one above is
@@ -478,6 +530,15 @@ TYPED_ROWS = [
     ("4", {"reading": 7, "seen": "2026-11-30"}),
     ("5", {"reading": 40, "seen": "2026-02-02"}),
     ("6", {"seen": "2026-04-04"}),
+    # **A bare timestamp on the boundary a filter asks about.** Read in UTC it
+    # is 00:00Z and matches `lt 02:00Z`; read in `America/New_York` it is
+    # 05:00Z and does not. Without a row here, every timezone the tests try
+    # gives the same answer and the rule asserts nothing.
+    ("7", {"reading": 1, "seen": "2026-03-01"}),
+    # A tie whose key sorts *before* the rows it ties with, and which is
+    # written last - so the incidental order a store returns without a
+    # tie-break is not the order the rule requires.
+    ("0", {"reading": 40, "seen": "2026-05-05"}),
 ]
 TYPED_DECLARED = [
     {"api_name": "reading", "data_type": "integer"},
@@ -802,13 +863,17 @@ def test_the_postgres_store_sorts_by_a_property(
     page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort="reading")
     # 3 and 5 both read 40, so the tie-break decides their order; 6 has no
     # reading at all and goes last.
-    assert [i["primary_key"] for i in page["instances"]] == ["4", "1", "3", "5", "2", "6"]
+    assert [i["primary_key"] for i in page["instances"]] == [
+        "7", "4", "1", "0", "3", "5", "2", "6"
+    ]
 
     page = evaluate(client, fx, {"object_type_id": typed, "filters": []}, sort="-reading")
     # **The tie still breaks ascending, and the absent row is still last.**
     # Postgres puts NULLs first descending by default, so the last element here
     # is what `NULLS LAST` buys.
-    assert [i["primary_key"] for i in page["instances"]] == ["2", "3", "5", "1", "4", "6"]
+    assert [i["primary_key"] for i in page["instances"]] == [
+        "2", "0", "3", "5", "1", "4", "7", "6"
+    ]
 
 
 def test_a_row_that_will_not_cast_sorts_last_in_both_directions(
@@ -971,7 +1036,9 @@ async def test_postgres_reads_a_bare_date_as_utc_whatever_the_server_says(
     from src.lib.db import user_connection
     from src.services import instances as instances_service
 
-    bound = (object_sets.Filter("seen", "lt", "2026-03-01", "timestamp"),)
+    # 02:00Z, so the bare `2026-03-01` in row 7 falls on one side of it read as
+    # UTC and the other side read in a western timezone.
+    bound = (object_sets.Filter("seen", "lt", "2026-03-01T02:00:00+00:00", "timestamp"),)
     answers = []
     for zone in ("UTC", "America/New_York", "Asia/Kathmandu"):
         async with user_connection(fx.owner) as conn:
