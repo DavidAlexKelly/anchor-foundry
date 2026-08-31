@@ -26,6 +26,15 @@ Named so that skipping them is a decision rather than an omission.
 
 **Within Workshop:** Scenarios, Mobile, AIP widgets (AIP Analyst, AIP Chatbot, AIP Generated Content), and anything else AIP-branded.
 
+**Fifteen widgets, named individually on their rows in `workshop.md` §10 and marked ⊘.** A whole product is easy to put out of scope in one line; a widget inside an application that *is* in scope is not, so each one carries its own reason. They fall into four kinds, and only the first is a judgement about the widget itself:
+
+- **The spec is somebody else's.** Vega Chart is eleven pages pointing at the Vega and Vega-Lite grammars — implementing it is implementing Vega, and "we have a Vega Chart" would be a claim about a grammar rather than about Workshop.
+- **The source is one sentence in an overview list, with no section behind it.** Status Tracker, Waterfall Chart, Header text and Comments. Building from a sentence means inventing the specification and then claiming parity against it. §215's Object Selector was built on exactly one such sentence, so this is a threshold rather than a rule — but a sentence like "enables collaboration in a Workshop module" describes nothing to build.
+- **They rest on a Foundry service this platform does not have.** Resource List and Linked Compass Resources need Compass; Observability Chart needs platform telemetry; Data Freshness needs per-datasource index times; Edit History needs per-object-type edit tracking; Audio and Transcription Display and Audio Recorder need the `media reference` property type. Each would be a platform unit wearing a widget's clothes. **Spreadsheet Display needs that same property type and is *not* here** — it stays ○, because "blocked on something we have not built" and "decided against" are different states and the mark is what keeps them apart.
+- **A scope call, plainly.** PDF Viewer, Video Display and Image Annotation have real pages and real specifications, and are not being built. Saying so is the difference between a boundary and a gap.
+
+The mark is what makes this reversible: `grep '⊘' docs/parity/*.md` is the whole list, and nothing was deleted to produce it.
+
 **Platform-wide:** AIP Assist, Approvals, Checkpoint, Cipher, Sensitive Data Scanner, Data Lifetime, Walkthroughs, Training, OSDK, Compute Modules, MCP servers, Global Branching.
 
 Two of these deserve a note rather than a line. **Global Branching** — one branch spanning a pipeline, an ontology and a Workshop module — is what makes Foundry's per-application branching cohere (`foundry-branching` p.2–3). We are not building it, but every branching decision inside these five specs should leave the door open. **Code Workspaces** is explicitly *backed by* Code Repositories (`code-workspaces` p.2–3), so it is a layer on top of in-scope work, not a competitor to it.
@@ -55,7 +64,8 @@ Each spec is a table of Foundry features with a status and a citation.
 |---|---|
 | ✅ | at parity — the feature exists and behaves as documented |
 | ◑ | partial — exists but materially narrower than the documented behaviour; the gap is named |
-| ○ | absent |
+| ○ | absent — not built, and still on the target |
+| ⊘ | **out of scope** — deliberately not building it, with the reason on the row |
 | `[fn]` | depends on the Functions runtime decision above |
 | `[?]` | Foundry behaviour not fully determinable from `docs/pal/` — needs a judgement call, flagged rather than guessed |
 

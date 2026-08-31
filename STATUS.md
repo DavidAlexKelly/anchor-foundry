@@ -4290,6 +4290,65 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 224. Fifteen widgets out of scope, and a mark that says so (this session)
+
+Ten widgets dropped on the user's call, plus the five already dropped this session, all now
+carrying a **⊘** mark in `workshop.md` §10 with the reason on the row: Header text, Comments,
+Vega Chart, Audio and Transcription Display, Audio Recorder, Resource List, Linked Compass
+Resources, Data Freshness, Edit History, Observability Chart — and Status Tracker, Waterfall
+Chart, PDF Viewer, Video Display, Image Annotation.
+
+**Nothing was deleted, and that is the whole of the decision.** A deleted row makes the next
+tally read better and tells nobody that a call was taken; the parity README already says
+out-of-scope things are "named so that skipping them is a decision rather than an omission",
+and that rule did not previously reach *inside* an application in scope. A whole product is
+easy to put out of scope in one line. A widget inside Workshop is not, so each of the fifteen
+carries its own sentence.
+
+**○ and ⊘ are different states**, and the mark exists to stop them merging: "not built yet"
+and "not being built" look identical in a checklist and mean opposite things to whoever reads
+it next. The tally now reads 30 built, 15 out of scope, 8 open, out of 53 — where before it
+read "30 of ~52" over a denominator that quietly included things nobody intended to build.
+
+The reasons sort into four kinds, and only the first is about the widget:
+
+* **The specification is somebody else's.** Vega Chart is eleven pages pointing at the Vega
+  and Vega-Lite grammars. Implementing it is implementing Vega, and "we have a Vega Chart"
+  would be a claim about a grammar rather than about Workshop.
+* **The source is one sentence in an overview list.** Header text, Comments, Status Tracker,
+  Waterfall Chart. §215's Object Selector was built from exactly one such sentence, so this is
+  a threshold rather than a rule — but "enables collaboration in a Workshop module" chooses
+  none of threads, mentions, notifications or permissions, and building it means inventing the
+  specification and then claiming parity against it.
+* **They rest on a service this platform does not have.** Compass (Resource List, Linked
+  Compass Resources), platform telemetry (Observability Chart), per-datasource index times
+  (Data Freshness), per-object-type edit tracking (Edit History), and the `media reference`
+  property type (Audio and Transcription Display, Audio Recorder). Each is a platform unit
+  wearing a widget's clothes.
+* **A scope call, plainly.** PDF Viewer, Video Display and Image Annotation have real pages
+  and real specifications and are not being built.
+
+**Two rows were nearly recorded wrong, in opposite directions.** Spreadsheet Display was marked
+⊘ and is not on the list — it needs the same `media reference` property type as the two audio
+widgets, which makes it *blocked*, not declined, and it stays ○. And Audio Recorder was missed,
+because the table row read `| Audio |` while the user's line said "Audio Recorder": the row
+title had been transcribed from p.480's overview list rather than from p.514's section header.
+Two other titles were wrong the same way and are corrected here — "Audio and Video Display" is
+p.375's **Audio and Transcription Display**, which is a different widget from Video Display
+sitting two rows below it.
+
+No code changed; 1267 unit, 597 browser, 1632 API (2 skipped) unaffected.
+
+Build-order item 9 is now eight widgets rather than twenty-three, and is written out in
+priority order with what each rests on. Items 4 and 6 still hold widget *depth* rather than new
+widgets: the Object Table's p.223 multi-column default sorts, its inline editing, and Inline
+Action depth.
+
+---
+---
+---
+---
+
 ### 223. The Media Preview, and a storage decision already made (this session)
 
 p.363-364's widget: p.363's two media sources — a **media string** (a media URL, a data URL
@@ -6116,6 +6175,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **"Not built yet" and "not being built" are different states, and a checklist with one mark for both loses the decision rather than the work.** §224 put fifteen Workshop widgets out of scope and the temptation was to delete their rows: the tally reads better and the document gets shorter. What that loses is not the widget — nobody wanted it — but the *fact that somebody decided*, which is the only thing a reader a year later cannot reconstruct. The parity README had the rule already ("named so that skipping them is a decision rather than an omission") and applied it only to whole products, never inside an application in scope. So the fix was a mark (⊘) and a sentence per row, not an edit to the inventory. The tell that a checklist needs this: a denominator that quietly includes things nobody intends to build, which makes every percentage in it a claim about a target that no longer exists.
+
+- **A row title transcribed from a summary is not the same string as the thing it names.** §224 nearly missed dropping the Audio Recorder because `workshop.md`'s row read `| Audio |` — taken from p.480's one-line overview list rather than from p.514's section header. Two more were wrong the same way: "Audio and Video Display" is p.375's **Audio and Transcription Display**, a different widget from the Video Display two rows below it, and "Prominent Terms" is p.475's **Prominent Term**. Overview lists compress; section headers name. The failure is quiet because a shortened title still *looks* like the widget, so it matches when you read it and misses when you grep it or when somebody hands you a list — which is exactly what happened.
 
 - **A page range is a claim about how big a unit is, and one read off a section header measures the header.** §223 cited the PDF Viewer as p.379-382 from where its heading starts and where the next widget's content appeared to begin. Reading the pages to write down what dropping it would cost put it at **p.379-384**, and the two extra pages are not more of the same: p.383-384 is the viewer's **annotation layers**, which read and write annotation objects and edit them through Actions, with a selection's page number and bounding boxes bound to action parameters. The widget is a writeback surface with a document viewer on top. A range that was two pages short described a unit that was a fraction of the real one, and every estimate downstream of it would have inherited that. The tell is a citation produced by locating a heading rather than by reading to the end of the section — and the fix is the same rule §216 wrote for build orders, applied to page numbers: **open what a line cites.**
 
