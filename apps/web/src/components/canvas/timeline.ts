@@ -61,11 +61,14 @@ export function orderOf(raw: unknown): string {
 
 /** p.349's order, as an `object_sets` sort on p.348's date property.
  *
- * **The whole reason this widget waited for decision 0006.** `-name` is
- * descending and `name` ascending, which is the shape `parse_sort` takes; a
- * server that could not order by a property would have had to send back
- * whatever it had and let the browser sort a page, and a page sorted after the
- * fact is the wrong page.
+ * **The whole reason this widget waited for decision 0006** — and the reason is
+ * *paging*, precisely. `-name` is descending and `name` ascending, the shape
+ * `parse_sort` takes. `eventsOf` re-sorts everything the browser has, so on a
+ * page holding the whole set this changes nothing anybody can see; what it
+ * decides is **which objects are on the page**. That is the difference between
+ * "the earliest twenty events" and "twenty events, and here are their dates" —
+ * and a server that could not order by a property could only answer the second
+ * while looking like it had answered the first.
  *
  * `null` when there is no date property, so a caller asks the server for
  * nothing rather than asking it for an ordering over a property nobody chose.

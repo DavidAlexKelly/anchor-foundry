@@ -33,15 +33,21 @@ from playwright.sync_api import expect
 from api import Module, layout, object_set
 from conftest import open_builder, open_module, settled
 
-# **Written in an order that is not their date order**, which is the whole
-# point: a sync stamps `updated_at` in write order, so a timeline that fell back
-# to the platform's old `recent` sort would come back in *this* order rather
-# than in `seen` order. Every date-order assertion below would pass on the old
-# platform if these were written chronologically.
+# **Three orderings, deliberately all different**: the order these are written,
+# the order their keys sort in, and the order their dates run. A sync stamps
+# every row in one batch with one `updated_at`, so the platform's default
+# `recent` sort falls through to its `primary_key` tie-break - which means a
+# fixture whose keys ran in date order could not tell a real date sort from no
+# sort at all. That is what the mutation harness found: with four objects and a
+# page of fifty, every object comes back whatever the sort, and the browser
+# re-sorts them anyway.
+#
+# So `S1` is Bravo and `S4` is Alpha, and `test_the_page_is_the_earliest_by_date`
+# is where the server sort is actually observable.
 SITES = [
-    {"id": "S2", "name": "Bravo", "seen": "2026-03-01", "region": "south"},
-    {"id": "S4", "name": "Delta", "seen": "2026-11-30", "region": "east"},
-    {"id": "S1", "name": "Alpha", "seen": "2026-01-05", "region": "north"},
+    {"id": "S1", "name": "Bravo", "seen": "2026-03-01", "region": "south"},
+    {"id": "S2", "name": "Delta", "seen": "2026-11-30", "region": "east"},
+    {"id": "S4", "name": "Alpha", "seen": "2026-01-05", "region": "north"},
     {"id": "S3", "name": "Charlie", "seen": "2026-06-15", "region": "north"},
 ]
 
@@ -139,10 +145,15 @@ def titles(page) -> list[str]:
 def test_events_come_back_in_date_order_not_sync_order(page, api, ontology) -> None:
     """**The assertion the whole of §220 and §221 was for.**
 
-    The fixture is written in an order that is not its date order, so a timeline
-    ordered by `updated_at` — which is all the platform could do before decision
-    0006 was built — comes back as Bravo, Delta, Alpha, Charlie. In date order,
-    newest first, it is Delta, Charlie, Bravo, Alpha.
+    The fixture's keys do not run in date order, so a timeline falling through
+    to the platform's old `recent` sort - which ties on `primary_key`, every row
+    having been stamped in one sync - would come back Bravo, Delta, Charlie,
+    Alpha. In date order, newest first, it is Delta, Charlie, Bravo, Alpha.
+
+    **This alone does not prove the *server* sorted**, and the harness said so:
+    the browser merges layers and re-sorts, so with every object on one page the
+    two are indistinguishable. `test_the_page_is_the_earliest_by_date` is the
+    one that can tell.
     """
     mod = build(api, ontology, "Timeline order")
     open_module(page, mod)
@@ -170,6 +181,43 @@ def test_the_date_of_each_event_is_shown(page, api, ontology) -> None:
 
     stamps = [t.strip() for t in page.get_by_test_id("timeline-when").all_text_contents()]
     assert stamps == ["2026-01-05", "2026-03-01", "2026-06-15", "2026-11-30"]
+
+
+def test_the_page_is_the_earliest_by_date_not_the_earliest_by_key(
+    page, api, ontology
+) -> None:
+    """**Where the server sort is observable at all**, and the reason §220 and
+    §221 had to come first.
+
+    The browser merges the layers and orders them, so on a page holding every
+    object the sort changes nothing anybody can see. It decides **which objects
+    are on the page** - and that is the whole difference between "the earliest
+    two events" and "two events, and here are their dates".
+
+    Found by the mutation harness: removing the sort from the request survived
+    every other test in this file.
+    """
+    mod = build(api, ontology, "Timeline paging",
+                {"order": "oldest_first", "pageSize": 2})
+    open_module(page, mod)
+    settled(page)
+
+    expect(events(page)).to_have_count(2)
+    # Alpha and Bravo are the two earliest by date. By key - which is where the
+    # default sort lands, every row sharing one sync timestamp - they would be
+    # Bravo and Delta.
+    assert titles(page) == ["Alpha", "Bravo"]
+
+
+def test_the_newest_page_is_the_other_end(page, api, ontology) -> None:
+    """The same claim from the other side, because a widget that always asked
+    for ascending would pass the test above and be wrong for p.349's default."""
+    mod = build(api, ontology, "Timeline paging newest",
+                {"order": "newest_first", "pageSize": 2})
+    open_module(page, mod)
+    settled(page)
+
+    assert titles(page) == ["Delta", "Charlie"]
 
 
 # ---- p.348's layers ----------------------------------------------------------

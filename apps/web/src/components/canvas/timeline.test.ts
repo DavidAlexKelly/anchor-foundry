@@ -37,10 +37,11 @@ describe("p.349's orientation and order", () => {
 
 describe("p.348's date property, as a server-side sort", () => {
   it("asks for the property descending when the newest come first", () => {
-    // **The whole reason this widget waited for decision 0006.** Ordering by a
-    // property was refused, so a timeline would have been drawn from a page
-    // ordered by *when a row last changed* - the 200 most recently changed
-    // objects, where a viewer reads "the earliest 200".
+    // **The whole reason this widget waited for decision 0006**, and the
+    // reason is paging: `eventsOf` re-sorts what the browser has, so this
+    // decides *which* objects are on the page rather than their drawn order.
+    // Without it a timeline shows the 200 most recently *changed* objects
+    // where a viewer reads "the earliest 200".
     expect(sortFor("newest_first", "seen")).toBe("-seen");
     expect(sortFor("oldest_first", "seen")).toBe("seen");
   });
