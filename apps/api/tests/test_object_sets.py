@@ -445,6 +445,74 @@ def test_every_sort_in_a_list_is_validated_not_just_the_first() -> None:
         object_sets.parse_sorts(["key", "nope"])
 
 
+# ---- the tie-break: once, and last, on both stores ---------------------------
+# Asserted on the *clause* each store builds rather than only on results, for
+# this file's own stated reason: for a store gateway the request it forms is the
+# contract. A results-only test cannot see a redundant tie-break at all - the
+# page is identical either way until a fixture happens to have a tie in the
+# right place, and "happens to" is what these assertions remove.
+def test_no_sort_asks_both_stores_for_the_default_ordering() -> None:
+    """`()` means the caller asked for nothing, and both stores turn that into
+    `DEFAULT_SORT` - because a page with no stated order cannot be paged
+    consistently, so p.223's "the data is not sorted" is not available here."""
+    from src.services.instance_store import _sort_clause
+    from src.services.instances import _order_by
+
+    default = object_sets.parse_sort(object_sets.DEFAULT_SORT)
+    assert _order_by((), {}) == _order_by((default,), {})
+    assert _sort_clause(()) == _sort_clause((default,))
+
+
+def test_the_key_tiebreak_appears_once_and_last_on_both_stores() -> None:
+    """`primary_key` is unique, so anything ordered after it can never fire. A
+    tie-break carried by each entry would leave an author's second and third
+    orderings configured and dead - and the page would still look like a page.
+    """
+    from src.services.instance_store import _sort_clause
+    from src.services.instances import _order_by
+
+    types = {"reading": "integer", "seen": "timestamp"}
+    sorts = object_sets.parse_sorts(["recent", "reading", "seen"], property_types=types)
+
+    sql = _order_by(sorts, {})
+    assert sql.count("i.primary_key") == 1, sql
+    assert sql.strip().endswith("i.primary_key ASC"), sql
+
+    clause = _sort_clause(sorts)
+    assert [f for f in clause if "primary_key" in f] == [{"primary_key": "asc"}]
+    assert clause[-1] == {"primary_key": "asc"}, clause
+
+
+def test_a_sort_by_key_is_its_own_tiebreak_and_gets_no_second_one() -> None:
+    """`ORDER BY … i.primary_key DESC, i.primary_key ASC` is not wrong, it is
+    unreadable - and it says the author's descending key sort might be
+    overridden, which it cannot be."""
+    from src.services.instance_store import _sort_clause
+    from src.services.instances import _order_by
+
+    sorts = object_sets.parse_sorts(["-key"])
+    assert _order_by(sorts, {}).count("i.primary_key") == 1
+    assert _sort_clause(sorts) == [{"primary_key": "desc"}]
+
+
+def test_a_fixed_time_sort_does_not_carry_a_tiebreak_of_its_own() -> None:
+    """The survivor this test was written for: `recent` used to be the finished
+    clause `updated_at DESC, primary_key ASC`, which as one entry of several
+    would decide every row before the second sort was consulted."""
+    from src.services.instance_store import _sort_clause
+    from src.services.instances import _order_by
+
+    types = {"reading": "integer"}
+    sorts = object_sets.parse_sorts(["recent", "reading"], property_types=types)
+    sql = _order_by(sorts, {})
+    assert sql.index("updated_at") < sql.index("jsonb_extract_path_text"), sql
+    assert sql.index("jsonb_extract_path_text") < sql.index("i.primary_key"), sql
+
+    clause = _sort_clause(sorts)
+    assert clause[0] == {"updated_at": "desc"}
+    assert "properties.reading" in clause[1]
+
+
 def test_comparison_is_on_the_text_of_a_value() -> None:
     """The same rule links use: two independently-mapped sources can disagree
     about whether a code is a string or a number."""
@@ -1015,6 +1083,24 @@ def test_the_key_tiebreak_is_appended_once_and_last(
     assert [i["primary_key"] for i in grouped["instances"]] != [
         i["primary_key"] for i in two["instances"]
     ], "the second sort changed nothing, so it is dead"
+
+
+def test_a_time_sort_followed_by_a_property_sort_lets_the_property_decide(
+    client: TestClient, fx: Fixture, typed: str
+) -> None:
+    """One sync writes every row in the same instant, so `recent` ties *every*
+    row here - which makes this the sharpest version of the tie-break rule: the
+    second sort has to decide the entire page.
+
+    With `recent` carrying its own `primary_key` tie-break, as it did before
+    p.223, the page comes back in key order and `reading` never runs.
+    """
+    page = evaluate(
+        client, fx, {"object_type_id": typed, "filters": []}, sort=["recent", "reading"]
+    )
+    keys = [i["primary_key"] for i in page["instances"]]
+    assert keys != sorted(keys), "the page is in key order, so the second sort is dead"
+    assert keys == ["7", "4", "1", "0", "3", "5", "2", "6"]
 
 
 def test_two_property_sorts_do_not_collide_on_one_bind(
