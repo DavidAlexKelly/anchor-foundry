@@ -523,7 +523,18 @@ class OpenSearchInstanceStore:
                 # migration that silently moved the first ten thousand of a
                 # larger type would be the worst possible outcome here: a
                 # workspace that looks migrated and is missing rows.
-                "sort": [{"primary_key": "asc"}],
+                #
+                # **Sorted on `source_id` *and* `primary_key`, because neither
+                # is unique alone.** Instance identity is the pair — two sources
+                # feeding one object type can each hold a row keyed "1", which
+                # `delete_instances` says in as many words. `search_after` on a
+                # non-unique sort skips every document sharing the cursor's
+                # value, so a type fed by two datasets would have lost rows
+                # here: quietly, and in proportion to how many keys the two
+                # datasets happen to share. It is the same rule `_sort_clause`
+                # already states for a viewer's page, where the symptom is a
+                # repeated row rather than a missing one.
+                "sort": [{"source_id": "asc"}, {"primary_key": "asc"}],
                 "size": self.MIGRATION_BATCH,
             }
             if after is not None:
@@ -554,7 +565,19 @@ class OpenSearchInstanceStore:
                     f"migrating {object_type_id} had {len(failed)} refusal(s): {failed[:3]}"
                 )
             moved += len(hits)
-            after = hits[-1]["sort"]
+            cursor = hits[-1]["sort"]
+            # **A cursor that does not advance is a hang, and a hang is the
+            # worst failure a migration can have**: nothing to read, nothing
+            # logged, and no way to tell it from a large one still working.
+            # Reachable if a store ever ignores `search_after` or answers a
+            # page it has already given — found by a mutant that did exactly
+            # that and spun the harness for four minutes rather than failing.
+            if cursor == after:
+                raise RuntimeError(
+                    f"migrating {object_type_id} made no progress past {cursor!r} - "
+                    "the store is not honouring search_after"
+                )
+            after = cursor
         return moved
 
     async def drop_type(self, *, search_prefix: str, object_type_id: UUID) -> None:

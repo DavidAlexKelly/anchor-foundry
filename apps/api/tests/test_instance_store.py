@@ -415,6 +415,57 @@ async def test_the_migration_pages_past_one_batch(store) -> None:
 
 
 @pytest.mark.anyio
+async def test_the_migration_keeps_two_sources_that_share_a_key(store) -> None:
+    """**Instance identity is (source_id, primary_key), not the key alone**, and
+    `delete_instances` says so: two datasets feeding one object type can each
+    hold a row keyed "1".
+
+    That makes `primary_key` a non-unique sort, and `search_after` on a
+    non-unique sort **skips every document sharing the cursor's value**. Paged
+    on the key alone this migration lost one of each colliding pair - quietly,
+    and in proportion to how many keys the two datasets happened to share.
+    Batched small so the collision straddles a page boundary, which is the only
+    arrangement in which the bug appears at all.
+    """
+    prefix = "ws-split-two-sources-"
+    type_id = str(uuid.uuid4())
+    other = "44444444-4444-4444-4444-444444444444"
+    legacy = instance_mapping.legacy_index_name(prefix)
+    await store._client.indices.create(index=legacy, body={"mappings": {}})
+    body: list[dict] = []
+    for source in (SOURCE, other):
+        for key in ("1", "2", "3"):
+            body.append({"update": {"_index": legacy,
+                                    "_id": instance_store._doc_id(uuid.UUID(source), key)}})
+            body.append({"doc": {"object_type_id": type_id, "source_id": source,
+                                 "primary_key": key,
+                                 "properties": {"full_name": f"{source[:4]}-{key}"},
+                                 "updated_at": "2026-01-01T00:00:00+00:00"},
+                         "doc_as_upsert": True})
+    await store._client.bulk(body=body, refresh="wait_for")
+
+    # **Three, not two.** With a batch of two each colliding pair lands wholly
+    # inside one page and the bug cannot appear - the cursor only skips
+    # documents that share its value and sit *after* it. Three splits the "2"s
+    # across the boundary, which is the arrangement that loses one.
+    original = store.MIGRATION_BATCH
+    store.MIGRATION_BATCH = 3
+    try:
+        moved = await store.adopt_legacy_index(
+            search_prefix=prefix, object_type_id=uuid.UUID(type_id), declared=DECLARED
+        )
+    finally:
+        store.MIGRATION_BATCH = original
+
+    assert moved == 6, "a shared primary key was paged over"
+    rows, total = await store.list_for_type(
+        search_prefix=prefix, object_type_id=uuid.UUID(type_id), limit=50, offset=0
+    )
+    assert total == 6
+    assert len({r["properties"]["full_name"] for r in rows}) == 6
+
+
+@pytest.mark.anyio
 async def test_the_migration_is_safe_to_run_twice(store) -> None:
     """**Run it, flip, run it again.** Every document id is derived from
     (source_id, primary_key), so a second pass rewrites the same documents - it
