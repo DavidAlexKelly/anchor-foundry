@@ -1,7 +1,7 @@
 # 0006 — Typed instance properties
 
-**Status:** accepted; §1, §2, §4 (partly), §5, §6 and §7 built (`STATUS.md` §112, §220, §221).
-Outstanding: §3's map bounding box, and numeric aggregations
+**Status:** accepted; §1, §2, §4 (partly), §5, §6 and §7 built (`STATUS.md` §112, §220, §221,
+§226). Outstanding: **§3's map bounding box**, and nothing else
 **Context:** the blocker `STATUS.md` names as holding four separate features
 
 **What is built, and what is not.** §220 built the structural half — one index per object
@@ -22,9 +22,24 @@ disagree invisibly:
   differently on a deployment configured to anything else — a cross-store divergence hiding in
   a server setting, which is the shape this whole document exists to remove.
 
-Still outstanding: **§3's map bounding box**, and the **numeric aggregations** (`sum`, `avg`,
-`min`, `max`). Both are now possible for the same reason ordered filters were; neither has
-been built.
+§226 then shipped the **numeric aggregations** on both stores, and two rules from that work
+belong here for the same reason §221's do — each is a place the stores would otherwise
+disagree without anybody seeing it:
+
+* **The aggregatable types are narrower than the orderable ones**, and the two dates are the
+  difference. A `min` over a date is a sensible question, and it is refused: Postgres answers
+  with a timestamp and OpenSearch's `min` aggregation answers with epoch milliseconds. Making
+  them agree is a conversion nothing else needs, for a question p.310 does not ask — its list
+  includes an *average*, and the average of two dates is not a date.
+* **Nothing aggregates to nothing, and that includes `sum`.** Zero is the identity of addition
+  and both a SQL `sum()` and a reader would accept it, but Postgres returns NULL over no rows
+  where OpenSearch returns `0.0` — so the two stores disagree by default on the emptiest case
+  there is. `None` is the answer on both. The store asks a `value_count` beside every numeric
+  aggregation to get it, because "how many documents matched" is the wrong test: a document can
+  match the filters and carry no value for the property at all.
+
+Still outstanding: **§3's map bounding box**, and nothing else. It is possible for the same
+reason these were; it has not been built.
 
 Four things are refused today, each with the same sentence in its refusal, and each with a
 one-line implementation that was deliberately not written:
@@ -32,7 +47,7 @@ one-line implementation that was deliberately not written:
 | Refused | Where | Now |
 |---|---|---|
 | Ordered filters — `gt`, `gte`, `lt`, `lte` | `object_sets.ORDERED_OPERATORS` | **built** (§221) |
-| Numeric aggregations — `sum`, `avg`, `min`, `max` | `object_sets.parse_aggregation` (`STATUS.md` §74) | outstanding |
+| Numeric aggregations — `sum`, `avg`, `min`, `max` | `object_sets.parse_aggregation` (`STATUS.md` §74) | **built** (§226) |
 | Sorting a table by a property | `object_sets.SORTS`, `PROPERTY_SORT_HINT` (§83) | **built** (§221) |
 | Selecting an area on a map to filter by it | roadmap 1.5, the Map row (§86) | outstanding (§3) |
 

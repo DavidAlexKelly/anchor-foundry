@@ -671,26 +671,98 @@ def _set_predicate(
     return " AND ".join(where), params
 
 
+def _named(aggregation: "Any") -> "Any":
+    """An `object_sets.Aggregation`, from one or from the bare name callers
+    used before §226.
+
+    The string door stays open for the same reason `_order_by` still takes one:
+    a store gateway is called from tests and from the worker as well as from
+    the route, and a bare `"count"` needs no ontology to be legal. A *numeric*
+    name arriving as a string has no declared type behind it, so it is refused
+    here rather than run - which is §221's rule about the caller that did not
+    pass the new argument.
+    """
+    from . import object_sets
+
+    if not isinstance(aggregation, str):
+        return aggregation
+    if aggregation in object_sets.NUMERIC_AGGREGATIONS:
+        raise ValueError(
+            f"{aggregation} needs a validated aggregation carrying its property's "
+            "declared type. " + object_sets.AGGREGATION_HINT
+        )
+    return object_sets.Aggregation(name=aggregation)
+
+
+def _number(value: "Any", agg: "Any") -> "float | int | None":
+    """What an aggregate returns, once.
+
+    `None` stays `None` - the empty set. `min` and `max` of an `integer`
+    property come back as the whole numbers they were, because a card reading
+    "40.0 beds" over a column of whole numbers is a value the ontology never
+    held. `avg` stays a float whatever the column, since the average of
+    integers is not one.
+    """
+    if value is None:
+        return None
+    number = float(value)
+    if agg.data_type == "integer" and agg.name in ("sum", "min", "max"):
+        return int(number)
+    return number
+
+
 async def aggregate_object_set(
     conn: AsyncConnection,
     *,
     object_type_id: UUID,
     filters: tuple[Any, ...],
-    aggregation: str,
-    property_name: str | None,
-) -> int:
-    """One number over a whole set, Postgres edition (roadmap 1.5).
+    aggregation: "Any",
+    property_name: str | None = None,
+) -> "float | int | None":
+    """One number over a whole set, Postgres edition (roadmap 1.5; §226).
 
     Reuses `_set_predicate` so the number counts exactly the rows
     `evaluate_object_set` would page through. Two predicates would be two
     definitions of the set, and the first time they drifted a Metric Card
     would count rows the table beside it does not show.
+
+    **`None` when the set is empty, for all four of p.310's numeric
+    aggregations** - including `sum`. The identity of addition is zero and SQL
+    would happily return it, and a card reading "0" is indistinguishable from a
+    card reading a real zero: "total capacity: 0" says the sites have no
+    capacity, where the truth is that there are no sites. §210's rule - the
+    unresolved state is not the empty one - and it is also what stops the two
+    stores disagreeing, since Postgres `sum()` over no rows is NULL and
+    OpenSearch's sum aggregation is 0.0.
     """
+    agg = _named(aggregation)
     predicate, params = _set_predicate(object_type_id, filters)
-    if aggregation == "count_distinct":
+    if agg.numeric:
+        # The same `pg_input_is_valid` extraction an ordered filter and a
+        # property sort use, so "average capacity" and "capacity > 40" agree
+        # about which rows have a capacity at all. A value that will not cast
+        # is NULL, and every aggregate here ignores NULLs - so an unparseable
+        # row is **left out of the average rather than counted as zero**, which
+        # is the same thing §221 means by "not on the ordering at all".
+        params["aggprop"] = agg.property
+        value = _comparable_sql(
+            "jsonb_extract_path_text(i.properties, :aggprop)", agg.data_type
+        )
+        row = await fetch_one(
+            conn,
+            f"SELECT {agg.name}({value}) AS n FROM object_instances i WHERE {predicate}",
+            params,
+        )
+        return _number(row["n"] if row else None, agg)
+    if agg.name == "count_distinct":
         # Same text extraction the filters use, so "how many distinct regions"
         # and "where region = north" agree about what a region *is*.
-        params["prop"] = property_name
+        #
+        # **From the aggregation, falling back to the argument.** A validated
+        # `Aggregation` carries its own property; the bare-string callers that
+        # predate §226 pass it separately. Reading only the argument is how the
+        # route's first version of this returned a distinct count of NULL.
+        params["prop"] = agg.property or property_name
         row = await fetch_one(
             conn,
             f"""

@@ -114,6 +114,18 @@ class MappingError(ValueError):
     """
 
 
+# The metric aggregations this platform issues (§226), plus the `value_count`
+# beside them that tells "nothing to aggregate" from "aggregated to zero".
+METRIC_AGGREGATIONS = ("sum", "avg", "min", "max", "value_count")
+
+# The mapped types a numeric aggregation may run over. Deliberately not
+# including `date`: a real cluster *will* min a date field and answers in epoch
+# milliseconds, which is exactly why `object_sets.AGGREGATABLE_TYPES` refuses
+# one, and a fixture that accepted it would let that refusal be deleted without
+# a test noticing.
+NUMERIC_FIELD_TYPES = ("integer", "long", "float", "double")
+
+
 def _declared_type(index: str, field: str) -> str | None:
     """The mapping's type for a field path, or None where nothing declares one.
 
@@ -771,6 +783,10 @@ class Handler(BaseHTTPRequestHandler):
             if "date_histogram" in spec:
                 computed[name] = self._date_histogram(spec["date_histogram"], matched)
                 continue
+            metric = next((k for k in METRIC_AGGREGATIONS if k in spec), None)
+            if metric is not None:
+                computed[name] = self._metric(metric, spec[metric]["field"], matched)
+                continue
             kind = "cardinality" if "cardinality" in spec else (
                 "terms" if "terms" in spec else None
             )
@@ -820,6 +836,52 @@ class Handler(BaseHTTPRequestHandler):
                 ]
             }
         return computed
+
+    def _metric(self, kind: str, field: str, matched: list[tuple[str, str, dict]]) -> dict:
+        """§226's numeric aggregations, over the values the mapping declares.
+
+        **Refuses a numeric aggregation on a text field, because a real cluster
+        does.** That refusal is the whole reason decision 0006 §7 asked the
+        fixture to enforce mappings: without it, a `sum` over `properties.x`
+        would quietly work here and fail on a deployment, which is the shape of
+        every disagreement this file exists to catch. `value_count` is exempt -
+        counting how many documents have a value is defined for any type.
+
+        Values are read as stored, which is already coerced by
+        `_coerce` on write - so a document that could not be typed never got
+        in, and is absent here for the same reason Postgres sees NULL for it.
+        """
+        parts = field.split(".")
+        values, seen_text = [], False
+        for pair in matched:
+            declared = _declared_type(pair[0], field)
+            if kind != "value_count" and declared not in NUMERIC_FIELD_TYPES:
+                seen_text = True
+                continue
+            cursor = pair[2]
+            for part in parts:
+                cursor = cursor.get(part) if isinstance(cursor, dict) else None
+            if cursor is not None:
+                values.append(cursor)
+        if seen_text and not values:
+            raise ValueError(
+                f"Field [{field}] of type [text] is not supported for aggregation [{kind}]"
+            )
+        if kind == "value_count":
+            return {"value": len(values)}
+        if not values:
+            # What a real cluster answers, and it differs by aggregation: a sum
+            # over nothing is 0.0 and a min over nothing is null. The store is
+            # what turns both into "nothing", and it can only be tested against
+            # a fixture that reproduces the disagreement rather than smoothing
+            # it - see `instance_store.aggregate_object_set`.
+            return {"value": 0.0 if kind == "sum" else None}
+        numbers = [float(v) for v in values]
+        answer = {
+            "sum": sum(numbers), "avg": sum(numbers) / len(numbers),
+            "min": min(numbers), "max": max(numbers),
+        }[kind]
+        return {"value": answer}
 
     def _date_histogram(self, spec: dict, matched: list[tuple[str, str, dict]]) -> dict:
         """Calendar buckets over a date field, keyed in epoch milliseconds.
