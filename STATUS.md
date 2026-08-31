@@ -4359,7 +4359,7 @@ stopped fitting a later one is the real case.
 list. A harness's selection is a second definition of "the tests for this unit", and it will
 disagree with the first in whatever way you did not think to check.
 
-**1674 API tests** (was 1664 at this unit's first commit, 1648 at §225), 2 skipped; 1293 unit
+**1673 API tests** (was 1664 at this unit's first commit, 1648 at §225), 2 skipped; 1293 unit
 and 611 browser unchanged — this unit is entirely below the API.
 
 Decision 0006 has **§3's map bounding box** left and nothing else. `workshop.md`'s **Metric
