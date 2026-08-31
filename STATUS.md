@@ -4413,9 +4413,13 @@ coverage it does not have.
 
 ---
 
-**MUTANT_SUMMARY**
+**49 mutants across three layers — 26 on the mapping module, 12 on the store, 11 on the fixture
+— 49 caught, 0 survivors, 0 hangs, 0 no-ops** after the fixes above. That took five runs: the
+first two were the leaked server, the third turned four fake catches into real survivors, the
+fourth found the migration's non-unique sort, and the fifth is the clean one.
 
-**TEST_COUNTS**
+**1583 API tests** (was 1571 at §220's first commit, 1533 at §219), 2 skipped; 1175 unit and
+559 browser tests unchanged — this unit is entirely below the API.
 
 **No operator ships here, and that is 0006 §6 rather than an unfinished unit.** Ordered
 comparisons, numeric aggregations, property sorts and the map's bounding box all stay refused
