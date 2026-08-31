@@ -694,6 +694,22 @@ def _named(aggregation: "Any") -> "Any":
     return object_sets.Aggregation(name=aggregation)
 
 
+def _order_group_by(sized: bool) -> str:
+    """How a chart's buckets are ordered, as SQL.
+
+    A function so a test can assert the **tie-break** without needing rows that
+    expose it: §225's lesson, met again here — a sequential scan over a small
+    table is accidentally stable, so a bucket order with no second key produces
+    the right answer on every fixture small enough to write down.
+
+    `value ASC` either way. Without it, slices of equal size come back in
+    whatever order each store happens to produce, so two deployments draw the
+    same pie with its slices — and the legend beside it — in different
+    sequences, and one of them looks wrong to whoever knew the other.
+    """
+    return ("metric DESC, value ASC" if sized else "n DESC, value ASC")
+
+
 def _number(value: "Any", agg: "Any") -> "float | int | None":
     """What an aggregate returns, once.
 
@@ -821,15 +837,15 @@ async def group_object_set(
     predicate, params = _set_predicate(object_type_id, filters)
     params["prop"] = property_name
     params["limit"] = max(1, limit)
-    metric, present, order = "NULL", "", "n DESC, value ASC"
-    if agg is not None and agg.numeric:
+    sized = agg is not None and agg.numeric
+    metric, present, order = "NULL", "", _order_group_by(sized)
+    if sized:
         params["aggprop"] = agg.property
         value = _comparable_sql(
             "jsonb_extract_path_text(i.properties, :aggprop)", agg.data_type
         )
         metric = f"{agg.name}({value})"
         present = f" AND {value} IS NOT NULL"
-        order = "metric DESC, value ASC"
     rows = await fetch_all(
         conn,
         f"""
@@ -854,8 +870,11 @@ async def group_object_set(
         {k: v for k, v in params.items() if k != "limit"},
     )
     return (
-        [(str(r["value"]), int(r["n"]),
-          _number(r["metric"], agg) if agg is not None else None) for r in rows],
+        # No conditional: the SQL selects a literal `NULL` for the metric
+        # unless a numeric aggregation asked for one, and `_number` answers
+        # `None` for `None` before it looks at the aggregation at all. The
+        # branch that used to be here could not change an answer.
+        [(str(r["value"]), int(r["n"]), _number(r["metric"], agg)) for r in rows],
         int(total_row["n"]) if total_row else 0,
     )
 

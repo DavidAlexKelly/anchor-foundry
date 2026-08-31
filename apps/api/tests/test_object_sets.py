@@ -1933,6 +1933,15 @@ def test_slices_that_tie_on_the_metric_fall_through_to_their_label(
     assert len(tied) == 3, "the fixture stopped having three slices of one size"
     assert tied == sorted(tied), "tied slices did not fall through to the label"
 
+    # **And asserted on the ORDER BY as well as on the rows**, for §225's
+    # reason: a sequential scan over a small table is accidentally stable, so
+    # removing the tie-break changes no result here and the rows above would
+    # pass without it. What the statement asks for is the contract.
+    from src.services.instances import _order_group_by
+
+    assert _order_group_by(True).endswith("value ASC")
+    assert _order_group_by(False).endswith("value ASC")
+
 
 def test_the_truncation_flag_counts_only_the_slices_that_can_be_measured(
     client: TestClient, fx: Fixture, typed: str
