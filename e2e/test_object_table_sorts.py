@@ -68,6 +68,28 @@ def build(api, name: str, sort, *, columns: str = "name,priority"):
     return mod
 
 
+def save(page):
+    """Click Save and wait for **this** save, not for a moment (§201).
+
+    Waiting for "· saved" is not enough once a test saves twice: the header
+    renders it from `save.isSuccess`, which stays true, so the second wait
+    matches the *first* save's text and the assertion after it reads a document
+    the click never reached. The version number is what actually changes, so
+    the wait is for the header to stop saying what it said.
+    """
+    before = page.locator(".ws-actions .sub").text_content()
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.locator(".ws-actions .sub")).not_to_have_text(before)
+    expect(page.locator(".ws-actions .sub")).to_contain_text("saved")
+
+
+def sort_prop(mod):
+    """The `sort` prop **as the server holds it** - which is the only place the
+    string-versus-list shape is observable. Both read back the same on screen,
+    so a test that looked at the panel could not tell them apart."""
+    return mod.definition()["layout"]["tbl"]["props"]["sort"]
+
+
 def column(page, header: str = "Name") -> list[str]:
     """The rendered values of one column, top to bottom, **found by its header**.
 
@@ -155,6 +177,42 @@ def test_no_sort_still_renders_a_table(page, api) -> None:
     assert sorted(column(page)) == ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
 
 
+def test_a_document_holding_a_repeat_still_renders(page, api) -> None:
+    """**The widget reads the document before it sends it**, and this is where
+    that is observable.
+
+    The server *refuses* a repeated sort - the second entry can never break a
+    tie the first did not - so a document holding one would 422 and the table
+    would show its load error. A document can hold one easily: a hand-edit, a
+    paste, or the raw JSON tab. So the widget drops it on the way out, and the
+    table renders in the order the first entry asks for.
+
+    Every other test here passes a sort the server would have accepted as
+    written, which is why they cannot see the difference between sending the
+    prop and sending what was read from it.
+    """
+    mod = build(api, "Table sort repeat", ["priority", "priority"])
+    open_module(page, mod)
+    settled(page)
+
+    expect(page.get_by_text("Couldn't load these objects")).to_have_count(0)
+    assert column(page) == ["Bravo", "Alpha", "Charlie", "Echo", "Delta"]
+
+
+def test_a_document_holding_more_sorts_than_the_server_takes_still_renders(
+    page, api
+) -> None:
+    """The same rule at the other limit: seven orderings are refused outright,
+    and the widget sends the six it kept."""
+    mod = build(api, "Table sort overflow",
+                ["priority", "stamp", "key", "recent", "oldest", "-key", "-stamp"])
+    open_module(page, mod)
+    settled(page)
+
+    expect(page.get_by_text("Couldn't load these objects")).to_have_count(0)
+    assert column(page) == ["Bravo", "Echo", "Charlie", "Alpha", "Delta"]
+
+
 def test_a_sort_the_server_refuses_does_not_empty_the_table(page, api) -> None:
     """`name` is a string property, and decision 0006 refuses string ordering
     permanently - Postgres orders by the database collation and OpenSearch by
@@ -196,8 +254,12 @@ def test_a_sort_can_be_added_and_removed_in_the_panel(page, api) -> None:
     # Two rows, and the summary says what the order means in words.
     expect(page.get_by_test_id("table-sorts-summary")).to_contain_text("then")
 
-    page.get_by_test_id("table-sort-remove-1").click()
+    # **The first of the two, not the last.** Removing the last row is what
+    # `slice(0, -1)` also does, so a test that removed it could not tell the
+    # two apart - and what survives is the assertion that matters.
+    page.get_by_test_id("table-sort-remove-0").click()
     expect(page.get_by_test_id("table-sort-property-1")).to_have_count(0)
+    expect(page.get_by_test_id("table-sort-property-0")).to_have_value("stamp")
 
 
 def test_a_fixed_sort_offers_no_direction_of_its_own(page, api) -> None:
@@ -215,6 +277,43 @@ def test_a_fixed_sort_offers_no_direction_of_its_own(page, api) -> None:
     page.get_by_test_id("table-sort-kind-0").select_option("")
     expect(page.get_by_test_id("table-sort-property-0")).to_be_visible()
     expect(page.get_by_test_id("table-sort-direction-0")).to_be_visible()
+
+
+def test_one_sort_is_saved_as_a_string_and_several_as_a_list(page, api) -> None:
+    """**Asserted on the saved document, not on the panel.**
+
+    `["priority"]` and `"priority"` read back identically everywhere on screen,
+    so nothing a viewer or a builder can see distinguishes them. What they
+    change is the document - and decision 0002's whole point is that the
+    document is the thing that outlives the code, so a table with one ordering
+    must keep the shape every module before p.223 already had.
+    """
+    mod = build(api, "Table sort saved shape", "priority")
+    open_builder(page, mod)
+    settled(page)
+
+    page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
+    # Touch the row so the panel writes the prop rather than leaving the
+    # fixture's value in place - otherwise this asserts what `build` wrote.
+    page.get_by_test_id("table-sort-property-0").fill("stamp")
+    save(page)
+    assert sort_prop(mod) == "stamp"
+
+    page.get_by_test_id("table-sort-add").click()
+    page.get_by_test_id("table-sort-property-1").fill("priority")
+    save(page)
+    assert sort_prop(mod) == ["stamp", "priority"]
+
+    # And back down to one: the shape returns rather than staying a list, so a
+    # table does not carry the scar of having briefly had two orderings.
+    page.get_by_test_id("table-sort-remove-1").click()
+    # Wait for the row to be gone before saving. Clicking Save and then waiting
+    # for "saved" is not enough on its own: the header already said "saved" from
+    # the write above, so the wait matches the *previous* save and the assertion
+    # reads a document the click never reached. §201's rule, one level in.
+    expect(page.get_by_test_id("table-sort-property-1")).to_have_count(0)
+    save(page)
+    assert sort_prop(mod) == "stamp"
 
 
 def test_the_panel_stops_at_the_cap_the_server_enforces(page, api) -> None:
