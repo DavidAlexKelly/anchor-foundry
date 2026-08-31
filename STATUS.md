@@ -4368,9 +4368,21 @@ has no media-set service and an attachment key is the same idea under another na
 **media reference properties**, which are a property type the ontology does not have and
 therefore an ontology unit rather than a widget one.
 
-`workshop.md` build-order item 8 has **PDF Viewer** (p.379-382), **Video Display** (p.371) and
-**Image Annotation** (p.386-388) left. All three have real pages, checked per §216. The PDF
-Viewer starts with the question this unit deferred rather than with a widget.
+`workshop.md` build-order item 8 is **finished**, and the other three are **dropped on the
+user's call** — a narrowing of the boundary, not a gap in the source, which is the opposite of
+why Status Tracker and Waterfall went. **PDF Viewer** (p.379-384), **Video Display**
+(p.371-373) and **Image Annotation** (p.386-388) all have real pages, so the honest record is
+that this platform chose not to build three documented widgets rather than that it could not.
+The row for each stays ○, which remains true either way.
+
+Reading them to write that down corrected two citations made an hour earlier in this same
+file. The PDF Viewer runs **p.379-384**, not 379-382: p.383-384 is its **annotation layers**,
+which read and write annotation *objects*, fire events on selection, and edit or delete them
+through **Actions**, binding the selection's page number and bounding boxes to action
+parameters. It is a writeback surface with a document viewer on top, not a viewer with extras
+— so "starts with the stored-XSS question" was true and was also the smallest thing about it.
+**A page range is a claim about how big a unit is**, and one taken from a section header
+measures the header.
 
 ---
 ---
@@ -6104,6 +6116,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A page range is a claim about how big a unit is, and one read off a section header measures the header.** §223 cited the PDF Viewer as p.379-382 from where its heading starts and where the next widget's content appeared to begin. Reading the pages to write down what dropping it would cost put it at **p.379-384**, and the two extra pages are not more of the same: p.383-384 is the viewer's **annotation layers**, which read and write annotation objects and edit them through Actions, with a selection's page number and bounding boxes bound to action parameters. The widget is a writeback surface with a document viewer on top. A range that was two pages short described a unit that was a fraction of the real one, and every estimate downstream of it would have inherited that. The tell is a citation produced by locating a heading rather than by reading to the end of the section — and the fix is the same rule §216 wrote for build orders, applied to page numbers: **open what a line cites.**
 
 - **"No extension" and "no dot" are not the same sentence, and a test for a fallback needs an input that actually reaches it.** §223's `kindOfUrl` falls back to `unknown` when a URL carries no extension, and the test written to pin that used `https://example.test/media/1234` — which has no extension and a dot, in its host. `lastIndexOf(".")` finds it, so the fallback branch never runs and the test passes through the extension lookup missing instead; the mutant returning `image` from that branch survived a test whose whole purpose was to catch it. The input contained the very thing it claimed to lack. This is §206's family from the other side: there, an input was rejected too early to reach the mechanism under test; here, an input satisfied the *precondition* too well to reach it. The tell in both is the same — write down which line the input is supposed to execute, then check that it does.
 
