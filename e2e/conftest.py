@@ -88,6 +88,56 @@ def stack() -> None:
         if os.environ.get("ANCHOR_E2E_REQUIRED"):
             pytest.fail(message)
         pytest.skip(message)
+    _refuse_a_stale_api()
+
+
+def _refuse_a_stale_api() -> None:
+    """Refuse to run against an API older than the code it is supposed to test.
+
+    **`dev-up.sh` starts the API only if nothing is answering**, which is right
+    - it is documented as idempotent, and restarting somebody's running server
+    because they ran it twice would be worse. The consequence is that editing
+    `apps/api/src` and then running this suite tests the *previous* build, and
+    Next's hot reload hides how asymmetric that is: browser changes are picked
+    up and server ones are not.
+
+    That has cost real time twice. The failure is the worst shape there is - a
+    suite that goes red for a change that is actually correct, or green for one
+    that is not - and it is the same family as §220's leaked fixture server: a
+    result that is not about the code under test. So the suite says so instead
+    of running.
+
+    Compares the newest mtime under `apps/api/src` against when the server
+    process started. Best-effort: if the process cannot be found or `/proc` is
+    not there, this says nothing rather than blocking a run it cannot judge.
+    """
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    source = os.path.join(root, "apps", "api", "src")
+    if not os.path.isdir(source):
+        return
+    try:
+        found = subprocess.run(
+            ["pgrep", "-f", "dev_server.py"], capture_output=True, text=True, timeout=5
+        ).stdout.split()
+        started = max(os.path.getmtime(f"/proc/{pid}") for pid in found)
+    except Exception:
+        return
+    newest = max(
+        (os.path.getmtime(os.path.join(where, name))
+         for where, _, names in os.walk(source)
+         for name in names if name.endswith(".py")),
+        default=0.0,
+    )
+    # A second of slack: a file written in the same second the server started
+    # is one it almost certainly loaded, and the alternative is a suite that
+    # refuses to run immediately after `dev-up.sh`.
+    if newest > started + 1:
+        pytest.fail(
+            "the running API is older than apps/api/src, so this suite would test "
+            "the previous build. Run scripts/dev-down.sh && scripts/dev-up.sh."
+        )
 
 
 @pytest.fixture(scope="session")

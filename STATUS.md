@@ -4290,6 +4290,67 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 227. p.310's aggregation per slice, and a bucket with nothing to measure (this session)
+
+§226 answered p.310's six aggregations over a whole set. A pie needs them **per slice**, so
+`/object-sets/group` now takes an aggregation and a property to run it over, and every bucket
+comes back as `(value, count, metric)`.
+
+**Ordered by the metric when there is one.** A slice's size *is* the metric, and truncation has
+to keep the twenty largest slices rather than the twenty most populous — "the top 20 of 300" is
+a claim about the chart somebody is looking at. Count ordering is untouched when no aggregation
+is asked for, because every existing caller sends none.
+
+**A bucket with nothing to measure is not a bucket, and that is the rule that keeps the two
+stores in the same order.** Left in, a bucket whose objects all lack the aggregated property
+gets NULL on Postgres and `0.0` from OpenSearch's sum, and the two sort it to opposite ends —
+a slice first on one deployment and last on the other. So the objects with no value are
+filtered out of the whole question. That is also the honest reading rather than a
+convenience: a slice sized by average capacity is a slice of the objects that *have* a
+capacity. It is the same rule the *group* property has always followed, applied to the second
+property the question now has.
+
+A cross-tab's axes stay counts. p.310's aggregation is a pie's setting, and a grid whose row
+labels were sized by one thing while its cells counted another would be two questions in one
+table.
+
+**The fixture needed two things before it could disagree**, which is decision 0006 §7 again:
+`exists` clauses, and ordering a terms aggregation by a sub-aggregation. The second was written
+wrong first — one `reverse=True` over a compound key, which reverses the `_key` tie-break too,
+so equal slices came back Z–A where a real cluster gives A–Z. A fixture that gets an ordering
+subtly wrong is worse than one that refuses the query, because the test it lets pass is about
+ordering.
+
+**17 mutants, 17 caught, 0 survivors, 0 hangs, 0 no-ops.** Five survived the first pass and
+four were assertions the tests never made — the metric's *shape* went unchecked on both stores,
+because `40.0 == 40` in Python and every comparison in those tests was numeric, so a slice could
+have been labelled with a value the ontology never held.
+
+**The fifth was not a hole, and neither was a sixth that appeared after fixing it.** The route
+passed `aggregation if aggregation.numeric else None`, and both stores read a `count` as "no
+metric" anyway; then the metric's own `if agg is not None else None` turned out to be
+unreachable for the same reason, since the SQL selects a literal `NULL` unless a numeric
+aggregation asked for one. Both deleted rather than recorded as equivalent. **Removing one dead
+branch exposed the next**, which is §223's `Array.isArray` again: guards that answer the same
+question stack up, and only the first one to run has an effect.
+
+**And the tie-break between equal slices had to be asserted on the clause rather than on rows** —
+§225's lesson, one endpoint along. A bucket order with no second key produces the right answer
+on every fixture small enough to write down, because a sequential scan over a small table is
+accidentally stable. The `ORDER BY` is a function now so a test can read it.
+
+**1687 API tests** (was 1673 at §226), 2 skipped; 1293 unit and 611 browser unchanged — this
+unit is entirely below the API.
+
+`workshop.md`'s **Pie Chart** row is ○ only for wiring the setting into its panel now, which is
+the widget half of §226 and §227 together and is the natural next unit. Decision 0006 still has
+**§3's map bounding box** and nothing else.
+
+---
+---
+---
+---
+
 ### 226. p.310's numeric aggregations, and nothing that aggregates to zero (this session)
 
 > "Aggregation: Select the aggregation method used, options include average, count, min, max,
@@ -6342,6 +6403,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A suite that silently tests the previous build is the worst shape a result can take, and `dev-up.sh` produces one by design.** It starts the API only if nothing is answering — correct, and documented as idempotent, because restarting somebody's running server for a second invocation would be worse. The consequence is that editing `apps/api/src` and running the browser suite tests the *old* server, and Next's hot reload hides how asymmetric that is: browser changes are picked up, server ones are not. §227 lost eight Pivot Table failures to it and §223 lost a whole run earlier; both times the code was correct. This is §220's leaked fixture server again — a red or green that is not about the code under test — and the fix is the same shape: make the suite **refuse** rather than run. `conftest` now compares the newest mtime under `apps/api/src` against when the server process started, and fails with the command to run. Best-effort, and it says nothing when it cannot judge. The general rule: when a harness can be pointed at the wrong thing, the harness should be what notices.
+
+- **A fixture that gets an ordering subtly wrong is worse than one that refuses the query.** §227 taught the OpenSearch fixture to order a terms aggregation by a sub-aggregation, and the first version sorted with one `reverse=True` over a compound key — which reverses the `_key` tie-break along with the metric, so equal slices came back Z–A where a real cluster gives A–Z. The store's request says `[{metric: desc}, {_key: asc}]`, and **those are two directions**: the fix is a stable sort by the key ascending followed by a sort on the metric. What makes this worth recording is the failure mode: a fixture that raises on an unsupported query fails loudly and gets fixed, while one that answers *almost* right silently vouches for the code under test — and here the thing under test was ordering. The general tell: whenever a fixture implements a feature with more than one parameter, ask which parameters it is quietly collapsing.
+
+- **Removing one dead branch exposes the next.** §227's harness found the route passing `aggregation if aggregation.numeric else None` when both stores read a `count` as "no metric" anyway; deleting it made a second conditional unreachable — the metric's own `if agg is not None else None`, because the SQL already selects a literal `NULL` unless a numeric aggregation asked for one. §223 met the same thing when pulling an `Array.isArray` guard revealed that the `typeof` check beside it was equally unreachable. Guards that answer the same question stack up over time, each individually plausible, and **only the first one to run has an effect** — so a survivor on one of them is worth re-running the harness after, rather than assuming the rest are load-bearing.
 
 - **The empty answer is dangerous exactly when it is a plausible number.** §226's aggregations return `None` over an empty set — including `sum`, whose identity really is zero and which both SQL and a reader would accept as `0`. That is the reason to refuse it: "total capacity: 0" and "there are no sites" are different facts that render identically, so the number a card shows is indistinguishable from a real measurement. `avg`, `min` and `max` are safe by accident, because nobody writes zero for them. The tell is a default that happens to be a legal value in the domain — a count of zero, a total of zero, an empty string where "" is meaningful — and the question is whether a reader could tell the default from the measurement. This is §210's "unresolved is not empty" met where it actually bites, and it is also what kept the two stores together: Postgres `sum()` over no rows is NULL and OpenSearch's is `0.0`, so the plausible-number answer was already a cross-store divergence sitting in a default nobody had chosen.
 
