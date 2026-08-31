@@ -878,6 +878,7 @@ async def execute_action(
                 for removal in removals:
                     await instance_store.store_for(conn).delete_instances(
                         search_prefix=prefix,
+                        object_type_id=UUID(removal["object_type_id"]),
                         source_id=UUID(str(removal["source"]["id"])),
                         primary_keys=[removal["primary_key"]],
                     )
@@ -901,6 +902,14 @@ async def execute_action(
                         source_id=UUID(str(target_source["id"])),
                         rows=rows,
                         synced_at=datetime.now(timezone.utc),
+                        # An action creating the *first* object of a type is
+                        # the one path that reaches the store before any sync
+                        # has, so the index it creates has to carry the
+                        # mapping - otherwise `dynamic: "strict"` refuses the
+                        # document that asked for it.
+                        declared=await ontology_service.list_properties(
+                            conn, UUID(type_id)
+                        ),
                     )
     except DatasetEngineError as exc:
         ok, error = False, str(exc)

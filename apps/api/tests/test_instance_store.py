@@ -89,6 +89,22 @@ def _rows(n: int = 2) -> list[tuple[str, dict]]:
     return [(str(i), {"full_name": f"person-{i}", "rank": i}) for i in range(1, n + 1)]
 
 
+# What `ontology.list_properties` returns for the type these rows belong to.
+#
+# **Passed on every upsert, because decision 0006 made an index carry its
+# type's mapping.** Without it the index is created with an empty `dynamic:
+# "strict"` mapping and every document is refused - which is the intended
+# refusal (§5: loudly broken beats quietly wrong) reaching a caller that has
+# the declaration and had simply never been asked for it. `rank` is an integer
+# on purpose: it is the property whose ordering the whole decision is about, so
+# a mapping that lost the type would be visible here rather than only in a
+# comparison test.
+DECLARED = [
+    {"api_name": "full_name", "data_type": "string"},
+    {"api_name": "rank", "data_type": "integer"},
+]
+
+
 # ---- the gateway itself, over real HTTP -------------------------------------
 @pytest.mark.anyio
 async def test_upsert_is_idempotent_on_the_same_source_row(store) -> None:
@@ -97,7 +113,7 @@ async def test_upsert_is_idempotent_on_the_same_source_row(store) -> None:
 
     assert await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
-        rows=_rows(2), synced_at=now,
+        rows=_rows(2), synced_at=now, declared=DECLARED,
     ) == 2
     rows, total = await store.list_for_type(
         search_prefix=PREFIX, object_type_id=type_id, limit=50, offset=0
@@ -109,7 +125,7 @@ async def test_upsert_is_idempotent_on_the_same_source_row(store) -> None:
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
         rows=[("1", {"full_name": "renamed", "rank": 1})],
-        synced_at=now + timedelta(seconds=1),
+        synced_at=now + timedelta(seconds=1), declared=DECLARED,
     )
     rows, total = await store.list_for_type(
         search_prefix=PREFIX, object_type_id=type_id, limit=50, offset=0
@@ -127,20 +143,21 @@ async def test_stale_instances_are_removed_and_others_are_not(store) -> None:
     first = datetime.now(timezone.utc)
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
-        rows=_rows(3), synced_at=first,
+        rows=_rows(3), synced_at=first, declared=DECLARED,
     )
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=other_source,
-        rows=_rows(1), synced_at=first,
+        rows=_rows(1), synced_at=first, declared=DECLARED,
     )
 
     second = first + timedelta(minutes=1)
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
-        rows=_rows(1), synced_at=second,
+        rows=_rows(1), synced_at=second, declared=DECLARED,
     )
     removed = await store.delete_stale_instances(
-        search_prefix=PREFIX, source_id=source_id, synced_before=second
+        search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
+        synced_before=second,
     )
     assert removed == 2, "rows 2 and 3 vanished upstream"
 
@@ -156,7 +173,7 @@ async def test_reads_are_scoped_by_object_type(store) -> None:
     now = datetime.now(timezone.utc)
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=mine, source_id=source_id,
-        rows=_rows(1), synced_at=now,
+        rows=_rows(1), synced_at=now, declared=DECLARED,
     )
     doc = instance_store._doc_id(source_id, "1")
 
@@ -182,6 +199,7 @@ async def test_paging_and_ordering(store) -> None:
         await store.upsert_instances(
             search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
             rows=[(str(i), {"rank": i})], synced_at=base + timedelta(seconds=i),
+            declared=DECLARED,
         )
 
     page, total = await store.list_for_type(
@@ -207,7 +225,7 @@ async def test_update_properties_merges_and_refuses_a_missing_instance(store) ->
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
         rows=[("1", {"full_name": "Ada", "rank": 1})],
-        synced_at=datetime.now(timezone.utc),
+        synced_at=datetime.now(timezone.utc), declared=DECLARED,
     )
     doc = instance_store._doc_id(source_id, "1")
 
@@ -235,11 +253,11 @@ async def test_each_workspace_gets_its_own_index(store) -> None:
     now = datetime.now(timezone.utc)
     await store.upsert_instances(
         search_prefix="ws-alpha-", object_type_id=type_id, source_id=source_id,
-        rows=_rows(2), synced_at=now,
+        rows=_rows(2), synced_at=now, declared=DECLARED,
     )
     await store.upsert_instances(
         search_prefix="ws-beta-", object_type_id=type_id, source_id=source_id,
-        rows=_rows(1), synced_at=now,
+        rows=_rows(1), synced_at=now, declared=DECLARED,
     )
     _, alpha = await store.list_for_type(
         search_prefix="ws-alpha-", object_type_id=type_id, limit=50, offset=0
@@ -251,7 +269,13 @@ async def test_each_workspace_gets_its_own_index(store) -> None:
 
     from src.services.instance_store import _index_name
 
-    assert _index_name("ws-alpha-") != _index_name("ws-beta-")
+    # Two anchors now, not one. The **workspace** is still the prefix (db 0002,
+    # this test's original claim), and decision 0006 added the **object type**
+    # inside it — so one type's index in one workspace differs from the same
+    # type's in another *and* from another type's in the same one.
+    other_type = uuid.uuid4()
+    assert _index_name("ws-alpha-", type_id) != _index_name("ws-beta-", type_id)
+    assert _index_name("ws-alpha-", type_id) != _index_name("ws-alpha-", other_type)
 
 
 # ---- the cutover: the real API on the real store -----------------------------
@@ -608,13 +632,14 @@ def test_the_explorer_pages_and_refuses_an_outsider(
 # separately would have let that stand for as long as nobody compared them,
 # which is the cross-store rule `OPERATORS` exists to keep - so the claim is
 # written once and both stores answer it.
-async def _sync_twice(store, *, first: dict, edit: dict, second: dict) -> dict:
+async def _sync_twice(store, *, first: dict, edit: dict, second: dict,
+                      declared: list[dict] | None = None) -> dict:
     """Sync a row, apply an edit the dataset knows nothing about, sync again."""
     type_id, source_id = uuid.uuid4(), uuid.uuid4()
     t0 = datetime.now(timezone.utc)
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
-        rows=[("1", first)], synced_at=t0,
+        rows=[("1", first)], synced_at=t0, declared=declared,
     )
     rows, _ = await store.list_for_type(
         search_prefix=PREFIX, object_type_id=type_id, limit=10, offset=0
@@ -625,7 +650,7 @@ async def _sync_twice(store, *, first: dict, edit: dict, second: dict) -> dict:
     )
     await store.upsert_instances(
         search_prefix=PREFIX, object_type_id=type_id, source_id=source_id,
-        rows=[("1", second)], synced_at=t0 + timedelta(minutes=1),
+        rows=[("1", second)], synced_at=t0 + timedelta(minutes=1), declared=declared,
     )
     rows, _ = await store.list_for_type(
         search_prefix=PREFIX, object_type_id=type_id, limit=10, offset=0
@@ -640,6 +665,16 @@ async def test_a_sync_keeps_what_the_dataset_cannot_say_opensearch(store) -> Non
         first={"rank": 1},
         edit={"rank": 1, "triage_note": "call the owner"},
         second={"rank": 2},
+        # **`triage_note` is declared here even though no column feeds it** —
+        # that is exactly what p.113's edit-only property is, and decision
+        # 0006's strict mapping is what makes the distinction load-bearing: a
+        # property the ontology does not declare cannot be written at all now,
+        # so "the dataset cannot say it" and "the ontology does not have it"
+        # stopped being the same state.
+        declared=[
+            {"api_name": "rank", "data_type": "integer"},
+            {"api_name": "triage_note", "data_type": "string"},
+        ],
     )
     # The mapped property is the dataset's to say, and it changed.
     assert got["rank"] == 2

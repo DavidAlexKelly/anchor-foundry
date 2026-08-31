@@ -2399,18 +2399,27 @@ async def sync_source(
         async with user_connection(access.auth.user_id) as conn:
             prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
             store = instance_store.store_for(conn)
+            type_id = UUID(str(source["object_type_id"]))
+            # **Read before the upsert, not after.** It was fetched here only
+            # for the sync report below until decision 0006 made an object
+            # type's index carry its declared mapping — so the upsert now needs
+            # it too, and a sync that wrote first would be creating the index
+            # with no mapping at all and refusing the very document that
+            # triggered it.
+            declared = await ontology_service.list_properties(conn, type_id)
             upserted = await store.upsert_instances(
                 search_prefix=prefix,
-                object_type_id=UUID(str(source["object_type_id"])),
+                object_type_id=type_id,
                 source_id=source_id,
                 rows=rows,
                 synced_at=synced_at,
+                declared=declared,
             )
             removed = await store.delete_stale_instances(
-                search_prefix=prefix, source_id=source_id, synced_before=synced_at
-            )
-            declared = await ontology_service.list_properties(
-                conn, UUID(str(source["object_type_id"]))
+                search_prefix=prefix,
+                object_type_id=type_id,
+                source_id=source_id,
+                synced_before=synced_at,
             )
             # p.116's sync report, minus the properties this dataset cannot
             # speak for. An **edit-only** property (p.113) has no column here,

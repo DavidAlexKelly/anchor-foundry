@@ -53,7 +53,7 @@ from uuid import UUID, uuid5
 from ..lib.db import fetch_all
 # Stdlib-only, so importing it does not undo this module's care about staying
 # usable on the OpenSearch-only path.
-from . import object_sets
+from . import instance_mapping, object_sets
 
 if TYPE_CHECKING:  # avoids importing SQLAlchemy for the OpenSearch-only path
     from sqlalchemy.ext.asyncio import AsyncConnection
@@ -78,14 +78,23 @@ class InstanceStoreGateway(Protocol):
         source_id: UUID,
         rows: list[tuple[str, dict[str, Any]]],
         synced_at: datetime,
+        # The object type's declared properties (`ontology.list_properties`),
+        # so the index can be created and widened with the mapping they ask
+        # for (decision 0006 §1). Optional because the Postgres store has no
+        # mapping to keep, and because a caller with nothing to declare - the
+        # backfill, replaying rows that are already coerced - should not have
+        # to invent one.
+        declared: list[dict[str, Any]] | None = None,
     ) -> int: ...
 
     async def delete_stale_instances(
-        self, *, search_prefix: str, source_id: UUID, synced_before: datetime
+        self, *, search_prefix: str, object_type_id: UUID, source_id: UUID,
+        synced_before: datetime,
     ) -> int: ...
 
     async def delete_instances(
-        self, *, search_prefix: str, source_id: UUID, primary_keys: list[str]
+        self, *, search_prefix: str, object_type_id: UUID, source_id: UUID,
+        primary_keys: list[str],
     ) -> int: ...
 
     async def list_for_type(
@@ -259,11 +268,21 @@ def join_key(value: Any) -> str | None:
     return str(value)
 
 
-def _index_name(search_prefix: str) -> str:
-    # search_prefix already ends in "-" (db 0002: f"{slug}-{short_id}-");
-    # index names must be lowercase with no leading "-" or "_" - search_prefix
-    # is always lowercase-slug-derived so this is safe without re-validating.
-    return f"{search_prefix}object-instances"
+def _index_name(search_prefix: str, object_type_id: "UUID | str") -> str:
+    """One index per object type (decision 0006 §1).
+
+    **This used to be one index per workspace**, and the name it returned is
+    still reachable as `instance_mapping.legacy_index_name` because a
+    deployment that has not run the migration still has one. The reason for the
+    split is that an object type *is* a schema: a workspace holding an Order
+    whose `status` is a string and a Reading whose `status` is an integer
+    cannot have one mapping for `properties.status`, so declared types were not
+    merely hard to honour in the old shape — they were inexpressible.
+
+    The naming lives in `instance_mapping`, with the rules and the test that
+    the workspace-wide pattern does not also match the index this replaces.
+    """
+    return instance_mapping.index_name(search_prefix, object_type_id)
 
 
 def _sort_clause(sort: str) -> list[dict[str, str]]:
@@ -326,46 +345,39 @@ class OpenSearchInstanceStore:
             verify_certs=secure,
         )
 
-    async def _ensure_index(self, index: str) -> None:
+    async def _ensure_index(
+        self, index: str, declared: "list[dict[str, Any]] | None" = None
+    ) -> None:
+        """Create the type's index, or widen the one that exists.
+
+        **Two operations, deliberately not one.** Creating is what the first
+        sync of a type does. *Widening* is what a later one does after somebody
+        declared another property: OpenSearch adds a field to an existing
+        mapping happily, and a store that only created would leave the new
+        property undeclared — which, under `dynamic: "strict"`, means the next
+        document carrying it is **refused** rather than silently mapped by
+        guess. That refusal is correct (0006 §5) and this is what stops it
+        firing for the ordinary case.
+
+        A *changed* type is neither, and is not done here: OpenSearch cannot
+        remap a field in place, so it is a reindex (0006 §4) with a cost that
+        belongs in the impact report rather than inside a sync.
+        """
         exists = await self._client.indices.exists(index=index)
-        if exists:
+        if not exists:
+            await self._client.indices.create(
+                index=index, body=instance_mapping.mapping_for(declared)
+            )
             return
-        await self._client.indices.create(
+        if not declared:
+            return
+        live = await self._client.indices.get_mapping(index=index)
+        added = instance_mapping.added_fields(live, declared)
+        if not added:
+            return
+        await self._client.indices.put_mapping(
             index=index,
-            body={
-                "mappings": {
-                    # Declared rather than left to dynamic mapping, because
-                    # link traversal (roadmap Objects item 3) needs exact
-                    # equality on an arbitrary property, and that needs a
-                    # keyword subfield to exist. Dynamic mapping would give
-                    # one by default - with ignore_above 256, which silently
-                    # stops indexing the keyword for longer values, so a
-                    # long join key would traverse to nothing for reasons
-                    # invisible from the outside. Stating the template makes
-                    # the guarantee ours instead of the cluster default's.
-                    "dynamic_templates": [
-                        {
-                            "property_strings": {
-                                "path_match": "properties.*",
-                                "match_mapping_type": "string",
-                                "mapping": {
-                                    "type": "text",  # keeps explorer search working
-                                    "fields": {
-                                        "keyword": {"type": "keyword", "ignore_above": 8192}
-                                    },
-                                },
-                            }
-                        }
-                    ],
-                    "properties": {
-                        "object_type_id": {"type": "keyword"},
-                        "source_id": {"type": "keyword"},
-                        "primary_key": {"type": "keyword"},
-                        "properties": {"type": "object", "enabled": True},
-                        "updated_at": {"type": "date"},
-                    },
-                }
-            },
+            body={"properties": {"properties": {"properties": added}}},
         )
 
     async def upsert_instances(
@@ -376,11 +388,12 @@ class OpenSearchInstanceStore:
         source_id: UUID,
         rows: list[tuple[str, dict[str, Any]]],
         synced_at: datetime,
+        declared: list[dict[str, Any]] | None = None,
     ) -> int:
         if not rows:
             return 0
-        index = _index_name(search_prefix)
-        await self._ensure_index(index)
+        index = _index_name(search_prefix, object_type_id)
+        await self._ensure_index(index, declared)
 
         bulk_body: list[dict[str, Any]] = []
         for primary_key, properties in rows:
@@ -405,9 +418,10 @@ class OpenSearchInstanceStore:
         return len(rows)
 
     async def delete_stale_instances(
-        self, *, search_prefix: str, source_id: UUID, synced_before: datetime
+        self, *, search_prefix: str, object_type_id: UUID, source_id: UUID,
+        synced_before: datetime,
     ) -> int:
-        index = _index_name(search_prefix)
+        index = _index_name(search_prefix, object_type_id)
         resp = await self._client.delete_by_query(
             index=index,
             body={
@@ -425,7 +439,8 @@ class OpenSearchInstanceStore:
         return int(resp.get("deleted", 0))
 
     async def delete_instances(
-        self, *, search_prefix: str, source_id: UUID, primary_keys: list[str]
+        self, *, search_prefix: str, object_type_id: UUID, source_id: UUID,
+        primary_keys: list[str],
     ) -> int:
         """Remove named instances (`delete_object`, §138).
 
@@ -437,7 +452,7 @@ class OpenSearchInstanceStore:
         if not primary_keys:
             return 0
         resp = await self._client.delete_by_query(
-            index=_index_name(search_prefix),
+            index=_index_name(search_prefix, object_type_id),
             body={
                 "query": {
                     "bool": {
@@ -462,7 +477,7 @@ class OpenSearchInstanceStore:
                 f"pagination past {MAX_RESULT_WINDOW:,} rows needs search_after, not offset - "
                 "not implemented here (day-one instance browser never reaches it)"
             )
-        index = _index_name(search_prefix)
+        index = _index_name(search_prefix, object_type_id)
         resp = await self._client.search(
             index=index,
             body={
@@ -488,7 +503,7 @@ class OpenSearchInstanceStore:
     async def get_instance(
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str
     ) -> dict[str, Any] | None:
-        index = _index_name(search_prefix)
+        index = _index_name(search_prefix, object_type_id)
         try:
             resp = await self._client.get(index=index, id=instance_id)
         except Exception:  # opensearchpy.NotFoundError, deferred import
@@ -507,7 +522,7 @@ class OpenSearchInstanceStore:
     async def update_properties(
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str, properties: dict[str, Any]
     ) -> None:
-        index = _index_name(search_prefix)
+        index = _index_name(search_prefix, object_type_id)
         existing = await self.get_instance(
             search_prefix=search_prefix, object_type_id=object_type_id, instance_id=instance_id
         )
@@ -563,7 +578,15 @@ class OpenSearchInstanceStore:
             "from": offset,
             "size": limit,
         }
-        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        resp = await self._client.search(
+            index=instance_mapping.all_types_pattern(search_prefix),
+            body=body,
+            # A workspace with no synced type yet has no index at all, and a
+            # pattern matching nothing is a 404 rather than an empty result.
+            # An explorer that errored before the first sync would be reporting
+            # a broken cluster to describe an empty workspace.
+            ignore_unavailable=True,
+        )
         rows = [
             {
                 "id": h["_id"],
@@ -644,7 +667,10 @@ class OpenSearchInstanceStore:
             body["aggs"] = {
                 "distinct": {"cardinality": {"field": f"properties.{property_name}.keyword"}}
             }
-        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        resp = await self._client.search(
+            index=_index_name(search_prefix, object_type_id), body=body,
+            ignore_unavailable=True,
+        )
         if aggregation == "count_distinct":
             return int(resp["aggregations"]["distinct"]["value"])
         return int(resp["hits"]["total"]["value"])
@@ -675,7 +701,10 @@ class OpenSearchInstanceStore:
                 "distinct": {"cardinality": {"field": field}},
             },
         }
-        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        resp = await self._client.search(
+            index=_index_name(search_prefix, object_type_id), body=body,
+            ignore_unavailable=True,
+        )
         buckets = [
             (str(b["key"]), int(b["doc_count"]))
             for b in resp["aggregations"]["groups"]["buckets"]
@@ -725,7 +754,10 @@ class OpenSearchInstanceStore:
                 }
             },
         }
-        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        resp = await self._client.search(
+            index=_index_name(search_prefix, object_type_id), body=body,
+            ignore_unavailable=True,
+        )
         return {
             (str(row["key"]), str(col["key"])): int(col["doc_count"])
             for row in resp["aggregations"]["rows"]["buckets"]
@@ -771,7 +803,10 @@ class OpenSearchInstanceStore:
                 }
             },
         }
-        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        resp = await self._client.search(
+            index=_index_name(search_prefix, object_type_id), body=body,
+            ignore_unavailable=True,
+        )
         return [
             (
                 datetime.fromtimestamp(int(b["key"]) / 1000, tz=timezone.utc),
@@ -813,7 +848,10 @@ class OpenSearchInstanceStore:
             "from": offset,
             "size": limit,
         }
-        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        resp = await self._client.search(
+            index=_index_name(search_prefix, object_type_id), body=body,
+            ignore_unavailable=True,
+        )
         rows = [
             {
                 "id": h["_id"],
@@ -880,7 +918,10 @@ class OpenSearchInstanceStore:
             "from": offset,
             "size": limit,
         }
-        resp = await self._client.search(index=_index_name(search_prefix), body=body)
+        resp = await self._client.search(
+            index=_index_name(search_prefix, object_type_id), body=body,
+            ignore_unavailable=True,
+        )
         rows = [
             {
                 "id": h["_id"],
@@ -970,6 +1011,11 @@ class PostgresInstanceStore:
         source_id: UUID,
         rows: list[tuple[str, dict[str, Any]]],
         synced_at: datetime,
+        # Accepted and unused: Postgres holds `properties` as `jsonb` and has
+        # no mapping to keep in step, so the declaration reaches it and stops
+        # there. Named rather than swallowed by `**_`, so the signature says
+        # which store the argument is for.
+        declared: list[dict[str, Any]] | None = None,
     ) -> int:
         from . import instances as instances_service
 
@@ -982,7 +1028,8 @@ class PostgresInstanceStore:
         )
 
     async def delete_stale_instances(
-        self, *, search_prefix: str, source_id: UUID, synced_before: datetime
+        self, *, search_prefix: str, object_type_id: UUID, source_id: UUID,
+        synced_before: datetime,
     ) -> int:
         from . import instances as instances_service
 
@@ -991,7 +1038,8 @@ class PostgresInstanceStore:
         )
 
     async def delete_instances(
-        self, *, search_prefix: str, source_id: UUID, primary_keys: list[str]
+        self, *, search_prefix: str, object_type_id: UUID, source_id: UUID,
+        primary_keys: list[str],
     ) -> int:
         from . import instances as instances_service
 
@@ -1246,6 +1294,24 @@ async def backfill(
             )
             remapped += result.rowcount or 0
 
+    # Each type's declared properties, read once per type rather than once per
+    # (type, source): a type with eight sources would otherwise ask the same
+    # question eight times, and the answer cannot change inside a backfill.
+    #
+    # **Read at all** because decision 0006 made an index carry its type's
+    # mapping. A backfill replaying rows with nothing declared would create
+    # every index with an empty strict mapping and then have every document it
+    # was copying refused - which is the correct refusal reaching the one
+    # caller that has the declaration and had not been asked for it.
+    from . import ontology
+
+    declared_by_type: dict[UUID, list[dict[str, Any]]] = {}
+    for object_type_id, _source_id in grouped:
+        if object_type_id not in declared_by_type:
+            declared_by_type[object_type_id] = await ontology.list_properties(
+                conn, object_type_id
+            )
+
     copied = 0
     for (object_type_id, source_id), group in grouped.items():
         copied += await gateway.upsert_instances(
@@ -1254,6 +1320,7 @@ async def backfill(
             source_id=source_id,
             rows=group,
             synced_at=newest[(object_type_id, source_id)],
+            declared=declared_by_type[object_type_id],
         )
     return {"instances": copied, "sources": len(grouped), "action_runs_remapped": remapped}
 
