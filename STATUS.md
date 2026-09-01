@@ -4333,10 +4333,20 @@ slice to the other. What it caught was
 the server, surviving the model, and being dropped at the one line between the
 widget and the renderer, with every other assertion still passing.
 
-**19 mutants, 19 caught, 0 survivors, 0 hangs, 0 no-ops** — 12 on the model, 7
+**22 mutants, 22 caught, 0 survivors, 0 hangs, 0 no-ops** — 12 on the model, 10
 on the widget and the renderer.
 
-**1302 unit tests** (was 1293); **616 browser tests** (was 611); 1687 API tests,
+**Two survivors were equivalent, and the reason was worth fixing rather than
+recording.** `PieChart` built its own slices from one number per point, so
+`count` and `size` were always equal *inside the renderer* and no title could
+tell them apart — which also meant `Slice.count` was pinned by unit tests and
+read by nothing. Dead data with tests on it is the same fault one level up. So
+the component takes the counts when they are a second number, and a sum-pie's
+title now reads "north: 400 (25.0%) — 12 objects": the share is of the total
+capacity, and how many objects are behind it is what a reader of a sum-pie
+cannot get anywhere else. A count pie passes one number and says it once.
+
+**1302 unit tests** (was 1293); **617 browser tests** (was 611); 1687 API tests,
 2 skipped, unchanged — this unit adds no server behaviour, which is the point:
 §226 and §227 had already added it.
 
