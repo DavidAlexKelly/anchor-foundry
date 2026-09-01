@@ -288,8 +288,13 @@ export function PieChart({
   /** p.310's per-segment colours, keyed by the *label* drawn. */
   colors?: Record<string, string | null>;
 }) {
+  // `size` and `count` are the same number here: Chart XY plots a series of
+  // values and has no separate aggregation of its own, where p.310's Pie Chart
+  // can size a slice by one property while counting objects in another. Both go
+  // through the same `wedges`, which is §218's point — one pie, two widgets.
   const slices = points.map((p) => ({
-    value: p.label, label: p.label, count: Math.max(0, p.value),
+    value: p.label, label: p.label,
+    count: Math.max(0, p.value), size: Math.max(0, p.value),
     color: colors?.[p.label] ?? null,
   }));
   const drawn = wedges(slices);
@@ -322,7 +327,12 @@ export function PieChart({
           opacity={dim(drill, wedge.slice.value)}
           {...markProps(drill, wedge.slice.value)}
         >
-          <title>{`${wedge.slice.label}: ${wedge.slice.count} (${percentLabel(wedge.share)})`}</title>
+          {/* **`size`, not `count`** — the number a share is a share *of*.
+              With p.310's Aggregation set to a sum, a title reading "north: 12
+              (25.0%)" would state a count beside a percentage of a total, which
+              are two different numbers wearing one sentence. They are the same
+              value for a count pie, which is every pie before §228. */}
+          <title>{`${wedge.slice.label}: ${wedge.slice.size} (${percentLabel(wedge.share)})`}</title>
         </path>
       ))}
       {keyed &&
@@ -336,7 +346,10 @@ export function PieChart({
           >
             <rect width={11} height={11} y={-9} fill={colourOf(i, wedge.slice)} />
             <text x={17} fontSize={11.5} fill="var(--ink)">
-              {shortLabel(wedge.slice.label, 22)} — {niceNumber(wedge.slice.count)}
+              {/* The legend shows what the wedge is drawn from, so the two
+                  agree. p.310's Aggregation is the label above the chart, not
+                  a thing to re-explain on every row. */}
+              {shortLabel(wedge.slice.label, 22)} — {niceNumber(wedge.slice.size)}
             </text>
           </g>
         ))}

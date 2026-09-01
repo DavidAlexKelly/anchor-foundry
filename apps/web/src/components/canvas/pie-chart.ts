@@ -22,26 +22,59 @@
  * of them is changed.
  */
 
-/** p.310's Aggregation.
+/** p.310's Aggregation: "average, count, min, max, sum, or approximate unique
+ * count".
  *
- * **Count only, and that is decision 0006 rather than a shortcut.** p.310 lists
- * average, count, min, max, sum and approximate unique count;
- * `object_sets.AGGREGATIONS` offers count and count_distinct over a set, and
- * the *grouped* endpoint offers count alone — because instance properties are
- * stored untyped, so Postgres and OpenSearch would disagree about what a sum
- * of them is. A pie whose slices were sums the two stores computed differently
- * would be a picture of a disagreement.
+ * **Five of the six, and the missing one is the odd one out.** This list read
+ * `count` alone until §227, because instance properties were stored untyped and
+ * a pie whose slices were sums the two stores computed differently would be a
+ * picture of a disagreement. §220's typed index removed that, §226 shipped the
+ * four numeric aggregations over a set and §227 shipped them per bucket.
+ *
+ * `count_distinct` — p.310's "approximate unique count" — is **not** here: the
+ * grouped endpoint answers it over a whole set, not per bucket, and "how many
+ * distinct regions are in this slice" is a question about a *third* property
+ * nobody has named. Offering it would mean a control with nowhere to put its
+ * argument.
  */
 export const AGGREGATIONS: Record<string, string> = {
   count: "Count of objects",
+  sum: "Sum of",
+  avg: "Average of",
+  min: "Minimum of",
+  max: "Maximum of",
 };
 
 export const DEFAULT_AGGREGATION = "count";
+
+/** The aggregations that run over a second property, and therefore need one. */
+export const NUMERIC_AGGREGATIONS = ["sum", "avg", "min", "max"] as const;
 
 export function aggregationOf(raw: unknown): string {
   return typeof raw === "string" && Object.hasOwn(AGGREGATIONS, raw)
     ? raw
     : DEFAULT_AGGREGATION;
+}
+
+/** Whether an aggregation needs a property to run over. */
+export function needsProperty(aggregation: unknown): boolean {
+  return (NUMERIC_AGGREGATIONS as readonly string[]).includes(aggregationOf(aggregation));
+}
+
+/** What to ask the server for, from what the panel holds.
+ *
+ * `null` when the setting is incomplete — a numeric aggregation with no
+ * property yet — because the request would be refused with a sentence about
+ * property types for what is an unfinished panel. §223's rule: the widget reads
+ * the document before it sends it.
+ */
+export function aggregationRequest(aggregation: unknown, property: unknown): {
+  aggregation: string; aggregation_property: string | null;
+} | null {
+  const name = aggregationOf(aggregation);
+  const over = typeof property === "string" ? property.trim() : "";
+  if (!needsProperty(name)) return { aggregation: name, aggregation_property: null };
+  return over ? { aggregation: name, aggregation_property: over } : null;
 }
 
 /** p.310's legend positions. */
@@ -113,16 +146,30 @@ export function segmentsOf(raw: unknown): Segment[] {
   return out;
 }
 
-/** A grouped count, as `/object-sets/group` returns one. */
+/** A grouped bucket, as `/object-sets/group` returns one. */
 export interface Group {
   value: string;
   count: number;
+  /** p.310's aggregation for this bucket, or `null` when it was a count
+   * (§227). Never `null` *within* a metric answer: the server drops the
+   * buckets with nothing to measure. */
+  metric?: number | null;
 }
 
 export interface Slice {
   value: string;
   label: string;
+  /** How many objects are in this slice — the legend's number, and the wedge's
+   * size when the aggregation is a count. */
   count: number;
+  /** **What the wedge is actually drawn from.** The metric when p.310's
+   * Aggregation is one of the four numeric ones, the count otherwise.
+   *
+   * Kept apart from `count` rather than overwriting it, because a legend that
+   * reads "north — 12 objects" beside a wedge sized by their total capacity is
+   * telling a reader two true things; one field would make it tell them one
+   * thing twice, and the wrong one. */
+  size: number;
   /** p.310's per-segment colour, or `null` to take the palette's. */
   color: string | null;
 }
@@ -142,10 +189,19 @@ export function visibleSlices(
   for (const group of groups) {
     const override = overrides.get(group.value);
     if (override?.hidden) continue;
+    // **A negative metric cannot be a wedge.** A sum over a column holding
+    // debits is a real answer and a pie is the wrong picture of it: an angle
+    // has no sign, so a -40 slice drawn beside a 100 one would either vanish or
+    // eat its neighbour. Clamped to zero, which draws nothing and leaves the
+    // legend's own number honest — the same call `count` already made.
+    const metric = typeof group.metric === "number" && Number.isFinite(group.metric)
+      ? group.metric
+      : null;
     out.push({
       value: group.value,
       label: override?.label ?? group.value,
       count: Math.max(0, group.count),
+      size: Math.max(0, metric ?? group.count),
       color: override?.color ?? null,
     });
   }
@@ -169,11 +225,11 @@ export interface Wedge {
  * circle rather than leaving a hole where one used to be.
  */
 export function wedges(slices: readonly Slice[]): Wedge[] {
-  const total = slices.reduce((sum, s) => sum + Math.max(0, s.count), 0);
+  const total = slices.reduce((sum, s) => sum + Math.max(0, s.size), 0);
   if (total <= 0) return [];
   let angle = -Math.PI / 2;
   return slices.map((slice) => {
-    const share = Math.max(0, slice.count) / total;
+    const share = Math.max(0, slice.size) / total;
     const start = angle;
     const end = angle + share * Math.PI * 2;
     angle = end;

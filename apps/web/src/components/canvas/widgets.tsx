@@ -98,8 +98,9 @@ import {
   // Aliased on §211's rule: `AGGREGATIONS` and `segmentsOf` are generic enough
   // to collide, and `visibleSlices` sits beside two other `visible*` reads.
   AGGREGATIONS as PIE_AGGREGATIONS, LEGEND_POSITIONS, MAX_INNER_RADIUS,
-  aggregationOf as pieAggregationOf, innerRadiusOf, legendPositionOf,
-  segmentsOf, showLegendOf, visibleSlices,
+  aggregationOf as pieAggregationOf,
+  aggregationRequest as pieAggregationRequest, innerRadiusOf, legendPositionOf,
+  needsProperty as pieNeedsProperty, segmentsOf, showLegendOf, visibleSlices,
 } from "./pie-chart";
 import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
@@ -4478,6 +4479,8 @@ CanvasObjectViewWidget.craft = {
 export function CanvasPieChart({
   objectSetVariable = null,
   groupBy = "",
+  aggregation = "count",
+  aggregationProperty = "",
   inner = 0,
   legend = "right",
   showLegend = true,
@@ -4488,6 +4491,12 @@ export function CanvasPieChart({
   objectSetVariable?: string | null;
   /** p.310's Group by. */
   groupBy?: string;
+  /** p.310's **Aggregation**: what sizes a slice. `count` until §227, which
+   * shipped the four numeric ones per bucket on both stores. */
+  aggregation?: string;
+  /** The property a numeric aggregation runs over — a *second* property,
+   * distinct from the one being grouped by. */
+  aggregationProperty?: string;
   /** p.310's Radius, as a fraction of the outer radius. */
   inner?: number;
   legend?: string;
@@ -4508,10 +4517,15 @@ export function CanvasPieChart({
   const { set: setParameter } = useCanvasParameters();
   const filterRaw = useCanvasParameter(filterVariable);
 
+  // `null` while p.310's Aggregation is unfinished — a `sum` with no property
+  // yet — so the widget does not send a request the server refuses with a
+  // sentence about property types for what is a half-filled panel.
+  const ask = pieAggregationRequest(aggregation, aggregationProperty);
   const grouped = useQuery({
-    queryKey: ["object-set-group", JSON.stringify(setDefinition ?? null), groupBy],
-    queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, groupBy),
-    enabled: !!setDefinition && !!groupBy && !variablesPending,
+    queryKey: ["object-set-group", JSON.stringify(setDefinition ?? null), groupBy,
+               ask?.aggregation ?? null, ask?.aggregation_property ?? null],
+    queryFn: () => objApi.groupObjectSet(workspaceId, setDefinition, groupBy, ask ?? {}),
+    enabled: !!setDefinition && !!groupBy && !!ask && !variablesPending,
   });
   const typeId = (setDefinition as { object_type_id?: string } | undefined)?.object_type_id
     ?? null;
@@ -4564,7 +4578,12 @@ export function CanvasPieChart({
       ) : (
         <div data-testid="pie-chart">
           <PieChart
-            points={slices.map((s) => ({ label: s.label, value: s.count }))}
+            // **`size`, not `count`** — what p.310's Aggregation made the two
+            // different numbers. `PieChart` takes a series of values and knows
+            // nothing about aggregations, so this is the one line where a pie
+            // sized by a sum becomes a pie sized by how many objects are in
+            // each slice, and every assertion downstream still passes.
+            points={slices.map((s) => ({ label: s.label, value: s.size }))}
             inner={innerRadiusOf(inner)}
             legend={legendPositionOf(legend)}
             showLegend={showLegendOf(showLegend)}
@@ -4599,12 +4618,14 @@ export function CanvasPieChart({
 function PieChartSettings() {
   const { workspaceId } = useCanvasEnv();
   const {
-    objectSetVariable, groupBy, inner, legend, showLegend, ontologyColors,
-    filterVariable,
+    objectSetVariable, groupBy, aggregation, aggregationProperty, inner, legend,
+    showLegend, ontologyColors, filterVariable,
     actions: { setProp },
   } = useNode((node) => ({
     objectSetVariable: node.data.props.objectSetVariable,
     groupBy: node.data.props.groupBy,
+    aggregation: node.data.props.aggregation,
+    aggregationProperty: node.data.props.aggregationProperty,
     inner: node.data.props.inner,
     legend: node.data.props.legend,
     showLegend: node.data.props.showLegend,
@@ -4658,15 +4679,52 @@ function PieChartSettings() {
       </label>
       <label className="field">
         <span className="field-label">Aggregation</span>
-        <select value={pieAggregationOf(undefined)} data-testid="pie-aggregation" disabled>
+        <select
+          value={pieAggregationOf(aggregation)}
+          data-testid="pie-aggregation"
+          onChange={(e) =>
+            setProp((p: { aggregation: string }) => (p.aggregation = e.target.value))}
+        >
           {Object.entries(PIE_AGGREGATIONS).map(([key, name]) => (
             <option key={key} value={key}>{name}</option>
           ))}
         </select>
         <span className="field-hint">
-          p.310 lists six; a grouped sum needs declared property types (decision 0006)
+          What sizes a slice. p.310&apos;s &ldquo;approximate unique count&rdquo; is
+          not offered: per slice it would need a third property nobody has named
         </span>
       </label>
+      {pieNeedsProperty(aggregation) && (
+        <label className="field">
+          <span className="field-label">Aggregate over</span>
+          <select
+            value={aggregationProperty || ""}
+            data-testid="pie-aggregation-property"
+            onChange={(e) =>
+              setProp((p: { aggregationProperty: string }) =>
+                (p.aggregationProperty = e.target.value))}
+          >
+            <option value="">Choose…</option>
+            {/* **Only the properties the server will aggregate**, which is a
+                narrower list than the one Group by offers: `object_sets`
+                refuses anything but an integer or a float, and a picker that
+                offered a date would produce a sentence about arithmetic in
+                place of a chart. This panel already has the object type in
+                hand for Group by, so the list costs nothing. */}
+            {(type.data?.properties ?? [])
+              .filter((p) => p.data_type === "integer" || p.data_type === "float")
+              .map((p) => (
+                <option key={p.api_name} value={p.api_name}>
+                  {p.display_name || p.api_name}
+                </option>
+              ))}
+          </select>
+          <span className="field-hint">
+            Integer and float properties only — the two the stores order and add
+            identically (decision 0006)
+          </span>
+        </label>
+      )}
       </>}
       configuration={<>
       <label className="field">
@@ -4743,7 +4801,8 @@ function PieChartSettings() {
 CanvasPieChart.craft = {
   displayName: "Pie chart",
   props: {
-    objectSetVariable: null, groupBy: "", inner: 0, legend: "right",
+    objectSetVariable: null, groupBy: "", aggregation: "count",
+    aggregationProperty: "", inner: 0, legend: "right",
     showLegend: true, segments: [], ontologyColors: false, filterVariable: null,
   },
   related: { settings: PieChartSettings },

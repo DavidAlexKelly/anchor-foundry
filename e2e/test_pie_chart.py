@@ -31,18 +31,29 @@ from conftest import open_builder, open_module, settled
 # that divided the circle evenly would be visibly wrong rather than plausibly
 # right.
 ROWS = [
-    {"id": "S1", "status": "open", "region": "north"},
-    {"id": "S2", "status": "open", "region": "south"},
-    {"id": "S3", "status": "open", "region": "north"},
-    {"id": "S4", "status": "closed", "region": "east"},
+    {"id": "S1", "status": "open", "region": "north", "capacity": 10},
+    {"id": "S2", "status": "open", "region": "south", "capacity": 10},
+    {"id": "S3", "status": "open", "region": "north", "capacity": 10},
+    {"id": "S4", "status": "closed", "region": "east", "capacity": 90},
 ]
+# **`capacity` inverts the chart on purpose.** By count, `open` is three of four
+# and covers three quarters; by *total capacity* it is 30 of 120 and covers one.
+# So a pie sized by the count when the author asked for a sum is not merely
+# wrong, it is backwards — which is what makes p.310's Aggregation testable
+# rather than plausible.
+CAPACITIES = {"open": 30, "closed": 90}
 
 
 @pytest.fixture(scope="module")
 def sites(api):
     mod = Module(api, "Pie chart")
     mod.site_type_id = mod.object_type(
-        columns=["id", "status", "region"], rows=ROWS, key="id", title="id",
+        columns=["id", "status", "region", "capacity"], rows=ROWS, key="id",
+        title="id",
+        # `capacity` declared `integer`, which is what p.310's Aggregation needs
+        # behind it: `object_sets.AGGREGATABLE_TYPES` refuses anything else, so
+        # a string column here would test the refusal rather than the feature.
+        types={"capacity": "integer"},
         # p.102-109's ordered rules, in the shape `test_conditional_formatting`
         # uses. Only `open` is painted, so p.310's setting has to change one
         # slice and leave the other alone.
@@ -122,6 +133,81 @@ def test_the_slices_are_proportional(page, api, sites) -> None:
     # them wrong by half a circle.
     assert " 1 1 " in (slice_for(page, "open").get_attribute("d") or "")
     assert " 0 1 " in (slice_for(page, "closed").get_attribute("d") or "")
+
+
+# ---- p.310's Aggregation (§228) ----------------------------------------------
+def test_a_sum_sizes_the_slices_rather_than_the_count(page, api, sites) -> None:
+    """**The assertion this unit exists for, and the fixture is built to invert
+    it.**
+
+    By count, `open` is three of four objects and covers three quarters. By
+    total capacity it is 30 of 120 and covers one quarter. So a pie still sized
+    by the count when the author asked for a sum is not subtly wrong — it is
+    backwards, and the large-arc flag moves from one slice to the other.
+    """
+    mod = build(api, sites, "Pie sum",
+                {"aggregation": "sum", "aggregationProperty": "capacity"})
+    open_module(page, mod)
+    settled(page)
+
+    expect(slice_for(page, "closed").locator("title")).to_have_text("closed: 90 (75.0%)")
+    expect(slice_for(page, "open").locator("title")).to_have_text("open: 30 (25.0%)")
+    # And the arcs agree with the words: the larger share is the one that takes
+    # more than half the circle.
+    assert " 1 1 " in (slice_for(page, "closed").get_attribute("d") or "")
+    assert " 0 1 " in (slice_for(page, "open").get_attribute("d") or "")
+
+
+def test_an_average_is_not_a_sum(page, api, sites) -> None:
+    """Three open sites of 10 average 10; one closed site of 90 averages 90. A
+    widget that sent the aggregation but ignored which one would draw the sum's
+    chart here, and the shares differ."""
+    mod = build(api, sites, "Pie average",
+                {"aggregation": "avg", "aggregationProperty": "capacity"})
+    open_module(page, mod)
+    settled(page)
+
+    expect(slice_for(page, "closed").locator("title")).to_have_text("closed: 90 (90.0%)")
+    expect(slice_for(page, "open").locator("title")).to_have_text("open: 10 (10.0%)")
+
+
+def test_the_legend_shows_what_the_wedge_is_drawn_from(page, api, sites) -> None:
+    """A legend reading "open — 3" beside a wedge covering a quarter of the
+    circle states a count next to a percentage of a total: two true numbers
+    arranged to look like one, which is worse than either alone."""
+    mod = build(api, sites, "Pie sum legend",
+                {"aggregation": "sum", "aggregationProperty": "capacity"})
+    open_module(page, mod)
+    settled(page)
+
+    legend = page.get_by_test_id("pie-chart")
+    expect(legend).to_contain_text("open — 30")
+    expect(legend).to_contain_text("closed — 90")
+
+
+def test_an_unfinished_aggregation_draws_nothing_rather_than_an_error(
+    page, api, sites
+) -> None:
+    """A `sum` with no property yet is a panel somebody is halfway through. The
+    server refuses it with a sentence about property types, and showing that to
+    a viewer in place of a chart would report an author's unfinished setting as
+    a failure."""
+    mod = build(api, sites, "Pie sum unset", {"aggregation": "sum"})
+    open_module(page, mod)
+    settled(page)
+
+    expect(slices(page)).to_have_count(0)
+    expect(page.get_by_text("is a string property")).to_have_count(0)
+
+
+def test_a_count_still_counts(page, api, sites) -> None:
+    """p.310's default, unchanged - every pie saved before §228 holds no
+    aggregation at all and must keep drawing the chart it drew."""
+    mod = build(api, sites, "Pie count default")
+    open_module(page, mod)
+    settled(page)
+
+    expect(slice_for(page, "open").locator("title")).to_have_text("open: 3 (75.0%)")
 
 
 def test_a_donut_has_a_hole(page, api, sites) -> None:
@@ -396,19 +482,45 @@ def test_the_panel_offers_the_bound_type_s_properties(page, api, sites) -> None:
 
     page.locator(".canvas-tree-row").filter(has_text="Pie chart").first.click()
     options = page.get_by_test_id("pie-group-by").locator("option")
-    expect(options).to_have_count(4)  # Choose… plus id, status, region
+    expect(options).to_have_count(5)  # Choose… plus id, status, region, capacity
     expect(page.get_by_test_id("pie-group-by")).to_contain_text("Region")
 
 
-def test_the_panel_says_why_there_is_one_aggregation(page, api, sites) -> None:
-    """p.310 lists six and this offers one, so the panel says what it would
-    take — a control that is permanently inert should explain itself rather
-    than look configurable."""
+def test_the_panel_offers_five_of_p310s_six_aggregations(page, api, sites) -> None:
+    """This control was **disabled** until §228, with a hint saying a grouped
+    sum needed declared property types. It does not any more (§220, §226,
+    §227), so the hint would have been a refusal that was no longer true —
+    §216's stale line, in a settings panel."""
     mod = build(api, sites, "Pie panel aggregation")
     open_builder(page, mod)
     settled(page)
 
     page.locator(".canvas-tree-row").filter(has_text="Pie chart").first.click()
-    hint = page.get_by_test_id("pie-aggregation").locator("xpath=..")
-    expect(hint).to_contain_text("declared property types")
-    expect(page.get_by_test_id("pie-aggregation")).to_be_disabled()
+    control = page.get_by_test_id("pie-aggregation")
+    expect(control).to_be_enabled()
+    assert control.locator("option").all_text_contents() == [
+        "Count of objects", "Sum of", "Average of", "Minimum of", "Maximum of",
+    ]
+
+
+def test_the_property_picker_appears_only_for_an_aggregation_that_needs_one(
+    page, api, sites
+) -> None:
+    """A count runs over no property, so a field asking which one would be a
+    control with nothing to do — and an author who filled it in would reasonably
+    expect it to change the chart."""
+    mod = build(api, sites, "Pie panel property")
+    open_builder(page, mod)
+    settled(page)
+
+    page.locator(".canvas-tree-row").filter(has_text="Pie chart").first.click()
+    expect(page.get_by_test_id("pie-aggregation-property")).to_have_count(0)
+
+    page.get_by_test_id("pie-aggregation").select_option("sum")
+    picker = page.get_by_test_id("pie-aggregation-property")
+    expect(picker).to_be_visible()
+    # **Only what the server will aggregate.** `capacity` is the one integer;
+    # `status` and `region` are strings and `object_sets` refuses them, so
+    # offering them would produce a sentence about arithmetic in place of a
+    # chart. A narrower list than Group by's, deliberately.
+    assert picker.locator("option").all_text_contents() == ["Choose…", "Capacity"]
