@@ -150,8 +150,16 @@ def test_a_sum_sizes_the_slices_rather_than_the_count(page, api, sites) -> None:
     open_module(page, mod)
     settled(page)
 
-    expect(slice_for(page, "closed").locator("title")).to_have_text("closed: 90 (75.0%)")
-    expect(slice_for(page, "open").locator("title")).to_have_text("open: 30 (25.0%)")
+    # **Both numbers, because they are now two.** The share is of the total
+    # capacity, and the object count is what a reader of a sum-pie cannot get
+    # anywhere else - a title that only said "90" would leave "of how many
+    # sites?" unanswerable from the chart.
+    expect(slice_for(page, "closed").locator("title")).to_have_text(
+        "closed: 90 (75.0%) — 1 objects"
+    )
+    expect(slice_for(page, "open").locator("title")).to_have_text(
+        "open: 30 (25.0%) — 3 objects"
+    )
     # And the arcs agree with the words: the larger share is the one that takes
     # more than half the circle.
     assert " 1 1 " in (slice_for(page, "closed").get_attribute("d") or "")
@@ -167,8 +175,12 @@ def test_an_average_is_not_a_sum(page, api, sites) -> None:
     open_module(page, mod)
     settled(page)
 
-    expect(slice_for(page, "closed").locator("title")).to_have_text("closed: 90 (90.0%)")
-    expect(slice_for(page, "open").locator("title")).to_have_text("open: 10 (10.0%)")
+    expect(slice_for(page, "closed").locator("title")).to_have_text(
+        "closed: 90 (90.0%) — 1 objects"
+    )
+    expect(slice_for(page, "open").locator("title")).to_have_text(
+        "open: 10 (10.0%) — 3 objects"
+    )
 
 
 def test_the_legend_shows_what_the_wedge_is_drawn_from(page, api, sites) -> None:
@@ -207,6 +219,8 @@ def test_a_count_still_counts(page, api, sites) -> None:
     open_module(page, mod)
     settled(page)
 
+    # One number, said once: a count pie's slice size *is* its object count, and
+    # "3 (75.0%) - 3 objects" would be the same fact twice.
     expect(slice_for(page, "open").locator("title")).to_have_text("open: 3 (75.0%)")
 
 

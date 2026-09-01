@@ -4584,6 +4584,10 @@ export function CanvasPieChart({
             // sized by a sum becomes a pie sized by how many objects are in
             // each slice, and every assertion downstream still passes.
             points={slices.map((s) => ({ label: s.label, value: s.size }))}
+            // Passed only where it is a *second* number: a count pie's slices
+            // have one, and a title repeating it would say "3 (75.0%) — 3
+            // objects".
+            counts={Object.fromEntries(slices.map((s) => [s.label, s.count]))}
             inner={innerRadiusOf(inner)}
             legend={legendPositionOf(legend)}
             showLegend={showLegendOf(showLegend)}
