@@ -103,6 +103,13 @@ import {
   needsProperty as pieNeedsProperty, segmentsOf, showLegendOf, visibleSlices,
 } from "./pie-chart";
 import {
+  // Aliased on §211's rule: this file already has two `AGGREGATIONS` and three
+  // `needsProperty`-shaped questions.
+  AGGREGATIONS as METRIC_AGGREGATIONS, aggregationOf as metricAggregationOf,
+  metricRequest, needsProperty as metricNeedsProperty,
+  propertiesFor as metricPropertiesFor, valueLabel as metricValueLabel,
+} from "./metric-card";
+import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
   // enough to collide with something later, and `labelOf` is the kind of name
   // three widgets could each want.
@@ -10038,10 +10045,12 @@ CanvasActionForm.craft = {
  * worth having as a shared thing: the card, the table and the chart all read
  * *the same* variable, so "127 sites" and the rows under it cannot disagree.
  *
- * Only `count` and `count_distinct` are offered, because those are the two the
- * two stores answer identically over untyped properties - see
- * `services/object_sets.py`. A sum would be right on one deployment and absent
- * on another.
+ * All six of `object_sets`' aggregations. Only `count` and `count_distinct`
+ * were offered until §229, because those are the two the stores answered
+ * identically over *untyped* properties - and §220 typed them, §226 shipped the
+ * other four. The rules are `metric-card.ts`, including the divergence from
+ * p.328 that shapes this widget: p.328's card reads a *variable* and something
+ * else computes the number.
  */
 export function CanvasMetricCard({
   objectSetVariable = null,
@@ -10050,7 +10059,8 @@ export function CanvasMetricCard({
   label = "",
 }: {
   objectSetVariable?: string | null;
-  aggregation?: "count" | "count_distinct";
+  /** p.310's six, as `metric-card.ts` lists them. */
+  aggregation?: string;
   property?: string | null;
   label?: string;
 }) {
@@ -10061,17 +10071,18 @@ export function CanvasMetricCard({
   const setDefinition = useCanvasVariable(objectSetVariable);
   const { pending: variablesPending } = useCanvasVariables();
 
+  // `null` while the setting is unfinished - an aggregation whose property has
+  // not been chosen yet. The server answers that with a sentence about property
+  // types, and showing it here would report a half-filled panel as a failure of
+  // the data (§223, §228).
+  const ask = metricRequest(aggregation, property);
   const metric = useQuery({
     queryKey: [
       "canvas-metric", objectSetVariable, JSON.stringify(setDefinition ?? null),
-      aggregation, property,
+      ask?.aggregation ?? null, ask?.property ?? null,
     ],
-    queryFn: () =>
-      objApi.aggregateObjectSet(workspaceId, setDefinition, {
-        aggregation,
-        property: property ?? undefined,
-      }),
-    enabled: !!objectSetVariable && !!setDefinition,
+    queryFn: () => objApi.aggregateObjectSet(workspaceId, setDefinition, ask ?? {}),
+    enabled: !!objectSetVariable && !!setDefinition && !!ask,
   });
 
   return (
@@ -10083,11 +10094,19 @@ export function CanvasMetricCard({
         ) : variablesPending || metric.isPending ? (
           // Not "0". A card that showed a number it did not have would be
           // believed, and nobody re-reads a figure that looked fine.
-          <span className="metric-value soft">…</span>
+          <span className="metric-value soft" data-testid="metric-pending">…</span>
         ) : metric.isError ? (
-          <p className="canvas-widget-empty">{(metric.error as Error).message}</p>
+          <p className="canvas-widget-empty" data-testid="metric-error">
+            {(metric.error as Error).message}
+          </p>
         ) : (
-          <span className="metric-value">{metric.data!.value.toLocaleString()}</span>
+          // **Not `.toLocaleString()` on the value directly.** §226 made an
+          // aggregation over an empty set answer `null`, and a card is one
+          // large number somebody reads at a glance - so it says there is
+          // nothing rather than throwing, or worse, showing a zero.
+          <span className="metric-value" data-testid="metric-value">
+            {metricValueLabel(metric.data?.value)}
+          </span>
         )}
       </div>
     </div>
@@ -10154,29 +10173,32 @@ function MetricCardSettings() {
       <label className="field">
         <span className="field-label">Shows</span>
         <select
-          value={aggregation ?? "count"}
+          value={metricAggregationOf(aggregation)}
+          data-testid="metric-aggregation"
           onChange={(e) =>
             setProp((p: { aggregation: string }) => (p.aggregation = e.target.value))
           }
         >
-          <option value="count">How many</option>
-          <option value="count_distinct">How many distinct values</option>
+          {Object.entries(METRIC_AGGREGATIONS).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
         </select>
-        <span className="field-hint">
-          Sums and averages need typed properties — see the ontology roadmap
-        </span>
       </label>
-      {aggregation === "count_distinct" && (
+      {metricNeedsProperty(aggregation) && (
         <label className="field">
           <span className="field-label">Of property</span>
           <select
             value={property || ""}
+            data-testid="metric-property"
             onChange={(e) =>
               setProp((p: { property: string | null }) => (p.property = e.target.value || null))
             }
           >
             <option value="">Choose…</option>
-            {detail.data?.properties.map((prop) => (
+            {/* **Two different lists.** A distinct count is a text-identity
+                question and works on any property; the four numeric ones are
+                arithmetic and the server takes only an integer or a float. */}
+            {metricPropertiesFor(aggregation, detail.data?.properties ?? []).map((prop) => (
               <option key={prop.api_name} value={prop.api_name}>{prop.api_name}</option>
             ))}
           </select>

@@ -731,7 +731,11 @@ export const objects = {
     definition: unknown,
     opts: { aggregation?: string; property?: string } = {},
   ) =>
-    request<{ value: number; aggregation: string; property: string | null }>(
+    // **`value` is nullable as of §226**: an aggregation over an empty set
+    // answers nothing rather than zero, because "total capacity: 0" and "there
+    // are no sites" are different facts. The type said `number` for two units
+    // after that stopped being true, which is a lie a compiler will repeat.
+    request<{ value: number | null; aggregation: string; property: string | null }>(
       `/workspaces/${wid}/object-sets/aggregate`,
       { method: "POST", body: JSON.stringify({ definition, ...opts }) },
     ),

@@ -4290,6 +4290,75 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 229. The Metric Card's other four aggregations, and a null it could not show (this session)
+
+The last consumer of §226. The card offered `count` and `count_distinct`, with a hint reading
+"sums and averages need typed properties — see the ontology roadmap": true when written, untrue
+from §220, and still there through §221, §226 and §227 while the thing it refused was being
+built. **That is the second widget in one file carrying a refusal that outlived its reason** —
+§228 found the first on the Pie Chart's panel — which is what turns it from an oversight into a
+pattern worth a rule.
+
+**§226 also widened `value` to nullable and the client type did not follow.**
+`request<{ value: number }>` said otherwise for two units, and the card read
+`metric.data!.value.toLocaleString()`, which throws on the first sum over an empty set. Latent
+only because nothing could ask for a sum yet — a type that has stopped being true is a lie the
+compiler repeats on request.
+
+**The empty answer matters more here than anywhere else §226 touched.** A Metric Card is one
+large figure somebody reads at a glance and believes, so "total capacity: 0" where the truth is
+"there are no sites" is the worst possible place for the two to render identically. The card
+shows `—`. A count over nothing is still `0`, because "how many" always has an answer and
+hiding that would be its own lie — and a test pins both halves, because a rule applied too
+widely is the usual way the first one gets undone.
+
+The property picker offers **two different lists**: a distinct count is a text-identity question
+and works on any property, the four numeric ones are arithmetic and the server takes only an
+integer or a float.
+
+**Checked against p.325-330 before building, per §216, and the specification describes
+something this platform does not do.** p.328: the value "must be backed by a Workshop variable
+of the corresponding type" — the card *reads* a number and something else computes it. This
+card computes its own, by calling `/object-sets/aggregate` directly.
+
+The variable-backed shape is the better one, and this platform half has it:
+`object_set_aggregation` is a declared transform in `workshop_variables.py`, refused on save as
+"not built yet — it reads the ontology, so it needs a server round trip rather than a local
+computation". **§226 is what removed that reason.** Until it is built, one number needs one
+widget, and every other consumer of an aggregate — a Markdown heading, a chart title, an
+action's default — has nowhere to read one from. Recorded in `metric-card.ts` and on the parity
+row rather than fixed in passing, because moving the aggregation onto the variable changes the
+resolver's shape (`evaluate` is a pure function today) rather than this widget's.
+
+**19 mutants, 19 caught, 0 survivors, 0 hangs, 0 no-ops** — 14 on the model, 5 on the widget.
+
+**Both browser survivors were the same weak assertion.** The unfinished-setting test named the
+sentences the card must not show — "is a string property", "needs a property" — which is a test
+of the server's *wording* rather than of the request that was never made, and passes the moment
+that wording changes. The three states are distinguishable now (`metric-pending`,
+`metric-value`, `metric-error`) and the test asserts which one the card is in. A third survivor
+was subtler: every *legal* setting produces an identical request whether the widget sends its
+props or what it read from them, so the only case that separates them is **a document naming an
+aggregation this platform has not got** — easy for a document to hold, and a 422 where a number
+should be if it is sent on.
+
+**The widget had no browser tests at all**, which is its own finding: it has existed since
+roadmap 1.5 and every assertion about it lived in `test_widget_setup_order.py`, which is about
+panel ordering rather than about metrics. A widget whose whole content is one number is exactly
+the shape that looks fine while showing the wrong one.
+
+**1315 unit tests** (was 1302); **629 browser tests** (was 617); 1687 API tests, 2 skipped,
+unchanged — this unit adds no server behaviour.
+
+Decision 0006 has **§3's map bounding box** left and nothing else. `workshop.md`'s **Pie Chart**
+and **Metric Card** are both ○ only for settings this platform has decided against or has not
+built a mechanism for.
+
+---
+---
+---
+---
+
 ### 228. p.310's Aggregation, wired into the Pie Chart (this session)
 
 The widget half of §226 and §227. `/object-sets/aggregate` and
@@ -6475,6 +6544,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
 
 - **A suite that silently tests the previous build is the worst shape a result can take, and `dev-up.sh` produces one by design.** It starts the API only if nothing is answering — correct, and documented as idempotent, because restarting somebody's running server for a second invocation would be worse. The consequence is that editing `apps/api/src` and running the browser suite tests the *old* server, and Next's hot reload hides how asymmetric that is: browser changes are picked up, server ones are not. §227 lost eight Pivot Table failures to it and §223 lost a whole run earlier; both times the code was correct. This is §220's leaked fixture server again — a red or green that is not about the code under test — and the fix is the same shape: make the suite **refuse** rather than run. `conftest` now compares the newest mtime under `apps/api/src` against when the server process started, and fails with the command to run. Best-effort, and it says nothing when it cannot judge. The general rule: when a harness can be pointed at the wrong thing, the harness should be what notices.
+
+- **When a type stops being true, the compiler repeats the lie on request.** §226 widened an aggregation's `value` to `number | null` on the server and left `request<{ value: number }>` in the browser client. For two units every consumer typechecked against a guarantee that no longer existed, and the Metric Card's `metric.data!.value.toLocaleString()` was a crash waiting for the first sum over an empty set — latent only because nothing could ask for a sum yet. **A hand-written client type is a second copy of the API contract**, and this repo already knows what those cost (the five mirrored files in `STATUS.md`'s rough edges); what is different here is that the copy is *checked*, so it reads as verified rather than asserted. The cheap habit: when a response field gains `| None` on the server, grep the client for its name in the same commit — the compiler will not, because from its side nothing changed.
+
+- **A widget whose whole content is one number is the easiest kind to leave untested.** The Metric Card had existed since roadmap 1.5 with no browser suite: every assertion naming it lived in `test_widget_setup_order.py`, which is about panel ordering. Nothing was checking *which* aggregation ran, and the fixture §229 wrote makes all six answers different numbers precisely so that "the plumbing works" and "the right question was asked" stop being the same assertion. The tell is a widget with one visible element — there is nothing to locate, nothing to count, and no layout to measure, so the usual reasons to write a browser test are all absent while the reason that matters (is this number the number?) is untouched.
 
 - **A refusal outlives its reason, and a settings panel is where nobody looks for one.** §218 disabled the Pie Chart's Aggregation control with a hint reading "a grouped sum needs declared property types (decision 0006)" — correct when written, and wrong from §220 onward, through §221, §226 and §227 while the thing it refused was being built three units in a row. This is §216's stale build-order line in a different file: a line citing a blocker that nobody re-opened. **Build orders get audited and disabled controls do not**, because a build order is a list somebody reads to decide what to do next, while a greyed-out `<select>` reads as settled. The tell is a control that explains why it cannot work — that sentence is a claim with a date on it, and the cheap habit is to grep for the decision record's name whenever the decision changes: `grep -rn "0006" apps/web` would have found this one the day §226 landed.
 
