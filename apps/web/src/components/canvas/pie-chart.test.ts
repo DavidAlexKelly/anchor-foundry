@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGGREGATIONS, DEFAULT_AGGREGATION, DEFAULT_LEGEND_POSITION, LEGEND_POSITIONS,
-  MAX_INNER_RADIUS, aggregationOf, arcPath, innerRadiusOf, legendPositionOf,
-  percentLabel, pointOnCircle, segmentsOf, showLegendOf, visibleSlices, wedges,
+  MAX_INNER_RADIUS, aggregationOf, aggregationRequest, arcPath, innerRadiusOf,
+  legendPositionOf, needsProperty, percentLabel, pointOnCircle, segmentsOf,
+  showLegendOf, visibleSlices, wedges,
 } from "./pie-chart";
 
 /** p.309-310's Pie Chart. */
@@ -14,21 +15,54 @@ const GROUPS = [
 ];
 
 describe("p.310's aggregation", () => {
-  it("offers only the one the grouped endpoint has", () => {
-    // p.310 lists six. `/object-sets/group` answers a grouped **count** alone,
-    // because instance properties are stored untyped and the two stores would
-    // disagree about a sum (decision 0006) — the same refusal §214's sort
-    // carries, and a pie of a disagreement would be worse than a table of one.
-    expect(Object.keys(AGGREGATIONS)).toEqual(["count"]);
+  it("offers five of p.310's six", () => {
+    // This read `["count"]` until §227, because a grouped sum would have been
+    // computed differently by the two stores (decision 0006). §226 and §227
+    // shipped the four numeric ones. `count_distinct` — p.310's "approximate
+    // unique count" — stays out: per bucket it is a question about a *third*
+    // property nobody has named, so the control would have nowhere to put its
+    // argument.
+    expect(Object.keys(AGGREGATIONS)).toEqual(["count", "sum", "avg", "min", "max"]);
     expect(DEFAULT_AGGREGATION).toBe("count");
   });
 
-  it("reads an aggregation a document holds back to the one that works", () => {
-    // A document written against p.310's wording would name `sum`, and sending
-    // it on would be a 422 in place of a chart.
-    expect(aggregationOf("sum")).toBe("count");
+  it("falls back to counting for an aggregation nothing offers", () => {
+    expect(aggregationOf("count_distinct")).toBe("count");
     expect(aggregationOf(undefined)).toBe("count");
-    expect(aggregationOf("count")).toBe("count");
+    expect(aggregationOf("sum")).toBe("sum");
+  });
+
+  it("knows which aggregations need a property to run over", () => {
+    expect(needsProperty("count")).toBe(false);
+    for (const name of ["sum", "avg", "min", "max"]) {
+      expect(needsProperty(name)).toBe(true);
+    }
+    // And an unknown one is a count, so it needs nothing - the fallback and
+    // this question have to agree, or the panel shows a property field for a
+    // request that will not carry one.
+    expect(needsProperty("count_distinct")).toBe(false);
+  });
+});
+
+describe("what the pie asks the server for", () => {
+  it("sends a count with no property", () => {
+    expect(aggregationRequest("count", "reading")).toEqual({
+      aggregation: "count", aggregation_property: null,
+    });
+  });
+
+  it("sends a numeric aggregation with the property it runs over", () => {
+    expect(aggregationRequest("sum", " reading ")).toEqual({
+      aggregation: "sum", aggregation_property: "reading",
+    });
+  });
+
+  it("sends nothing at all while the setting is unfinished", () => {
+    // A `sum` with no property yet is a 422 about property types shown in
+    // place of a chart, for what is a panel somebody is still filling in.
+    expect(aggregationRequest("sum", "")).toBeNull();
+    expect(aggregationRequest("avg", "   ")).toBeNull();
+    expect(aggregationRequest("min", null)).toBeNull();
   });
 });
 
@@ -104,14 +138,16 @@ describe("p.310's segment overrides", () => {
 describe("which slices are drawn", () => {
   it("keeps the server's order and names each by its value", () => {
     expect(visibleSlices(GROUPS, [])).toEqual([
-      { value: "open", label: "open", count: 3, color: null },
-      { value: "closed", label: "closed", count: 1, color: null },
+      { value: "open", label: "open", count: 3, size: 3, color: null },
+      { value: "closed", label: "closed", count: 1, size: 1, color: null },
     ]);
   });
 
   it("applies a label and a colour to the segment they name", () => {
     const slices = visibleSlices(GROUPS, [{ value: "closed", label: "Done", color: "#0f0" }]);
-    expect(slices[1]).toEqual({ value: "closed", label: "Done", count: 1, color: "#0f0" });
+    expect(slices[1]).toEqual({
+      value: "closed", label: "Done", count: 1, size: 1, color: "#0f0",
+    });
     // And the other slice is untouched, which is what makes it an override.
     expect(slices[0]?.label).toBe("open");
     expect(slices[0]?.color).toBeNull();
@@ -124,6 +160,53 @@ describe("which slices are drawn", () => {
 
   it("treats a negative count as nothing", () => {
     expect(visibleSlices([{ value: "odd", count: -5 }], [])[0]?.count).toBe(0);
+  });
+
+  it("draws the metric when there is one, and keeps the count beside it", () => {
+    // **Two numbers, not one.** A legend reading "north — 12 objects" beside a
+    // wedge sized by their total capacity tells a reader two true things;
+    // overwriting `count` would make it tell them one thing twice.
+    const slices = visibleSlices(
+      [{ value: "north", count: 12, metric: 400 },
+       { value: "south", count: 40, metric: 100 }], [],
+    );
+    expect(slices.map((s) => s.size)).toEqual([400, 100]);
+    expect(slices.map((s) => s.count)).toEqual([12, 40]);
+  });
+
+  it("falls back to the count when no metric came back", () => {
+    // p.310's count is the default, and `/object-sets/group` answers `null`
+    // for the metric then - a slice of `null` would be no slice at all.
+    expect(visibleSlices([{ value: "a", count: 3, metric: null }], [])[0]?.size).toBe(3);
+    expect(visibleSlices([{ value: "a", count: 3 }], [])[0]?.size).toBe(3);
+  });
+
+  it("treats a negative metric as nothing to draw", () => {
+    // A sum over a column of debits is a real answer and a pie is the wrong
+    // picture of it: an angle has no sign, so a -40 wedge beside a 100 one
+    // would either vanish or eat its neighbour. The legend's count stays true.
+    const slice = visibleSlices([{ value: "owed", count: 2, metric: -40 }], [])[0];
+    expect(slice?.size).toBe(0);
+    expect(slice?.count).toBe(2);
+  });
+
+  it("ignores a metric that is not a finite number", () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, "40" as unknown as number]) {
+      expect(visibleSlices([{ value: "a", count: 7, metric: bad }], [])[0]?.size).toBe(7);
+    }
+  });
+});
+
+describe("a pie sized by a metric", () => {
+  it("shares the circle by the metric, not by how many objects are in each slice", () => {
+    // The assertion that separates the two: `north` has fewer objects and the
+    // larger total, so a wedge drawn from the count would be the smaller one.
+    const drawn = wedges(visibleSlices(
+      [{ value: "north", count: 1, metric: 75 },
+       { value: "south", count: 9, metric: 25 }], [],
+    ));
+    expect(drawn[0]?.share).toBeCloseTo(0.75);
+    expect(drawn[1]?.share).toBeCloseTo(0.25);
   });
 });
 

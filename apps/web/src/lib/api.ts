@@ -735,17 +735,30 @@ export const objects = {
       `/workspaces/${wid}/object-sets/aggregate`,
       { method: "POST", body: JSON.stringify({ definition, ...opts }) },
     ),
-  /** How many in each distinct value of one property — what a chart over a set
-   * plots. Grouped counts only; a grouped sum has the untyped-property problem
-   * a plain sum does. */
-  groupObjectSet: (wid: string, definition: unknown, property: string, limit?: number) =>
+  /** One number per distinct value of a property — what a chart over a set
+   * plots.
+   *
+   * p.310's Aggregation per bucket as of §227: a count, or one of the four
+   * numeric ones over a second property. `metric` is `null` for a count, and
+   * never `null` within a metric answer — the server drops the buckets with
+   * nothing to measure, so a slice always has something to be sized by. */
+  groupObjectSet: (
+    wid: string,
+    definition: unknown,
+    property: string,
+    opts: {
+      limit?: number;
+      aggregation?: string;
+      aggregation_property?: string | null;
+    } = {},
+  ) =>
     request<{
-      groups: { value: string; count: number }[];
+      groups: { value: string; count: number; metric: number | null }[];
       distinct_total: number;
       truncated: boolean;
     }>(`/workspaces/${wid}/object-sets/group`, {
       method: "POST",
-      body: JSON.stringify({ definition, property, ...(limit ? { limit } : {}) }),
+      body: JSON.stringify({ definition, property, ...opts }),
     }),
   /** Counts by two properties at once — what a Pivot Table shows.
    *

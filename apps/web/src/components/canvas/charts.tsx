@@ -272,6 +272,7 @@ function ScatterChart({ points }: { points: ChartPoint[] }) {
  */
 export function PieChart({
   points,
+  counts,
   drill,
   inner = 0,
   legend = "right",
@@ -279,6 +280,15 @@ export function PieChart({
   colors,
 }: {
   points: ChartPoint[];
+  /** How many objects are behind each point, keyed by label, when that is a
+   * *different* number from the one the wedge is drawn from.
+   *
+   * Only p.310's Aggregation makes them differ: a pie sized by total capacity
+   * has a slice worth 400 holding 12 objects. Chart XY plots a series of values
+   * and has no second number, so it passes none — and where there is none the
+   * legend and the title say one thing, which is what every pie before §228
+   * did. */
+  counts?: Record<string, number>;
   drill?: Drill;
   /** p.310's Radius, as a fraction of the outer radius. */
   inner?: number;
@@ -288,12 +298,18 @@ export function PieChart({
   /** p.310's per-segment colours, keyed by the *label* drawn. */
   colors?: Record<string, string | null>;
 }) {
+  // `size` is what a wedge is drawn from; `count` is how many objects are
+  // behind it, which is the same number unless p.310's Aggregation made it
+  // otherwise. Both go through the same `wedges`, which is §218's point — one
+  // pie, two widgets.
   const slices = points.map((p) => ({
-    value: p.label, label: p.label, count: Math.max(0, p.value),
+    value: p.label, label: p.label,
+    count: counts?.[p.label] ?? Math.max(0, p.value),
+    size: Math.max(0, p.value),
     color: colors?.[p.label] ?? null,
   }));
   const drawn = wedges(slices);
-  const total = slices.reduce((sum, s) => sum + s.count, 0);
+  const total = slices.reduce((sum, s) => sum + s.size, 0);
   // The legend takes a side, so the pie's centre moves with it. Beside it the
   // chart keeps its half; above or below, the pie centres and gives up height.
   const beside = legend === "left" || legend === "right";
@@ -322,7 +338,22 @@ export function PieChart({
           opacity={dim(drill, wedge.slice.value)}
           {...markProps(drill, wedge.slice.value)}
         >
-          <title>{`${wedge.slice.label}: ${wedge.slice.count} (${percentLabel(wedge.share)})`}</title>
+          {/* **`size`, not `count`** — the number a share is a share *of*.
+              With p.310's Aggregation set to a sum, a title reading "north: 12
+              (25.0%)" would state a count beside a percentage of a total, which
+              are two different numbers wearing one sentence. They are the same
+              value for a count pie, which is every pie before §228. */}
+          {/* **`size`, then the count when it is a different number.** With
+              p.310's Aggregation set to a sum, "north: 400 (25.0%)" states the
+              share's own total, and "12 objects" says what is behind it —
+              which a reader of a sum-pie wants and cannot get anywhere else.
+              For a count pie they are one number and it is said once. */}
+          <title>
+            {`${wedge.slice.label}: ${wedge.slice.size} (${percentLabel(wedge.share)})`}
+            {wedge.slice.count === wedge.slice.size
+              ? ""
+              : ` — ${niceNumber(wedge.slice.count)} objects`}
+          </title>
         </path>
       ))}
       {keyed &&
@@ -336,7 +367,10 @@ export function PieChart({
           >
             <rect width={11} height={11} y={-9} fill={colourOf(i, wedge.slice)} />
             <text x={17} fontSize={11.5} fill="var(--ink)">
-              {shortLabel(wedge.slice.label, 22)} — {niceNumber(wedge.slice.count)}
+              {/* The legend shows what the wedge is drawn from, so the two
+                  agree. p.310's Aggregation is the label above the chart, not
+                  a thing to re-explain on every row. */}
+              {shortLabel(wedge.slice.label, 22)} — {niceNumber(wedge.slice.size)}
             </text>
           </g>
         ))}

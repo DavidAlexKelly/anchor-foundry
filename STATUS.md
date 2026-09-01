@@ -4290,6 +4290,76 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 228. p.310's Aggregation, wired into the Pie Chart (this session)
+
+The widget half of §226 and §227. `/object-sets/aggregate` and
+`/object-sets/group` have answered p.310's aggregations since those two; this is
+the panel that lets somebody ask for one.
+
+**The control had been disabled since §218, with a hint that stopped being
+true.** "A grouped sum needs declared property types (decision 0006)" was
+correct when it was written and wrong from §220 onward — a refusal outliving its
+reason, which is §216's stale build-order line relocated into a settings panel.
+The tell is the same one: a line citing a blocker nobody re-opened.
+
+Five of p.310's six. **`count_distinct` — "approximate unique count" — stays
+out**, and it is the interesting exclusion: per *slice* it is a question about a
+third property nobody has named, so the control would have nowhere to put its
+argument. The grouped endpoint answers it over a whole set, which is a different
+question wearing the same word.
+
+**A slice's size and its count are two numbers now, and keeping them apart is
+the design.** A legend reading "north — 12" beside a wedge sized by their total
+capacity tells a reader two true things; one field would make it tell them one
+thing twice, and the wrong one. So `Slice.size` is what a wedge is drawn from
+and `count` is what a count pie shows, and they are equal for every pie saved
+before this — which is also what let Chart XY keep rendering through the same
+`wedges`, one pie and two widgets, as §218 set it up.
+
+The property picker offers **integer and float only** — narrower than Group by's
+list, because `object_sets.AGGREGATABLE_TYPES` refuses the rest and a picker
+offering a date would produce a sentence about arithmetic in place of a chart.
+The panel already had the object type in hand for Group by, so the narrower list
+cost nothing. An unfinished setting — a `sum` with no property yet — sends no
+request at all, rather than showing a viewer the server's refusal as though it
+were a failure.
+
+**The fixture inverts the chart on purpose**, and it is what found the one real
+bug. By count `open` is three of four objects and covers three quarters; by
+total capacity it is 30 of 120 and covers one. So a pie still sized by the count
+is not subtly wrong, it is *backwards*, and the large-arc flag moves from one
+slice to the other. What it caught was
+`points={slices.map((s) => ({ value: s.count }))}` — the metric arriving from
+the server, surviving the model, and being dropped at the one line between the
+widget and the renderer, with every other assertion still passing.
+
+**22 mutants, 22 caught, 0 survivors, 0 hangs, 0 no-ops** — 12 on the model, 10
+on the widget and the renderer.
+
+**Two survivors were equivalent, and the reason was worth fixing rather than
+recording.** `PieChart` built its own slices from one number per point, so
+`count` and `size` were always equal *inside the renderer* and no title could
+tell them apart — which also meant `Slice.count` was pinned by unit tests and
+read by nothing. Dead data with tests on it is the same fault one level up. So
+the component takes the counts when they are a second number, and a sum-pie's
+title now reads "north: 400 (25.0%) — 12 objects": the share is of the total
+capacity, and how many objects are behind it is what a reader of a sum-pie
+cannot get anywhere else. A count pie passes one number and says it once.
+
+**1302 unit tests** (was 1293); **617 browser tests** (was 611); 1687 API tests,
+2 skipped, unchanged — this unit adds no server behaviour, which is the point:
+§226 and §227 had already added it.
+
+`workshop.md`'s Pie Chart row is ○ only for p.309's **export as PNG / copy to
+clipboard** now, which rasterises an SVG and is a capability rather than a
+setting. The **Metric Card** is the other widget §226 unblocked and its panel is
+still counting.
+
+---
+---
+---
+---
+
 ### 227. p.310's aggregation per slice, and a bucket with nothing to measure (this session)
 
 §226 answered p.310's six aggregations over a whole set. A pie needs them **per slice**, so
@@ -6405,6 +6475,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
 
 - **A suite that silently tests the previous build is the worst shape a result can take, and `dev-up.sh` produces one by design.** It starts the API only if nothing is answering — correct, and documented as idempotent, because restarting somebody's running server for a second invocation would be worse. The consequence is that editing `apps/api/src` and running the browser suite tests the *old* server, and Next's hot reload hides how asymmetric that is: browser changes are picked up, server ones are not. §227 lost eight Pivot Table failures to it and §223 lost a whole run earlier; both times the code was correct. This is §220's leaked fixture server again — a red or green that is not about the code under test — and the fix is the same shape: make the suite **refuse** rather than run. `conftest` now compares the newest mtime under `apps/api/src` against when the server process started, and fails with the command to run. Best-effort, and it says nothing when it cannot judge. The general rule: when a harness can be pointed at the wrong thing, the harness should be what notices.
+
+- **A refusal outlives its reason, and a settings panel is where nobody looks for one.** §218 disabled the Pie Chart's Aggregation control with a hint reading "a grouped sum needs declared property types (decision 0006)" — correct when written, and wrong from §220 onward, through §221, §226 and §227 while the thing it refused was being built three units in a row. This is §216's stale build-order line in a different file: a line citing a blocker that nobody re-opened. **Build orders get audited and disabled controls do not**, because a build order is a list somebody reads to decide what to do next, while a greyed-out `<select>` reads as settled. The tell is a control that explains why it cannot work — that sentence is a claim with a date on it, and the cheap habit is to grep for the decision record's name whenever the decision changes: `grep -rn "0006" apps/web` would have found this one the day §226 landed.
+
+- **When two numbers become different, the bug lives at whichever line still passes one of them.** §228 gave a pie slice a `size` (what the wedge is drawn from) alongside its `count` (how many objects are in it), equal for every chart saved before it. The model was right, the server was right, the tests of both passed — and `points={slices.map((s) => ({ value: s.count }))}`, one line between the widget and the renderer, silently drew the old chart. What caught it was a **fixture built so the two answers are inverted**: by count the slice covers three quarters, by sum one quarter, so a wedge drawn from the wrong number is backwards rather than slightly off. The general shape: when a field splits in two, every place that read the old one is a candidate, and a fixture where the two agree cannot tell you which places you missed.
 
 - **A fixture that gets an ordering subtly wrong is worse than one that refuses the query.** §227 taught the OpenSearch fixture to order a terms aggregation by a sub-aggregation, and the first version sorted with one `reverse=True` over a compound key — which reverses the `_key` tie-break along with the metric, so equal slices came back Z–A where a real cluster gives A–Z. The store's request says `[{metric: desc}, {_key: asc}]`, and **those are two directions**: the fix is a stable sort by the key ascending followed by a sort on the metric. What makes this worth recording is the failure mode: a fixture that raises on an unsupported query fails loudly and gets fixed, while one that answers *almost* right silently vouches for the code under test — and here the thing under test was ordering. The general tell: whenever a fixture implements a feature with more than one parameter, ask which parameters it is quietly collapsing.
 
