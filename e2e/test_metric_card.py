@@ -161,6 +161,28 @@ def test_an_unfinished_setting_shows_no_number_and_no_error(page, api, sites) ->
     expect(page.get_by_test_id("metric-pending")).to_be_visible()
 
 
+def test_a_document_naming_an_aggregation_this_platform_has_not_got_still_counts(
+    page, api, sites
+) -> None:
+    """**The widget reads its own configuration before sending it** (§223).
+
+    A document can hold anything - a hand-edit, a paste, the raw JSON tab, or a
+    module written against a Foundry page listing an aggregation this platform
+    does not answer. Sent on, `median` comes back as a 422 and the card shows an
+    error where a number should be; read first, it falls back to counting, which
+    is the answer that is never wrong.
+
+    This is the only case that separates sending the props from sending what was
+    read from them: every *legal* setting is identical either way.
+    """
+    mod = build(api, sites, "Metric unknown agg", {"aggregation": "median"})
+    open_module(page, mod)
+    settled(page)
+
+    expect(page.get_by_test_id("metric-error")).to_have_count(0)
+    expect(value(page)).to_have_text("3")
+
+
 # ---- the panel ---------------------------------------------------------------
 def test_the_panel_offers_all_six(page, api, sites) -> None:
     mod = build(api, sites, "Metric panel")
