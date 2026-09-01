@@ -152,8 +152,13 @@ def test_an_unfinished_setting_shows_no_number_and_no_error(page, api, sites) ->
     open_module(page, mod)
     settled(page)
 
-    expect(page.get_by_text("is a string property")).to_have_count(0)
-    expect(page.get_by_text("needs a property")).to_have_count(0)
+    # **Asserted on which state the card is in, not on the wording of an error
+    # it must not show.** Naming the server's sentence would pass the moment
+    # that sentence changed, which is a test of the message rather than of the
+    # request that was never made.
+    expect(page.get_by_test_id("metric-error")).to_have_count(0)
+    expect(page.get_by_test_id("metric-value")).to_have_count(0)
+    expect(page.get_by_test_id("metric-pending")).to_be_visible()
 
 
 # ---- the panel ---------------------------------------------------------------

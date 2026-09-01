@@ -10094,9 +10094,11 @@ export function CanvasMetricCard({
         ) : variablesPending || metric.isPending ? (
           // Not "0". A card that showed a number it did not have would be
           // believed, and nobody re-reads a figure that looked fine.
-          <span className="metric-value soft">…</span>
+          <span className="metric-value soft" data-testid="metric-pending">…</span>
         ) : metric.isError ? (
-          <p className="canvas-widget-empty">{(metric.error as Error).message}</p>
+          <p className="canvas-widget-empty" data-testid="metric-error">
+            {(metric.error as Error).message}
+          </p>
         ) : (
           // **Not `.toLocaleString()` on the value directly.** §226 made an
           // aggregation over an empty set answer `null`, and a card is one
