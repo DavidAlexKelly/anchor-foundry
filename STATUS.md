@@ -4330,15 +4330,24 @@ action's default — has nowhere to read one from. Recorded in `metric-card.ts` 
 row rather than fixed in passing, because moving the aggregation onto the variable changes the
 resolver's shape (`evaluate` is a pure function today) rather than this widget's.
 
-**33 mutants, 33 caught, 0 survivors, 0 hangs, 0 no-ops** — 14 on the model, 5 on the widget,
-and 14 carried from §228's model that still apply.
+**19 mutants, 19 caught, 0 survivors, 0 hangs, 0 no-ops** — 14 on the model, 5 on the widget.
+
+**Both browser survivors were the same weak assertion.** The unfinished-setting test named the
+sentences the card must not show — "is a string property", "needs a property" — which is a test
+of the server's *wording* rather than of the request that was never made, and passes the moment
+that wording changes. The three states are distinguishable now (`metric-pending`,
+`metric-value`, `metric-error`) and the test asserts which one the card is in. A third survivor
+was subtler: every *legal* setting produces an identical request whether the widget sends its
+props or what it read from them, so the only case that separates them is **a document naming an
+aggregation this platform has not got** — easy for a document to hold, and a 422 where a number
+should be if it is sent on.
 
 **The widget had no browser tests at all**, which is its own finding: it has existed since
 roadmap 1.5 and every assertion about it lived in `test_widget_setup_order.py`, which is about
 panel ordering rather than about metrics. A widget whose whole content is one number is exactly
 the shape that looks fine while showing the wrong one.
 
-**1315 unit tests** (was 1302); **628 browser tests** (was 617); 1687 API tests, 2 skipped,
+**1315 unit tests** (was 1302); **629 browser tests** (was 617); 1687 API tests, 2 skipped,
 unchanged — this unit adds no server behaviour.
 
 Decision 0006 has **§3's map bounding box** left and nothing else. `workshop.md`'s **Pie Chart**
