@@ -123,35 +123,42 @@ BOXABLE_TYPES = ("geopoint",)
 
 BOX_EDGES = ("north", "south", "east", "west")
 
-# How a page of a set may be ordered (roadmap 1.5, the Object Table upgrade).
+# How a page of a set may be ordered without knowing any property's type
+# (roadmap 1.5, the Object Table upgrade).
 #
-# Four, and **none of them sorts by a property**, which is the same refusal
-# `ORDERED_OPERATORS` makes and for exactly the same reason: properties are
-# stored untyped, so ordering by one means choosing between "250 comes after
-# 40" and "250 comes before 40" on the caller's behalf, and the two stores
-# would choose differently. A table sorted one way on Postgres and another on
-# OpenSearch is the invisible kind of wrong.
+# **Not the whole vocabulary since §221** - `parse_sort` also takes `prop` and
+# `-prop` for a property whose declared type both stores order identically.
+# These four are the ones that need no ontology at all: the primary key, which
+# is text on both stores, and `updated_at`, which is a real timestamp column on
+# one and an indexed date on the other.
 #
-# What is here is what both stores can order identically without knowing any
-# property's type: the primary key, which is text on both, and `updated_at`,
-# which is a real timestamp column on one and an indexed date on the other.
+# The distinction is what `parse_sort`'s two branches are: a caller that
+# resolved no `property_types` gets these four and a refusal naming what a
+# property sort would need, because a caller that has checked no type has
+# checked nothing.
 SORTS = ("key", "-key", "recent", "oldest")
 DEFAULT_SORT = "recent"
 
 # Named so the refusal can say what it would take, rather than only "no".
 #
-# Says which types it *would* cover, because decision 0006 settled that and the
-# earlier wording implied every property would be sortable one day. A `string`
-# property will not be: lexicographic order is the database collation on
-# Postgres and byte order on OpenSearch, so 'Z' < 'a' differs between them -
-# which is the same disagreement this refusal exists to prevent, one layer down.
+# **Present tense as of §231.** This promised that a property sort "*will* cover
+# integer, float, date and timestamp properties" for ten units after §221 built
+# exactly that - a sentence describing a feature that had shipped, reaching
+# whoever asked for an ordering the parser did not recognise, and telling them
+# to stop trying. A refusal that describes the platform is a claim with a date
+# on it, and this one sits on the far side of the door where nobody looks
+# (`STATUS.md` §230, six copies of the same mistake).
+#
+# A `string` property is refused and always will be: lexicographic order is the
+# database collation on Postgres and byte order on OpenSearch, so 'Z' < 'a'
+# differs between them - the same disagreement this refusal exists to prevent,
+# one layer down.
 PROPERTY_SORT_HINT = (
-    "sorting by a property needs the declared property type behind it - instance "
-    "properties are stored untyped, so the two stores would order 250 and 40 "
-    "differently (docs/decisions/0006-typed-instance-properties.md). It will cover "
-    "integer, float, date and timestamp properties; text will stay unsortable, "
-    "because the two stores disagree about how text orders. Sort by key or by when "
-    "a row last changed."
+    "a property sort is 'name' or '-name', for a property whose declared type both "
+    "stores order identically - integer, float, date and timestamp. Text is refused "
+    "permanently, because Postgres orders it by the database collation and "
+    "OpenSearch by byte order (docs/decisions/0006-typed-instance-properties.md). "
+    "A caller that resolves no property types gets only the fixed sorts."
 )
 
 

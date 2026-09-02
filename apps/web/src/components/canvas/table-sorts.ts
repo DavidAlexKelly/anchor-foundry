@@ -22,21 +22,24 @@
  * refusal is a sentence naming the property — so this module offers what an
  * author can *write* and lets the server say what is *legal*, which is the same
  * division §214's sort refusal and §221's `property_types` argument draw.
+ *
+ * **What one sort *is* moved to `property-sort.ts` in §231**, which is the file
+ * this module's own docstring asked for and did not write: four widgets want a
+ * property sort and three of them are not tables, so a module named for the
+ * Object Table is the wrong place to keep the vocabulary. What stayed here is
+ * p.223's list — several sorts, in an order that is itself the setting.
  */
 
-/** The four orderings that need no declared property type behind them.
- *
- * Mirrors `object_sets.SORTS`. They are the primary key, which is text on both
- * stores, and `updated_at`, which is a real timestamp on one and an indexed
- * date on the other — so both stores order them identically without knowing
- * any property's type.
- */
-export const FIXED_SORTS: Record<string, string> = {
-  recent: "Last changed, newest first",
-  oldest: "Last changed, oldest first",
-  key: "Key, A–Z",
-  "-key": "Key, Z–A",
-};
+import { blankEntry, entryOf } from "./property-sort";
+import type { Entry } from "./property-sort";
+
+// Re-exported so a caller that wants p.223's list and the vocabulary it is
+// built from imports one module, not two. `property-sort.ts` is the definition;
+// this is a doorway.
+export {
+  FIXED_SORTS, blankEntry, entryOf, labelOf, withDirection, withFixed, withProperty,
+} from "./property-sort";
+export type { Entry } from "./property-sort";
 
 /** What the Object Table has always sorted by when nothing says otherwise. */
 export const DEFAULT_SORT = "recent";
@@ -45,33 +48,6 @@ export const DEFAULT_SORT = "recent";
  * a panel that let an author add a seventh row would be offering something the
  * server refuses. */
 export const MAX_SORTS = 6;
-
-export interface Entry {
-  /** The sort as the server reads it: a fixed key, or `prop` / `-prop`. */
-  key: string;
-  /** The property name, or `""` for one of the four fixed sorts. */
-  property: string;
-  descending: boolean;
-  /** True for the four fixed sorts, which have no property and no direction
-   * control of their own — `-key` *is* the descending one. */
-  fixed: boolean;
-}
-
-/** One written sort, read. */
-export function entryOf(raw: unknown): Entry | null {
-  const value = typeof raw === "string" ? raw.trim() : "";
-  if (!value) return null;
-  if (Object.hasOwn(FIXED_SORTS, value)) {
-    return { key: value, property: "", descending: value.startsWith("-"), fixed: true };
-  }
-  const descending = value.startsWith("-");
-  const property = descending ? value.slice(1).trim() : value;
-  // A bare `-` is a direction with nothing to apply it to. Dropped rather than
-  // sent, because the server would refuse it as an unknown sort and the author
-  // would read a sentence about property types for what is a blank field.
-  if (!property) return null;
-  return { key: `${descending ? "-" : ""}${property}`, property, descending, fixed: false };
-}
 
 /** The whole setting — **the rows the panel shows** — from what a document holds.
  *
@@ -126,48 +102,4 @@ export function toRequest(entries: Entry[]): string | string[] | undefined {
   // every other caller in the browser sends, so a table with one ordering
   // produces the request it always produced.
   return keys.length === 1 ? keys[0] : keys;
-}
-
-/** A sort's direction changed, keeping everything else about it. */
-export function withDirection(entry: Entry, descending: boolean): Entry {
-  if (entry.fixed) return entry;
-  return {
-    ...entry,
-    descending,
-    key: `${descending ? "-" : ""}${entry.property}`,
-  };
-}
-
-/** A sort's property changed. Blank leaves the entry in place with no key, so
- * a half-typed row does not vanish from under the author mid-keystroke —
- * §203's rule about a field that clears itself between `1` and `1.5`. */
-export function withProperty(entry: Entry, property: string): Entry {
-  const name = property.trim();
-  return {
-    key: name ? `${entry.descending ? "-" : ""}${name}` : "",
-    property: name,
-    descending: entry.descending,
-    fixed: false,
-  };
-}
-
-/** An entry switched between one of the four fixed sorts and a property. */
-export function withFixed(entry: Entry, key: string): Entry {
-  if (!Object.hasOwn(FIXED_SORTS, key)) {
-    return { key: "", property: "", descending: entry.descending, fixed: false };
-  }
-  return { key, property: "", descending: key.startsWith("-"), fixed: true };
-}
-
-/** A blank row to add, defaulting to a property sort — the fixed four are one
- * click away and are not what an author reaches for a *second* sort. */
-export function blankEntry(): Entry {
-  return { key: "", property: "", descending: false, fixed: false };
-}
-
-/** What to call a sort, for a row's summary. */
-export function labelOf(entry: Entry): string {
-  if (entry.fixed) return FIXED_SORTS[entry.key] ?? entry.key;
-  if (!entry.property) return "No property yet";
-  return `${entry.property} ${entry.descending ? "(Z–A / high to low)" : "(A–Z / low to high)"}`;
 }

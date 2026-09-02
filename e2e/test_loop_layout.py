@@ -29,6 +29,14 @@ from conftest import eventually, no_console_errors, open_builder, open_module
 
 NAMES = ["Alpha", "Beta", "Gamma"]
 
+# p.132's property sorts (§231). The ranks are 100, 10, 25 rather than 1, 2, 3
+# so that a *numeric* ordering and a *text* one disagree: as text they read 10,
+# 100, 25 and as numbers 10, 25, 100. Sorting ascending therefore proves the
+# declared type reached the store, not merely that some ordering was applied —
+# which is the entire subject of decision 0006.
+RANKS = {"Alpha": "100", "Beta": "10", "Gamma": "25"}
+BY_RANK = ["Beta", "Gamma", "Alpha"]
+
 
 @pytest.fixture(scope="module")
 def modules(api):
@@ -36,9 +44,10 @@ def modules(api):
     loops a three-object set through it."""
     card = Module(api, "Loop card")
     type_id = card.object_type(
-        columns=["id", "name"],
-        rows=[{"id": f"S{i}", "name": name} for i, name in enumerate(NAMES, start=1)],
-        key="id", title="name",
+        columns=["id", "name", "rank"],
+        rows=[{"id": f"S{i}", "name": name, "rank": RANKS[name]}
+              for i, name in enumerate(NAMES, start=1)],
+        key="id", title="name", types={"rank": "integer"},
     )
     card.define({
         "format": 2,
@@ -106,6 +115,67 @@ def test_each_copy_gets_its_own_object(page, modules):
         what="three cards, each naming its own object",
     )
     assert texts == sorted(f"CARD {name}" for name in NAMES), texts
+
+
+def test_a_loop_with_no_sort_keeps_the_order_it_always_had(page, modules):
+    """**The compatibility half of §231.** p.132's sort is new; every loop saved
+    before it holds no `sort` at all, and adding a default here would silently
+    reorder them. The fallback is the empty string, which sends no `sort` key —
+    so the set's own order is what a blank setting means, exactly as before.
+    """
+    host, _ = modules
+    open_module(page, host)
+    texts = eventually(
+        lambda: [t.strip() for t in cards(page).all_inner_texts()],
+        lambda got: len(got) == len(NAMES),
+        what="three cards in the set's own order",
+    )
+    assert texts == [f"CARD {name}" for name in NAMES], texts
+
+
+def test_a_loop_can_be_ordered_by_a_declared_property(page, modules):
+    """p.132: "Property sorts may be applied to the object set being looped
+    through to determine the order in which the objects will be displayed in the
+    looped layout."
+
+    Set through the panel rather than the document, because the panel is where
+    the refusal used to be — this widget carried "sorting by a property is not
+    available yet" for ten units after §221 built it.
+    """
+    host, _ = modules
+    open_builder(page, host)
+    page.locator(".canvas-tree-row").first.click()
+    expect(page.get_by_test_id("loop-sort")).to_be_visible()
+    page.get_by_test_id("loop-sort").select_option("rank")
+
+    texts = eventually(
+        lambda: [t.strip() for t in cards(page).all_inner_texts()],
+        lambda got: len(got) == len(NAMES) and got[0] == f"CARD {BY_RANK[0]}",
+        what="the cards reordered by rank, ascending",
+    )
+    assert texts == [f"CARD {name}" for name in BY_RANK], texts
+
+    page.get_by_test_id("loop-sort").select_option("-rank")
+    texts = eventually(
+        lambda: [t.strip() for t in cards(page).all_inner_texts()],
+        lambda got: len(got) == len(NAMES) and got[0] == f"CARD {BY_RANK[-1]}",
+        what="the cards reordered by rank, descending",
+    )
+    assert texts == [f"CARD {name}" for name in reversed(BY_RANK)], texts
+
+
+def test_the_loop_sort_offers_only_properties_the_stores_agree_on(page, modules):
+    """The picker's list is `property-sort.ts`'s, so `name` — text, refused
+    permanently — must not be in it. A widened list breaks nothing until
+    somebody picks from it, which is why this asserts the options rather than
+    the result of choosing one."""
+    host, _ = modules
+    open_builder(page, host)
+    page.locator(".canvas-tree-row").first.click()
+    picker = page.get_by_test_id("loop-sort")
+    expect(picker).to_be_visible()
+    values = picker.locator("option").evaluate_all("nodes => nodes.map(n => n.value)")
+    assert values == ["key", "-key", "recent", "oldest", "rank", "-rank"], values
 
 
 def test_the_limit_paging_style_caps_what_is_drawn(page, modules):
