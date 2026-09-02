@@ -127,8 +127,15 @@ def test_a_loop_with_no_sort_keeps_the_order_it_always_had(page, modules):
     open_module(page, host)
     texts = eventually(
         lambda: [t.strip() for t in cards(page).all_inner_texts()],
-        lambda got: len(got) == len(NAMES),
-        what="three cards in the set's own order",
+        # **`startswith("CARD ")` with the trailing space, not just a count.**
+        # Three cards exist before their names do: each name comes from an
+        # `object_property` derivation on the object that copy was handed, so a
+        # predicate that only counts the cards accepts `["CARD", ...]` and the
+        # assertion below then compares a half-rendered page. The neighbouring
+        # test had this right and this one did not, which is why it failed once
+        # in a full run and never alone.
+        lambda got: len(got) == len(NAMES) and all(t.startswith("CARD ") for t in got),
+        what="three named cards in the set's own order",
     )
     assert texts == [f"CARD {name}" for name in NAMES], texts
 
@@ -150,7 +157,9 @@ def test_a_loop_can_be_ordered_by_a_declared_property(page, modules):
 
     texts = eventually(
         lambda: [t.strip() for t in cards(page).all_inner_texts()],
-        lambda got: len(got) == len(NAMES) and got[0] == f"CARD {BY_RANK[0]}",
+        lambda got: len(got) == len(NAMES)
+        and all(t.startswith("CARD ") for t in got)
+        and got[0] == f"CARD {BY_RANK[0]}",
         what="the cards reordered by rank, ascending",
     )
     assert texts == [f"CARD {name}" for name in BY_RANK], texts
@@ -158,7 +167,9 @@ def test_a_loop_can_be_ordered_by_a_declared_property(page, modules):
     page.get_by_test_id("loop-sort").select_option("-rank")
     texts = eventually(
         lambda: [t.strip() for t in cards(page).all_inner_texts()],
-        lambda got: len(got) == len(NAMES) and got[0] == f"CARD {BY_RANK[-1]}",
+        lambda got: len(got) == len(NAMES)
+        and all(t.startswith("CARD ") for t in got)
+        and got[0] == f"CARD {BY_RANK[-1]}",
         what="the cards reordered by rank, descending",
     )
     assert texts == [f"CARD {name}" for name in reversed(BY_RANK)], texts
