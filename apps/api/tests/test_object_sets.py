@@ -488,9 +488,20 @@ def test_a_value_that_is_not_a_point_is_in_no_box() -> None:
     """§221's rule in another shape: a value that cannot be read must not widen
     a set."""
     box = object_sets.parse_box(BOX)
-    for bad in (None, "52,5", 52.0, {"lat": 52.0}, {"lat": "52", "lon": "5"},
-                {"lat": True, "lon": 5.0}, []):
+    for bad in (None, "52,5", 52.0, {"lat": 52.0}, {"lat": "52", "lon": "5"}, []):
         assert not object_sets.in_box(bad, box), bad
+
+    # **A boolean, against a box it would land inside if read as a number.**
+    # `isinstance(True, int)` is true in Python, so `True` becomes latitude 1.0
+    # - which is outside the European box above and *inside* the equatorial one,
+    # so only the second separates the guard from its absence. §221's rule: an
+    # input that fails for the wrong reason asserts nothing.
+    wrap = object_sets.parse_box(WRAP)
+    assert object_sets.in_box(point(1.0, 175.0), wrap), "the fixture stopped separating them"
+    assert not object_sets.in_box({"lat": True, "lon": 175.0}, wrap)
+    assert not object_sets.in_box({"lat": 1.0, "lon": True}, object_sets.parse_box(
+        {"north": 10.0, "south": -10.0, "east": 10.0, "west": 0.0}
+    ))
 
 
 def test_a_box_needs_the_declared_type_behind_it() -> None:
@@ -1463,6 +1474,50 @@ def test_a_row_with_no_coordinate_is_in_no_box(
     keys = {i["primary_key"] for i in page["instances"]}
     assert "7" not in keys
     assert keys, "the box selected nothing, so this asserts nothing"
+
+
+def test_a_stored_coordinate_that_will_not_read_is_in_no_box(
+    client: TestClient, fx: Fixture, geo: str
+) -> None:
+    """**One bad row must narrow the answer, not destroy it** - and the row that
+    proves it has to be *present* and unreadable, not absent.
+
+    A bare `::double precision` on the extracted latitude raises on the first
+    row it cannot parse, turning every map over that set into a 500. An absent
+    coordinate does not reach that: `jsonb_extract_path_text` returns NULL and
+    NULL casts fine. So the case is a `where` that exists and holds text.
+
+    **Written past the API deliberately**, for §226's reason: every write path
+    coerces (`property_values._coerce_geopoint`), so a geopoint property cannot
+    be given `{"lat": "n/a"}` through the platform at all. A value that survived
+    an earlier declaration and stopped fitting a later one is the real case.
+    """
+    import psycopg
+    from test_api import ADMIN_DSN
+
+    def write(value: str) -> None:
+        with psycopg.connect(ADMIN_DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE object_instances SET properties = jsonb_set("
+                    "properties, '{where}', %s::jsonb) "
+                    "WHERE object_type_id = %s AND primary_key = %s",
+                    (value, geo, "1"),
+                )
+                assert cur.rowcount == 1, "the fixture row moved"
+            conn.commit()
+
+    write('{"lat": "n/a", "lon": 5.0}')
+    try:
+        page = evaluate(client, fx, {
+            "object_type_id": geo,
+            "filters": [{"property": "where", "op": "within_box", "value": BOX}],
+        })
+        keys = {i["primary_key"] for i in page["instances"]}
+        assert "1" not in keys, "an unreadable coordinate was counted as inside"
+        assert keys, "the box selected nothing, so this asserts nothing"
+    finally:
+        write('{"lat": 52.0, "lon": 5.0}')
 
 
 def test_a_box_on_a_property_that_is_not_a_geopoint_is_refused(
