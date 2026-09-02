@@ -4290,6 +4290,97 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 233. p.470's Exploration Filter Pills, and the seventh copy of one sentence (this session)
+
+**The first widget that reads a set's filters rather than writing one.** Every
+narrowing widget before it wrote one clause shape and knew which — a Filter List
+writes `eq`/`in`, a Search `starts_with`, §232's Prominent Terms `eq`. This one
+renders whatever is there, and that is the whole difference: it has to answer
+"what could this clause be", which none of them ever did.
+
+**The data layer was already built and nothing had used it.**
+`workshop_variables._narrow_set` returns `{...base, filters: [...base.filters,
+...clauses]}` — a flat, effective filter list sitting on the resolved variable
+the widget already reads. So "what filters are on this set" needed no endpoint
+and no server change. A traversal resets `filters` and keeps the base under
+`via`, which turns out to be exactly right rather than incidental: p.470 says
+"an object set containing a single object type", and past a traversal the earlier
+clauses are about the *other* type.
+
+**A pill the widget cannot remove does not offer to be**, which is the rule no
+other widget has needed. The resolved list is the base definition's own filters
+plus whatever `narrow_set` added, and only the second kind lives in the variable
+this widget writes. The first is structural — part of what the set *is* — so a ✕
+on it would write a list that changes nothing while the pill sat there. §214's
+rule, and the reason `isRemovable` takes the written list as well as the clause.
+
+All four of p.470's modes, escalating, falling back to **Read only**: a document
+naming a mode this build has not got should lose the ability to edit rather than
+gain it.
+
+**Divergence, stated rather than approximated.** p.470's "Prevent users from
+changing operators (or, and)" has nothing to prevent — every clause an object set
+takes is an `and`. The panel says so where the toggle would be.
+
+---
+
+**`filter-clause.ts` is §231's argument at the other half of the language, and it
+was already overdue.** `VariablesPanel.tsx` offered four operators under a
+comment reading "`gt` and friends are refused by the API because Postgres casts
+and OpenSearch compares text" — true when written, untrue from §221, and **the
+seventh copy of that staleness**. §231 found six and fixed them; this one
+survived that sweep because **it stated the reason in its own words and never
+named decision 0006**. A grep for the citation cannot see a claim that does not
+cite.
+
+That is the sharpest form of the lesson §231 landed on. The habit ("grep the
+decision's number") fails on exactly the copies that paraphrase, and paraphrasing
+is what a careful author does. So the fix has to be structural: nothing outside
+`filter-clause.ts` writes an operator list, `ORDERABLE_TYPES` is imported from
+`property-sort.ts` rather than restated, and three API tests compare the browser's
+lists against `object_sets.OPERATORS`, `ORDERED_OPERATORS` and `GEO_OPERATORS`.
+The panel now derives its operators from the property's declared type, so a
+numeric filter can be `is at least` there too — which it could have been for
+twelve units.
+
+`within_box` is describable and never offered for editing: a box is four numbers
+meaning a rectangle somebody drew (§230), and a picker offering it with nowhere to
+draw is a control that looks like it works.
+
+**39 mutants, 39 caught, 0 hangs, 0 no-ops** — 29 on the model, 2 on the mirror
+guards, 8 through a browser.
+
+**The last survivor took three attempts, and each fix was a different way of
+reading too early.** "Pressing Escape wrote nothing" cannot be checked by reading
+once: the write it rules out takes a round trip, so a read taken straight
+afterwards sees the page *before* the thing that would have failed it. `settled`
+does not help — it waits for a canvas block already on screen. Re-reading through
+`expect` does not either, because `expect` stops at the first read that matches
+and that is the one taken too early; the second attempt re-opened the editor and
+asserted its contents, and the *click* raced the same way. A probe settled it
+rather than more guessing: with the mutant applied the pill does become "Region
+is south", about a second later.
+
+So **`conftest.stays` is `eventually`'s counterpart** — keep looking for longer
+than the write would have taken, and fail on the first look that disagrees. Its
+docstring says it is timeout-based and can only show nothing happened *yet*, and
+points at waiting for an ordered positive signal where one exists.
+
+**And the first hand-check of that fix reported a *skip*, which I nearly read as
+a pass.** The web server was mid-recompile and the suite skipped rather than ran.
+A skip is not a catch — §220's rule for hangs, one layer over; the real check
+needed the recompile wait the harness itself does, and then it went red on the
+mutant and green on the restored source.
+
+Two things the browser caught that the model could not: an array variable's
+starting contents are its `default`, and the widget must read the **resolved**
+variable rather than the parameter — the parameter holds only what this session
+set, so an app opening with filters already applied would show every pill as
+structural and strip its ✕.
+
+**Recounted from the table**: `workshop.md` §10 goes from 31 of 53 to **32**, and
+the ○ column from 7 to 6.
+
 ### 232. p.475's Prominent Terms, and a count that had to be asked one at a time (this session)
 
 **The Filter List with its list turned around.** That widget asks the data what
@@ -6785,6 +6876,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A negative claim about an async page cannot be checked by reading once, and none of the obvious fixes work.** §233 needed "pressing Escape wrote nothing", and the write it was ruling out takes a round trip — so a read taken straight after the keypress sees the page *before* the thing that would have failed it, and passes whether or not the bug is there. Three attempts, each wrong in its own way: `settled` waits for a canvas block that is already on screen, so it adds nothing; a retrying `expect` stops at the **first** read that matches, and that is precisely the one taken too early; and re-opening a control to inspect its state races on the click. The primitive that works is `stays` — keep looking for longer than the write would have taken and fail on the first look that disagrees — and it is honest about being timeout-based: it shows that nothing happened *yet*. Where an ordered positive signal exists (a later action whose completion is observable), wait for that instead. The tell is a test asserting an absence right after an action: `to_have_count(0)`, an unchanged list, a value that should not have moved. §209 wrote half of this rule for the *first* render; this is the other half, for everything after it.
+
+- **A skipped test is not a passing test, and a hand-run mutation check is where that bites.** §233's first manual verification of a fix reported `1 skipped` and I nearly read it as green. The web server was mid-recompile, so the suite's own guard skipped rather than ran — a correct guard producing a result that looks like success. This is §220's "a hang is not a catch" one layer over: the harness reports timeouts as `HANG` for exactly this reason, and a *hand* check has no such reporting, so the skip arrives bare. Any manual mutant check has to wait for the thing it is about to test — the harness's own `wait_for_web` before the run — and then read the count, not the colour. A frontend mutation needs the recompile; a backend one needs `dev-up.sh` (§227).
 
 - **A build-order line can be wrong in the cheap-sounding direction too: "the endpoint for this already exists" is a claim about an endpoint's *guarantees*, not its existence.** §216's rule catches lines that overstate what is left; §232 hit the opposite. `workshop.md` item 9 had estimated the Prominent Terms widget as nearly free — "its rows are exact-match counts, which `/object-sets/group` already answers" — which is true of the counts and false of the widget, because that endpoint caps at 20 groups ordered by count. A curated term naming a rare value comes back absent, and the spec hangs a *visible* behaviour (Hide empty terms) on telling absent from zero. The line was not stale; it was written from the endpoint's name rather than its contract. The habit that catches it is the same one, one level deeper: opening what a line cites means reading the cap and the ordering, not confirming the route exists. A cheap estimate is a claim, and claims about work you have not started are the ones nobody re-reads.
 
