@@ -382,6 +382,151 @@ def test_a_property_sort_needs_the_declared_types_too() -> None:
         object_sets.parse_sort("-capacity")
 
 
+# ---- decision 0006 §3's bounding box ------------------------------------------
+BOX = {"north": 55.0, "south": 50.0, "east": 10.0, "west": 0.0}
+# A box across the antimeridian: west edge *east* of the east edge. Four ordered
+# comparisons read this as `lon >= 170 AND lon <= -170`, which is a
+# contradiction and selects nothing - silently, for exactly the customers whose
+# data crosses the Pacific.
+WRAP = {"north": 10.0, "south": -10.0, "east": -170.0, "west": 170.0}
+
+
+def point(lat, lon):
+    return {"lat": lat, "lon": lon}
+
+
+# Points chosen so every rule has a row that separates it: two inside a European
+# box, two outside it, and three around the antimeridian - one either side of
+# the seam and one in the middle of the world, which is what a naive reading
+# selects instead.
+GEO_ROWS = [
+    ("1", {"where": {"lat": 52.0, "lon": 5.0}}),      # inside BOX
+    ("2", {"where": {"lat": 55.0, "lon": 10.0}}),     # on BOX's corner
+    ("3", {"where": {"lat": 20.0, "lon": 5.0}}),      # south of BOX
+    ("4", {"where": {"lat": 0.0, "lon": 175.0}}),     # west side of the seam
+    ("5", {"where": {"lat": 0.0, "lon": -175.0}}),    # east side of the seam
+    ("6", {"where": {"lat": 0.0, "lon": 0.0}}),       # the middle of the world
+    ("7", {}),                                        # no coordinate at all
+]
+GEO_DECLARED = [{"api_name": "where", "data_type": "geopoint"}]
+GEO_TYPES = {"where": "geopoint"}
+
+
+def test_a_box_is_read_as_four_numbers() -> None:
+    box = object_sets.parse_box(BOX)
+    assert (box.north, box.south, box.east, box.west) == (55.0, 50.0, 10.0, 0.0)
+    assert box.wraps is False
+
+
+def test_a_west_edge_east_of_the_east_edge_is_a_box_not_an_error() -> None:
+    """**The case the whole operator exists for.** A box drawn across 180° has
+    to stay expressible: refusing it would leave a map unable to select the one
+    area four comparisons get wrong."""
+    assert object_sets.parse_box(WRAP).wraps is True
+
+
+def test_an_upside_down_box_is_refused() -> None:
+    """**The asymmetry is the geometry, not an oversight.** Longitude is a
+    circle, so west-of-east is a seam crossing; latitude is a segment with ends,
+    so south-above-north is simply upside down and selects nothing. Refused
+    rather than silently empty."""
+    with pytest.raises(ValueError, match="south edge is above its north edge"):
+        object_sets.parse_box({**BOX, "south": 60.0})
+
+
+@pytest.mark.parametrize("edge, value", [
+    ("north", 91.0), ("south", -91.0), ("east", 181.0), ("west", -181.0),
+])
+def test_a_coordinate_off_the_globe_is_refused(edge, value) -> None:
+    with pytest.raises(ValueError, match="must be between"):
+        object_sets.parse_box({**BOX, edge: value})
+
+
+def test_a_box_needs_four_numbers() -> None:
+    with pytest.raises(ValueError, match="needs a number"):
+        object_sets.parse_box({"north": 55.0, "south": 50.0, "east": 10.0})
+    with pytest.raises(ValueError, match="needs a number"):
+        object_sets.parse_box({**BOX, "west": "0"})
+    # A bool is an int in Python and is not a coordinate anywhere else.
+    with pytest.raises(ValueError, match="needs a number"):
+        object_sets.parse_box({**BOX, "west": True})
+    with pytest.raises(ValueError, match="must be an object"):
+        object_sets.parse_box([55.0, 50.0, 10.0, 0.0])
+
+
+def test_a_point_inside_the_box_is_in_it() -> None:
+    box = object_sets.parse_box(BOX)
+    assert object_sets.in_box(point(52.0, 5.0), box)
+    # The edges are inclusive, on both stores and here.
+    assert object_sets.in_box(point(55.0, 10.0), box)
+    assert object_sets.in_box(point(50.0, 0.0), box)
+
+
+def test_a_point_outside_the_box_is_not() -> None:
+    box = object_sets.parse_box(BOX)
+    for outside in (point(56.0, 5.0), point(49.0, 5.0),
+                    point(52.0, 11.0), point(52.0, -1.0)):
+        assert not object_sets.in_box(outside, box), outside
+
+
+def test_a_wrapping_box_is_the_union_of_two_ranges() -> None:
+    """**The assertion four comparisons cannot pass.** Inside a box across 180°
+    means east of its west edge *or* west of its east edge, and the points that
+    prove it are the ones on either side of the seam."""
+    box = object_sets.parse_box(WRAP)
+    assert object_sets.in_box(point(0.0, 175.0), box)
+    assert object_sets.in_box(point(0.0, -175.0), box)
+    assert object_sets.in_box(point(0.0, 180.0), box)
+    # And the middle of the world - which is what a naive reading would select
+    # instead, since it is "between" -170 and 170.
+    assert not object_sets.in_box(point(0.0, 0.0), box)
+    # Latitude still bounds it: the wrap is a longitude rule only.
+    assert not object_sets.in_box(point(50.0, 175.0), box)
+
+
+def test_a_value_that_is_not_a_point_is_in_no_box() -> None:
+    """§221's rule in another shape: a value that cannot be read must not widen
+    a set."""
+    box = object_sets.parse_box(BOX)
+    for bad in (None, "52,5", 52.0, {"lat": 52.0}, {"lat": "52", "lon": "5"}, []):
+        assert not object_sets.in_box(bad, box), bad
+
+    # **A boolean, against a box it would land inside if read as a number.**
+    # `isinstance(True, int)` is true in Python, so `True` becomes latitude 1.0
+    # - which is outside the European box above and *inside* the equatorial one,
+    # so only the second separates the guard from its absence. §221's rule: an
+    # input that fails for the wrong reason asserts nothing.
+    wrap = object_sets.parse_box(WRAP)
+    assert object_sets.in_box(point(1.0, 175.0), wrap), "the fixture stopped separating them"
+    assert not object_sets.in_box({"lat": True, "lon": 175.0}, wrap)
+    assert not object_sets.in_box({"lat": 1.0, "lon": True}, object_sets.parse_box(
+        {"north": 10.0, "south": -10.0, "east": 10.0, "west": 0.0}
+    ))
+
+
+def test_a_box_needs_the_declared_type_behind_it() -> None:
+    """§221's rule, third operator family: absence of `property_types` is a
+    refusal rather than a permission."""
+    definition = {"object_type_id": str(uuid.uuid4()),
+                  "filters": [{"property": "where", "op": "within_box", "value": BOX}]}
+    with pytest.raises(ValueError, match="resolved none"):
+        object_sets.parse(definition)
+    with pytest.raises(ValueError, match="is a string property"):
+        object_sets.parse(definition, property_types={"where": "string"})
+    parsed = object_sets.parse(definition, property_types={"where": "geopoint"})
+    assert parsed.filters[0].value.north == 55.0
+
+
+def test_a_box_on_a_geopoint_reaches_the_reference_semantics() -> None:
+    definition = object_sets.parse(
+        {"object_type_id": str(uuid.uuid4()),
+         "filters": [{"property": "where", "op": "within_box", "value": BOX}]},
+        property_types={"where": "geopoint"},
+    )
+    assert object_sets.matches({"where": point(52.0, 5.0)}, definition.filters)
+    assert not object_sets.matches({"where": point(20.0, 5.0)}, definition.filters)
+
+
 # ---- p.310's aggregations, as rules -----------------------------------------
 def test_a_numeric_aggregation_needs_the_declared_types_too() -> None:
     """§221's rule, one route along: a caller that has not resolved the
@@ -1074,6 +1219,51 @@ async def test_the_two_stores_size_the_same_slices(opensearch: str, name: str) -
         await store.close()
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("box", [BOX, WRAP], ids=["plain", "antimeridian"])
+async def test_the_two_stores_answer_a_bounding_box_identically(
+    opensearch: str, box: dict
+) -> None:
+    """Decision 0006 §3, across the store boundary.
+
+    **The antimeridian case is the reason the operator exists**, and it is the
+    one where the two stores are most likely to part company: OpenSearch's
+    `geo_bounding_box` wraps natively, and Postgres has to be told to. Both are
+    checked against `in_box`, which is the one written-down definition.
+    """
+    urllib.request.urlopen(
+        urllib.request.Request(f"{opensearch}/__reset", method="POST", data=b"")
+    ).read()
+    store = instance_store.OpenSearchInstanceStore(opensearch, "admin", "admin")
+    try:
+        type_id, source_id = uuid.uuid4(), uuid.uuid4()
+        await store.upsert_instances(
+            search_prefix="ws-geo", object_type_id=type_id, source_id=source_id,
+            rows=GEO_ROWS, synced_at=datetime.now(timezone.utc),
+            declared=GEO_DECLARED,
+        )
+        definition = object_sets.parse(
+            {"object_type_id": str(type_id),
+             "filters": [{"property": "where", "op": "within_box", "value": box}]},
+            property_types=GEO_TYPES,
+        )
+        rows, total = await store.evaluate_object_set(
+            search_prefix="ws-geo", object_type_id=type_id,
+            filters=definition.filters, limit=50, offset=0,
+        )
+        expected = {
+            key for key, props in GEO_ROWS
+            if object_sets.matches(props, definition.filters)
+        }
+        assert {r["primary_key"] for r in rows} == expected
+        assert total == len(expected)
+        # And it is not vacuous either way: the plain box has members and the
+        # wrapping one has the two rows either side of the seam.
+        assert expected, box
+    finally:
+        await store.close()
+
+
 # ---- through the API (Postgres store, the local-dev default) -----------------
 @pytest.fixture(scope="module")
 def seeded(client: TestClient, fx: Fixture) -> str:
@@ -1200,6 +1390,150 @@ def typed(client: TestClient, fx: Fixture) -> str:
     )
     assert r.status_code == 200, r.text
     return type_id
+
+
+@pytest.fixture(scope="module")
+def geo(client: TestClient, fx: Fixture) -> str:
+    """A population with a declared `geopoint`, landed through a real sync.
+
+    Separate from `typed` because adding a coordinate column there would move
+    every count and sum that fixture already pins - and landed through an upload
+    rather than inserted, because a geopoint arrives in a CSV as the text
+    "lat,lon" and has to survive `property_values._coerce_geopoint` to be in the
+    shape a box reads.
+    """
+    tag = uuid.uuid4().hex[:8]
+    lines = ["key,where"]
+    for key, props in GEO_ROWS:
+        where = props.get("where")
+        lines.append(f'{key},"{where["lat"]},{where["lon"]}"' if where else f"{key},")
+    csv = ("\n".join(lines) + "\n").encode()
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.owner_sub),
+        data={"name": f"Places {tag}"},
+        files={"file": ("places.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    dataset_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-types",
+        headers=hdr(fx.owner_sub),
+        json={"api_name": f"Place{tag}", "display_name": f"Place {tag}",
+              "properties": [{"api_name": "where", "data_type": "geopoint"}]},
+    )
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/object-type-sources",
+        headers=hdr(fx.owner_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset_id,
+              "primary_key_column": "key", "column_mappings": {"where": "where"}},
+    )
+    assert r.status_code == 201, r.text
+    source_id = r.json()["id"]
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/object-type-sources/{source_id}/sync",
+        headers=hdr(fx.owner_sub),
+    )
+    assert r.status_code == 200, r.text
+    return type_id
+
+
+@pytest.mark.parametrize("box", [BOX, WRAP], ids=["plain", "antimeridian"])
+def test_the_postgres_store_answers_a_bounding_box_the_same_way(
+    client: TestClient, fx: Fixture, geo: str, box: dict
+) -> None:
+    """The Postgres half of decision 0006 §3, against the same reference the
+    OpenSearch half is checked against - which is what §6 means by "neither
+    store ships it until both do"."""
+    definition = {"object_type_id": geo,
+                  "filters": [{"property": "where", "op": "within_box", "value": box}]}
+    page = evaluate(client, fx, definition)
+    parsed = object_sets.parse(definition, property_types=GEO_TYPES)
+    expected = {
+        key for key, props in GEO_ROWS if object_sets.matches(props, parsed.filters)
+    }
+    assert {i["primary_key"] for i in page["instances"]} == expected
+    assert page["total"] == len(expected)
+
+
+def test_a_row_with_no_coordinate_is_in_no_box(
+    client: TestClient, fx: Fixture, geo: str
+) -> None:
+    """**One bad row must narrow the answer, not destroy it.** A bare cast on
+    the extracted latitude would fail the whole page on the row that has no
+    coordinate at all; `pg_input_is_valid` makes it simply not a member."""
+    page = evaluate(client, fx, {
+        "object_type_id": geo,
+        "filters": [{"property": "where", "op": "within_box", "value": BOX}],
+    })
+    keys = {i["primary_key"] for i in page["instances"]}
+    assert "7" not in keys
+    assert keys, "the box selected nothing, so this asserts nothing"
+
+
+def test_a_stored_coordinate_that_will_not_read_is_in_no_box(
+    client: TestClient, fx: Fixture, geo: str
+) -> None:
+    """**One bad row must narrow the answer, not destroy it** - and the row that
+    proves it has to be *present* and unreadable, not absent.
+
+    A bare `::double precision` on the extracted latitude raises on the first
+    row it cannot parse, turning every map over that set into a 500. An absent
+    coordinate does not reach that: `jsonb_extract_path_text` returns NULL and
+    NULL casts fine. So the case is a `where` that exists and holds text.
+
+    **Written past the API deliberately**, for §226's reason: every write path
+    coerces (`property_values._coerce_geopoint`), so a geopoint property cannot
+    be given `{"lat": "n/a"}` through the platform at all. A value that survived
+    an earlier declaration and stopped fitting a later one is the real case.
+    """
+    import psycopg
+    from test_api import ADMIN_DSN
+
+    def write(value: str) -> None:
+        with psycopg.connect(ADMIN_DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE object_instances SET properties = jsonb_set("
+                    "properties, '{where}', %s::jsonb) "
+                    "WHERE object_type_id = %s AND primary_key = %s",
+                    (value, geo, "1"),
+                )
+                assert cur.rowcount == 1, "the fixture row moved"
+            conn.commit()
+
+    write('{"lat": "n/a", "lon": 5.0}')
+    try:
+        page = evaluate(client, fx, {
+            "object_type_id": geo,
+            "filters": [{"property": "where", "op": "within_box", "value": BOX}],
+        })
+        keys = {i["primary_key"] for i in page["instances"]}
+        assert "1" not in keys, "an unreadable coordinate was counted as inside"
+        assert keys, "the box selected nothing, so this asserts nothing"
+    finally:
+        write('{"lat": 52.0, "lon": 5.0}')
+
+
+def test_a_box_on_a_property_that_is_not_a_geopoint_is_refused(
+    client: TestClient, fx: Fixture, seeded: str
+) -> None:
+    """`region` is a string in that fixture. Refused with the property's type
+    named, the same shape §221's sort refusal and §226's aggregation refusal
+    take - "a bounding box selects an area, and only a coordinate is in one"."""
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/object-sets/evaluate",
+        headers=hdr(fx.owner_sub),
+        json={"definition": {"object_type_id": seeded, "filters": [
+            {"property": "region", "op": "within_box", "value": BOX}]}},
+    )
+    assert r.status_code == 422, r.text
+    assert "is a string property" in r.json()["detail"]
 
 
 @pytest.mark.parametrize(

@@ -158,7 +158,9 @@ but "the only authoring surface for transforms that are not yet files".
   Columns section. Loop renders one embedded module per object, using §116's
   interface mapping per row rather than a second mechanism; looping an *array*
   is refused until there is a typed-array kind, and sorting is refused for
-  decision 0006's reason.
+  decision 0006's reason — **which §221 removed for orderable types**; this
+  line and `CanvasLoopSection`'s own docstring are two of the six places
+  `widgets.tsx` still names that refusal (`STATUS.md` §230's closing note).
 - **The vertical header** — done (`STATUS.md` §119). Orientation, width,
   height, collapsibility and collapsed-by-default, plus the one part of a
   header that is a rule rather than styling: collapsed, only Button and Tabs

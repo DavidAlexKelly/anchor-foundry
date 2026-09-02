@@ -493,6 +493,50 @@ _SQL_COMPARISON = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
 _HAS_OFFSET = r"(Z|[+-][0-9]{2}:?[0-9]{2})$"
 
 
+def _within_box_sql(
+    prop: str, val: str, box: "Any", params: dict[str, Any]
+) -> str:
+    """Decision 0006 §3's bounding box, as SQL.
+
+    A geopoint is stored `{"lat", "lon"}` (db 0029), so the two numbers come out
+    of the jsonb by path rather than from a mapped geo field the way OpenSearch
+    reads them. **Cast through `pg_input_is_valid`**, the same guard an ordered
+    filter and a property sort use: a coordinate that will not read as a number
+    is not in any box, and a bare cast would fail the whole page on one bad row
+    rather than narrowing it.
+
+    **The wrap is stated here, and it is the reason this is not four ordered
+    comparisons.** A box across the antimeridian has a west edge east of its
+    east edge, so `lon >= west AND lon <= east` is a contradiction and selects
+    nothing — silently, and only for the customers whose data crosses 180°. The
+    union is what `object_sets.in_box` says and what OpenSearch's
+    `geo_bounding_box` does natively.
+
+    The four edges are **bound, not interpolated**. They are numbers this module
+    validated, so interpolating them would be safe today and would be the line
+    somebody edits later.
+    """
+    lat = _comparable_sql(f"jsonb_extract_path_text(i.properties, :{prop}, 'lat')", "float")
+    lon = _comparable_sql(f"jsonb_extract_path_text(i.properties, :{prop}, 'lon')", "float")
+    for edge in ("north", "south", "east", "west"):
+        params[f"{val}{edge}"] = getattr(box, edge)
+    between_lat = (
+        f"{lat} >= CAST(:{val}south AS double precision) AND "
+        f"{lat} <= CAST(:{val}north AS double precision)"
+    )
+    if box.wraps:
+        between_lon = (
+            f"({lon} >= CAST(:{val}west AS double precision) OR "
+            f"{lon} <= CAST(:{val}east AS double precision))"
+        )
+    else:
+        between_lon = (
+            f"{lon} >= CAST(:{val}west AS double precision) AND "
+            f"{lon} <= CAST(:{val}east AS double precision)"
+        )
+    return f"({between_lat} AND {between_lon})"
+
+
 def _comparable_sql(extract: str, data_type: str | None) -> str:
     """A stored property, as a value its declared type can be ordered by.
 
@@ -665,6 +709,8 @@ def _set_predicate(
                 f"CAST(:{val} AS {_CAST_FOR[f.data_type]}))"
             )
             params[val] = bound.isoformat() if hasattr(bound, "isoformat") else bound
+        elif f.op in object_sets.GEO_OPERATORS:
+            where.append(_within_box_sql(prop, val, f.value, params))
         else:  # pragma: no cover - object_sets.parse refuses anything else
             raise ValueError(f"unsupported object-set operator {f.op!r}")
 
