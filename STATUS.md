@@ -4290,6 +4290,84 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 230. Decision 0006 §3's bounding box, and a box that crosses the seam (this session)
+
+The last of decision 0006's four refusals. A `within_box` operator narrows an object set to a
+rectangle on a declared `geopoint`, answered by `geo_bounding_box` on OpenSearch and by two
+compared numbers on Postgres, with one written-down rule — `object_sets.in_box` — that both
+stores are tested against.
+
+**The wrap is the whole reason this is an operator rather than four filters somebody composes.**
+p.298-304's area selection *looks* like `lat >= south AND lat <= north AND lon >= west AND lon
+<= east`, and that is right for every box except the ones crossing 180 degrees. A box across the
+antimeridian has a west edge numerically **east** of its east edge, so those two longitude
+clauses are a contradiction: no crash, no error, no 422 — an empty map, for exactly the
+customers whose data spans the Pacific. Inside such a box is the **union** of two longitude
+ranges, and a conjunction of ordered comparisons cannot express a union at all. `Box.wraps` says
+which shape a box is and `in_box` branches on it.
+
+**Latitude is refused where longitude wraps, and the asymmetry is the geometry rather than a
+convention.** Longitude is a circle, so west-of-east is a seam crossing and means something.
+Latitude is a segment with two ends, so south-above-north is upside down and can only ever match
+nothing. `parse_box` refuses it in a sentence instead of returning an empty set, because "you
+drew the box wrong" and "nothing is there" are different answers and a map cannot tell them
+apart.
+
+§221's rule holds for a third operator family: **the absence of `property_types` is a refusal,
+not a permission.** A caller that resolved no ontology cannot know a property holds a
+coordinate, so it does not get to filter on one. And a value that is not a readable geopoint is
+in no box, so a bad coordinate narrows the answer rather than widening it — the fixture row with
+no coordinate at all is what pins that.
+
+The Postgres side extracts `lat` and `lon` by jsonb path through the same `pg_input_is_valid`
+guard §221's ordered filters and property sorts use, so a row whose stored coordinate will not
+read costs that row rather than the page. The fixture server already answered `geo_bounding_box`
+including the wrap — built in §112 against this same decision, before there was anything to run
+it — which is what let the cross-store test be written at all.
+
+**21 mutants, 21 caught, 0 survivors, 0 hangs, 0 no-ops.**
+
+**Both survivors failed for the wrong reason, which is the finding.** A guard against a boolean
+coordinate was checked against the *European* box, where `True` reads as latitude 1.0 and is
+outside that box either way — so the guard and its absence gave the identical answer and the
+test could not see the difference. Only the equatorial box, where 1.0 lands *inside*, separates
+them. And the unreadable-coordinate case used a property that was **absent** rather than present
+and unparseable: an absent one extracts as `NULL` and casts fine, so a bare `::double precision`
+survives it untouched. The real case is a stored `{"lat": "n/a"}`, and it has to be written past
+the API with psycopg because every write path coerces geopoints — §226's finding again, in the
+same shape. Both are the same mistake one level down from §221's: an assertion that a bad value
+is excluded proves nothing if the value was excluded on other grounds.
+
+**1708 API tests** (was 1687), 2 skipped; 1315 unit tests and 629 browser tests unchanged — this
+unit adds no browser surface, because the widget half is not built.
+
+**Decision 0006 is closed** apart from §4's reindex-cost line on the impact report. Its Status
+now reads *accepted and built*, all four rows of its refusal table say **built**, and the line
+"Four things are refused today" — which had been false since §221 — says so. `workshop.md`'s
+**Map** row records that the data layer for p.298-304 exists and that wiring a drawn rectangle to
+it is the widget half still to do.
+
+**The sweep for stale lines that closing a decision requires turned up the pattern §228 and §229
+found, for a third, fourth, fifth and sixth time.** Four places in `widgets.tsx` still name a
+sort refusal §221 lifted eight units ago: the **Object Dropdown** (§214) and **Object Selector**
+(§215) carry "sorting by a property needs declared property types (decision 0006)" as a field
+hint, **Object Cards** says "sorting by a property is not available yet", and
+`CanvasLoopSection`'s docstring argues the refusal as a considered design note. Property sorts
+on integers, floats, dates and timestamps have worked since §221; only *text* is refused now,
+and permanently. `parity/README.md` repeated the Loop's version and has been corrected to point
+here. **Two refusals outliving their reason is an oversight; six in one file is a structural
+property of how this repo is built** — a data-layer unit closes a gap and the
+widgets that named it are in a file nobody reopens, because the reason to reopen it is a
+sentence rather than a compiler error. That sweep is the next unit, and the durable fix is for
+the hint to be *derived* from what the server accepts rather than typed twice. `workshop.md`'s
+item 9 had gone stale in the same direction: **Free-form Analysis** was still listed as blocked
+on numeric aggregations §226 and §227 shipped.
+
+---
+---
+---
+---
+
 ### 229. The Metric Card's other four aggregations, and a null it could not show (this session)
 
 The last consumer of §226. The card offered `count` and `count_distinct`, with a hint reading
@@ -6543,13 +6621,17 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
 
+- **A test that a bad value is excluded proves nothing unless the value would otherwise be included.** §230's guard against a boolean coordinate was checked against a box over Europe, where `True` reads as latitude 1.0 and falls outside that box either way — so the guard and its deletion returned the same rows and the mutant survived a test that named exactly the thing it broke. The equatorial box, where 1.0 lands *inside*, is the only place the two answers differ. This is the general shape behind several survivors this session: a rejection test needs a case where **rejection is the only reason** the value is absent, and the easy way to get that wrong is to pick a fixture where the value is implausible on two counts at once. The tell is an exclusion assertion whose input would fail a second, unrelated check.
+
+- **"Absent" and "present but unreadable" are different bad values, and a cast only meets one of them.** §230's other survivor: a missing jsonb path extracts as `NULL`, and `NULL::double precision` is perfectly legal, so a bare cast with no `pg_input_is_valid` guard passes the absent case untouched. Only a stored `{"lat": "n/a"}` reaches the guard — and writing one takes psycopg straight at the table, because every API write path coerces geopoints first (§226 hit the same wall). So the value that exercises the guard is precisely the value the platform will not let you create through its own doors, which is why this kind of check goes untested by default. When a guard exists for malformed *stored* data, the test has to write malformed stored data, not omit the field.
+
 - **A suite that silently tests the previous build is the worst shape a result can take, and `dev-up.sh` produces one by design.** It starts the API only if nothing is answering — correct, and documented as idempotent, because restarting somebody's running server for a second invocation would be worse. The consequence is that editing `apps/api/src` and running the browser suite tests the *old* server, and Next's hot reload hides how asymmetric that is: browser changes are picked up, server ones are not. §227 lost eight Pivot Table failures to it and §223 lost a whole run earlier; both times the code was correct. This is §220's leaked fixture server again — a red or green that is not about the code under test — and the fix is the same shape: make the suite **refuse** rather than run. `conftest` now compares the newest mtime under `apps/api/src` against when the server process started, and fails with the command to run. Best-effort, and it says nothing when it cannot judge. The general rule: when a harness can be pointed at the wrong thing, the harness should be what notices.
 
 - **When a type stops being true, the compiler repeats the lie on request.** §226 widened an aggregation's `value` to `number | null` on the server and left `request<{ value: number }>` in the browser client. For two units every consumer typechecked against a guarantee that no longer existed, and the Metric Card's `metric.data!.value.toLocaleString()` was a crash waiting for the first sum over an empty set — latent only because nothing could ask for a sum yet. **A hand-written client type is a second copy of the API contract**, and this repo already knows what those cost (the five mirrored files in `STATUS.md`'s rough edges); what is different here is that the copy is *checked*, so it reads as verified rather than asserted. The cheap habit: when a response field gains `| None` on the server, grep the client for its name in the same commit — the compiler will not, because from its side nothing changed.
 
 - **A widget whose whole content is one number is the easiest kind to leave untested.** The Metric Card had existed since roadmap 1.5 with no browser suite: every assertion naming it lived in `test_widget_setup_order.py`, which is about panel ordering. Nothing was checking *which* aggregation ran, and the fixture §229 wrote makes all six answers different numbers precisely so that "the plumbing works" and "the right question was asked" stop being the same assertion. The tell is a widget with one visible element — there is nothing to locate, nothing to count, and no layout to measure, so the usual reasons to write a browser test are all absent while the reason that matters (is this number the number?) is untouched.
 
-- **A refusal outlives its reason, and a settings panel is where nobody looks for one.** §218 disabled the Pie Chart's Aggregation control with a hint reading "a grouped sum needs declared property types (decision 0006)" — correct when written, and wrong from §220 onward, through §221, §226 and §227 while the thing it refused was being built three units in a row. This is §216's stale build-order line in a different file: a line citing a blocker that nobody re-opened. **Build orders get audited and disabled controls do not**, because a build order is a list somebody reads to decide what to do next, while a greyed-out `<select>` reads as settled. The tell is a control that explains why it cannot work — that sentence is a claim with a date on it, and the cheap habit is to grep for the decision record's name whenever the decision changes: `grep -rn "0006" apps/web` would have found this one the day §226 landed.
+- **A refusal outlives its reason, and a settings panel is where nobody looks for one.** §218 disabled the Pie Chart's Aggregation control with a hint reading "a grouped sum needs declared property types (decision 0006)" — correct when written, and wrong from §220 onward, through §221, §226 and §227 while the thing it refused was being built three units in a row. This is §216's stale build-order line in a different file: a line citing a blocker that nobody re-opened. **Build orders get audited and disabled controls do not**, because a build order is a list somebody reads to decide what to do next, while a greyed-out `<select>` reads as settled. The tell is a control that explains why it cannot work — that sentence is a claim with a date on it, and the cheap habit is to grep for the decision record's name whenever the decision changes: `grep -rn "0006" apps/web` would have found this one the day §226 landed. **§230 finally ran that grep — closing a decision is what forces it — and it returned six, not one.** §229 was the second, and four more are still standing: the Object Dropdown's and Object Selector's field hints, Object Cards' "not available yet", and `CanvasLoopSection`'s docstring, all naming a sort refusal §221 lifted eight units earlier for every type but text. Six in one file is past oversight and into mechanism: **a data-layer unit that removes a blocker touches none of the files that named it**, and nothing fails when they go on naming it, so the count only ever grows. The durable fix is not vigilance — it is to stop typing the constraint twice. `object_sets` already exports the orderable types; a panel that renders its hint *from* that list cannot disagree with the server, and the sentence stops being a claim with a date on it. Until then, treat "grep the decision's number across the frontend" as part of closing one, not as a habit.
 
 - **When two numbers become different, the bug lives at whichever line still passes one of them.** §228 gave a pie slice a `size` (what the wedge is drawn from) alongside its `count` (how many objects are in it), equal for every chart saved before it. The model was right, the server was right, the tests of both passed — and `points={slices.map((s) => ({ value: s.count }))}`, one line between the widget and the renderer, silently drew the old chart. What caught it was a **fixture built so the two answers are inverted**: by count the slice covers three quarters, by sum one quarter, so a wedge drawn from the wrong number is backwards rather than slightly off. The general shape: when a field splits in two, every place that read the old one is a candidate, and a fixture where the two agree cannot tell you which places you missed.
 

@@ -1,7 +1,8 @@
 # 0006 — Typed instance properties
 
-**Status:** accepted; §1, §2, §4 (partly), §5, §6 and §7 built (`STATUS.md` §112, §220, §221,
-§226). Outstanding: **§3's map bounding box**, and nothing else
+**Status:** accepted and **built** — §1, §2, §3, §5, §6 and §7 (`STATUS.md` §112, §220, §221,
+§226, §227, §230). §4's reindex-cost line on the impact report is the only part not done, and
+it is a reporting change rather than an operator
 **Context:** the blocker `STATUS.md` names as holding four separate features
 
 **What is built, and what is not.** §220 built the structural half — one index per object
@@ -38,22 +39,39 @@ disagree without anybody seeing it:
   aggregation to get it, because "how many documents matched" is the wrong test: a document can
   match the filters and carry no value for the property at all.
 
-Still outstanding: **§3's map bounding box**, and nothing else. It is possible for the same
-reason these were; it has not been built.
+§230 then built **§3's bounding box**, which closes the table above. Two rules from that work
+belong here beside §221's and §226's:
 
-Four things are refused today, each with the same sentence in its refusal, and each with a
-one-line implementation that was deliberately not written:
+* **A box whose west edge is east of its east edge crosses the antimeridian, and that is the
+  whole reason this is one operator rather than four comparisons.** `lon >= west AND lon <=
+  east` is a contradiction for such a box: it selects nothing, with no error, for exactly the
+  customers whose data crosses 180°. Inside a wrapping box is the *union* of two ranges, which
+  four ordered comparisons cannot express at all. OpenSearch's `geo_bounding_box` handles it
+  natively; Postgres is told to, and both are checked against `object_sets.in_box`.
+* **Latitude is refused where longitude wraps, and the asymmetry is the geometry.** Longitude
+  is a circle, so west-of-east is a seam crossing. Latitude is a segment with ends, so
+  south-above-north is upside down and matches nothing — refused with a sentence rather than
+  returning an empty set, because an empty set is what the bug looks like.
+
+Nothing in this document is outstanding except §4's reindex-cost line, which belongs on the
+impact report and is a reporting change rather than an operator.
+
+**Four things were refused when this was written, and none of them is now.** The table is kept
+rather than deleted: it is the record of what the decision was for, and each row names where
+the refusal lived so the next person can see that a refusal is a thing with a date on it.
 
 | Refused | Where | Now |
 |---|---|---|
 | Ordered filters — `gt`, `gte`, `lt`, `lte` | `object_sets.ORDERED_OPERATORS` | **built** (§221) |
 | Numeric aggregations — `sum`, `avg`, `min`, `max` | `object_sets.parse_aggregation` (`STATUS.md` §74) | **built** (§226) |
 | Sorting a table by a property | `object_sets.SORTS`, `PROPERTY_SORT_HINT` (§83) | **built** (§221) |
-| Selecting an area on a map to filter by it | roadmap 1.5, the Map row (§86) | outstanding (§3) |
+| Selecting an area on a map to filter by it | roadmap 1.5, the Map row (§86) | **built** (§230) |
 
-The refusals are correct and this document does not soften them. What it settles is the
-question underneath, so that whoever builds this is not deciding it at three in the morning
-against a cluster.
+The refusals were correct and this document did not soften them; what it settled was the
+question underneath, so that whoever built this was not deciding it at three in the morning
+against a cluster. Four units later that is what happened, and the two rules each of them
+added to this file are the part that would otherwise have been decided at three in the
+morning.
 
 ## The actual problem, stated once
 
@@ -159,6 +177,8 @@ Sorting a table by a `string` property is the same refusal for the same reason, 
 `SORTS` grows by the orderable types only, and `PROPERTY_SORT_HINT` keeps its job for the rest.
 
 ## 3. The map's area selection is a bounding box, not four comparisons
+
+**Built** (`STATUS.md` §230). The fixture carries a point on each side of the seam for the reason this section gives: a set whose points all sit west of 180° passes with or without the wrap rule, so a suite without one is not testing the thing this section is about.
 
 `geopoint` is stored `{lat, lon}` (db 0029). The temptation is to express "in this rectangle"
 as four ordered comparisons on two numbers. **Do not.** Mapped as OpenSearch's `geo_point`,
