@@ -2133,6 +2133,26 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    column rather than trailing the label and wrapping. */
 .canvas-filter-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
+/* p.475's Prominent Terms. Capped like the filter list beside it, and for the
+   same reason: a row is a label and a number, and stretching it across a page
+   leaves the two unrelatable. */
+.canvas-terms { list-style: none; margin: 0; padding: 0; max-width: 320px; }
+/* A button rather than a checkbox, because p.475's rows are the terms
+   themselves - the whole row is the target, and there is nothing beside it a
+   tick would belong to. */
+.canvas-term {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 8px; margin: 0 0 2px; font-size: 13px; text-align: left;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: inherit; cursor: pointer;
+}
+.canvas-term:hover:not(:disabled) { background: var(--surface-2); }
+.canvas-term:disabled { cursor: default; }
+.canvas-term.is-on { border-color: var(--accent); background: var(--surface-2); }
+.canvas-term-icon { flex: 0 0 auto; width: 1.4em; text-align: center; }
+.canvas-term-label { flex: 1 1 auto; min-width: 0; }
+.canvas-term-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+
 .canvas-table-pager {
   display: flex; align-items: center; gap: 10px; margin-top: 8px;
 }
