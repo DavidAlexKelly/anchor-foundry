@@ -4290,6 +4290,71 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 232. p.475's Prominent Terms, and a count that had to be asked one at a time (this session)
+
+**The Filter List with its list turned around.** That widget asks the data what
+values exist and offers them; this one is handed the values by an author and
+asks the data how many rows each accounts for. Everything downstream is shared —
+the clause vocabulary, the `narrow_set` derivation, the read-back of the
+selection — so the unit is small, and the one decision in it is where the
+numbers come from.
+
+**Each count is its own request, and that is the design rather than something to
+optimise later.** The obvious implementation is the Filter List's single
+`/object-sets/group` call. Grouping is capped at `object_sets.MAX_GROUPS` (20)
+and ordered by count, so a curated term naming a rare value comes back
+**absent** — and absent would then mean either "no rows" or "not in the top
+twenty". p.475 hangs a visible behaviour on precisely that distinction: **Hide
+empty terms** removes the rows "that return with no results". A grouped
+implementation would delete rows for being unfashionable rather than unused, and
+neither the author nor the viewer could tell. `MAX_TERMS` bounds the fan-out
+instead, which is the honest trade: a hand-typed list is short by construction,
+and a long one is a Filter List.
+
+**`workshop.md`'s own build order had this backwards**, which is why the check
+was worth doing before building. Item 9 read: "**Prominent Term** … the second's
+rows are exact-match counts, which `/object-sets/group` already answers." True of
+the counts, false of the widget. §216's rule usually catches a line claiming
+*more* work than remains; this is the other direction — a line claiming a unit is
+free because the endpoint it names exists, without asking what that endpoint
+guarantees.
+
+**A term naming a value no row has is the normal case here**, and it is what a
+Filter List structurally cannot produce: its options come from the data, so every
+one matches something. An author writes the vocabulary they want viewers to think
+in, and the data says which parts of it are populated today — which is what makes
+Hide empty terms a setting rather than a tidy-up.
+
+**Three rules the model holds.** The matched value is **not trimmed**, because
+p.475 says the match is exact and repairing `" north"` would hide the typo from
+the only person who can fix it — while the label and icon *are* trimmed, since
+they are displayed rather than matched, and the asymmetry is the point. A count
+that has **not arrived is not a count of zero**: `undefined` keeps its row
+whatever the setting says, or a failed request would be indistinguishable from a
+deliberate hide. And counts are measured against the **base** set, so picking one
+term does not send every other number to zero — p.475's word "Base" doing work.
+
+**27 mutants, 27 caught, 0 hangs, 0 no-ops** — 22 on the model, 5 through a
+browser.
+
+**All three survivors were fixtures that could not tell two implementations
+apart**, which is §230's rule showing up at a different layer. `selectedValues`
+dedupes and nothing tested it — reachable because two clauses on one property is
+a real document even though this widget never writes one. A term's clause
+*replacing* the base set's filters was invisible because every base set in the
+file had no filters, so appending and replacing produce the identical request; a
+`band` column and a filtered base set separate them. And dropping another
+widget's clauses was invisible because nothing else ever wrote the variable; two
+Prominent Terms widgets now share one, which is the arrangement the preservation
+exists for. An assertion that clauses are preserved proves nothing if there were
+none to lose.
+
+**Recounted from the table, per the instruction in that line**: `workshop.md`
+§10 goes from 30 of 53 to **31**, and the ○ column from 8 to 7.
+
+**1363 unit tests** (was 1335); **651 browser tests** (was 637); API unchanged at
+1709, 2 skipped — this unit adds no server behaviour.
+
 ### 231. Four widgets catch up with a decision that closed, and one place to say what is orderable (this session)
 
 §230's closing note, built. Four panels in `widgets.tsx` still told authors that
@@ -6720,6 +6785,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A build-order line can be wrong in the cheap-sounding direction too: "the endpoint for this already exists" is a claim about an endpoint's *guarantees*, not its existence.** §216's rule catches lines that overstate what is left; §232 hit the opposite. `workshop.md` item 9 had estimated the Prominent Terms widget as nearly free — "its rows are exact-match counts, which `/object-sets/group` already answers" — which is true of the counts and false of the widget, because that endpoint caps at 20 groups ordered by count. A curated term naming a rare value comes back absent, and the spec hangs a *visible* behaviour (Hide empty terms) on telling absent from zero. The line was not stale; it was written from the endpoint's name rather than its contract. The habit that catches it is the same one, one level deeper: opening what a line cites means reading the cap and the ordering, not confirming the route exists. A cheap estimate is a claim, and claims about work you have not started are the ones nobody re-reads.
 
 - **Never commit while a mutation harness is running: its restore reads `git show HEAD:<path>`, and a commit moves HEAD to a tree containing the applied mutant.** §231 lost one this way. The harness reported the mutant *caught*, then restored from a HEAD that had captured it mid-run, and `git status` came back clean because the mutation was now committed — so every signal said the tree was pristine. It surfaced 45 minutes later as three panel tests failing in the full browser suite that had passed per-file an hour before, which is the most expensive possible place to find it. This is §220's rule one turn further out: a restore narrower than its mutants is worse than no harness, and **a restore reading from a moving baseline is not narrower, it is wrong**. The harness already refuses to *start* over a dirty tree; what it cannot do is refuse a commit made underneath it, so the discipline has to sit with the caller. Two cheap habits: never `git commit` between starting a mutation run and reading its summary, and when one finishes, `git diff <the commit the run started from> -- <every mutated path>` before trusting a clean `git status` — the diff is the only check that does not share the harness's own blind spot.
 
