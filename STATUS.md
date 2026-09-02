@@ -4381,6 +4381,10 @@ structural and strip its ✕.
 **Recounted from the table**: `workshop.md` §10 goes from 31 of 53 to **32**, and
 the ○ column from 7 to 6.
 
+**1395 unit tests** (was 1363); **668 browser tests** (was 651); **1712 API
+tests**, 2 skipped (was 1709) — the three new ones are the operator mirror
+guards.
+
 ### 232. p.475's Prominent Terms, and a count that had to be asked one at a time (this session)
 
 **The Filter List with its list turned around.** That widget asks the data what
