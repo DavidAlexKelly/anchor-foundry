@@ -187,6 +187,22 @@ describe("reading the selection back out of the variable", () => {
     expect(selectedValues([{ property: "n", op: "eq", value: 40 }], "n")).toEqual(["40"]);
   });
 
+  it("reads a value named twice as one selection", () => {
+    // **Two clauses on one property is a real document**, even though this
+    // widget never writes one: it drops its own property before rewriting, so
+    // a repeat comes from a hand-edit or from a second widget filtering the
+    // same property into the same variable. Counted twice, the value would go
+    // back out as `in: ["north", "north"]` — a clause the server takes and
+    // nothing reads correctly afterwards, because unticking it once would
+    // leave a copy behind.
+    expect(selectedValues([
+      { property: "tag", op: "eq", value: "north" },
+      { property: "tag", op: "in", value: ["north", "south"] },
+    ], "tag")).toEqual(["north", "south"]);
+    expect(selectedValues([{ property: "tag", op: "in", value: ["a", "a"] }], "tag"))
+      .toEqual(["a"]);
+  });
+
   it("reads nothing from a variable holding nothing", () => {
     expect(selectedValues(undefined, "region")).toEqual([]);
     expect(selectedValues([], "region")).toEqual([]);
