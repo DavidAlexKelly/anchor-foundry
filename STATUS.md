@@ -4387,7 +4387,7 @@ histogram** on the grouping endpoint. And `PROPERTY_SORT_HINT` promised, in the
 future tense, a feature that had shipped — on the far side of a 422, which is
 where a refusal is least likely to be re-read and most likely to be believed.
 
-**1335 unit tests** (was 1315); **636 browser tests** (was 629); 1709 API tests,
+**1335 unit tests** (was 1315); **637 browser tests** (was 629); 1709 API tests,
 2 skipped (was 1708).
 
 ### 230. Decision 0006 §3's bounding box, and a box that crosses the seam (this session)
