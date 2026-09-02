@@ -821,6 +821,18 @@ class OpenSearchInstanceStore:
                         "type": "phrase_prefix",
                     }
                 })
+            elif f.op in object_sets.GEO_OPERATORS:
+                # Decision 0006 §3's whole argument, in one clause. The mapped
+                # `geo_point` field answers this natively and **handles the
+                # antimeridian itself** - a box whose `top_left` longitude is
+                # east of its `bottom_right` one wraps, which is the same rule
+                # `object_sets.in_box` states and the Postgres store writes out
+                # as a union. Four range clauses would need the rule restated
+                # here and would get it wrong the same silent way.
+                must.append({"geo_bounding_box": {field: {
+                    "top_left": {"lat": f.value.north, "lon": f.value.west},
+                    "bottom_right": {"lat": f.value.south, "lon": f.value.east},
+                }}})
             elif f.op in object_sets.ORDERED_OPERATORS:
                 bound = object_sets.comparable(f.value, f.data_type)
                 if bound is None:

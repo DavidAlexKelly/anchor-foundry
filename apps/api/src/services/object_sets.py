@@ -100,6 +100,29 @@ ORDERABLE_TYPES = ("integer", "float", "date", "timestamp")
 # Operators whose value is a list rather than a scalar.
 LIST_OPERATORS = ("in",)
 
+# Decision 0006 §3: **the map's area selection is a bounding box, not four
+# ordered comparisons.**
+#
+# The temptation is to express "in this rectangle" as `lat >= south AND lat <=
+# north AND lon >= west AND lon <= east`, which is four operators this module
+# already has. It is wrong at the antimeridian, and wrong *silently*: a box
+# drawn across 180° has a west edge east of its east edge, so the two longitude
+# comparisons contradict each other and the box matches nothing. Nobody sees a
+# crash; a customer whose data crosses the Pacific sees an empty map.
+#
+# So it is one operator with one rule, stated here and implemented three times
+# against it - `matches` below, the Postgres store's SQL, and OpenSearch's
+# `geo_bounding_box`, which handles the wrap natively and is the reason the
+# shape is a box rather than four comparisons in the first place.
+GEO_OPERATORS = ("within_box",)
+
+# The type a bounding box may be drawn on. One, and not by omission: a box is a
+# pair of coordinates, and `geopoint` is the only declared type that holds one
+# (db 0029, stored `{"lat", "lon"}`).
+BOXABLE_TYPES = ("geopoint",)
+
+BOX_EDGES = ("north", "south", "east", "west")
+
 # How a page of a set may be ordered (roadmap 1.5, the Object Table upgrade).
 #
 # Four, and **none of them sorts by a property**, which is the same refusal
@@ -614,6 +637,35 @@ def object_type_id_of(definition: Any) -> UUID:
         raise ValueError(f"{raw!r} is not a valid object type id") from exc
 
 
+def _boxable_type(
+    prop: str, op: str, property_types: "Mapping[str, str] | None"
+) -> str:
+    """The declared type behind a bounding box, or a refusal naming what it
+    would take.
+
+    §221's rule, applied to a second operator family: **absence of
+    `property_types` is a refusal, not a permission.** A caller that has not
+    resolved the ontology has checked no property's type, so it cannot know this
+    one holds a coordinate — and a box drawn on a string property would compare
+    two numbers against text on one store and be rejected by the mapping on the
+    other.
+    """
+    declared = (property_types or {}).get(prop)
+    if declared in BOXABLE_TYPES:
+        return declared
+    if declared is not None:
+        raise ValueError(
+            f"{prop!r} is a {declared} property, and {op} needs a "
+            f"{' or '.join(BOXABLE_TYPES)}. A bounding box selects an area, and "
+            "only a coordinate is in one."
+        )
+    raise ValueError(
+        f"{op} needs the declared type of {prop!r} behind it, and this caller "
+        "resolved none. A box may only be drawn on a geopoint property "
+        "(docs/decisions/0006-typed-instance-properties.md)."
+    )
+
+
 def _orderable_type(
     prop: str, op: str, property_types: "Mapping[str, str] | None"
 ) -> str:
@@ -700,12 +752,19 @@ def parse(
         data_type: str | None = None
         if op in ORDERED_OPERATORS:
             data_type = _orderable_type(prop, op, property_types)
+        elif op in GEO_OPERATORS:
+            data_type = _boxable_type(prop, op, property_types)
         elif op not in OPERATORS:
             raise ValueError(
                 f"unknown filter operator {op!r} "
-                f"(supported: {', '.join((*OPERATORS, *ORDERED_OPERATORS))})"
+                f"(supported: {', '.join((*OPERATORS, *ORDERED_OPERATORS, *GEO_OPERATORS))})"
             )
         value = entry.get("value")
+        if op in GEO_OPERATORS:
+            # **Parsed into a `Box` here, so the stores receive one.** The
+            # alternative is four numbers each store re-reads, which is three
+            # places to get the wrap rule wrong instead of one.
+            value = parse_box(value)
         if op in LIST_OPERATORS:
             if not isinstance(value, list):
                 raise ValueError(f"the {op!r} operator needs a list of values")
@@ -812,6 +871,102 @@ def join_filter(*, far_property: str, values: list[Any]) -> Filter | None:
     return Filter(property=far_property, op="in", value=sorted(seen, key=_text))
 
 
+@dataclass(frozen=True)
+class Box:
+    """A bounding box, as `parse` validated it.
+
+    A value object for `Filter.data_type`'s reason: the decision that these four
+    numbers are a legal box was made once, here, and a store that re-read them
+    could reach a different answer than the validation did.
+
+    **`west > east` is not an error — it is a box across the antimeridian**, and
+    keeping it expressible is the whole point of decision 0006 §3. Latitude has
+    no such case: the poles are the ends of the axis, not a seam, so `south >
+    north` genuinely is empty and is refused rather than wrapped.
+    """
+
+    north: float
+    south: float
+    east: float
+    west: float
+
+    @property
+    def wraps(self) -> bool:
+        """Whether this box crosses 180°."""
+        return self.west > self.east
+
+
+def parse_box(raw: Any) -> "Box":
+    """Validate a bounding box, refusing in a sentence somebody can act on."""
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"a within_box value must be an object with {', '.join(BOX_EDGES)}"
+        )
+    edges: dict[str, float] = {}
+    for edge in BOX_EDGES:
+        value = raw.get(edge)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"a box needs a number for {edge!r}, got {value!r}")
+        edges[edge] = float(value)
+    for edge in ("north", "south"):
+        if not -90.0 <= edges[edge] <= 90.0:
+            raise ValueError(f"{edge} is a latitude and must be between -90 and 90")
+    for edge in ("east", "west"):
+        if not -180.0 <= edges[edge] <= 180.0:
+            raise ValueError(f"{edge} is a longitude and must be between -180 and 180")
+    if edges["south"] > edges["north"]:
+        # **Refused, where `west > east` is allowed**, and the asymmetry is the
+        # geometry rather than an oversight: longitude is a circle, so the
+        # larger-than case is a box across the seam; latitude is a segment with
+        # ends, so it is simply upside down and matches nothing.
+        raise ValueError(
+            "a box's south edge is above its north edge, which selects nothing - "
+            "longitude wraps at 180 but latitude does not"
+        )
+    return Box(**edges)
+
+
+def in_box(actual: Any, box: "Box") -> bool:
+    """Whether a stored geopoint falls inside a box. **The one definition.**
+
+    Both stores are checked against this: Postgres compares the two numbers in
+    SQL and OpenSearch answers a `geo_bounding_box`, and neither is allowed to
+    disagree with it. A point whose value is not a readable geopoint is not in
+    any box - the same rule §221 applies to a value that will not cast, and for
+    the same reason: it must not widen a set.
+    """
+    point = _point(actual)
+    if point is None:
+        return False
+    lat, lon = point
+    if not box.south <= lat <= box.north:
+        return False
+    # The seam. Inside a wrapping box means east of its west edge *or* west of
+    # its east edge, which is a union rather than an interval - four ordered
+    # comparisons cannot say this, which is decision 0006 §3's whole argument.
+    return box.west <= lon <= box.east if not box.wraps else (
+        lon >= box.west or lon <= box.east
+    )
+
+
+def _point(actual: Any) -> "tuple[float, float] | None":
+    """A stored geopoint as `(lat, lon)`, or `None`.
+
+    db 0029 stores `{"lat", "lon"}` and `property_values._coerce_geopoint` is
+    what puts it there, so that is the only shape this reads. Tolerant of the
+    rest for §212's reason - this comes out of a jsonb blob that a sync, an
+    action or a hand-edit wrote.
+    """
+    if not isinstance(actual, dict):
+        return None
+    lat, lon = actual.get("lat"), actual.get("lon")
+    if isinstance(lat, bool) or isinstance(lon, bool):
+        return None
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return None
+    return float(lat), float(lon)
+
+
 def matches(properties: dict[str, Any], filters: tuple[Filter, ...]) -> bool:
     """Whether one instance satisfies every filter.
 
@@ -838,6 +993,8 @@ def _matches_one(actual: Any, f: Filter) -> bool:
         return actual is not None and _text(actual).lower().startswith(_text(f.value).lower())
     if f.op in ORDERED_OPERATORS:
         return _compares(actual, f)
+    if f.op in GEO_OPERATORS:
+        return in_box(actual, f.value)
     # Unreachable while `parse` is the only way to build a Filter, which it is.
     raise ValueError(f"no reference semantics for operator {f.op!r}")
 
