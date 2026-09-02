@@ -31,6 +31,7 @@ import { useEffect, useMemo, useState } from "react";
 import { canvas as canvasApi, objects as objectsApi } from "@/lib/api";
 import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "@/lib/types";
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
+import { OPERATOR_LABELS, operatorsFor } from "./filter-clause";
 import { ROUTABLE_KINDS } from "./routing";
 import { VariableLineage } from "./VariableLineage";
 import {
@@ -1367,9 +1368,15 @@ function ObjectSetEditor({
               }
             />
           </label>
-          {/* Only the operators both stores agree about. `gt` and friends are
+          {/* **The operators for the property this filter names**, from
+              `filter-clause.ts` rather than typed here. This list was four
+              hard-coded options under a comment reading "`gt` and friends are
               refused by the API because Postgres casts and OpenSearch compares
-              text, so an app's results would depend on the deployment. */}
+              text" — true when written and untrue from §221, and it was the
+              *seventh* copy of that staleness (§231 found six). It survived
+              §231's sweep because it stated the reason in its own words and
+              never named decision 0006, so grepping for the citation could not
+              see it. Hence the module: nothing outside it writes the list. */}
           <label>
             Match
             <select
@@ -1379,10 +1386,13 @@ function ObjectSetEditor({
                 setDerivation({ config: { ...variable.derivation?.config, op: e.target.value } })
               }
             >
-              <option value="eq">equals</option>
-              <option value="neq">does not equal</option>
-              <option value="starts_with">starts with</option>
-              <option value="in">is one of</option>
+              {operatorsFor(
+                detail.data?.properties.find(
+                  (p) => p.api_name === String(variable.derivation?.config?.property ?? ""),
+                )?.data_type,
+              ).map((op) => (
+                <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>
+              ))}
             </select>
           </label>
             </>
