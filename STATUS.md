@@ -4356,7 +4356,9 @@ whose values sort identically under both would let a property sort pass while
 proving nothing about the thing decision 0006 exists for. The same change went
 into the Selector's rows and the Loop's ranks.
 
-**24 mutants, 24 caught, 0 survivors, 0 hangs, 0 no-ops.**
+**24 mutants, 24 caught, 0 hangs, 0 no-ops** — 15 on the model, 1 on the mirror
+guard, 8 through a browser. A twenty-fifth is not in that count because the code
+it mutated is gone.
 
 **The one survivor was a wrapper nothing called.** `sortableProperties` in
 `object-dropdown.ts` re-exported `orderableProperties` under a second name for
