@@ -36,7 +36,7 @@
  * bottom.
  */
 
-import { orderableProperties, requestSort } from "./property-sort";
+import { requestSort } from "./property-sort";
 import type { Property } from "./property-sort";
 
 /** How many objects the dropdown loads.
@@ -100,12 +100,6 @@ export const DEFAULT_SORT = "key";
 export function sortOf(raw: unknown, declared?: readonly Property[]): string | undefined {
   if (typeof raw === "string" && Object.hasOwn(SORTS, raw)) return raw;
   return requestSort(raw, declared, DEFAULT_SORT);
-}
-
-/** The properties p.458's picker offers, which is narrower than the list the
- * search modes use: a search runs on text and an ordering cannot. */
-export function sortableProperties(all: readonly Property[]): Property[] {
-  return orderableProperties(all);
 }
 
 /** p.458's three Search items by modes. */
