@@ -26,7 +26,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, open_builder, open_module, settled
+from conftest import eventually, open_builder, open_module, settled, stays
 
 ROWS = [
     {"id": "N1", "region": "north", "band": "new", "capacity": "10"},
@@ -244,13 +244,17 @@ def test_an_abandoned_edit_changes_nothing(page, api, sites) -> None:
     page.get_by_test_id("filter-pill-input").press("Escape")
 
     expect(page.get_by_test_id("filter-pill-input")).to_have_count(0)
-    # **`settled` before the read, and a mutant is what said so.** Escape closes
-    # the box at once; a commit would take a round trip to reach the pills. A
-    # one-shot `texts(page)` straight after the keypress reads the page *before*
-    # the write it is meant to be ruling out, so it passes either way — §202's
-    # lesson, in a test written after §202.
-    settled(page)
-    assert texts(page) == ["Band is new", "Region is north"], texts(page)
+
+    # **`stays`, and it took three attempts to get here.** Escape closes the box
+    # at once while a commit takes a round trip, so every one-shot read taken
+    # straight afterwards — of the pills, of the table — happens *before* the
+    # write it is meant to rule out. `settled` does not help (it waits for a
+    # canvas block already on screen), and neither does re-reading through
+    # `expect`, which stops at the first read that matches and that is the one
+    # taken too early. The only honest form of "nothing happened" here is to
+    # keep looking for longer than the write would have taken.
+    stays(lambda: texts(page), lambda t: t == ["Band is new", "Region is north"],
+          what="the pill after an abandoned edit")
     assert table_rows(page) == len(NEW_NORTH)
 
 
