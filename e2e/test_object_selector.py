@@ -22,10 +22,16 @@ from playwright.sync_api import expect
 from api import Module, layout, object_set
 from conftest import open_builder, open_module, settled
 
+# The capacities are 100, 10 and 25 for §231's reason: as *text* they order 10,
+# 100, 25 and as *numbers* 10, 25, 100, so a property sort that reached the
+# store with its declared type is distinguishable from one that did not.
 ROWS = [
-    {"id": "S1", "name": "North West Depot", "region": "north", "note": ""},
-    {"id": "S2", "name": "Bravo Yard", "region": "south", "note": "checked"},
-    {"id": "S3", "name": "Charlie Depot", "region": "east", "note": "sealed"},
+    {"id": "S1", "name": "North West Depot", "region": "north", "note": "",
+     "capacity": "100"},
+    {"id": "S2", "name": "Bravo Yard", "region": "south", "note": "checked",
+     "capacity": "10"},
+    {"id": "S3", "name": "Charlie Depot", "region": "east", "note": "sealed",
+     "capacity": "25"},
 ]
 
 
@@ -33,7 +39,8 @@ ROWS = [
 def sites(api):
     mod = Module(api, "Object selector")
     mod.site_type_id = mod.object_type(
-        columns=["id", "name", "region", "note"], rows=ROWS, key="id", title="name",
+        columns=["id", "name", "region", "note", "capacity"], rows=ROWS,
+        key="id", title="name", types={"capacity": "integer"},
     )
     return mod
 
@@ -363,6 +370,23 @@ def test_the_list_can_be_sorted(page, api, sites) -> None:
     expect(page.get_by_test_id("selector-option").last).to_contain_text("North West Depot")
 
 
+def test_the_list_can_be_sorted_by_a_declared_property(page, api, sites) -> None:
+    """p.458's sort on a property, on the Selector as on the Dropdown — the two
+    share `object-dropdown.ts` and now share `PropertySortField` too, so this
+    asserts the sharing rather than a second implementation.
+
+    Ascending by capacity is 10, 25, 100 — Bravo, Charlie, North West — which
+    is the ordering a *text* sort would not produce.
+    """
+    mod = build(api, sites, "Selector by capacity", {"sortProperty": "capacity"})
+    open_module(page, mod)
+    settled(page)
+
+    open_list(page)
+    expect(page.get_by_test_id("selector-option").first).to_contain_text("Bravo Yard")
+    expect(page.get_by_test_id("selector-option").last).to_contain_text("North West Depot")
+
+
 def test_the_label_is_drawn_only_when_there_is_one(page, api, sites) -> None:
     blank = build(api, sites, "Selector blank label", {"label": "   "})
     open_module(page, blank)
@@ -394,3 +418,32 @@ def test_the_panel_offers_the_same_settings_as_the_dropdown(page, api, sites) ->
     expect(page.get_by_test_id("dropdown-allow-none")).to_have_count(0)
     hint = page.get_by_test_id("selector-properties").locator("xpath=..")
     expect(hint).to_contain_text("region")
+
+
+def test_the_sort_picker_offers_only_properties_the_stores_agree_on(
+    page, api, sites
+) -> None:
+    """**The claim §231 rests on.** A picker that listed `name` would be
+    offering a setting the server refuses permanently, and the author would
+    find out by watching the list stop sorting.
+
+    `capacity` is an integer and is offered in both directions; `name`,
+    `region` and `note` are text and appear at all only if the filter has gone
+    — which is the failure this test exists to catch, because a widened list
+    breaks nothing until somebody picks from it.
+    """
+    mod = build(api, sites, "Selector sort options")
+    open_builder(page, mod)
+    settled(page)
+
+    page.locator(".canvas-tree-row").filter(has_text="Object selector").first.click()
+    picker = page.get_by_test_id("selector-sort")
+    expect(picker).to_be_visible()
+    values = picker.locator("option").evaluate_all(
+        "nodes => nodes.map(n => n.value)"
+    )
+    assert values == ["key", "-key", "recent", "oldest", "capacity", "-capacity"], values
+    # The sentence beneath comes from `ORDERABLE_HINT`, so there is one place to
+    # change it when the server's list changes — which it did not, for the ten
+    # units this unit is about.
+    expect(page.get_by_test_id("selector-sort-hint")).to_contain_text("permanently")

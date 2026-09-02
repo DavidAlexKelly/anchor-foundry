@@ -221,11 +221,18 @@ describe("saying when the list is only part of the set", () => {
 });
 
 describe("p.458's sort", () => {
-  it("offers only the sorts the object-set language has", () => {
-    // **Not a property picker**: `object_sets.parse_sort` refuses those,
-    // because instance properties are stored untyped and the two stores would
-    // order 250 and 40 differently (decision 0006). A widget offering a
-    // property here would produce a request the server answers with a 422.
+  /** What the ontology says while these run. `title` is text, which is refused
+   * permanently; `capacity` and `opened` are the two shapes a picker offers. */
+  const DECLARED = [
+    { api_name: "title", data_type: "string" },
+    { api_name: "capacity", data_type: "integer" },
+    { api_name: "opened", data_type: "date" },
+  ];
+
+  it("keeps the four sorts that need no ontology", () => {
+    // These are `object_sets.SORTS` — the primary key and `updated_at`, which
+    // both stores order identically without knowing any property's type. §231
+    // added property sorts *beside* them, not instead of them.
     expect(Object.keys(SORTS).sort()).toEqual(["-key", "key", "oldest", "recent"]);
   });
 
@@ -234,17 +241,50 @@ describe("p.458's sort", () => {
     // freshly synced type every row shares an `updated_at` — so "recent" is
     // arbitrary and can reorder under a viewer for no visible reason.
     expect(DEFAULT_SORT).toBe("key");
-    expect(sortOf(undefined)).toBe("key");
-    expect(sortOf("")).toBe("key");
+    expect(sortOf(undefined, DECLARED)).toBe("key");
+    expect(sortOf("", DECLARED)).toBe("key");
   });
 
-  it("keeps a sort the language has and refuses one it does not", () => {
+  it("sends a fixed sort without waiting for the ontology", () => {
+    // **The common case must not cost a second fetch.** Every unconfigured
+    // dropdown holds one of these four, and a widget that withheld its sort
+    // until the type resolved would evaluate the set twice on every load.
     expect(sortOf("-key")).toBe("-key");
     expect(sortOf("oldest")).toBe("oldest");
-    // A property name is exactly what a document written against p.458 would
-    // hold, and sending it on would be a 422 in place of a list.
-    expect(sortOf("name")).toBe("key");
-    expect(sortOf("constructor")).toBe("key");
+    expect(sortOf("recent", undefined)).toBe("recent");
+  });
+
+  it("sends a property sort the type declares as orderable", () => {
+    // p.458 asks for exactly this, and §221 built it. Both directions, because
+    // the leading `-` is how every caller in this codebase writes descending.
+    expect(sortOf("capacity", DECLARED)).toBe("capacity");
+    expect(sortOf("-capacity", DECLARED)).toBe("-capacity");
+    expect(sortOf("opened", DECLARED)).toBe("opened");
+  });
+
+  it("reads a property the two stores cannot order back to the default", () => {
+    // Text is refused permanently (decision 0006 §2), so a document naming one
+    // gets the key rather than a 422 where the list should be — §214's rule.
+    expect(sortOf("title", DECLARED)).toBe("key");
+    expect(sortOf("-title", DECLARED)).toBe("key");
+  });
+
+  it("reads a property the type no longer declares back to the default", () => {
+    // The stale-document case, which is the reason this reads back at all: a
+    // module saved when `capacity` existed, opened after somebody removed it.
+    expect(sortOf("capacity", [])).toBe("key");
+    expect(sortOf("gone", DECLARED)).toBe("key");
+    // Not a declared property, and not an inherited one either.
+    expect(sortOf("constructor", DECLARED)).toBe("key");
+  });
+
+  it("withholds a property sort until the ontology has resolved", () => {
+    // **`undefined` rather than the default**, and the difference is what stops
+    // a flash of the wrong order: sending `key` here would draw the list one
+    // way and redraw it another a moment later, which reads as a bug in the
+    // widget rather than as loading.
+    expect(sortOf("capacity", undefined)).toBeUndefined();
+    expect(sortOf("-capacity")).toBeUndefined();
   });
 });
 

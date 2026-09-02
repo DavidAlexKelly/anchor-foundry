@@ -32,8 +32,15 @@ from conftest import open_builder, open_module, settled
 # hiding has something to do on one row and nothing on the rest. `capacity` is
 # an integer so the search-mode tests have a displayed property that is not
 # searchable.
+#
+# **The capacities are 100, 10 and 25 rather than 40, 10 and 25, and §231 is
+# why.** Sorted as *text* they read 10, 100, 25; sorted as *numbers*, 10, 25,
+# 100. That disagreement is the entire subject of decision 0006 — a page one
+# store orders one way and the other the other — so a fixture whose values sort
+# identically under both would let a property sort pass while proving nothing
+# about what it is for.
 ROWS = [
-    {"id": "S1", "name": "North West Depot", "region": "north", "note": "", "capacity": "40"},
+    {"id": "S1", "name": "North West Depot", "region": "north", "note": "", "capacity": "100"},
     {"id": "S2", "name": "Bravo Yard", "region": "south", "note": "checked", "capacity": "10"},
     {"id": "S3", "name": "Charlie Depot", "region": "east", "note": "sealed", "capacity": "25"},
 ]
@@ -287,14 +294,11 @@ def test_null_properties_hide_per_object(page, api, sites) -> None:
            .get_by_test_id("dropdown-detail")).to_have_count(2)
 
 
-def test_the_list_can_be_sorted(page, api, sites) -> None:
-    """p.458's Sort items by, **as far as the object-set language goes**.
+def test_the_list_can_be_sorted_by_key(page, api, sites) -> None:
+    """p.458's Sort items by, on the two orderings that need no ontology.
 
-    Not by property: `object_sets.parse_sort` refuses those, because instance
-    properties are stored untyped and the two stores would order 250 and 40
-    differently (decision 0006). What is here is the key, both ways round —
-    and the fixture's keys run S1, S2, S3, so descending has to come back
-    reversed rather than merely in some order.
+    The fixture's keys run S1, S2, S3, so descending has to come back reversed
+    rather than merely in some order.
     """
     ascending = build(api, sites, "Dropdown sorted up", {"sortProperty": "key"})
     open_module(page, ascending)
@@ -309,12 +313,54 @@ def test_the_list_can_be_sorted(page, api, sites) -> None:
     expect_titles(page, ["Charlie Depot", "Bravo Yard", "North West Depot"])
 
 
-def test_a_property_sort_a_document_holds_does_not_break_the_list(page, api, sites) -> None:
-    """A document written against p.458's wording would name a property, and
-    sending that to the server is a 422 in place of a list. The model reads it
-    back to the default instead, so a stale setting costs the ordering rather
-    than the widget."""
-    mod = build(api, sites, "Dropdown stale sort", {"sortProperty": "name"})
+def test_the_list_can_be_sorted_by_a_declared_property(page, api, sites) -> None:
+    """p.458's Sort items by, on a property — **§231, and §221 is what made it
+    possible**. The widget carried a hint saying this needed declared property
+    types for ten units after they were built.
+
+    **The fixture's capacities disagree between a numeric ordering and a text
+    one**: 100, 10, 25 read 10, 25, 100 as numbers and 10, 100, 25 as text. That
+    disagreement is what decision 0006 is about, so asserting the numeric answer
+    is asserting that the declared type reached the store — not merely that
+    *some* ordering was applied.
+    """
+    ascending = build(api, sites, "Dropdown by capacity", {"sortProperty": "capacity"})
+    open_module(page, ascending)
+    settled(page)
+    open_list(page)
+    expect_titles(page, ["Bravo Yard", "Charlie Depot", "North West Depot"])
+
+    descending = build(api, sites, "Dropdown by capacity down", {"sortProperty": "-capacity"})
+    open_module(page, descending)
+    settled(page)
+    open_list(page)
+    expect_titles(page, ["North West Depot", "Charlie Depot", "Bravo Yard"])
+
+
+def test_a_sort_on_text_is_read_back_to_the_key_rather_than_sent(page, api, sites) -> None:
+    """`name` is a string, and text has no order the two stores agree on
+    (decision 0006 §2, permanently). Sending it would be a 422 in place of a
+    list, so the widget reads it back to the key — §214's rule, and the reason
+    `requestSort` exists rather than the widget passing its prop along.
+
+    **The assertion is the key order, not "some order".** Sorted by `name` the
+    titles would read Bravo Yard, Charlie Depot, North West Depot, which is a
+    different list from the one this expects — so a widget that sent the sort on
+    and got away with it would fail here.
+    """
+    mod = build(api, sites, "Dropdown text sort", {"sortProperty": "name"})
+    open_module(page, mod)
+    settled(page)
+
+    open_list(page)
+    expect_titles(page, ["North West Depot", "Bravo Yard", "Charlie Depot"])
+
+
+def test_a_sort_naming_a_property_the_type_lost_still_lists(page, api, sites) -> None:
+    """The stale-document case, which is what a settings panel cannot prevent:
+    a module saved when a property existed, opened after it was removed. The
+    list is still a list."""
+    mod = build(api, sites, "Dropdown gone sort", {"sortProperty": "-removed_last_year"})
     open_module(page, mod)
     settled(page)
 

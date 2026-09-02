@@ -250,7 +250,7 @@ def test_a_sort_can_be_added_and_removed_in_the_panel(page, api) -> None:
 
     page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
     page.get_by_test_id("table-sort-add").click()
-    page.get_by_test_id("table-sort-property-1").fill("stamp")
+    page.get_by_test_id("table-sort-property-1").select_option("stamp")
     # Two rows, and the summary says what the order means in words.
     expect(page.get_by_test_id("table-sorts-summary")).to_contain_text("then")
 
@@ -295,12 +295,12 @@ def test_one_sort_is_saved_as_a_string_and_several_as_a_list(page, api) -> None:
     page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
     # Touch the row so the panel writes the prop rather than leaving the
     # fixture's value in place - otherwise this asserts what `build` wrote.
-    page.get_by_test_id("table-sort-property-0").fill("stamp")
+    page.get_by_test_id("table-sort-property-0").select_option("stamp")
     save(page)
     assert sort_prop(mod) == "stamp"
 
     page.get_by_test_id("table-sort-add").click()
-    page.get_by_test_id("table-sort-property-1").fill("priority")
+    page.get_by_test_id("table-sort-property-1").select_option("priority")
     save(page)
     assert sort_prop(mod) == ["stamp", "priority"]
 
@@ -314,6 +314,30 @@ def test_one_sort_is_saved_as_a_string_and_several_as_a_list(page, api) -> None:
     expect(page.get_by_test_id("table-sort-property-1")).to_have_count(0)
     save(page)
     assert sort_prop(mod) == "stamp"
+
+
+def test_the_property_control_is_a_picker_over_the_orderable_properties(
+    page, api
+) -> None:
+    """§225 left this a text box because the panel had no property list; §231
+    gave it one (`property-sort.ts`), and a picker cannot name a property the
+    type does not declare.
+
+    **`name` must not be in it.** It is a column on this table and it is text,
+    so it is exactly the property somebody would reach for — and the server
+    refuses a text sort permanently, so the picker offering one would be a
+    setting that can only produce an empty table. p.223's "hidden property
+    types not displayed" still holds: `stamp` is not a configured column here
+    and is offered anyway, because the list is the type's and not the table's.
+    """
+    mod = build(api, "Table sort picker", "priority", columns="name,priority")
+    open_builder(page, mod)
+    settled(page)
+
+    page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
+    picker = page.get_by_test_id("table-sort-property-0")
+    values = picker.locator("option").evaluate_all("nodes => nodes.map(n => n.value)")
+    assert values == ["", "priority", "stamp"], values
 
 
 def test_the_panel_stops_at_the_cap_the_server_enforces(page, api) -> None:

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import io
 import os
+import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -249,6 +251,36 @@ def test_an_ordered_comparison_on_text_is_refused_permanently() -> None:
             },
             property_types={"name": "string"},
         )
+
+
+def test_the_browsers_copy_of_the_orderable_types_has_not_drifted() -> None:
+    """§231's mirror, checked rather than asserted in a comment.
+
+    `apps/web/src/components/canvas/property-sort.ts` is the one place the
+    browser decides which properties a sort picker offers, and its list is a
+    copy of this module's. A comment saying "mirrors the server" is what every
+    one of the six stale refusals `STATUS.md` §230 found also said about itself,
+    so the claim is made a test.
+
+    **Drift is silent in both directions and neither is harmless.** Wider, and a
+    panel offers a sort the server answers with a sentence about property types.
+    Narrower, and a working ordering is hidden from the person who needs it -
+    which is exactly the failure this unit was written to undo, ten units late.
+    """
+    root = pathlib.Path(__file__).resolve().parents[3]
+    module = root / "apps/web/src/components/canvas/property-sort.ts"
+    assert module.exists(), "the browser's copy is missing"
+    declared = re.search(
+        r"export const ORDERABLE_TYPES: readonly string\[\] = \[(.*?)\];",
+        module.read_text(),
+        re.S,
+    )
+    assert declared is not None, "ORDERABLE_TYPES is no longer declared as a literal"
+    mirrored = tuple(re.findall(r'"([^"]+)"', declared.group(1)))
+    assert mirrored == object_sets.ORDERABLE_TYPES, (
+        f"the browser offers {mirrored} and the server accepts "
+        f"{object_sets.ORDERABLE_TYPES}"
+    )
 
 
 @pytest.mark.parametrize("kind", ["boolean", "json", "attachment", "geopoint"])
@@ -3215,10 +3247,17 @@ def test_sorting_by_a_property_is_refused_with_what_it_would_take(
     assert unknown.status_code == 422, unknown.text
     hint = unknown.json()["detail"]
     assert "unknown sort" in hint
-    # `PROPERTY_SORT_HINT` still says which types a property sort covers, and
-    # that text is not among them - it is the sentence somebody reads when they
-    # named a property that does not exist, so it has to point at the rule.
-    assert "text will stay unsortable" in hint, "and what it never will"
+    # `PROPERTY_SORT_HINT` says which types a property sort covers, and text is
+    # not among them - this is the sentence somebody reads when they named a
+    # property that does not exist, so it has to point at the rule.
+    for kind in object_sets.ORDERABLE_TYPES:
+        assert kind in hint, f"the hint does not name {kind}"
+    # **Present tense, and §231 is why this is asserted.** The hint promised
+    # these types "will" be covered for ten units after §221 covered them -
+    # a refusal describing a feature that had shipped, reaching exactly the
+    # person who wanted it, on the far side of a 422 where nobody re-reads it.
+    assert "will cover" not in hint, "a refusal in the future tense outlives its reason"
+    assert "permanently" in hint, "text is refused for good, not pending"
 
 
 @pytest.mark.anyio

@@ -36,6 +36,9 @@
  * bottom.
  */
 
+import { requestSort } from "./property-sort";
+import type { Property } from "./property-sort";
+
 /** How many objects the dropdown loads.
  *
  * **Search happens within these**, which is the one place this widget is
@@ -47,20 +50,27 @@
  */
 export const PAGE_LIMIT = 200;
 
-export interface Property {
-  api_name: string;
-  display_name?: string | null;
-  data_type?: string | null;
-}
+/** One declared property. Defined in `property-sort.ts` and re-exported here
+ * rather than restated: this file had its own copy, and a second declaration of
+ * the same three fields is how `data_type` ends up optional in one place and
+ * required in another. */
+export type { Property } from "./property-sort";
 
-/** p.458's "Sort items by", as far as the object-set language can express it.
+/** p.458's "Sort items by": "Specify the order in which objects are sorted in
+ * the dropdown widget."
  *
- * **Not a property picker, and that is decision 0006 rather than a shortcut.**
- * `object_sets.parse_sort` takes four sorts and refuses the rest in a sentence:
- * instance properties are stored untyped, so Postgres and OpenSearch would put
- * 250 and 40 in different orders, and text orders differently again. p.458's
- * per-property sort lands when declared property types do — the same ○ the
- * Object Table's p.223 default sorts carry.
+ * **A property picker as of §231, and the note saying it could not be one had
+ * outlived its reason by ten units.** It read "not a property picker, and that
+ * is decision 0006 rather than a shortcut" — true when §214 wrote it, and
+ * untrue from §221, which built property sorts on both stores for every
+ * declared type the two order identically. `STATUS.md` §230 found six copies of
+ * that sentence across this codebase; this was one, and `property-sort.ts` now
+ * holds the single answer all of them were guessing at.
+ *
+ * p.458's second clause — "if multiple object types exist in the object set,
+ * only shared properties can be sorted on" — is satisfied by construction here:
+ * an object set in this platform is over one object type, so every declared
+ * property is a shared one.
  *
  * **The default is the key, not `recent`.** A picker's list has to be in an
  * order a person can predict; "whichever rows were touched last" is not one,
@@ -76,8 +86,20 @@ export const SORTS: Record<string, string> = {
 
 export const DEFAULT_SORT = "key";
 
-export function sortOf(raw: unknown): string {
-  return typeof raw === "string" && Object.hasOwn(SORTS, raw) ? raw : DEFAULT_SORT;
+/** What to send, given what the object type declares.
+ *
+ * **The fallback matters more in a picker than in a table**, which is why this
+ * goes through `requestSort` and the Object Table does not. A dropdown is a
+ * small control: a load error where its list should be is easy to miss and
+ * impossible to act on from the viewer's side, so a sort naming a property the
+ * ontology no longer orders reads back to the key rather than being sent on.
+ * §214's rule, at the widget §214 wrote it for.
+ *
+ * `undefined` while the ontology is still resolving — see `requestSort`.
+ */
+export function sortOf(raw: unknown, declared?: readonly Property[]): string | undefined {
+  if (typeof raw === "string" && Object.hasOwn(SORTS, raw)) return raw;
+  return requestSort(raw, declared, DEFAULT_SORT);
 }
 
 /** p.458's three Search items by modes. */

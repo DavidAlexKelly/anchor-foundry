@@ -10,7 +10,7 @@
 import { Editor, Frame, useEditor, useNode } from "@craftjs/core";
 import dynamic from "next/dynamic";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   actions as actionApi, ApiError, canvas as canvasApi, datasets as dsApi,
   objects as objApi,
@@ -113,11 +113,16 @@ import {
   // Aliased on the same rule. `PAGE_LIMIT` and `SEARCH_MODES` are generic
   // enough to collide with something later, and `labelOf` is the kind of name
   // three widgets could each want.
+  DEFAULT_SORT as DROPDOWN_DEFAULT_SORT,
   PAGE_LIMIT as DROPDOWN_PAGE_LIMIT, SEARCH_MODES, SORTS as DROPDOWN_SORTS,
   allowNoSelectionOf, labelOf as dropdownLabelOf, matchesQuery,
   propertyListOf, searchModeOf, searchProperties, selectionSummary,
   sortOf as dropdownSortOf, titleOf as optionTitleOf, truncationNote,
 } from "./object-dropdown";
+import {
+  ORDERABLE_HINT, orderableProperties, requestSort,
+} from "./property-sort";
+import type { Property as SortableProperty } from "./property-sort";
 import {
   // Aliased on §211's rule, and this pair is the plainest case yet: `typeOf`
   // and `templateOf` are names half the widgets in this file could want, and
@@ -3010,6 +3015,97 @@ export function CanvasObjectTable({
   );
 }
 
+/** **One** page ordering, chosen from the four fixed sorts and the object
+ * type's orderable properties — p.458's "Sort items by" for the Object Dropdown
+ * and Object Selector, and p.132's property sorts for the Loop layout.
+ *
+ * **One control for three widgets, which is the whole argument of §231.** All
+ * three carried a hint saying the platform could not sort by a property, all
+ * three were wrong from §221, and the reason none of them noticed is that each
+ * had typed the constraint out privately. The types come from
+ * `property-sort.ts` and the sentence beneath comes from `ORDERABLE_HINT`, so
+ * there is nothing here for a fourth widget to disagree with.
+ *
+ * **A select rather than the Object Table's three controls.** p.223's setting is
+ * a *list* whose order is itself the setting, so it needs a row with a kind, a
+ * property and a direction. This is one ordering, and 4 + 2n options in a single
+ * select is the shape a person can read in one glance — the direction is part of
+ * the option because "capacity, high to low" is how somebody says it.
+ *
+ * The list is empty until the ontology resolves, and the stored value is shown
+ * meanwhile: a select that fell back to the default while loading would rewrite
+ * the author's setting on the next keystroke somewhere else in the panel.
+ */
+function PropertySortField({ value, properties, onChange, testId, label }: {
+  value: unknown;
+  properties: readonly SortableProperty[];
+  onChange: (sort: string) => void;
+  testId: string;
+  label: string;
+}) {
+  const sortable = orderableProperties(properties);
+  const stored = typeof value === "string" && value ? value : DROPDOWN_DEFAULT_SORT;
+  // What is *shown* is the stored value whenever the ontology has not ruled it
+  // out — `requestSort` only overrides once there is a property list to check
+  // against, which is what stops a half-loaded panel from looking like a reset.
+  const shown = sortable.length > 0
+    ? requestSort(stored, sortable, DROPDOWN_DEFAULT_SORT) ?? DROPDOWN_DEFAULT_SORT
+    : stored;
+  const known = Object.hasOwn(DROPDOWN_SORTS, shown)
+    || sortable.some((p) => p.api_name === shown.replace(/^-/, ""));
+
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      <select
+        value={shown}
+        data-testid={testId}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {/* A stored sort the type no longer offers is shown as its own option
+            rather than silently swapped: the author has to be able to see what
+            the document says before deciding to change it. The widget sends the
+            fallback regardless — `requestSort` is what makes that safe. */}
+        {!known && <option value={shown}>{shown} — no longer sortable</option>}
+        {Object.entries(DROPDOWN_SORTS).map(([key, name]) => (
+          <option key={key} value={key}>{name}</option>
+        ))}
+        {sortable.map((p) => (
+          <Fragment key={p.api_name}>
+            <option value={p.api_name}>
+              {`${p.display_name || p.api_name} — low to high`}
+            </option>
+            <option value={`-${p.api_name}`}>
+              {`${p.display_name || p.api_name} — high to low`}
+            </option>
+          </Fragment>
+        ))}
+      </select>
+      <span className="field-hint" data-testid={`${testId}-hint`}>
+        {sortable.length > 0
+          ? ORDERABLE_HINT
+          : `This object type declares no property both stores can order. ${ORDERABLE_HINT}`}
+      </span>
+    </label>
+  );
+}
+
+/** The Loop's p.132 sort as `useSetPage` wants it.
+ *
+ * `undefined` means "the set's own order", which is what an unconfigured loop
+ * has always had and must keep — so the fallback is the empty string rather than
+ * one of the four fixed sorts, and an empty string is no `sort` key at all. The
+ * Object Dropdown's fallback is `key` for the opposite reason: a picker with no
+ * predictable order is a worse picker, while a looped layout with no configured
+ * order is simply the set.
+ */
+function sortOfLoop(
+  raw: unknown,
+  declared: readonly SortableProperty[] | undefined,
+): string | undefined {
+  return requestSort(raw, declared, "") || undefined;
+}
+
 /** p.223's **Default sort(s)**: "one or more default sorts to be applied to the
  * table".
  *
@@ -3018,19 +3114,28 @@ export function CanvasObjectTable({
  * a property with a direction — the rules are in `table-sorts.ts`, so what
  * this component holds is the editing and nothing else.
  *
- * **The property is typed, not picked.** §222's Timeline made the same call for
- * its date property: a picker over the ontology's orderable properties is one
+ * **The property is picked as of §231**, and this paragraph used to explain why
+ * it was typed: "a picker over the ontology's orderable properties is one
  * decision for every widget that wants one — the Timeline, the Object Dropdown's
  * p.458 sort, this — and building it three times privately is how three widgets
- * end up disagreeing about which properties are offered. p.223 also asks for
- * something a column list cannot give: "module builders can sort on **hidden
- * property types not displayed**", so the names here are deliberately not
- * limited to the columns on screen.
+ * end up disagreeing about which properties are offered." That is what
+ * `property-sort.ts` is, and this field is one of its four callers. The text box
+ * survives as the fallback for the case that made §225 leave it: this widget can
+ * be configured from p.65's object-type half before any type is chosen, and the
+ * panel has no property list then.
+ *
+ * p.223 asks for something a column list cannot give — "module builders can sort
+ * on **hidden property types not displayed**" — and the picker satisfies it,
+ * because it lists what the *type* declares rather than what the table shows.
  */
-function TableSortsField({ sort, setProp }: {
+function TableSortsField({ sort, properties, setProp }: {
   sort: unknown;
+  /** Every property the type declares. Empty while the ontology resolves, and
+   * empty is why the text box is still here rather than deleted. */
+  properties: readonly SortableProperty[];
   setProp: (cb: (props: { sort: string | string[] }) => void) => void;
 }) {
+  const sortable = orderableProperties(properties);
   const entries = tableSortsOf(sort);
   const write = (next: ReturnType<typeof tableSortsOf>) => {
     const keys = next.map((e) => e.key);
@@ -3066,13 +3171,45 @@ function TableSortsField({ sort, setProp }: {
           </select>
           {!entry.fixed && (
             <>
-              <input
-                type="text"
-                value={entry.property}
-                placeholder="property api name"
-                data-testid={`table-sort-property-${index}`}
-                onChange={(e) => edit(index, withSortProperty(entry, e.target.value))}
-              />
+              {/* **A picker when the ontology is there, a text box when it is
+                  not.** §225 shipped the text box because this panel had no
+                  property list; §231 gave it one, and a picker is strictly
+                  better — it cannot name a property that does not exist, and it
+                  cannot offer a `string` the server refuses. The text box stays
+                  as the fallback rather than as an alternative: this widget can
+                  be configured before an object type is chosen (p.65's choice),
+                  and a control that vanished then would look broken. p.223's
+                  "hidden property types not displayed" is satisfied either way,
+                  because the list is the *type's* properties and not the
+                  table's columns. */}
+              {sortable.length > 0 ? (
+                <select
+                  value={entry.property}
+                  data-testid={`table-sort-property-${index}`}
+                  onChange={(e) => edit(index, withSortProperty(entry, e.target.value))}
+                >
+                  <option value="">Choose a property…</option>
+                  {!!entry.property
+                    && !sortable.some((p) => p.api_name === entry.property) && (
+                    <option value={entry.property}>
+                      {`${entry.property} — no longer sortable`}
+                    </option>
+                  )}
+                  {sortable.map((p) => (
+                    <option key={p.api_name} value={p.api_name}>
+                      {p.display_name || p.api_name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={entry.property}
+                  placeholder="property api name"
+                  data-testid={`table-sort-property-${index}`}
+                  onChange={(e) => edit(index, withSortProperty(entry, e.target.value))}
+                />
+              )}
               <select
                 value={entry.descending ? "desc" : "asc"}
                 data-testid={`table-sort-direction-${index}`}
@@ -3113,17 +3250,14 @@ function TableSortsField({ sort, setProp }: {
           422s — on a property whose declared type has no order both stores
           agree on — would be worse than one that never invited the click. See
           `object_sets.PROPERTY_SORT_HINT`. */}
-      <span className="field-hint">
-        A property needs a declared type both stores can order: integer, float,
-        date or timestamp. Text is refused permanently.
-      </span>
+      <span className="field-hint">{ORDERABLE_HINT}</span>
     </div>
   );
 }
 
 function ObjectTableSettings() {
   const { workspaceId } = useCanvasEnv();
-  const { declared } = useCanvasVariables();
+  const { declared, resolved } = useCanvasVariables();
   const {
     objectTypeId, filterProperty, filterParameter, searchParameter,
     objectSetVariable, pageSize, columns, sort,
@@ -3166,10 +3300,19 @@ function ObjectTableSettings() {
     queryKey: ["object-types", workspaceId],
     queryFn: () => objApi.listTypes(workspaceId),
   });
+  // **Either half of p.65's choice**, because p.223's sort picker needs the
+  // declared properties whichever way this widget was populated: a directly
+  // picked object type, or the one behind a bound object set. Before §231 the
+  // sort's property was typed by hand, so it needed neither.
+  const sortTypeId = objectTypeId
+    ?? (objectSetVariable
+      ? ((resolved[objectSetVariable] as { object_type_id?: string } | undefined)
+          ?.object_type_id ?? null)
+      : null);
   const detail = useQuery({
-    queryKey: ["object-type", objectTypeId],
-    queryFn: () => objApi.getType(workspaceId, objectTypeId!),
-    enabled: !!objectTypeId,
+    queryKey: ["object-type", sortTypeId],
+    queryFn: () => objApi.getType(workspaceId, sortTypeId!),
+    enabled: !!sortTypeId,
   });
 
   // p.65's order, and p.66's disclosure. **A choice rather than a
@@ -3292,7 +3435,11 @@ function ObjectTableSettings() {
           Property names in the order to show them. Blank shows all of them.
         </span>
       </label>
-      <TableSortsField sort={sort} setProp={setProp} />
+      <TableSortsField
+        sort={sort}
+        properties={detail.data?.properties ?? []}
+        setProp={setProp}
+      />
       {/* p.224-225's Display & formatting, in p.224's order. */}
       <label className="field">
         <span className="field-label">Number of lines to display per row</span>
@@ -4476,12 +4623,17 @@ CanvasObjectViewWidget.craft = {
  * exactly what p.310's "each property type value will be represented by a
  * slice" asks for.
  *
- * **Not built, and named rather than approximated**: five of p.310's six
- * aggregations — the grouped endpoint answers a **count**, because instance
- * properties are stored untyped and the two stores would disagree about a sum
- * (decision 0006), which is §214's sort refusal in another widget; and p.309's
- * **export as PNG / copy to clipboard**, which rasterises an SVG and is a
- * capability rather than a setting.
+ * **Five of p.310's six aggregations landed in §227 and §228**, and this
+ * paragraph used to list them as not built "because instance properties are
+ * stored untyped and the two stores would disagree about a sum (decision
+ * 0006)". `/object-sets/group` takes an aggregation and a property now.
+ * `count_distinct` is the one still absent, and for a reason that is not
+ * decision 0006's: per slice it is a question about a *third* property nobody
+ * has named.
+ *
+ * **Not built, and named rather than approximated**: p.309's **export as PNG /
+ * copy to clipboard**, which rasterises an SVG and is a capability rather than
+ * a setting.
  */
 export function CanvasPieChart({
   objectSetVariable = null,
@@ -5993,17 +6145,27 @@ export function CanvasObjectDropdown({
   const [open, setOpen] = useState(false);
   const [screenRef, onScreen] = useOnScreen();
 
-  const setPage = useSetPage(workspaceId, setDefinition, {
-    pageSize: DROPDOWN_PAGE_LIMIT,
-    sort: dropdownSortOf(sortProperty),
-    variablesPending,
-  });
+  // **The type is resolved from the set definition, not from the page**, so a
+  // p.458 property sort can be checked before the first fetch rather than after
+  // it. `useSetPage` reads `object_type_id` off the same definition — it never
+  // needed the response for it — so this costs no request the panel and the
+  // other widgets over this set are not already sharing by query key.
+  const typeId =
+    (setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
   const type = useQuery({
-    queryKey: ["object-type", setPage.typeId],
-    queryFn: () => objApi.getType(workspaceId, setPage.typeId!),
-    enabled: !!setPage.typeId,
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
   });
   const declared = type.data?.properties ?? [];
+  const setPage = useSetPage(workspaceId, setDefinition, {
+    pageSize: DROPDOWN_PAGE_LIMIT,
+    // `undefined` rather than `declared` until the read lands: an empty list
+    // reads as "this type orders nothing" and would send the fallback, which is
+    // a different ordering from the one that is about to arrive.
+    sort: dropdownSortOf(sortProperty, type.data ? declared : undefined),
+    variablesPending,
+  });
   const titleProperty = declared.find((p) => p.id === type.data?.title_property_id);
   const shownNames = propertyListOf(properties);
   const searchable = searchProperties({
@@ -6269,22 +6431,14 @@ function ObjectDropdownSettings() {
         />
         <span className="field-label">Hide null properties</span>
       </label>
-      <label className="field">
-        <span className="field-label">Sort items by</span>
-        <select
-          value={dropdownSortOf(sortProperty)}
-          data-testid="dropdown-sort"
-          onChange={(e) =>
-            setProp((p: { sortProperty: string }) => (p.sortProperty = e.target.value))}
-        >
-          {Object.entries(DROPDOWN_SORTS).map(([key, name]) => (
-            <option key={key} value={key}>{name}</option>
-          ))}
-        </select>
-        <span className="field-hint">
-          Sorting by a property needs declared property types (decision 0006)
-        </span>
-      </label>
+      <PropertySortField
+        label="Sort items by"
+        testId="dropdown-sort"
+        value={sortProperty}
+        properties={type.data?.properties ?? []}
+        onChange={(sort) =>
+          setProp((p: { sortProperty: string }) => (p.sortProperty = sort))}
+      />
       <label className="field">
         <span className="field-label">Search items by</span>
         <select
@@ -6383,17 +6537,27 @@ export function CanvasObjectSelector({
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
 
-  const setPage = useSetPage(workspaceId, setDefinition, {
-    pageSize: DROPDOWN_PAGE_LIMIT,
-    sort: dropdownSortOf(sortProperty),
-    variablesPending,
-  });
+  // **The type is resolved from the set definition, not from the page**, so a
+  // p.458 property sort can be checked before the first fetch rather than after
+  // it. `useSetPage` reads `object_type_id` off the same definition — it never
+  // needed the response for it — so this costs no request the panel and the
+  // other widgets over this set are not already sharing by query key.
+  const typeId =
+    (setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
   const type = useQuery({
-    queryKey: ["object-type", setPage.typeId],
-    queryFn: () => objApi.getType(workspaceId, setPage.typeId!),
-    enabled: !!setPage.typeId,
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
   });
   const declared = type.data?.properties ?? [];
+  const setPage = useSetPage(workspaceId, setDefinition, {
+    pageSize: DROPDOWN_PAGE_LIMIT,
+    // `undefined` rather than `declared` until the read lands: an empty list
+    // reads as "this type orders nothing" and would send the fallback, which is
+    // a different ordering from the one that is about to arrive.
+    sort: dropdownSortOf(sortProperty, type.data ? declared : undefined),
+    variablesPending,
+  });
   const titleProperty = declared.find((p) => p.id === type.data?.title_property_id);
   const searchable = searchProperties({
     mode: searchMode,
@@ -6632,22 +6796,14 @@ function ObjectSelectorSettings() {
         />
         <span className="field-label">Hide null properties</span>
       </label>
-      <label className="field">
-        <span className="field-label">Sort items by</span>
-        <select
-          value={dropdownSortOf(sortProperty)}
-          data-testid="selector-sort"
-          onChange={(e) =>
-            setProp((p: { sortProperty: string }) => (p.sortProperty = e.target.value))}
-        >
-          {Object.entries(DROPDOWN_SORTS).map(([key, name]) => (
-            <option key={key} value={key}>{name}</option>
-          ))}
-        </select>
-        <span className="field-hint">
-          Sorting by a property needs declared property types (decision 0006)
-        </span>
-      </label>
+      <PropertySortField
+        label="Sort items by"
+        testId="selector-sort"
+        value={sortProperty}
+        properties={type.data?.properties ?? []}
+        onChange={(sort) =>
+          setProp((p: { sortProperty: string }) => (p.sortProperty = sort))}
+      />
       <label className="field">
         <span className="field-label">Search items by</span>
         <select
@@ -7183,10 +7339,13 @@ CanvasObjectCards.craft = {
  * because the columns are capped. A pivot whose margins were the sum of its
  * cells would look tidier and would quietly contradict the chart beside it.
  *
- * **Counts only**, like every other aggregation over a set — instance
- * properties are stored untyped, so a cross-tab of sums would mean one thing
- * on Postgres and nothing at all on OpenSearch (`services/object_sets.py`, and
- * `docs/decisions/0006-typed-instance-properties.md` for what would change it).
+ * **Counts only, and this is now a gap rather than a refusal.** The paragraph
+ * here used to say a cross-tab of sums "would mean one thing on Postgres and
+ * nothing at all on OpenSearch" — decision 0006's reason, correct until §226
+ * built numeric aggregations on both stores. Nothing blocks a summed pivot; it
+ * is a *second* aggregation argument on `/object-sets/cross-tab` and the
+ * margins have to agree with the cells, which is real work nobody has done.
+ * Recorded on the parity row as ○ rather than fixed in passing.
  *
  * Clicking a cell narrows, by the same mechanism the chart's drill-down uses:
  * it writes equality *clauses* into a variable a `narrow_set` derivation
@@ -7570,17 +7729,22 @@ CanvasPivotTable.craft = {
  * the caption is not optional — a viewer who reads this as an events-over-time
  * chart has been misled by the shape.
  *
- * A date *property* is the other question and is blocked: properties are
- * stored untyped, so bucketing one means guessing whether "03/04" is March or
- * April, and the two stores would guess differently
- * (`docs/decisions/0006-typed-instance-properties.md`).
+ * A date *property* is the other question, and as of §220 it is **unbuilt
+ * rather than blocked**. This said bucketing one "means guessing whether
+ * '03/04' is March or April, and the two stores would guess differently" —
+ * decision 0006's reason, and §220 removed it: a `date` property is mapped
+ * `date` in the index and stored typed, so both stores read the same instant.
+ * What is missing is a date histogram on `/object-sets/group`, which today
+ * buckets by term. §222's Timeline already orders by a declared date property,
+ * so the ontology half is proven.
  *
- * **No drill-down, deliberately.** Every narrowing widget writes property
- * equality clauses; a time bucket is a *range* over a system field, which is
- * not in that vocabulary and would need the ordered operators the same
- * decision holds. Inventing a second narrowing mechanism for one widget would
- * be two answers to one question — the same reason the scatter chart takes no
- * drill.
+ * **No drill-down, deliberately, and this reason did not expire.** Every
+ * narrowing widget writes property equality clauses; a time bucket is a *range*
+ * over a system field. §221 built the ordered operators, so a range clause is
+ * now expressible — over a *property*. `updated_at` is not one; it is a column
+ * the set language has no name for, which is a different gap and the same
+ * answer. Inventing a second narrowing mechanism for one widget would be two
+ * answers to one question — the same reason the scatter chart takes no drill.
  *
  * The line itself is the existing `Chart`, not a second renderer: gaps are
  * already filled by the server, so a plain line over the points is correct.
@@ -7707,10 +7871,12 @@ function TimeSeriesSettings() {
           ))}
         </select>
         {/* There is no property picker here on purpose, and the absence needs
-            explaining or it reads as an oversight. */}
+            explaining or it reads as an oversight. **The explanation changed in
+            §231**: it used to name decision 0006, which §220 closed. */}
         <span className="field-hint">
-          Plots when each object last changed. Bucketing by a date property
-          needs the declared property type behind it (decision 0006).
+          Plots when each object last changed. Bucketing by a date property needs
+          a date histogram on the grouping endpoint, which buckets by term — not
+          built yet.
         </span>
       </label>
       <label className="field">
@@ -8052,12 +8218,18 @@ CanvasEmbeddedModule.craft = {
  * a provider keyed by the object's own id, and everything else goes through the
  * host link that `CanvasEmbeddedModule` already uses.
  *
- * **Sorting is not offered**, and that is decision 0006 rather than an
- * omission: properties are stored untyped, so an ordered comparison means one
- * thing on Postgres and another on OpenSearch. p.132 also notes Foundry applies
- * a primary key sort behind any user sort "to ensure a consistent ordering" —
- * which is what the object set evaluation already does, so the order is stable
- * even without the control.
+ * **p.132's property sorts are offered as of §231.** This paragraph used to say
+ * they were not, "and that is decision 0006 rather than an omission" — which was
+ * true when it was written and false from §221, one of the six copies of that
+ * refusal `STATUS.md` §230 found still standing. p.132's other sentence still
+ * holds and now matters more: Foundry "applies a primary key sort behind any
+ * user configured sorts to ensure a consistent ordering", which is exactly what
+ * §225 appends in `_order_by`, so a loop ordered by a property with five
+ * distinct values still pages without repeating or skipping an object.
+ *
+ * **Only the object-set arm.** p.133 orders the array arm "by the entry's
+ * position in the array", which is the array's own order — there is nothing to
+ * sort by and no request to put a sort on.
  */
 export function CanvasLoopSection({
   source = "object_set",
@@ -8072,6 +8244,7 @@ export function CanvasLoopSection({
   display = "list",
   maxColumns = 3,
   minCardWidth = 220,
+  sort = "",
 }: {
   /** p.133's two sources. An older document has no `source` at all, which is
    * why the default is the arm that already existed rather than a required
@@ -8090,6 +8263,9 @@ export function CanvasLoopSection({
   display?: "list" | "grid";
   maxColumns?: number;
   minCardWidth?: number;
+  /** p.132's property sorts. Blank is the set's own order, which is what every
+   * module saved before §231 has and must keep having. */
+  sort?: string;
 }) {
   const {
     connectors: { connect, drag },
@@ -8123,14 +8299,34 @@ export function CanvasLoopSection({
   // `limit` shows one page of at most `maxItems`; `paged` walks the set
   // (p.134). Both are a page size to `useSetPage`; only the controls differ.
   const size = paging === "paged" ? Math.max(1, pageSize) : Math.max(1, maxItems);
-  const page = useSetPage(workspaceId, definition, {
-    pageSize: size,
-    variablesPending: host.pending,
-  });
-
   // p.133's array arm. Its entries are already resolved and in memory, so
   // paging is a slice - see `loop-array.ts` for why position is the key.
   const overArray = source === "array";
+  // p.132's property sort needs the looped type's declared properties before it
+  // can be sent, for the reason `requestSort` gives; the type comes off the set
+  // definition, so no page has to come back first.
+  const loopTypeId =
+    (definition as { object_type_id?: string } | undefined)?.object_type_id ?? null;
+  const loopType = useQuery({
+    queryKey: ["object-type", loopTypeId],
+    queryFn: () => objApi.getType(workspaceId, loopTypeId!),
+    enabled: !!loopTypeId && !overArray,
+  });
+  const page = useSetPage(workspaceId, definition, {
+    pageSize: size,
+    // **No sort at all when nothing is configured**, which is what every module
+    // saved before §231 gets: the fallback is `""`, so `requestSort` returns it
+    // and `useSetPage` sends no `sort` key. A default of `recent` here would
+    // reorder existing looped layouts on deploy.
+    //
+    // p.132: "a primary key sort will be applied behind any user configured
+    // sorts to ensure a consistent ordering of objects" — which is what §225
+    // built into `_order_by`, so this sends the one sort and the server appends
+    // the tie-break that makes the page stable.
+    sort: sortOfLoop(sort, loopType.data ? (loopType.data.properties ?? []) : undefined),
+    variablesPending: host.pending,
+  });
+
   const [arrayPage, setArrayPage] = useState(0);
   const entries = arrayEntries(overArray ? host.resolved[arrayVariable ?? ""] : undefined);
   const arraySlice = pageOf(entries, { paging, maxItems, pageSize, page: arrayPage });
@@ -8280,7 +8476,7 @@ function LoopSectionSettings() {
   const {
     source, arrayVariable,
     objectSetVariable, moduleId, itemVariable, mapping,
-    paging, maxItems, pageSize, display, maxColumns, minCardWidth,
+    paging, maxItems, pageSize, display, maxColumns, minCardWidth, sort,
     actions: { setProp },
   } = useNode((node) => ({
     source: node.data.props.source ?? "object_set",
@@ -8295,8 +8491,20 @@ function LoopSectionSettings() {
     display: node.data.props.display,
     maxColumns: node.data.props.maxColumns,
     minCardWidth: node.data.props.minCardWidth,
+    sort: node.data.props.sort,
   }));
-  const { declared } = useCanvasVariables();
+  const { declared, resolved } = useCanvasVariables();
+  // p.132's property sorts need the looped type's properties, resolved the same
+  // way the Object Selector's panel resolves them.
+  const loopTypeId = objectSetVariable
+    ? ((resolved[objectSetVariable] as { object_type_id?: string } | undefined)
+        ?.object_type_id ?? null)
+    : null;
+  const loopType = useQuery({
+    queryKey: ["object-type", loopTypeId],
+    queryFn: () => objApi.getType(workspaceId, loopTypeId!),
+    enabled: !!loopTypeId,
+  });
   const apps = useQuery({
     queryKey: ["canvas-apps", workspaceId, projectId],
     queryFn: () => canvasApi.list(workspaceId, projectId),
@@ -8541,14 +8749,22 @@ function LoopSectionSettings() {
         <InterfaceMapping moduleId={moduleId} except={itemVariable} />
       )}
 
-      {/* Said rather than offered. Decision 0006: properties are stored
-          untyped, so an ordered comparison means one thing on Postgres and
-          another on OpenSearch. */}
-      <p className="field-hint">
-        Sorting by a property is not available yet — see
-        <code> docs/decisions/0006</code>. The order is the set&apos;s own, which
-        is stable.
-      </p>
+      {/* p.132: "Property sorts may be applied to the object set being looped
+          through to determine the order in which the objects will be
+          displayed." Offered rather than said, as of §231 — this was a refusal
+          citing decision 0006, correct when written and untrue from §221.
+          Only on the object-set arm: p.133's array entries are "ordered by the
+          entry's position in the array", which is the array's own order and not
+          a sort anybody applies. */}
+      {!overArray && (
+        <PropertySortField
+          label="Sort objects by"
+          testId="loop-sort"
+          value={sort}
+          properties={loopType.data?.properties ?? []}
+          onChange={(next) => setProp((p: { sort: string }) => (p.sort = next))}
+        />
+      )}
       </>}
     />
   );
@@ -8561,6 +8777,9 @@ CanvasLoopSection.craft = {
     objectSetVariable: null, moduleId: null, itemVariable: null, interface: {},
     paging: "limit", maxItems: 12, pageSize: 12,
     display: "list", maxColumns: 3, minCardWidth: 220,
+    // Blank, not `recent`: a new Loop and every Loop saved before §231 both mean
+    // "the set's own order", and a default here would be a setting nobody chose.
+    sort: "",
   },
   related: { settings: LoopSectionSettings },
 };
