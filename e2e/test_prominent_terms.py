@@ -36,11 +36,22 @@ from conftest import eventually, open_builder, open_module, settled
 # the case a Filter List structurally cannot produce and this widget can.
 COMMON = {"north": 6, "south": 4}
 FILLER = [f"tag{i}" for i in range(1, 21)]
+# `band` exists so a *base set with a filter of its own* is expressible. Two of
+# the six northern rows are "old", so a base set narrowed to "new" has four of
+# them — which is what separates a term clause **added to** the base set's
+# filters from one that replaces them. With an unfiltered base set the two are
+# the same request, and a suite built only on one cannot tell them apart.
+OLD = {"N1", "N2"}
+NEW_NORTH = COMMON["north"] - len(OLD)
 ROWS = (
-    [{"id": f"N{i}", "tag": "north", "name": f"North {i}"} for i in range(1, COMMON["north"] + 1)]
-    + [{"id": f"S{i}", "tag": "south", "name": f"South {i}"} for i in range(1, COMMON["south"] + 1)]
-    + [{"id": "R1", "tag": "rare", "name": "The rare one"}]
-    + [{"id": f"F{i}", "tag": tag, "name": f"Filler {i}"} for i, tag in enumerate(FILLER, start=1)]
+    [{"id": f"N{i}", "tag": "north", "name": f"North {i}",
+      "band": "old" if f"N{i}" in OLD else "new"}
+     for i in range(1, COMMON["north"] + 1)]
+    + [{"id": f"S{i}", "tag": "south", "name": f"South {i}", "band": "new"}
+       for i in range(1, COMMON["south"] + 1)]
+    + [{"id": "R1", "tag": "rare", "name": "The rare one", "band": "new"}]
+    + [{"id": f"F{i}", "tag": tag, "name": f"Filler {i}", "band": "new"}
+       for i, tag in enumerate(FILLER, start=1)]
 )
 
 
@@ -48,7 +59,7 @@ ROWS = (
 def sites(api):
     mod = Module(api, "Prominent terms")
     mod.site_type_id = mod.object_type(
-        columns=["id", "tag", "name"], rows=ROWS, key="id", title="name",
+        columns=["id", "tag", "name", "band"], rows=ROWS, key="id", title="name",
     )
     return mod
 
@@ -265,6 +276,112 @@ def test_the_counts_do_not_move_when_a_term_is_picked(page, api, sites) -> None:
     assert counts(page) == before, counts(page)
 
 
+def test_a_term_narrows_the_base_set_rather_than_replacing_its_filters(
+    page, api, sites
+) -> None:
+    """p.475 calls it the **Base** object set, and the word is load-bearing: a
+    term is a filter applied *on top of* what the set already says.
+
+    The base set here is narrowed to the "new" band, which holds four of the six
+    northern rows. A term whose clause replaced the set's own filters would
+    count six — and every other test in this file uses an unfiltered base set,
+    where the two implementations produce the identical request.
+    """
+    mod = Module(api, "Terms on a filtered set", beside=sites)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "terms": {
+                "resolvedName": "CanvasProminentTerms",
+                "props": {
+                    "objectSetVariable": "v_new", "variable": "v_clauses",
+                    "property": "tag", "hideEmpty": False, "title": "By tag",
+                    "terms": [{"value": "north", "label": "", "icon": ""}],
+                },
+            },
+        }),
+        "variables": {
+            "v_new": {
+                "id": "v_new", "kind": "object_set", "label": "New band only",
+                "object_set": object_set(
+                    sites.site_type_id,
+                    filters=[{"property": "band", "op": "eq", "value": "new"}],
+                ),
+            },
+            "v_clauses": {"id": "v_clauses", "kind": "array", "label": "Picked"},
+        },
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+
+    expect(term(page, "north").locator(".canvas-term-count")).to_have_text(str(NEW_NORTH))
+
+
+def test_two_terms_widgets_sharing_one_variable_do_not_erase_each_other(
+    page, api, sites
+) -> None:
+    """**Several widgets chain through one `narrow_set`**, so a widget rewriting
+    the whole variable would silently drop another's filter — the failure
+    §101–§103 gave two clause variables to avoid, reachable again the moment two
+    widgets are pointed at one.
+
+    Two Prominent Terms widgets on two properties, one variable. Picking in each
+    has to leave both clauses standing, which the table is what proves.
+    """
+    mod = Module(api, "Terms sharing a variable", beside=sites)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "bytag": {
+                "resolvedName": "CanvasProminentTerms",
+                "props": {
+                    "objectSetVariable": "v_all", "variable": "v_clauses",
+                    "property": "tag", "title": "By tag",
+                    "terms": [{"value": "north", "label": "", "icon": ""}],
+                },
+            },
+            "byband": {
+                "resolvedName": "CanvasProminentTerms",
+                "props": {
+                    "objectSetVariable": "v_all", "variable": "v_clauses",
+                    "property": "band", "title": "By band",
+                    "terms": [{"value": "old", "label": "", "icon": ""}],
+                },
+            },
+            "tbl": {
+                "resolvedName": "CanvasObjectTable",
+                "props": {"objectSetVariable": "v_picked", "columns": "id,tag,band",
+                          "pageSize": 50},
+            },
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "Every site",
+                      "object_set": object_set(sites.site_type_id)},
+            "v_clauses": {"id": "v_clauses", "kind": "array", "label": "Picked"},
+            "v_picked": {
+                "id": "v_picked", "kind": "object_set", "label": "Narrowed",
+                "derivation": {"transform": "narrow_set", "inputs": ["v_all", "v_clauses"]},
+            },
+        },
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page)
+
+    term(page, "north").click()
+    eventually(lambda: table_rows(page), lambda n: n == COMMON["north"],
+               what="the six northern rows")
+
+    # The second widget's clause has to *narrow further*, not replace the first.
+    term(page, "old").click()
+    eventually(lambda: table_rows(page), lambda n: n == len(OLD),
+               what="northern and old together")
+    # And both stay lit, because both clauses are still in the variable.
+    expect(term(page, "north")).to_have_attribute("aria-pressed", "true")
+    expect(term(page, "old")).to_have_attribute("aria-pressed", "true")
+
+
 def test_the_rows_are_inert_in_the_builder(page, api, sites) -> None:
     """Clicking a term in the builder would write a viewer's filter into the
     document being edited. The rows are shown — an author has to see what they
@@ -314,13 +431,13 @@ def test_the_panel_offers_the_type_s_properties_for_the_one_property(
     # **Wait through a retrying matcher before reading**, per §202 and §231:
     # `evaluate_all` is a one-shot read, and the options arrive when the object
     # type resolves rather than when the select mounts.
-    expect(picker.locator("option")).to_have_count(4)
+    expect(picker.locator("option")).to_have_count(5)
     values = picker.locator("option").evaluate_all("nodes => nodes.map(n => n.value)")
     # The primary key is a declared property and is offered like any other: a
     # term list over unique values is a strange thing to build, but nothing here
     # gets to decide that for an author — unlike a *text sort*, which the server
     # actually refuses (§231).
-    assert values == ["", "id", "tag", "name"], values
+    assert values == ["", "id", "tag", "name", "band"], values
 
 
 def test_an_unconfigured_widget_says_what_it_is_waiting_for(page, api, sites) -> None:
