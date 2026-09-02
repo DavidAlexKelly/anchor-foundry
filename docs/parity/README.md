@@ -157,10 +157,10 @@ but "the only authoring surface for transforms that are not yet files".
   their children's natural size alone, which is what separates a Toolbar from a
   Columns section. Loop renders one embedded module per object, using §116's
   interface mapping per row rather than a second mechanism; looping an *array*
-  is refused until there is a typed-array kind, and sorting is refused for
-  decision 0006's reason — **which §221 removed for orderable types**; this
-  line and `CanvasLoopSection`'s own docstring are two of the six places
-  `widgets.tsx` still names that refusal (`STATUS.md` §230's closing note).
+  is refused until there is a typed-array kind, and **p.132's property sorts
+  are built (§231)** — this line said they were refused for decision 0006's
+  reason, which §221 removed eight units earlier and nobody noticed, one of the
+  six copies `STATUS.md` §230 found.
 - **The vertical header** — done (`STATUS.md` §119). Orientation, width,
   height, collapsibility and collapsed-by-default, plus the one part of a
   header that is a rule rather than styling: collapsed, only Button and Tabs

@@ -4290,6 +4290,92 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 231. Four widgets catch up with a decision that closed, and one place to say what is orderable (this session)
+
+§230's closing note, built. Four panels in `widgets.tsx` still told authors that
+"sorting by a property needs declared property types (decision 0006)" — the
+**Object Dropdown** and **Object Selector** (p.458's "Sort items by"), **Object
+Cards**, and `CanvasLoopSection` (p.132's property sorts). §221 built exactly
+that, on both stores, eight units earlier. So this unit is two things at once:
+p.458's and p.132's settings, and the reason six copies of one sentence could
+go stale together without anything failing.
+
+**`property-sort.ts` is the durable half, and §225 wrote its argument and then
+did not write the file.** Verbatim, from `TableSortsField`'s docstring:
+
+> "a picker over the ontology's orderable properties is one decision for every
+> widget that wants one — the Timeline, the Object Dropdown's p.458 sort, this —
+> and building it three times privately is how three widgets end up disagreeing
+> about which properties are offered."
+
+It now holds `ORDERABLE_TYPES`, the sentence that explains it, and what one sort
+*is*; `table-sorts.ts` keeps p.223's list semantics and imports the rest. One
+`PropertySortField` serves the Dropdown, the Selector and the Loop, and the
+Object Table's free-text property box became a picker over the same list — the
+follow-up §225 named.
+
+**"Mirrors the server" is now a test rather than a comment**, because that is
+precisely what every one of the six stale refusals also said about itself. An
+API test reads `property-sort.ts`, extracts the literal, and compares it with
+`object_sets.ORDERABLE_TYPES`. **Drift is silent in both directions and neither
+is harmless**: wider offers a setting the server refuses in a sentence, narrower
+hides an ordering that works — which is the failure this whole unit is undoing,
+ten units late.
+
+**Three answers to "is this sort legal", different on purpose.** The *server*
+refuses in a sentence naming the property, because it is validating a request
+nobody can see. The *panel* declines to offer a text property, because a control
+that can only fail is §214's setting that looks like it works. And
+`requestSort` reads a stale document back to the widget's fallback. Those are
+not two validations and a third: the panel cannot stop a document arriving from
+elsewhere, and the fallback is a judgement about *this* widget — a dropdown is a
+small control, and a load error where its list should be is easy to miss and
+impossible for a viewer to act on. **The Object Table is deliberately not a
+caller**: it renders a big region, its refusal is legible, and p.223's setting is
+a list whose silent collapse would be the worse lie.
+
+**`undefined` is a third state and the widget needs all three.** A property sort
+waits for the ontology rather than sending the fallback, because committing to
+one would draw the list in one order and redraw it in another — which reads as a
+broken widget, not as loading. A *fixed* sort never waits, checked before
+`declared` is looked at, so every unconfigured widget still costs one fetch. And
+an *empty* property list is not the unresolved state: it says the type declares
+nothing orderable, and the fallback is right then.
+
+**The Loop's fallback is `""`, not one of the four.** Every loop saved before
+this holds no `sort`, and an empty string sends no `sort` key at all — so a
+default here would silently reorder every existing looped layout on deploy.
+p.132's other sentence matters more now than when it was quoted as a consolation:
+"a primary key sort will be applied behind any user configured sorts to ensure a
+consistent ordering" is §225's appended tie-break, which is what keeps a loop
+ordered by a five-valued property from repeating a card across a page boundary.
+
+**The fixtures' numbers changed from 40/10/25 to 100/10/25, and that is the
+assertion.** As text they order 10, 100, 25; as numbers, 10, 25, 100. A fixture
+whose values sort identically under both would let a property sort pass while
+proving nothing about the thing decision 0006 exists for. The same change went
+into the Selector's rows and the Loop's ranks.
+
+**24 mutants, 24 caught, 0 survivors, 0 hangs, 0 no-ops.**
+
+**The one survivor was a wrapper nothing called.** `sortableProperties` in
+`object-dropdown.ts` re-exported `orderableProperties` under a second name for
+the panel, and the panel calls `PropertySortField`, which calls the original —
+so no test could have reached it. Deleted rather than tested: §223's rule, and a
+second name for one decision is the exact thing this unit exists to stop.
+
+**Also corrected, all stale for the same mechanism.** The Pie Chart's docstring
+listed five aggregations as unbuilt (§227 built them); the Pivot Table's called a
+summed cross-tab refused when it is merely **unbuilt** — a second aggregation
+argument and margins that agree with the cells, which is real work nobody has
+done; the Time Series' named decision 0006 where the missing piece is a **date
+histogram** on the grouping endpoint. And `PROPERTY_SORT_HINT` promised, in the
+future tense, a feature that had shipped — on the far side of a 422, which is
+where a refusal is least likely to be re-read and most likely to be believed.
+
+**1335 unit tests** (was 1315); **636 browser tests** (was 629); 1709 API tests,
+2 skipped (was 1708).
+
 ### 230. Decision 0006 §3's bounding box, and a box that crosses the seam (this session)
 
 The last of decision 0006's four refusals. A `within_box` operator narrows an object set to a
@@ -6621,6 +6707,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
 
+- **A constraint typed out in more than one place will go stale in all but one of them, and the cheapest fix is a test rather than a habit.** §231 found the browser's "which properties can a page be ordered by" written into four panels and named in six comments, none of which noticed when §221 changed the answer. The instinct is to prescribe a habit — §228's own rough edge prescribed `grep -rn "0006" apps/web`, and nobody ran it until §230 closed the decision. Habits are what the six stale copies each already had: every one of them said "mirrors the server" or cited the decision by number, which is a *claim* of synchronisation rather than a check of it. What works is one exported list and **a test that reads the other language's file and compares** — `test_the_browsers_copy_of_the_orderable_types_has_not_drifted` is nine lines of `re` and a string comparison, and it fails on the commit that widens either side. The repo already had the shape (`test_property_types.py` hashes two copies of a mirrored module); what it did not have was the recognition that a *list of allowed values* is a mirror too. The tell is a comment containing the words "mirrors", "same as", or a decision record's number: each one is a synchronisation nobody is enforcing.
+
 - **A test that a bad value is excluded proves nothing unless the value would otherwise be included.** §230's guard against a boolean coordinate was checked against a box over Europe, where `True` reads as latitude 1.0 and falls outside that box either way — so the guard and its deletion returned the same rows and the mutant survived a test that named exactly the thing it broke. The equatorial box, where 1.0 lands *inside*, is the only place the two answers differ. This is the general shape behind several survivors this session: a rejection test needs a case where **rejection is the only reason** the value is absent, and the easy way to get that wrong is to pick a fixture where the value is implausible on two counts at once. The tell is an exclusion assertion whose input would fail a second, unrelated check.
 
 - **"Absent" and "present but unreadable" are different bad values, and a cast only meets one of them.** §230's other survivor: a missing jsonb path extracts as `NULL`, and `NULL::double precision` is perfectly legal, so a bare cast with no `pg_input_is_valid` guard passes the absent case untouched. Only a stored `{"lat": "n/a"}` reaches the guard — and writing one takes psycopg straight at the table, because every API write path coerces geopoints first (§226 hit the same wall). So the value that exercises the guard is precisely the value the platform will not let you create through its own doors, which is why this kind of check goes untested by default. When a guard exists for malformed *stored* data, the test has to write malformed stored data, not omit the field.
@@ -6631,7 +6719,7 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A widget whose whole content is one number is the easiest kind to leave untested.** The Metric Card had existed since roadmap 1.5 with no browser suite: every assertion naming it lived in `test_widget_setup_order.py`, which is about panel ordering. Nothing was checking *which* aggregation ran, and the fixture §229 wrote makes all six answers different numbers precisely so that "the plumbing works" and "the right question was asked" stop being the same assertion. The tell is a widget with one visible element — there is nothing to locate, nothing to count, and no layout to measure, so the usual reasons to write a browser test are all absent while the reason that matters (is this number the number?) is untouched.
 
-- **A refusal outlives its reason, and a settings panel is where nobody looks for one.** §218 disabled the Pie Chart's Aggregation control with a hint reading "a grouped sum needs declared property types (decision 0006)" — correct when written, and wrong from §220 onward, through §221, §226 and §227 while the thing it refused was being built three units in a row. This is §216's stale build-order line in a different file: a line citing a blocker that nobody re-opened. **Build orders get audited and disabled controls do not**, because a build order is a list somebody reads to decide what to do next, while a greyed-out `<select>` reads as settled. The tell is a control that explains why it cannot work — that sentence is a claim with a date on it, and the cheap habit is to grep for the decision record's name whenever the decision changes: `grep -rn "0006" apps/web` would have found this one the day §226 landed. **§230 finally ran that grep — closing a decision is what forces it — and it returned six, not one.** §229 was the second, and four more are still standing: the Object Dropdown's and Object Selector's field hints, Object Cards' "not available yet", and `CanvasLoopSection`'s docstring, all naming a sort refusal §221 lifted eight units earlier for every type but text. Six in one file is past oversight and into mechanism: **a data-layer unit that removes a blocker touches none of the files that named it**, and nothing fails when they go on naming it, so the count only ever grows. The durable fix is not vigilance — it is to stop typing the constraint twice. `object_sets` already exports the orderable types; a panel that renders its hint *from* that list cannot disagree with the server, and the sentence stops being a claim with a date on it. Until then, treat "grep the decision's number across the frontend" as part of closing one, not as a habit.
+- **A refusal outlives its reason, and a settings panel is where nobody looks for one.** §218 disabled the Pie Chart's Aggregation control with a hint reading "a grouped sum needs declared property types (decision 0006)" — correct when written, and wrong from §220 onward, through §221, §226 and §227 while the thing it refused was being built three units in a row. This is §216's stale build-order line in a different file: a line citing a blocker that nobody re-opened. **Build orders get audited and disabled controls do not**, because a build order is a list somebody reads to decide what to do next, while a greyed-out `<select>` reads as settled. The tell is a control that explains why it cannot work — that sentence is a claim with a date on it, and the cheap habit is to grep for the decision record's name whenever the decision changes: `grep -rn "0006" apps/web` would have found this one the day §226 landed. **§230 finally ran that grep — closing a decision is what forces it — and it returned six, not one.** §229 was the second, and four more are still standing: the Object Dropdown's and Object Selector's field hints, Object Cards' "not available yet", and `CanvasLoopSection`'s docstring, all naming a sort refusal §221 lifted eight units earlier for every type but text. Six in one file is past oversight and into mechanism: **a data-layer unit that removes a blocker touches none of the files that named it**, and nothing fails when they go on naming it, so the count only ever grows. The durable fix is not vigilance — it is to stop typing the constraint twice. `object_sets` already exports the orderable types; a panel that renders its hint *from* that list cannot disagree with the server, and the sentence stops being a claim with a date on it. **§231 built that**, and the rough edge above it is what the doing taught: the list moved into one module and a test now reads it back across the language boundary, because "grep when you close a decision" is another habit and the last one was not run either.
 
 - **When two numbers become different, the bug lives at whichever line still passes one of them.** §228 gave a pie slice a `size` (what the wedge is drawn from) alongside its `count` (how many objects are in it), equal for every chart saved before it. The model was right, the server was right, the tests of both passed — and `points={slices.map((s) => ({ value: s.count }))}`, one line between the widget and the renderer, silently drew the old chart. What caught it was a **fixture built so the two answers are inverted**: by count the slice covers three quarters, by sum one quarter, so a wedge drawn from the wrong number is backwards rather than slightly off. The general shape: when a field splits in two, every place that read the old one is a candidate, and a fixture where the two agree cannot tell you which places you missed.
 
