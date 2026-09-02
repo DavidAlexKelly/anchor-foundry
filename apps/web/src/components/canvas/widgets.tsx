@@ -3075,6 +3075,9 @@ function PropertySortField({ value, properties, onChange, testId, label }: {
             <option value={p.api_name}>
               {`${p.display_name || p.api_name} — low to high`}
             </option>
+            <option value={`-${p.api_name}`}>
+              {`${p.display_name || p.api_name} — high to low`}
+            </option>
           </Fragment>
         ))}
       </select>
