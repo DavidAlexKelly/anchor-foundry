@@ -244,6 +244,12 @@ def test_an_abandoned_edit_changes_nothing(page, api, sites) -> None:
     page.get_by_test_id("filter-pill-input").press("Escape")
 
     expect(page.get_by_test_id("filter-pill-input")).to_have_count(0)
+    # **`settled` before the read, and a mutant is what said so.** Escape closes
+    # the box at once; a commit would take a round trip to reach the pills. A
+    # one-shot `texts(page)` straight after the keypress reads the page *before*
+    # the write it is meant to be ruling out, so it passes either way — §202's
+    # lesson, in a test written after §202.
+    settled(page)
     assert texts(page) == ["Band is new", "Region is north"], texts(page)
     assert table_rows(page) == len(NEW_NORTH)
 
@@ -295,8 +301,15 @@ def test_the_add_row_offers_ordered_operators_only_where_they_work(
 
 def test_an_operator_the_new_property_cannot_take_is_reset(page, api, sites) -> None:
     """Picking `capacity is at least`, then changing the property to `region`,
-    must not leave `gte` selected — the server refuses an ordered comparison on
-    text, so the next Apply would be a 422 the viewer never asked for."""
+    must not leave `gte` held — the server refuses an ordered comparison on
+    text, so the next Apply would be a 422 the viewer never asked for.
+
+    **Asserted by applying it, not by reading the select**, and a mutant is what
+    said so. A `<select>` whose `value` is not among its options *displays* the
+    first one, so `to_have_value("eq")` passes while React still holds `gte` —
+    the DOM and the state disagree and only the state is sent. The filter
+    working is the only assertion that can tell them apart.
+    """
     mod = build(api, sites, "Pills operator reset", {"mode": "add"})
     open_module(page, mod)
     settled(page)
@@ -305,6 +318,33 @@ def test_an_operator_the_new_property_cannot_take_is_reset(page, api, sites) -> 
     page.get_by_test_id("filter-add-op").select_option("gte")
     page.get_by_test_id("filter-add-property").select_option("region")
     expect(page.get_by_test_id("filter-add-op")).to_have_value("eq")
+
+    page.get_by_test_id("filter-add-value").fill("north")
+    page.get_by_test_id("filter-add-apply").click()
+    eventually(lambda: texts(page), lambda t: t == ["Band is new", "Region is north"],
+               what="an `is` filter rather than a refused `is at least`")
+    eventually(lambda: table_rows(page), lambda n: n == len(NEW_NORTH),
+               what="the table narrowing rather than erroring")
+
+
+def test_without_an_output_variable_the_pills_stay_read_only(page, api, sites) -> None:
+    """p.470 calls the output "optional", and for Read only it is. For the other
+    three there is nowhere for a change to go, so the controls are not drawn —
+    a ✕ that writes to nothing is §214's control that looks like it works.
+
+    The panel says so too, and that is a different assertion: the panel warns
+    the *author*, this is what the *viewer* sees.
+    """
+    mod = build(api, sites, "Pills no output", {"mode": "add", "variable": None})
+    open_module(page, mod)
+    settled(page)
+
+    # The set still has its own filter, so there is a pill to not-offer-to-remove.
+    eventually(lambda: texts(page), lambda t: t == ["Band is new"],
+               what="the structural pill")
+    expect(page.get_by_test_id("filter-pill-remove")).to_have_count(0)
+    expect(page.get_by_test_id("filter-pill-edit")).to_have_count(0)
+    expect(page.get_by_test_id("filter-pill-add")).to_have_count(0)
 
 
 def test_an_ordered_filter_a_viewer_adds_narrows_numerically(page, api, sites) -> None:
