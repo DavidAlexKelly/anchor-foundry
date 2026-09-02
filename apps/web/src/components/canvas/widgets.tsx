@@ -9,7 +9,7 @@
 
 import { Editor, Frame, useEditor, useNode } from "@craftjs/core";
 import dynamic from "next/dynamic";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   actions as actionApi, ApiError, canvas as canvasApi, datasets as dsApi,
@@ -122,6 +122,13 @@ import {
 import {
   ORDERABLE_HINT, orderableProperties, requestSort,
 } from "./property-sort";
+import {
+  // §211's aliasing rule: `labelOf` is a name half the widgets here could want,
+  // and `MAX_TERMS` says nothing about which list it caps once it is in this
+  // file rather than beside p.475's Terms.
+  MAX_TERMS as TERMS_MAX, blankTerm, countLabel, labelOf as termLabelOf,
+  renderableTerms, selectedValues, termsOf, toClauses, toggled, visibleTerms,
+} from "./prominent-terms";
 import type { Property as SortableProperty } from "./property-sort";
 import {
   // Aliased on §211's rule, and this pair is the plainest case yet: `typeOf`
@@ -728,6 +735,349 @@ CanvasFilterList.craft = {
   displayName: "Filter list",
   props: { objectSetVariable: null, variable: null, properties: "", title: "Filters" },
   related: { settings: FilterListSettings },
+};
+
+// ---- Prominent Terms (parity workshop.md §10; Foundry p.475) ---------------
+/**
+ * p.475: "define prominently-used terms and phrases to match on within an object
+ * set. Showcase the number of matched results, and use the widget as a way to
+ * define a custom set of terms for users to apply as filters."
+ *
+ * **The Filter List with its list turned around.** That widget asks the data
+ * what values exist and offers them; this one is handed the values by an author
+ * and asks the data how many rows each accounts for. Everything downstream is
+ * shared — the clause vocabulary, the `narrow_set` derivation, the read-back of
+ * the selection — and the rules that are this widget's own live in
+ * `prominent-terms.ts`.
+ *
+ * **One count per term, and it is not an optimisation waiting to happen.** The
+ * Filter List gets every count in a single `/object-sets/group` call, which is
+ * capped at `object_sets.MAX_GROUPS` and ordered by count — so a curated term
+ * naming a rare value comes back *absent*, and absent would mean either "no
+ * rows" or "not in the top twenty". p.475 hangs **Hide empty terms** on exactly
+ * that distinction, so a grouped implementation would hide rows for being
+ * unfashionable rather than unused, invisibly. `MAX_TERMS` is what keeps the
+ * fan-out bounded instead.
+ *
+ * **A term naming a value no row has is the normal case, not an error.** It is
+ * what the Filter List structurally cannot produce and what makes Hide empty
+ * terms a setting worth having: an author writes the vocabulary they want the
+ * viewer to think in, and the data says which parts of it are populated today.
+ *
+ * ○ for p.475's **Icon** as an icon: there is no icon library here, so it is one
+ * or two characters — the same ○ every icon setting in this file carries.
+ */
+export function CanvasProminentTerms({
+  objectSetVariable = null,
+  variable = null,
+  property = "",
+  terms = [],
+  hideEmpty = false,
+  title = "",
+}: {
+  /** p.475's Base object set. */
+  objectSetVariable?: string | null;
+  /** p.475's Filter variable — an array of clauses a `narrow_set` reads. */
+  variable?: string | null;
+  /** p.475's Property, the one every term filters on. */
+  property?: string;
+  /** p.475's Terms. */
+  terms?: unknown[];
+  /** p.475's Hide empty terms. */
+  hideEmpty?: boolean;
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, mode } = useCanvasEnv();
+  const { set } = useCanvasParameters();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  const chosen = useCanvasParameter(variable);
+
+  const configured = renderableTerms(termsOf(terms));
+  const selected = selectedValues(chosen, property);
+  const ready = !!objectSetVariable && !!variable && !!property;
+
+  const counts = useQueries({
+    queries: configured.map((term) => ({
+      queryKey: ["canvas-prominent-term", property, term.value,
+                 JSON.stringify(setDefinition ?? null)],
+      queryFn: () => objApi.aggregateObjectSet(
+        workspaceId,
+        // p.475's exact match, applied *on top of* the base set — a term
+        // narrows what the set already says rather than replacing it.
+        termClause(setDefinition, property, term.value),
+        { aggregation: "count" },
+      ),
+      enabled: ready && !!setDefinition,
+    })),
+  });
+  const byValue: Record<string, number | undefined> = {};
+  configured.forEach((term, n) => {
+    const value = counts[n]?.data?.value;
+    byValue[term.value] = typeof value === "number" ? value : undefined;
+  });
+  const shown = visibleTerms(configured, byValue, hideEmpty);
+
+  const pick = (value: string) => {
+    if (!variable) return;
+    set(variable, [
+      // Clauses this widget did not write are kept: several widgets chain
+      // through one `narrow_set`, and rewriting the whole variable would
+      // silently drop another widget's filter (§40's shape, stated here
+      // because this is the second widget to write into a shared list).
+      ...(Array.isArray(chosen) ? chosen : []).filter(
+        (c) => (c as { property?: unknown })?.property !== property,
+      ),
+      ...toClauses(property, toggled(selected, value)),
+    ]);
+  };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {title ? <p className="field-label">{title}</p> : null}
+      {!ready ? (
+        <p className="canvas-widget-empty">
+          Prominent terms — choose an object set, a property and the variable it
+          writes in Settings
+        </p>
+      ) : configured.length === 0 ? (
+        <p className="canvas-widget-empty">Add the terms to match on in Settings</p>
+      ) : shown.length === 0 ? (
+        // Every term answered zero and the setting hides them. Said rather than
+        // rendered as a blank space, which reads as a widget that failed.
+        <p className="canvas-widget-empty" data-testid="prominent-terms-all-empty">
+          No term matches anything in this set
+        </p>
+      ) : (
+        <ul className="canvas-terms" data-testid="prominent-terms">
+          {shown.map((term) => (
+            <li key={term.value}>
+              <button
+                type="button"
+                className={`canvas-term${selected.includes(term.value) ? " is-on" : ""}`}
+                data-testid="prominent-term"
+                data-value={term.value}
+                aria-pressed={selected.includes(term.value)}
+                // In the builder the rows are shown but inert: clicking one
+                // would write a viewer's filter into the document being edited.
+                disabled={mode !== "run"}
+                onClick={() => pick(term.value)}
+              >
+                {term.icon ? (
+                  <span className="canvas-term-icon" aria-hidden="true">{term.icon}</span>
+                ) : null}
+                <span className="canvas-term-label">{termLabelOf(term)}</span>
+                <span className="canvas-term-count" data-testid="prominent-term-count">
+                  {countLabel(byValue[term.value])}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** The base set with one term's exact-match clause added.
+ *
+ * Built here rather than in `prominent-terms.ts` because it is about the shape
+ * of an object-set *definition*, which every widget in this file shares and no
+ * widget's model owns.
+ */
+function termClause(definition: unknown, property: string, value: string): unknown {
+  const base = (definition ?? {}) as { filters?: unknown[] };
+  return {
+    ...(base as object),
+    filters: [...(Array.isArray(base.filters) ? base.filters : []),
+              { property, op: "eq", value }],
+  };
+}
+
+function ProminentTermsSettings() {
+  const {
+    objectSetVariable, variable, property, terms, hideEmpty, title,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    variable: node.data.props.variable,
+    property: node.data.props.property,
+    terms: node.data.props.terms,
+    hideEmpty: node.data.props.hideEmpty,
+    title: node.data.props.title,
+  }));
+  const { workspaceId } = useCanvasEnv();
+  const { declared, resolved } = useCanvasVariables();
+  const sets = Object.values(declared).filter((v) => v.kind === "object_set");
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const typeId = objectSetVariable
+    ? ((resolved[objectSetVariable] as { object_type_id?: string } | undefined)
+        ?.object_type_id ?? null)
+    : null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+
+  const rows = termsOf(terms);
+  const write = (next: ReturnType<typeof termsOf>) =>
+    setProp((p: { terms: unknown[] }) => (p.terms = next));
+  const edit = (index: number, patch: Partial<ReturnType<typeof blankTerm>>) =>
+    write(rows.map((t, n) => (n === index ? { ...t, ...patch } : t)));
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable, variable }}
+      requires={["objectSetVariable"]}
+      labels={{
+        objectSetVariable: "an object set",
+        variable: "where to put the filter",
+      }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Base object set</span>
+        <select
+          value={objectSetVariable ?? ""}
+          data-testid="terms-set"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {sets.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">The set the counts are measured against</span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title ?? ""}
+          data-testid="terms-title"
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Property</span>
+        <select
+          value={property || ""}
+          data-testid="terms-property"
+          onChange={(e) =>
+            setProp((p: { property: string }) => (p.property = e.target.value))}
+        >
+          <option value="">Choose…</option>
+          {(type.data?.properties ?? []).map((p) => (
+            <option key={p.api_name} value={p.api_name}>
+              {p.display_name || p.api_name}
+            </option>
+          ))}
+        </select>
+        <span className="field-hint">
+          Every term filters on this one property, matched exactly (p.475)
+        </span>
+      </label>
+      <label className="field checkbox">
+        <input
+          type="checkbox"
+          checked={hideEmpty === true}
+          data-testid="terms-hide-empty"
+          onChange={(e) =>
+            setProp((p: { hideEmpty: boolean }) => (p.hideEmpty = e.target.checked))}
+        />
+        <span className="field-label">Hide empty terms</span>
+      </label>
+      <div className="field" data-testid="terms-rows">
+        <span className="field-label">Terms</span>
+        {rows.length === 0 && (
+          <p className="field-hint" data-testid="terms-empty">
+            No terms yet — the widget shows nothing until there is one.
+          </p>
+        )}
+        {rows.map((term, index) => (
+          <div className="canvas-sort-row" key={index}>
+            <input
+              type="text"
+              value={term.value}
+              placeholder="value to match"
+              data-testid={`term-value-${index}`}
+              onChange={(e) => edit(index, { value: e.target.value })}
+            />
+            <input
+              type="text"
+              value={term.label}
+              placeholder="display name"
+              data-testid={`term-label-${index}`}
+              onChange={(e) => edit(index, { label: e.target.value })}
+            />
+            <input
+              type="text"
+              value={term.icon}
+              placeholder="icon"
+              maxLength={2}
+              data-testid={`term-icon-${index}`}
+              onChange={(e) => edit(index, { icon: e.target.value })}
+            />
+            <button
+              type="button"
+              className="btn quiet"
+              data-testid={`term-remove-${index}`}
+              onClick={() => write(rows.filter((_, n) => n !== index))}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        {rows.length < TERMS_MAX && (
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="term-add"
+            onClick={() => write([...rows, blankTerm()])}
+          >
+            Add a term
+          </button>
+        )}
+        <span className="field-hint">
+          {`The value is matched exactly, so it is not trimmed. At most ${TERMS_MAX}: `
+           + "each term is its own count, and a long list belongs in a Filter List."}
+        </span>
+      </div>
+      </>}
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Filter variable</span>
+        <select
+          value={variable ?? ""}
+          data-testid="terms-variable"
+          onChange={(e) =>
+            setProp((p: { variable: string | null }) =>
+              (p.variable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {arrays.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">
+          An array variable holding clauses. Point a narrow_set variable at it and
+          the base set to get the filtered set other widgets read.
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasProminentTerms.craft = {
+  displayName: "Prominent terms",
+  props: {
+    objectSetVariable: null, variable: null, property: "",
+    terms: [], hideEmpty: false, title: "",
+  },
+  related: { settings: ProminentTermsSettings },
 };
 
 // ---- Parameter (filter control) --------------------------------------------
@@ -11883,6 +12233,7 @@ export const CANVAS_RESOLVER = {
   CanvasContainer,
   CanvasText,
   CanvasFilterList,
+  CanvasProminentTerms,
   CanvasParameterControl,
   CanvasNumericInput,
   CanvasTextInput,
@@ -11924,6 +12275,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
+  { key: "CanvasProminentTerms", label: "Prominent terms", hint: "A curated list of values to filter by, each with its count" },
   { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
   { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
   { key: "CanvasStringSelector", label: "String selector", hint: "Pick one or many from a list of strings" },
