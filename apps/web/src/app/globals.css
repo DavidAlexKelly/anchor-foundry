@@ -2133,6 +2133,28 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    column rather than trailing the label and wrapping. */
 .canvas-filter-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
+/* p.470's Exploration Filter Pills. A wrapping row rather than a column: a
+   pill is one short phrase, and the set of them is read as a sentence about
+   what the viewer is looking at. */
+.canvas-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.canvas-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px; font-size: 12px; line-height: 1.6;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2);
+}
+/* A filter that is part of what the set *is* reads differently from one the
+   viewer added, because only the second can be taken off. */
+.canvas-pill.is-fixed { background: none; border-style: dashed; }
+.canvas-pill.is-type { border-style: none; font-weight: 600; background: none; }
+.canvas-pill.is-add { background: none; border-style: dashed; padding: 2px 6px; }
+.canvas-pill-btn {
+  background: none; border: 0; padding: 0 2px; cursor: pointer;
+  color: var(--ink-soft); font-size: 11px; line-height: 1;
+}
+.canvas-pill-btn:hover:not(:disabled) { color: inherit; }
+.canvas-pill-btn:disabled { opacity: 0.5; cursor: default; }
+.canvas-pill-input { font-size: 12px; padding: 1px 4px; max-width: 140px; }
+
 /* p.475's Prominent Terms. Capped like the filter list beside it, and for the
    same reason: a row is a label and a number, and stretching it across a page
    leaves the two unrelatable. */

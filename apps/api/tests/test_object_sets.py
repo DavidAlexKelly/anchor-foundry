@@ -283,6 +283,50 @@ def test_the_browsers_copy_of_the_orderable_types_has_not_drifted() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("UNIVERSAL_OPERATORS", "OPERATORS"),
+        ("ORDERED_OPERATORS", "ORDERED_OPERATORS"),
+        ("GEO_OPERATORS", "GEO_OPERATORS"),
+    ],
+)
+def test_the_browsers_copy_of_the_operators_has_not_drifted(
+    name: str, expected: str
+) -> None:
+    """§233's mirror, and it exists because the last one was not enough.
+
+    §231 put the orderable *types* in one browser module and guarded it with a
+    test. The *operators* were in the same state and that sweep missed them:
+    `VariablesPanel.tsx` offered four under a comment reading "`gt` and friends
+    are refused by the API because Postgres casts and OpenSearch compares text"
+    - true when written, untrue from §221, and **it never named decision 0006**.
+    Grepping for the citation cannot find a stale claim that states its reason
+    in its own words, which is the seventh copy and the reason the fix has to be
+    structural rather than a habit.
+
+    So `filter-clause.ts` is the only place the browser writes an operator list,
+    and this is what keeps it honest. Sorted before comparing, unlike the
+    orderable types: the server's order is the order a refusal lists them in and
+    the browser's is the order a picker shows, and neither owes the other its
+    ordering - only its membership.
+    """
+    root = pathlib.Path(__file__).resolve().parents[3]
+    module = root / "apps/web/src/components/canvas/filter-clause.ts"
+    assert module.exists(), "the browser's copy is missing"
+    declared = re.search(
+        rf"export const {name}: readonly string\[\] = \[(.*?)\];",
+        module.read_text(),
+        re.S,
+    )
+    assert declared is not None, f"{name} is no longer declared as a literal"
+    mirrored = sorted(re.findall(r'"([^"]+)"', declared.group(1)))
+    assert mirrored == sorted(getattr(object_sets, expected)), (
+        f"the browser's {name} is {mirrored} and the server's {expected} is "
+        f"{sorted(getattr(object_sets, expected))}"
+    )
+
+
 @pytest.mark.parametrize("kind", ["boolean", "json", "attachment", "geopoint"])
 def test_an_ordered_comparison_on_an_unorderable_type_is_refused(kind: str) -> None:
     """"Greater than false" is not a question, and a composite value has no

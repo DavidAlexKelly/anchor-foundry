@@ -234,6 +234,36 @@ def eventually(read, matches, *, what: str, timeout_ms: int | None = None):
         time.sleep(POLL_MS / 1000)
 
 
+def stays(read, matches, *, what: str, for_ms: int = 5000):
+    """`eventually`'s counterpart: assert a thing **keeps** being true.
+
+    **The primitive a negative claim about an async page actually needs**, and
+    §233 is what asked for it. "Pressing Escape wrote nothing" cannot be checked
+    by reading once: the write it is ruling out takes a round trip, so a read
+    taken straight after the keypress sees the page *before* the thing that
+    would have failed it, and passes either way. `settled` does not help - it
+    waits for a canvas block that is already on screen - and neither does
+    re-reading through a retrying matcher, because `expect` stops at the first
+    read that matches, which is the one taken too early.
+
+    So the shape is: keep looking for long enough that the write would have
+    landed, and fail on the first look that disagrees. §233's mutant committed
+    within about a second; the default window is five.
+
+    This is a timeout-based assertion and says so - it can only ever show that
+    nothing happened *yet*. Where an ordered positive signal exists, wait for
+    that instead; this is for the cases where there is none.
+    """
+    deadline = time.monotonic() + for_ms / 1000
+    last = None
+    while time.monotonic() < deadline:
+        last = read()
+        if not matches(last):
+            raise AssertionError(f"{what}: became {last!r}")
+        time.sleep(POLL_MS / 1000)
+    return last
+
+
 def settled(page, locator_or_none=None) -> None:
     """Wait for the module to have rendered *something* before asserting.
 

@@ -123,6 +123,14 @@ import {
   ORDERABLE_HINT, orderableProperties, requestSort,
 } from "./property-sort";
 import {
+  // §211's aliasing rule again: `MODES`, `describe` and `without` are all names
+  // this file could want for something else.
+  MODES as PILL_MODES, OPERATOR_LABELS,
+  canAdd, canEdit, canRemove, clausesOf, describe as describeClause,
+  editableValue, isEditable, isRemovable, modeOf as pillModeOf, operatorsFor,
+  parseValue, withValue, without,
+} from "./filter-clause";
+import {
   // §211's aliasing rule: `labelOf` is a name half the widgets here could want,
   // and `MAX_TERMS` says nothing about which list it caps once it is in this
   // file rather than beside p.475's Terms.
@@ -735,6 +743,380 @@ CanvasFilterList.craft = {
   displayName: "Filter list",
   props: { objectSetVariable: null, variable: null, properties: "", title: "Filters" },
   related: { settings: FilterListSettings },
+};
+
+// ---- Exploration Filter Pills (parity workshop.md §10; Foundry p.470-471) --
+/**
+ * p.470: "Use the Exploration Filter Pills widget to visualize and apply filters
+ * to an object set."
+ *
+ * **The first widget that reads a set's filters rather than writing them.**
+ * Every narrowing widget before it wrote one shape of clause and knew which — a
+ * Filter List writes `eq`/`in`, a Search writes `starts_with`, a Prominent Terms
+ * widget writes `eq`. This one renders whatever is there, which is why
+ * `filter-clause.ts` exists.
+ *
+ * **The data layer was already built and nobody had used it.** A set variable
+ * resolves to a *definition*, and `workshop_variables._narrow_set` returns
+ * `{...base, filters: [...base.filters, ...clauses]}` — a flat, effective filter
+ * list. So "what filters are on this set" needs no endpoint; it is the resolved
+ * variable the widget is already reading. A traversal resets `filters` to `[]`
+ * and keeps the base under `via`, which is correct here rather than incidental:
+ * p.470 says "an object set containing a single object type", and after a
+ * traversal the earlier clauses are about the *other* type.
+ *
+ * **A pill the widget cannot remove does not offer to be.** The resolved list is
+ * the base definition's own filters plus whatever `narrow_set` added, and only
+ * the second kind lives in the variable this widget writes. The first is
+ * structural — part of what the set *is* — so a remove button on it would write
+ * a list that changes nothing while the pill sat there. §214's rule, and the
+ * reason `isRemovable` takes the written list as well as the clause.
+ *
+ * **Divergence, stated rather than approximated: p.470's "Prevent users from
+ * changing operators (or, and)" has nothing to prevent.** Every clause the
+ * object-set language takes is an `and` — there is no `or` between filters, as
+ * the Object Dropdown's search modes already record. A toggle governing a choice
+ * nobody can make would be a control with no question behind it, so the panel
+ * says so where the toggle would be.
+ */
+export function CanvasFilterPills({
+  objectSetVariable = null,
+  variable = null,
+  mode = "read_only",
+  showTypePill = false,
+  title = "",
+}: {
+  /** p.470's specified object set — the one whose filters are drawn. */
+  objectSetVariable?: string | null;
+  /** p.470's optional output: "an object set filter variable containing the
+   * applied filters". Optional in the spec and *required* for the three
+   * editable modes here, because without it an edit has nowhere to go. */
+  variable?: string | null;
+  /** p.470's Mode. */
+  mode?: string;
+  /** p.471's Display object type pill. */
+  showTypePill?: boolean;
+  title?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { workspaceId, mode: runMode } = useCanvasEnv();
+  const { set } = useCanvasParameters();
+  const setDefinition = useCanvasVariable(objectSetVariable);
+  // **The *resolved* variable, not the parameter.** `useCanvasParameter` holds
+  // only what somebody has set this session, so a variable carrying a default —
+  // which is how an app opens with filters already applied — would read as
+  // empty, and every pill would look structural and lose its ✕. The resolved
+  // value is what `narrow_set` actually consumed, which is the list these pills
+  // are describing.
+  const written = clausesOf(useCanvasVariable(variable));
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const [adding, setAdding] = useState<{ property: string; op: string; value: string }>(
+    { property: "", op: "eq", value: "" },
+  );
+
+  const resolved = (setDefinition ?? null) as { object_type_id?: string } | null;
+  const typeId = resolved?.object_type_id ?? null;
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId!),
+    enabled: !!typeId,
+  });
+  const declared = type.data?.properties ?? [];
+  const pills = clausesOf((setDefinition as { filters?: unknown })?.filters);
+
+  const live = runMode === "run";
+  const editable = live && !!variable;
+  const commit = (next: ReturnType<typeof clausesOf>) => {
+    if (variable) set(variable, next);
+  };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {title ? <p className="field-label">{title}</p> : null}
+      {!objectSetVariable ? (
+        <p className="canvas-widget-empty">
+          Filter pills — choose the object set whose filters to show, in Settings
+        </p>
+      ) : (
+        <div className="canvas-pills" data-testid="filter-pills">
+          {showTypePill && (
+            // p.471's Display object type pill. Named from the ontology rather
+            // than from the definition, because the definition holds an id.
+            <span className="canvas-pill is-type" data-testid="filter-pill-type">
+              {type.data?.display_name || type.data?.api_name || "Object type"}
+            </span>
+          )}
+          {pills.length === 0 && (
+            <span className="canvas-widget-empty" data-testid="filter-pills-none">
+              No filters applied
+            </span>
+          )}
+          {pills.map((clause, index) => {
+            const removable = isRemovable(clause, written);
+            const beingEdited = editing === index;
+            return (
+              <span
+                className={`canvas-pill${removable ? "" : " is-fixed"}`}
+                key={`${clause.property}:${clause.op}:${index}`}
+                data-testid="filter-pill"
+                data-removable={removable ? "true" : "false"}
+              >
+                {beingEdited ? (
+                  <>
+                    <span className="canvas-pill-text">
+                      {describeClause({ ...clause, value: null }, declared)}
+                    </span>
+                    <input
+                      type="text"
+                      className="canvas-pill-input"
+                      value={draft}
+                      autoFocus
+                      data-testid="filter-pill-input"
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter" && e.key !== "Escape") return;
+                        if (e.key === "Enter") {
+                          commit(withValue(written, clause, parseValue(clause.op, draft)));
+                        }
+                        setEditing(null);
+                      }}
+                      onBlur={() => setEditing(null)}
+                    />
+                  </>
+                ) : (
+                  <span className="canvas-pill-text" data-testid="filter-pill-text">
+                    {describeClause(clause, declared)}
+                  </span>
+                )}
+                {/* p.470's Update mode. A pill the widget did not write cannot
+                    be edited either — the edit goes into the same list the
+                    removal would. */}
+                {canEdit(mode) && editable && removable && isEditable(clause)
+                  && !beingEdited && (
+                  <button
+                    type="button"
+                    className="canvas-pill-btn"
+                    data-testid="filter-pill-edit"
+                    onClick={() => {
+                      setDraft(editableValue(clause));
+                      setEditing(index);
+                    }}
+                  >
+                    edit
+                  </button>
+                )}
+                {canRemove(mode) && editable && removable && (
+                  <button
+                    type="button"
+                    className="canvas-pill-btn"
+                    aria-label={`Remove ${describeClause(clause, declared)}`}
+                    data-testid="filter-pill-remove"
+                    onClick={() => commit(without(written, clause))}
+                  >
+                    ✕
+                  </button>
+                )}
+              </span>
+            );
+          })}
+          {canAdd(mode) && editable && (
+            <span className="canvas-pill is-add" data-testid="filter-pill-add">
+              <select
+                value={adding.property}
+                data-testid="filter-add-property"
+                onChange={(e) => {
+                  const property = e.target.value;
+                  const allowed = operatorsFor(
+                    declared.find((p) => p.api_name === property)?.data_type,
+                  );
+                  // The operator is reset when it is no longer offered: a
+                  // `gte` left over from a numeric property, applied to a
+                  // string, is a 422 the viewer did not ask for.
+                  // Back to `eq` rather than to the first of the allowed list:
+                  // `eq` is in every list `operatorsFor` returns, so it is the
+                  // one fallback that needs no index and cannot be undefined.
+                  setAdding((a) => ({
+                    property,
+                    op: allowed.includes(a.op) ? a.op : "eq",
+                    value: a.value,
+                  }));
+                }}
+              >
+                <option value="">Add a filter…</option>
+                {declared.map((p) => (
+                  <option key={p.api_name} value={p.api_name}>
+                    {p.display_name || p.api_name}
+                  </option>
+                ))}
+              </select>
+              {!!adding.property && (
+                <>
+                  <select
+                    value={adding.op}
+                    data-testid="filter-add-op"
+                    onChange={(e) => setAdding((a) => ({ ...a, op: e.target.value }))}
+                  >
+                    {operatorsFor(
+                      declared.find((p) => p.api_name === adding.property)?.data_type,
+                    ).map((op) => (
+                      <option key={op} value={op}>{OPERATOR_LABELS[op]}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    className="canvas-pill-input"
+                    value={adding.value}
+                    placeholder={adding.op === "in" ? "a, b, c" : "value"}
+                    data-testid="filter-add-value"
+                    onChange={(e) => setAdding((a) => ({ ...a, value: e.target.value }))}
+                  />
+                  <button
+                    type="button"
+                    className="canvas-pill-btn"
+                    data-testid="filter-add-apply"
+                    // A blank value is not a filter: `eq ""` matches the rows
+                    // whose property is the empty string, which is never what
+                    // an unfinished row means.
+                    disabled={!adding.value.trim()}
+                    onClick={() => {
+                      commit([...written, {
+                        property: adding.property,
+                        op: adding.op,
+                        value: parseValue(adding.op, adding.value),
+                      }]);
+                      setAdding({ property: "", op: "eq", value: "" });
+                    }}
+                  >
+                    Apply
+                  </button>
+                </>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterPillsSettings() {
+  const {
+    objectSetVariable, variable, mode, showTypePill, title,
+    actions: { setProp },
+  } = useNode((node) => ({
+    objectSetVariable: node.data.props.objectSetVariable,
+    variable: node.data.props.variable,
+    mode: node.data.props.mode,
+    showTypePill: node.data.props.showTypePill,
+    title: node.data.props.title,
+  }));
+  const { declared } = useCanvasVariables();
+  const sets = Object.values(declared).filter((v) => v.kind === "object_set");
+  const arrays = Object.values(declared).filter((v) => v.kind === "array");
+  const needsOutput = canRemove(mode);
+
+  return (
+    <WidgetSetup
+      bindings={{ objectSetVariable }}
+      requires={["objectSetVariable"]}
+      labels={{ objectSetVariable: "an object set" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Object set</span>
+        <select
+          value={objectSetVariable ?? ""}
+          data-testid="pills-set"
+          onChange={(e) =>
+            setProp((p: { objectSetVariable: string | null }) =>
+              (p.objectSetVariable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {sets.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">The set whose filters are drawn as pills</span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Title</span>
+        <input
+          type="text"
+          value={title ?? ""}
+          data-testid="pills-title"
+          onChange={(e) => setProp((p: { title: string }) => (p.title = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Mode</span>
+        <select
+          value={pillModeOf(mode)}
+          data-testid="pills-mode"
+          onChange={(e) => setProp((p: { mode: string }) => (p.mode = e.target.value))}
+        >
+          {Object.entries(PILL_MODES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+        {needsOutput && !variable && (
+          <span className="field-hint" data-testid="pills-needs-output">
+            This mode changes filters, so it needs the output variable below —
+            without one there is nowhere for an edit to go, and the pills stay
+            read-only.
+          </span>
+        )}
+      </label>
+      <label className="field checkbox">
+        <input
+          type="checkbox"
+          checked={showTypePill === true}
+          data-testid="pills-type-pill"
+          onChange={(e) =>
+            setProp((p: { showTypePill: boolean }) => (p.showTypePill = e.target.checked))}
+        />
+        <span className="field-label">Display object type pill</span>
+      </label>
+      {/* p.470's fourth toggle. Said rather than offered: the object-set clause
+          language has no `or` between filters, so there is no operator for a
+          viewer to change and nothing for a toggle to prevent. */}
+      <p className="field-hint" data-testid="pills-no-operator-toggle">
+        p.470&apos;s &ldquo;Prevent users from changing operators&rdquo; is not
+        offered: every clause an object set takes is an <code>and</code>, so
+        there is no or/and for a viewer to change.
+      </p>
+      </>}
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Filter variable</span>
+        <select
+          value={variable ?? ""}
+          data-testid="pills-variable"
+          onChange={(e) =>
+            setProp((p: { variable: string | null }) =>
+              (p.variable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {arrays.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">
+          An array variable holding clauses — the same one a narrow_set uses to
+          make the set these pills describe. Optional for Read only.
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasFilterPills.craft = {
+  displayName: "Filter pills",
+  props: {
+    objectSetVariable: null, variable: null,
+    mode: "read_only", showTypePill: false, title: "",
+  },
+  related: { settings: FilterPillsSettings },
 };
 
 // ---- Prominent Terms (parity workshop.md §10; Foundry p.475) ---------------
@@ -12233,6 +12615,7 @@ export const CANVAS_RESOLVER = {
   CanvasContainer,
   CanvasText,
   CanvasFilterList,
+  CanvasFilterPills,
   CanvasProminentTerms,
   CanvasParameterControl,
   CanvasNumericInput,
@@ -12275,6 +12658,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasContainer", label: "Container", hint: "A box to arrange other widgets in" },
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
+  { key: "CanvasFilterPills", label: "Filter pills", hint: "The filters on a set, shown as pills a viewer can remove" },
   { key: "CanvasProminentTerms", label: "Prominent terms", hint: "A curated list of values to filter by, each with its count" },
   { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
   { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },
