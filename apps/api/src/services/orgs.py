@@ -155,15 +155,20 @@ async def list_users(
     answer a dropdown.
 
     **An empty list of groups is not "no filter".** `None` means nobody asked;
-    `[]` means "the users in these zero groups", which is nobody. That is the
-    honest reading of the argument, and it is kept even though **the route
-    cannot currently send it**: a repeated query parameter has no empty form, so
-    over HTTP the only two states are absent and non-empty. The case it exists
-    for is a widget whose group ids come from a variable that has resolved to
-    nothing - and the widget answers that by *not asking*, since a request it
-    cannot express would come back as the whole directory. Kept rather than
-    deleted because this is a service function with more callers than the one
-    route, and a next caller passing `[]` should not silently get everybody.
+    `[]` means "the users in these zero groups", which is nobody. Only the first
+    branches here - the second needs no code, because `x = ANY(ARRAY[]::uuid[])`
+    is false for every x, so the filtered query already answers `[]` with
+    nothing. An `if not group_ids: return []` fast path stood here and mutation
+    testing found it **equivalent**; removed per §223, and the behaviour it
+    stated is pinned by a test against this function rather than by a guard that
+    could not be made to matter.
+
+    **The route cannot send `[]` at all**: a repeated query parameter has no
+    empty form, so over HTTP the only two states are absent and non-empty. The
+    case the distinction exists for is a widget whose group ids come from a
+    variable that has resolved to nothing, and the widget answers it by *not
+    asking* - a request it cannot express would come back as the whole
+    directory.
     """
     if group_ids is None:
         return await fetch_all(
@@ -175,8 +180,6 @@ async def list_users(
             """,
             {"org": str(organisation_id)},
         )
-    if not group_ids:
-        return []
     return await fetch_all(
         conn,
         """

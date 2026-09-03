@@ -440,13 +440,18 @@ def test_narrowing_to_a_group_from_another_org_finds_nobody(
     assert r.status_code == 200, r.text
     assert r.json() == []
 
-    # **And now the case that actually needs the organisation check.** Above,
-    # the foreign group's only member is also foreign, so `users.organisation_id
-    # = :org` alone excludes them and the query answers correctly even without
-    # looking at the *group's* org - a mutant deleting that check survived this
-    # test until the state below existed. `group_members` has no organisation
-    # column, so a group in one org holding a user from another is expressible;
-    # written straight to the table because no route offers to build it.
+    # **The hostile case, and it is RLS that answers it.** Above, the foreign
+    # group's only member is also foreign, so `users.organisation_id = :org`
+    # alone already excludes them. The state below is the one that needs a real
+    # boundary: a group in *their* org holding a user from *ours*, which
+    # `group_members` allows because it has no organisation column, and which no
+    # route offers to build - hence the direct write.
+    #
+    # What excludes it is `gm_same_org` (db 0006) delegating to
+    # `groups_same_org` (db 0008), not anything `list_users` writes: two guards
+    # in that query were tried and mutation testing found both equivalent. So
+    # this is a test of the policies, kept because the guarantee is worth
+    # holding wherever it is enforced.
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(
             "INSERT INTO group_members (group_id, user_id) VALUES (%s,%s)",
