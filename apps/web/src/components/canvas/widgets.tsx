@@ -12,7 +12,7 @@ import dynamic from "next/dynamic";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
-  actions as actionApi, ApiError, canvas as canvasApi, datasets as dsApi,
+  actions as actionApi, api, ApiError, canvas as canvasApi, datasets as dsApi,
   objects as objApi,
 } from "@/lib/api";
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
@@ -122,6 +122,18 @@ import {
 import {
   ORDERABLE_HINT, orderableProperties, requestSort,
 } from "./property-sort";
+import {
+  // §211's aliasing rule, hardest case yet: this module is *about* users, so
+  // almost every export collides with something this file already means by the
+  // same word. `usersOf` is the one name nothing else wants.
+  SELECTION_MODES as USER_SELECTION_MODES,
+  allowClearOf as userAllowClearOf, groupIdsOf as userGroupIdsOf,
+  isMultiple as userIsMultiple, labelOf as userLabelOf, modeOf as userModeOf,
+  pickedSingle as userPickedSingle, placeholderOf as userPlaceholderOf,
+  selectedIds as userSelectedIds, shouldAsk as userShouldAsk,
+  summaryOf as userSummaryOf, textOf as userTextOf, toOutput as userToOutput,
+  toggled as userToggled, usersOf,
+} from "./user-select";
 import {
   // §211's aliasing rule again: `MODES`, `describe` and `without` are all names
   // this file could want for something else.
@@ -743,6 +755,319 @@ CanvasFilterList.craft = {
   displayName: "Filter list",
   props: { objectSetVariable: null, variable: null, properties: "", title: "Filters" },
   related: { settings: FilterListSettings },
+};
+
+// ---- User Select (parity workshop.md §10; Foundry p.477-478) ---------------
+/**
+ * p.477: "Use the User Select widget for selection of user(s) through a single
+ * or multi-select dropdown menu."
+ *
+ * **The first widget whose options are people rather than data.** Everything
+ * else in this file reads an object set; this reads the organisation's
+ * directory, which was already open to every member — `GET /org/members` has
+ * been viewer-visible since the org routes were written, on the reasoning that
+ * emails within one org are not sensitive to it. So the widget needs no new
+ * access boundary and creates none.
+ *
+ * **The output's *shape* is the setting**, which no other picker here does.
+ * p.478 makes Single a `string` variable holding one id and Multiple a
+ * `string[]` holding several, so the mode decides what kind of variable an
+ * author binds and what every downstream reader sees. The panel offers the
+ * matching kind for the mode rather than both, because a widget writing an
+ * array into a string variable is refused on save and one writing a string into
+ * an array variable looks fine and reads wrong.
+ *
+ * **p.478's group filter is built rather than refused**: this platform has
+ * groups of its own (migration 0001) and the setting's shape carries over
+ * exactly. What does not carry over is Foundry's "View group membership"
+ * permission note, which is about a boundary this platform does not draw.
+ *
+ * The widget **does not ask the directory** while a configured group filter
+ * names nobody — see `shouldAsk`, and the note on `orgMembers` for why the
+ * server cannot make that decision.
+ */
+export function CanvasUserSelect({
+  variable = null,
+  groupsVariable = null,
+  mode = "single",
+  allowClear = false,
+  label = "",
+  placeholder = "",
+}: {
+  /** p.478's Output variable — a string, or a string array in Multiple. */
+  variable?: string | null;
+  /** p.478's "Specify Multipass group IDs": a string-array variable. */
+  groupsVariable?: string | null;
+  mode?: string;
+  /** p.478's Allow clear, Single only. */
+  allowClear?: boolean;
+  label?: string;
+  placeholder?: string;
+}) {
+  const {
+    connectors: { connect, drag },
+  } = useNode();
+  const { mode: runMode } = useCanvasEnv();
+  const { set } = useCanvasParameters();
+  const chosen = useCanvasParameter(variable);
+  const groupIds = userGroupIdsOf(useCanvasVariable(groupsVariable));
+  const [open, setOpen] = useState(false);
+
+  const multiple = userIsMultiple(mode);
+  const ask = userShouldAsk(!!groupsVariable, groupIds);
+  const directory = useQuery({
+    // The group ids are part of the key: two filters are two different lists,
+    // and an array compares by identity in a query key, so a fresh one each
+    // render would refetch every time (§40's lesson on `useSetPage`).
+    queryKey: ["org-members", (groupIds ?? []).join(",")],
+    queryFn: () => api.orgMembers(groupIds ?? undefined),
+    enabled: ask,
+  });
+
+  const users = usersOf(directory.data);
+  const selected = userSelectedIds(chosen, mode);
+  const text = userPlaceholderOf(placeholder, mode);
+  const heading = userTextOf(label);
+  const live = runMode === "run";
+
+  const write = (ids: string[]) => {
+    if (variable) set(variable, userToOutput(ids, mode));
+  };
+
+  return (
+    <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
+      {heading ? (
+        <p className="field-label" data-testid="user-select-label">{heading}</p>
+      ) : null}
+      {!variable ? (
+        <p className="canvas-widget-empty">
+          User select — choose the variable it writes in Settings
+        </p>
+      ) : (
+        <div className="canvas-dropdown">
+          <button
+            type="button"
+            className="canvas-dropdown-toggle"
+            data-testid="user-select-toggle"
+            disabled={!live}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <span data-testid="user-select-value">
+              {userSummaryOf(selected, users, text)}
+            </span>
+          </button>
+          {/* p.478's Allow clear, Single only: in Multiple, unticking is how a
+              selection goes away, so a second control would be a second answer
+              to one question. */}
+          {!multiple && userAllowClearOf(allowClear) && selected.length > 0 && live && (
+            <button
+              type="button"
+              className="btn quiet"
+              data-testid="user-select-clear"
+              onClick={() => write([])}
+            >
+              Clear
+            </button>
+          )}
+          {open && live && (
+            <div className="canvas-dropdown-panel" data-testid="user-select-list">
+              {!ask && (
+                <p className="canvas-widget-empty" data-testid="user-select-unfiltered">
+                  No groups chosen yet — nobody to show.
+                </p>
+              )}
+              {ask && directory.isError && (
+                <p className="canvas-widget-empty">Couldn&apos;t read the directory.</p>
+              )}
+              {ask && directory.data && users.length === 0 && (
+                <p className="canvas-widget-empty" data-testid="user-select-none">
+                  No users to choose from.
+                </p>
+              )}
+              {users.map((user) => (
+                <button
+                  type="button"
+                  key={user.id}
+                  className={`canvas-dropdown-option${multiple ? " canvas-object-tick" : ""}`}
+                  data-testid="user-select-option"
+                  data-user={user.id}
+                  aria-pressed={selected.includes(user.id)}
+                  onClick={() => {
+                    if (multiple) {
+                      write(userToggled(selected, user.id));
+                      return;
+                    }
+                    write(userPickedSingle(user.id));
+                    setOpen(false);
+                  }}
+                >
+                  {/* The Object Selector's tick, reused rather than restyled —
+                      `canvas-object-tick` carries §211's naming fix and §204's
+                      collision with it. The list itself is the Object
+                      Dropdown's `canvas-dropdown-panel`, which is absolutely
+                      positioned for §195's reason: a list that reflows the page
+                      moves the control out from under the pointer that opened
+                      it, and the browser never sends the click. */}
+                  {multiple && (
+                    <input
+                      type="checkbox"
+                      readOnly
+                      checked={selected.includes(user.id)}
+                      tabIndex={-1}
+                    />
+                  )}
+                  <span className="canvas-dropdown-title">{userLabelOf(user)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UserSelectSettings() {
+  const {
+    variable, groupsVariable, mode, allowClear, label, placeholder,
+    actions: { setProp },
+  } = useNode((node) => ({
+    variable: node.data.props.variable,
+    groupsVariable: node.data.props.groupsVariable,
+    mode: node.data.props.mode,
+    allowClear: node.data.props.allowClear,
+    label: node.data.props.label,
+    placeholder: node.data.props.placeholder,
+  }));
+  const { declared } = useCanvasVariables();
+  const multiple = userIsMultiple(mode);
+  // **The kind offered follows the mode**, per p.478: a string for Single, a
+  // string array for Multiple. Offering both would invite the binding the
+  // server refuses on save.
+  const outputs = Object.values(declared).filter(
+    (v) => v.kind === (multiple ? "array" : "string"),
+  );
+  const groupVars = Object.values(declared).filter((v) => v.kind === "array");
+
+  return (
+    <WidgetSetup
+      bindings={{ variable }}
+      // **Nothing is required, and §180 wrote the reason at the Parameter
+      // control**: "a rule that made configuration wait for an input would
+      // leave it permanently unconfigurable". It is sharper here. This widget
+      // has no input at all — p.478's group filter is optional — and the
+      // *mode* decides which kind of variable the output picker offers, so
+      // waiting for the output would hide the control that decides what can be
+      // bound. The first version of this panel did exactly that.
+      labels={{ variable: "where to put the selection" }}
+      inputs={<>
+      <label className="field">
+        <span className="field-label">Multipass group IDs</span>
+        <select
+          value={groupsVariable ?? ""}
+          data-testid="user-groups-variable"
+          onChange={(e) =>
+            setProp((p: { groupsVariable: string | null }) =>
+              (p.groupsVariable = e.target.value || null))}
+        >
+          <option value="">Every user in the organisation</option>
+          {groupVars.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">
+          A string array of group ids. The dropdown shows only their members —
+          and shows nobody until the variable names at least one group, because
+          &ldquo;no groups&rdquo; and &ldquo;no filter&rdquo; are the same request.
+        </span>
+      </label>
+      </>}
+      configuration={<>
+      <label className="field">
+        <span className="field-label">Label</span>
+        <input
+          type="text"
+          value={label ?? ""}
+          data-testid="user-select-label-field"
+          onChange={(e) => setProp((p: { label: string }) => (p.label = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Placeholder</span>
+        <input
+          type="text"
+          value={placeholder ?? ""}
+          data-testid="user-select-placeholder"
+          onChange={(e) =>
+            setProp((p: { placeholder: string }) => (p.placeholder = e.target.value))}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Selection</span>
+        <select
+          value={userModeOf(mode)}
+          data-testid="user-select-mode"
+          onChange={(e) =>
+            // **The output is cleared with the mode**, because the two modes
+            // hold different kinds of variable: a `string` binding left behind
+            // by Single is not a legal Multiple output, and leaving it would
+            // put a refusal on the next save rather than on this change.
+            setProp((p: { mode: string; variable: string | null }) => {
+              p.mode = e.target.value;
+              p.variable = null;
+            })}
+        >
+          {Object.entries(USER_SELECTION_MODES).map(([key, name]) => (
+            <option key={key} value={key}>{name}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          Single writes one user id into a string variable; Multiple writes
+          several into a string array. Changing this clears the output binding.
+        </span>
+      </label>
+      {!multiple && (
+        <label className="field checkbox">
+          <input
+            type="checkbox"
+            checked={allowClear === true}
+            data-testid="user-select-allow-clear"
+            onChange={(e) =>
+              setProp((p: { allowClear: boolean }) => (p.allowClear = e.target.checked))}
+          />
+          <span className="field-label">Allow clear</span>
+        </label>
+      )}
+      </>}
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Selected user{multiple ? "s" : ""}</span>
+        <select
+          value={variable ?? ""}
+          data-testid="user-select-variable"
+          onChange={(e) =>
+            setProp((p: { variable: string | null }) =>
+              (p.variable = e.target.value || null))}
+        >
+          <option value="">Choose…</option>
+          {outputs.map((v) => <option key={v.id} value={v.id}>{v.label || v.id}</option>)}
+        </select>
+        <span className="field-hint">
+          {multiple
+            ? "A string array variable — the ids of the selected users."
+            : "A string variable — the id of the selected user."}
+        </span>
+      </label>
+      </>}
+    />
+  );
+}
+
+CanvasUserSelect.craft = {
+  displayName: "User select",
+  props: {
+    variable: null, groupsVariable: null, mode: "single",
+    allowClear: false, label: "", placeholder: "",
+  },
+  related: { settings: UserSelectSettings },
 };
 
 // ---- Exploration Filter Pills (parity workshop.md §10; Foundry p.470-471) --
@@ -12616,6 +12941,7 @@ export const CANVAS_RESOLVER = {
   CanvasText,
   CanvasFilterList,
   CanvasFilterPills,
+  CanvasUserSelect,
   CanvasProminentTerms,
   CanvasParameterControl,
   CanvasNumericInput,
@@ -12659,6 +12985,7 @@ export const PALETTE: { key: keyof typeof CANVAS_RESOLVER; label: string; hint: 
   { key: "CanvasText", label: "Text", hint: "A heading or paragraph" },
   { key: "CanvasFilterList", label: "Filter list", hint: "Property filters over an object set, with counts" },
   { key: "CanvasFilterPills", label: "Filter pills", hint: "The filters on a set, shown as pills a viewer can remove" },
+  { key: "CanvasUserSelect", label: "User select", hint: "Pick one or several people from the organisation" },
   { key: "CanvasProminentTerms", label: "Prominent terms", hint: "A curated list of values to filter by, each with its count" },
   { key: "CanvasNumericInput", label: "Numeric input", hint: "A number the viewer types, with units and grouping" },
   { key: "CanvasTextInput", label: "Text input", hint: "A line or a paragraph the viewer types" },

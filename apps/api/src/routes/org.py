@@ -92,11 +92,21 @@ async def get_org(auth: AuthContext = Depends(get_current_user)) -> OrgOut:
 
 
 @router.get("/members", response_model=list[UserOut])
-async def list_members(auth: AuthContext = Depends(get_current_user)) -> list[UserOut]:
+async def list_members(
+    group_id: list[UUID] | None = Query(default=None),
+    auth: AuthContext = Depends(get_current_user),
+) -> list[UserOut]:
     # Visible to all members: needed for member pickers when granting
     # workspace/project roles. Emails within one org are not sensitive to it.
+    #
+    # **`group_id` narrows to the members of those groups** (p.478's "Specify
+    # Multipass group IDs", for §234's User Select). Repeatable, and absent
+    # means the whole org - which is what every caller before §234 sends. The
+    # narrowing happens in `list_users` rather than here so the browser never
+    # needs the membership graph to answer a dropdown; see the note there for
+    # why an *empty* list is nobody rather than everybody.
     async with user_connection(auth.user_id) as conn:
-        rows = await org_service.list_users(conn, auth.organisation_id)
+        rows = await org_service.list_users(conn, auth.organisation_id, group_ids=group_id)
     return [UserOut(**row) for row in rows]
 
 

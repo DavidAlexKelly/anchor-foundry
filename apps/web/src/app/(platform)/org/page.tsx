@@ -156,7 +156,12 @@ function MemberRow({ member, isAdmin, selfId }: { member: OrgUser; isAdmin: bool
 
 export default function OrgPage() {
   const org = useQuery({ queryKey: ["org"], queryFn: api.org });
-  const members = useQuery({ queryKey: ["org-members"], queryFn: api.orgMembers });
+  // Wrapped rather than passed bare: `orgMembers` takes an optional group
+  // filter as of §234, and React Query hands its `queryFn` the query context —
+  // which would arrive as the filter. Harmless today (the context has no
+  // `length`, so no `group_id` is sent) and exactly the kind of accident that
+  // stops being harmless when the argument's shape changes.
+  const members = useQuery({ queryKey: ["org-members"], queryFn: () => api.orgMembers() });
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
 
   const isAdmin = me.data?.org_role === "owner" || me.data?.org_role === "admin";

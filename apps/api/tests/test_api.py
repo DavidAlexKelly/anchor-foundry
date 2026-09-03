@@ -388,6 +388,71 @@ def test_group_grant_flows_to_workspace(client: TestClient, fx: Fixture) -> None
     assert r.status_code == 200 and r.json()["effective_role"] == "viewer"
 
 
+def test_the_member_list_can_be_narrowed_to_groups(client: TestClient, fx: Fixture) -> None:
+    """p.478's "Specify Multipass group IDs", for §234's User Select.
+
+    **The narrowing is here rather than in the browser** so a dropdown never
+    needs the membership graph to answer itself - see `orgs.list_users`.
+    """
+    r = client.post("/api/org/groups", headers=hdr(fx.admin_sub),
+                    json={"name": f"Pickers {fx.tag}"})
+    assert r.status_code == 201, r.text
+    gid = r.json()["id"]
+    assert client.put(f"/api/org/groups/{gid}/members/{fx.outsider}",
+                      headers=hdr(fx.admin_sub)).status_code == 204
+
+    everyone = client.get("/api/org/members", headers=hdr(fx.viewer_sub))
+    assert everyone.status_code == 200, everyone.text
+    all_ids = {u["id"] for u in everyone.json()}
+    assert str(fx.outsider) in all_ids
+
+    narrowed = client.get("/api/org/members", headers=hdr(fx.viewer_sub),
+                          params={"group_id": gid})
+    assert narrowed.status_code == 200, narrowed.text
+    assert {u["id"] for u in narrowed.json()} == {str(fx.outsider)}
+    # **Narrower than the whole org is the assertion**, not merely "returns
+    # something": a filter that was ignored would answer with everyone, and on
+    # a one-member group that is the difference between right and wrong.
+    assert len(all_ids) > 1
+
+
+def test_narrowing_to_a_group_from_another_org_finds_nobody(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The group id arrives from a document a builder wrote, so it is re-checked
+    against the caller's organisation rather than trusted.
+
+    **A real group in the other organisation, not a made-up id.** An unknown
+    uuid matches nothing whatever the query says, so it would pass against a
+    version that never checked the organisation at all - the fixture's second
+    org is what makes this an assertion about the join rather than about
+    arithmetic on random numbers.
+    """
+    r = client.post("/api/org/groups", headers=hdr(fx.foreign_sub),
+                    json={"name": f"Theirs {fx.tag}"})
+    assert r.status_code == 201, r.text
+    theirs = r.json()["id"]
+    assert client.put(f"/api/org/groups/{theirs}/members/{fx.foreign}",
+                      headers=hdr(fx.foreign_sub)).status_code == 204
+
+    r = client.get("/api/org/members", headers=hdr(fx.viewer_sub),
+                   params={"group_id": theirs})
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+
+def test_the_member_list_is_unchanged_when_no_group_is_named(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Every caller before §234 sends no `group_id`, and gets what it always
+    got. The parameter being *absent* is the whole-organisation answer; there is
+    no URL that means "these zero groups", which is why the widget refuses to
+    ask rather than sending one (`user-select.shouldAsk`)."""
+    r = client.get("/api/org/members", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    assert len(r.json()) > 1
+
+
 def test_disabled_user_is_locked_out(client: TestClient, fx: Fixture) -> None:
     r = client.post(
         "/api/org/members", headers=hdr(fx.admin_sub),

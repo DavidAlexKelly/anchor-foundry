@@ -10,6 +10,7 @@ injected so the service is testable without AWS.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -135,15 +136,68 @@ async def get_org(conn: AsyncConnection, organisation_id: UUID) -> dict[str, Any
 
 
 # ---- users ------------------------------------------------------------------
-async def list_users(conn: AsyncConnection, organisation_id: UUID) -> list[dict[str, Any]]:
+async def list_users(
+    conn: AsyncConnection,
+    organisation_id: UUID,
+    *,
+    group_ids: "Sequence[UUID] | None" = None,
+) -> list[dict[str, Any]]:
+    """Every user in the organisation, or only those in the named groups.
+
+    **The filter is here rather than in the caller, and that is the point of it**
+    (p.478's "Specify Multipass group IDs" for §234's User Select). Filtering in
+    the browser would mean sending it every user *and* every group membership -
+    a directory this platform deliberately keeps to the server, since group
+    membership is what several permission decisions are made from. The narrowing
+    is not a privacy boundary either way: `GET /org/members` has always been
+    visible to every member of the org, on the reasoning that emails within one
+    org are not sensitive to it. It is about not shipping a membership graph to
+    answer a dropdown.
+
+    **An empty list of groups is not "no filter".** `None` means nobody asked;
+    `[]` means "the users in these zero groups", which is nobody. That is the
+    honest reading of the argument, and it is kept even though **the route
+    cannot currently send it**: a repeated query parameter has no empty form, so
+    over HTTP the only two states are absent and non-empty. The case it exists
+    for is a widget whose group ids come from a variable that has resolved to
+    nothing - and the widget answers that by *not asking*, since a request it
+    cannot express would come back as the whole directory. Kept rather than
+    deleted because this is a service function with more callers than the one
+    route, and a next caller passing `[]` should not silently get everybody.
+    """
+    if group_ids is None:
+        return await fetch_all(
+            conn,
+            """
+            SELECT id, email, display_name, org_role, status, created_at,
+                   (cognito_sub IS NOT NULL) AS identity_linked
+              FROM users WHERE organisation_id = :org ORDER BY display_name
+            """,
+            {"org": str(organisation_id)},
+        )
+    if not group_ids:
+        return []
     return await fetch_all(
         conn,
         """
-        SELECT id, email, display_name, org_role, status, created_at,
-               (cognito_sub IS NOT NULL) AS identity_linked
-          FROM users WHERE organisation_id = :org ORDER BY display_name
+        SELECT u.id, u.email, u.display_name, u.org_role, u.status, u.created_at,
+               (u.cognito_sub IS NOT NULL) AS identity_linked
+          FROM users u
+         WHERE u.organisation_id = :org
+           AND EXISTS (
+                 SELECT 1
+                   FROM group_members gm
+                   JOIN groups g ON g.id = gm.group_id
+                  WHERE gm.user_id = u.id
+                    AND g.organisation_id = :org
+                    AND gm.group_id = ANY(CAST(:groups AS uuid[]))
+               )
+         ORDER BY u.display_name
         """,
-        {"org": str(organisation_id)},
+        # **The group is re-checked against the organisation**, not trusted from
+        # the id alone: the ids arrive from a document a builder wrote, and a
+        # group id from another org would otherwise select its members here.
+        {"org": str(organisation_id), "groups": [str(g) for g in group_ids]},
     )
 
 
