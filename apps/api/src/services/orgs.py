@@ -189,14 +189,22 @@ async def list_users(
                    FROM group_members gm
                    JOIN groups g ON g.id = gm.group_id
                   WHERE gm.user_id = u.id
-                    AND g.organisation_id = :org
                     AND gm.group_id = ANY(CAST(:groups AS uuid[]))
                )
          ORDER BY u.display_name
         """,
-        # **The group is re-checked against the organisation**, not trusted from
-        # the id alone: the ids arrive from a document a builder wrote, and a
-        # group id from another org would otherwise select its members here.
+        # **The join to `groups` is the organisation check**, and it is not
+        # decoration: `group_members` has no organisation column, so a group in
+        # one org holding a user from another is expressible in the table - and
+        # the ids here arrive from a document a builder wrote. Joining puts
+        # `groups` in the query, where `groups_same_org` (db 0008) scopes it to
+        # the caller's org, so a foreign group matches no row.
+        #
+        # An explicit `AND g.organisation_id = :org` stood here first and was
+        # **equivalent** under that policy - a mutant deleting it changed no
+        # answer. Removed rather than kept as belt-and-braces, per §223: a guard
+        # no test can make matter reads as the thing doing the work, and the
+        # next person to simplify this query would drop the join instead.
         {"org": str(organisation_id), "groups": [str(g) for g in group_ids]},
     )
 
