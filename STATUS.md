@@ -4290,6 +4290,63 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 235. The widget library is closed (this session)
+
+The user's call, in their words: *"I think the widgets we have already is enough
+as long as they all work."* So the last five ○ rows in `workshop.md` §10 are ⊘ —
+**Gantt Chart**, **Free-form Analysis**, **Action Log Timeline**, **Media
+Uploader** and **Spreadsheet Display** — and the column is empty. 33 of 53
+built, 20 out of scope, none absent.
+
+**The condition is the substantive half of the instruction, and it is a claim
+about the *built* widgets rather than the dropped ones.** "These are enough"
+only holds if they work, so this unit ran everything before marking anything:
+**1716 API tests** (2 skipped), **1423 unit**, **681 browser**, types clean. Every
+widget in the library was mutation-tested as it was built; that is what the
+sentence is resting on.
+
+**Each row carries its own reason, because §224's rule still applies**: a whole
+product goes out of scope in one line, a widget inside an application that *is*
+in scope does not. Four of the five have real pages and real specifications, and
+saying so is the difference between a boundary and a gap.
+
+`README.md` gains a **fifth kind** of ⊘, and it is the only one that is not a
+judgement about the widget: the other four kinds say *this particular thing
+should not be built*, and this one says *the set is complete*. Worth keeping
+apart, because the reversal conditions differ — the others reverse when a
+dependency arrives, this one reverses only if somebody wants more widgets.
+
+**Spreadsheet Display is the row that changed state rather than being decided
+fresh**, and it is the distinction from §224 working rather than failing. That
+pass deliberately left it ○ while marking the other `media reference` widgets ⊘,
+on the grounds that "blocked on something we have not built" and "decided
+against" are different facts. It is now the second as well as the first: the
+property type is still unbuilt, and the widget is no longer wanted either way.
+A row that can say *why* it moved is what the mark was for.
+
+**And the build order's estimates were wrong in one direction, every time.**
+Item 9 described these five in a clause each, and reading the pages contradicted
+four of them — all under-counting. Gantt Chart was "§222's Timeline shape with a
+second date"; p.305–308 is three dense pages (layered events, three no-end-time
+behaviours, three colour modes, three stacking modes, six grid granularities,
+timezone handling). Media Uploader was "§223's attachment store plus an action";
+p.493–504 is twelve pages of upload workflow, and the clause named the two ends
+and none of the middle. Free-form Analysis was one blocker away; it is thirteen
+card types and an application. §232's Prominent Term was the same shape caught
+one unit earlier.
+
+That did not cause the decision — the user's reason was sufficiency, not size —
+but it is worth recording that **a scope call made against the clause would have
+been made against the wrong number**. §216's rule catches a build-order line
+claiming *more* work than remains; this item is four instances of the opposite,
+and the habit that answers both is the same one: open the pages before writing
+the clause.
+
+**What the table is now for has changed.** It was a list of what to build next;
+it is a record of what was built and what was decided against. `grep '⊘'
+docs/parity/*.md` is still the whole list and nothing was deleted, so the
+decision reverses by editing marks rather than by reconstructing intent.
+
 ### 234. p.477's User Select, and three guards that were all doing nothing (this session)
 
 **The first widget whose options are people rather than data.** Everything else
@@ -6970,6 +7027,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A build-order estimate written from a widget's name and the endpoint it would use under-counts every time.** §235 closed the widget library and, in doing so, checked the five clauses that described what was left: four were wrong and all four in the same direction. "§222's Timeline shape with a second date" was three dense pages; "§223's attachment store plus an action to hand the upload to" was twelve pages of upload workflow and named the two ends and none of the middle; "exact-match counts, which `/object-sets/group` already answers" was true of the counts and false of the widget (§232); "one blocker away" was thirteen card types and an application. The mechanism is that a clause is written while thinking about the *mechanism* a feature needs, and a specification is mostly the **settings** around it — the three no-end-time behaviours, the six grid granularities, the retry-per-file. §216's rule catches the opposite failure, a line claiming more work than remains, and both have one habit: open the pages before writing the clause, and treat an estimate that names an endpoint as an estimate of the endpoint. The cost is not the wasted optimism — it is that a **scope decision made against the clause is made against the wrong number**, which is exactly when these lines get read.
 
 - **Where a platform enforces something structurally, code written to enforce it again is invisible dead weight — and it reads as the thing doing the work.** §234 wrote three guards into one small function and mutation testing found every one of them equivalent: two org checks that RLS had already made (`groups` has a policy, and `group_members` has its own delegating to it), and an empty-list fast path that SQL's own `x = ANY(ARRAY[]::uuid[])` already answered. The danger is not the wasted lines, it is that the next person to simplify the query keeps the decoration and drops what matters — a `JOIN` that exists "for the org check" looks removable once an explicit clause sits beside it, and the clause looks load-bearing because it names the thing. **Mutation testing is the only thing that tells them apart**, and it needs a hostile fixture to ask the question at all: here, a group in one organisation holding a user from another, written straight to the table because no route will build it. Two habits: when adding a guard to a query, check whether a policy already covers the rows (`grep` the migrations for the table), and when a guard survives deletion, delete it rather than adding a test for it — a test that cannot fail is what the guard already was.
 
