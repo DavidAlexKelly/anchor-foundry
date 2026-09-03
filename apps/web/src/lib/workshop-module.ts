@@ -165,6 +165,9 @@ export const REFERENCE_PROPS = [
   "selectedVariable",
   // p.310's Selection as filter, a write. See the API's copy.
   "filterVariable",
+  // p.478's dynamic group filter on the User Select - a variable id, and so a
+  // usage. See the API's copy.
+  "groupsVariable",
   "name",
 ] as const;
 

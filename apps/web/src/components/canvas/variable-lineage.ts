@@ -65,6 +65,9 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   filterVariable: "write",
   // Reads — p.69's "input variables… data passed into a given widget".
   variable: "read",
+  // The User Select *reads* its group filter and writes its selection
+  // elsewhere, so this one prop is upstream while `variable` is downstream.
+  groupsVariable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",
