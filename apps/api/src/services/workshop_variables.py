@@ -315,6 +315,12 @@ REFERENCE_PROPS = (
     # §191's drift guard on the way in (§218), which is the third new
     # prop it has caught.
     "filterVariable",
+    # p.478's "Specify Multipass group IDs" - a string array variable whose
+    # contents narrow the User Select's dropdown. **A read, and §191's drift
+    # guard caught it on the way in (§234)**, which is the fourth new prop it
+    # has stopped: the widget's obvious binding is its *output*, and a prop that
+    # merely filters what a widget offers is exactly the shape that gets missed.
+    "groupsVariable",
     "name",
 )
 

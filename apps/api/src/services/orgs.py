@@ -10,6 +10,7 @@ injected so the service is testable without AWS.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -135,15 +136,79 @@ async def get_org(conn: AsyncConnection, organisation_id: UUID) -> dict[str, Any
 
 
 # ---- users ------------------------------------------------------------------
-async def list_users(conn: AsyncConnection, organisation_id: UUID) -> list[dict[str, Any]]:
+async def list_users(
+    conn: AsyncConnection,
+    organisation_id: UUID,
+    *,
+    group_ids: "Sequence[UUID] | None" = None,
+) -> list[dict[str, Any]]:
+    """Every user in the organisation, or only those in the named groups.
+
+    **The filter is here rather than in the caller, and that is the point of it**
+    (p.478's "Specify Multipass group IDs" for §234's User Select). Filtering in
+    the browser would mean sending it every user *and* every group membership -
+    a directory this platform deliberately keeps to the server, since group
+    membership is what several permission decisions are made from. The narrowing
+    is not a privacy boundary either way: `GET /org/members` has always been
+    visible to every member of the org, on the reasoning that emails within one
+    org are not sensitive to it. It is about not shipping a membership graph to
+    answer a dropdown.
+
+    **An empty list of groups is not "no filter".** `None` means nobody asked;
+    `[]` means "the users in these zero groups", which is nobody. Only the first
+    branches here - the second needs no code, because `x = ANY(ARRAY[]::uuid[])`
+    is false for every x, so the filtered query already answers `[]` with
+    nothing. An `if not group_ids: return []` fast path stood here and mutation
+    testing found it **equivalent**; removed per §223, and the behaviour it
+    stated is pinned by a test against this function rather than by a guard that
+    could not be made to matter.
+
+    **The route cannot send `[]` at all**: a repeated query parameter has no
+    empty form, so over HTTP the only two states are absent and non-empty. The
+    case the distinction exists for is a widget whose group ids come from a
+    variable that has resolved to nothing, and the widget answers it by *not
+    asking* - a request it cannot express would come back as the whole
+    directory.
+    """
+    if group_ids is None:
+        return await fetch_all(
+            conn,
+            """
+            SELECT id, email, display_name, org_role, status, created_at,
+                   (cognito_sub IS NOT NULL) AS identity_linked
+              FROM users WHERE organisation_id = :org ORDER BY display_name
+            """,
+            {"org": str(organisation_id)},
+        )
     return await fetch_all(
         conn,
         """
-        SELECT id, email, display_name, org_role, status, created_at,
-               (cognito_sub IS NOT NULL) AS identity_linked
-          FROM users WHERE organisation_id = :org ORDER BY display_name
+        SELECT u.id, u.email, u.display_name, u.org_role, u.status, u.created_at,
+               (u.cognito_sub IS NOT NULL) AS identity_linked
+          FROM users u
+         WHERE u.organisation_id = :org
+           AND EXISTS (
+                 SELECT 1
+                   FROM group_members gm
+                   JOIN groups g ON g.id = gm.group_id
+                  WHERE gm.user_id = u.id
+                    AND gm.group_id = ANY(CAST(:groups AS uuid[]))
+               )
+         ORDER BY u.display_name
         """,
-        {"org": str(organisation_id)},
+        # **The join to `groups` is the organisation check**, and it is not
+        # decoration: `group_members` has no organisation column, so a group in
+        # one org holding a user from another is expressible in the table - and
+        # the ids here arrive from a document a builder wrote. Joining puts
+        # `groups` in the query, where `groups_same_org` (db 0008) scopes it to
+        # the caller's org, so a foreign group matches no row.
+        #
+        # An explicit `AND g.organisation_id = :org` stood here first and was
+        # **equivalent** under that policy - a mutant deleting it changed no
+        # answer. Removed rather than kept as belt-and-braces, per §223: a guard
+        # no test can make matter reads as the thing doing the work, and the
+        # next person to simplify this query would drop the join instead.
+        {"org": str(organisation_id), "groups": [str(g) for g in group_ids]},
     )
 
 

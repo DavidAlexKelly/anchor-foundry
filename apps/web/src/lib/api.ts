@@ -85,7 +85,21 @@ export const api = {
   me: () => request<Me>("/auth/me"),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   org: () => request<Org>("/org"),
-  orgMembers: () => request<OrgUser[]>("/org/members"),
+  /** Every user in the organisation, or — with `groupIds` — only those in the
+   * named groups (p.478's group filter, §234).
+   *
+   * **A caller with a filter must not pass an empty array**: a repeated query
+   * parameter has no empty form, so `[]` produces the same request as no filter
+   * at all and answers with the whole directory. `user-select.shouldAsk` is
+   * where that decision is made and tested. */
+  orgMembers: (groupIds?: readonly string[]) =>
+    request<OrgUser[]>(
+      `/org/members${
+        groupIds && groupIds.length > 0
+          ? `?${groupIds.map((g) => `group_id=${encodeURIComponent(g)}`).join("&")}`
+          : ""
+      }`,
+    ),
   orgGroups: () => request<import("./types").Group[]>("/org/groups"),
   workspaces: () => request<WorkspaceSummary[]>("/workspaces"),
   workspace: (id: string) => request<WorkspaceDetail>(`/workspaces/${id}`),

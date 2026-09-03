@@ -36,6 +36,10 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   activeVariable: "write",
   selectedVariable: "write",
   filterVariable: "write",
+  // p.478's group filter narrows what the User Select *offers*, so the
+  // widget reads it — its own output is `variable`, which is the write.
+  // One widget with an edge in each direction.
+  groupsVariable: "read",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

@@ -4290,6 +4290,96 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 234. p.477's User Select, and three guards that were all doing nothing (this session)
+
+**The first widget whose options are people rather than data.** Everything else
+in this file reads an object set; this reads the organisation's directory — and
+the access question it looks like it raises was already answered. `GET
+/org/members` has been visible to every member since the org routes were
+written, with the reasoning written down there: emails within one org are not
+sensitive to it. So the widget needs no new boundary and creates none, and the
+unit is about shape rather than about permission.
+
+**The output's *shape* is the setting**, which no other picker here does. p.478
+makes Single a `string` variable holding one id and Multiple a `string[]`, so
+the mode decides what kind of variable an author binds and what every downstream
+reader sees. The panel offers the matching kind rather than both — an array
+written into a string variable is refused on save, a string written into an
+array variable looks fine and reads wrong — and changing the mode **clears the
+binding**, because the alternative is a refusal on the next save, at a moment
+that has nothing to do with the change that caused it.
+
+**p.478's group filter is built rather than refused.** This platform has groups
+(migration 0001), the setting's shape carries over, and the narrowing is done in
+`list_users` so a dropdown never needs the membership graph on the wire. Foundry's
+"View group membership" permission note does not carry over: it is about a
+boundary this platform does not draw.
+
+One rule the server cannot enforce falls to the widget: **a repeated query
+parameter has no empty form**, so "no groups" and "no filter" are the same
+request, and that request answers with the whole organisation. A
+configured-but-empty filter therefore does not ask at all — otherwise a filtered
+picker flashes every user in the org and then narrows, which is both wrong and
+the kind of wrong nobody reports.
+
+**§180's rule, broken and then found by a browser.** The panel's `requires` was
+`["variable"]`, which makes configuration wait for the output binding — and the
+*mode* is what decides which variables the output picker offers, so the widget
+was permanently unconfigurable. §180 wrote that exact sentence at the Parameter
+control ("a rule that made configuration wait for an input would leave it
+permanently unconfigurable"); it is sharper here, because this widget has no
+input at all. Nothing in the model could have caught it.
+
+**37 mutants, 37 caught, 0 hangs, 0 no-ops** — 26 on the model, 3 on the server,
+8 through a browser.
+
+**Three defensive constructs in one small function, and mutation testing found
+all three equivalent.** `list_users`'s group filter was written with
+`AND g.organisation_id = :org`, a `JOIN groups g` to carry it, and an
+`if not group_ids: return []` fast path. None of them changed an answer:
+
+* `groups` carries RLS scoping it to the caller's org (db 0008), so the explicit
+  clause was redundant.
+* `group_members` has its **own** policy (db 0006) delegating to that same one,
+  so a membership row whose group belongs to another org is invisible to the
+  connection — the join was redundant too. **This is a correction**: I claimed
+  in a commit that the join was the real check, having read the `groups` policy
+  and not `group_members`'s.
+* `x = ANY(ARRAY[]::uuid[])` is false for every x, so the empty-list branch was
+  a fast path rather than a semantic.
+
+All three removed per §223. The docstring now names what actually enforces each
+rule, and the tests stay — the cross-org one as a test of the *policies* rather
+than of this SQL, and the empty-list one pinned against the function instead of
+against a guard that could not be made to matter.
+
+**The general shape is worth having: when a platform already enforces something
+structurally, code written to enforce it again is invisible dead weight.** It
+reads as the thing doing the work, so the next person to simplify keeps the
+decoration and removes what matters. Mutation testing is what tells them apart,
+and it took a hostile fixture — a group in one org holding a user from another,
+written straight to the table because no route builds it — to even ask the
+question.
+
+**Two more findings from the browser rather than the model**: the seeded users
+have real display names (`Ada Admin`, not `admin`), so a test written against
+the email local part would have passed only against a widget that had got
+`labelOf` wrong; and `org/page.tsx` passed `api.orgMembers` bare as a React Query
+`queryFn`, which after this unit would hand the query context in as the group
+filter. Harmless today — the context has no `length`, so no `group_id` is sent —
+and exactly the kind of accident that stops being harmless when an argument's
+shape changes. The compiler caught that one.
+
+**1423 unit tests** (was 1395); **681 browser tests** (was 668); **1716 API
+tests**, 2 skipped (was 1712) — the four new ones are the group filter and the
+empty-list case the route cannot express.
+
+**Recounted from the table**: `workshop.md` §10 goes from 32 of 53 to **33**, and
+the ○ column from 6 to 5. The build-order line's page range was wrong too —
+p.477–481 is the widget plus the *next section's* overview; p.477–478 is the
+widget. A range read off where a section starts measures the header, which is
+§223's PDF Viewer lesson from the other end.
+
 ### 233. p.470's Exploration Filter Pills, and the seventh copy of one sentence (this session)
 
 **The first widget that reads a set's filters rather than writing one.** Every
@@ -6880,6 +6970,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **Where a platform enforces something structurally, code written to enforce it again is invisible dead weight — and it reads as the thing doing the work.** §234 wrote three guards into one small function and mutation testing found every one of them equivalent: two org checks that RLS had already made (`groups` has a policy, and `group_members` has its own delegating to it), and an empty-list fast path that SQL's own `x = ANY(ARRAY[]::uuid[])` already answered. The danger is not the wasted lines, it is that the next person to simplify the query keeps the decoration and drops what matters — a `JOIN` that exists "for the org check" looks removable once an explicit clause sits beside it, and the clause looks load-bearing because it names the thing. **Mutation testing is the only thing that tells them apart**, and it needs a hostile fixture to ask the question at all: here, a group in one organisation holding a user from another, written straight to the table because no route will build it. Two habits: when adding a guard to a query, check whether a policy already covers the rows (`grep` the migrations for the table), and when a guard survives deletion, delete it rather than adding a test for it — a test that cannot fail is what the guard already was.
 
 - **A negative claim about an async page cannot be checked by reading once, and none of the obvious fixes work.** §233 needed "pressing Escape wrote nothing", and the write it was ruling out takes a round trip — so a read taken straight after the keypress sees the page *before* the thing that would have failed it, and passes whether or not the bug is there. Three attempts, each wrong in its own way: `settled` waits for a canvas block that is already on screen, so it adds nothing; a retrying `expect` stops at the **first** read that matches, and that is precisely the one taken too early; and re-opening a control to inspect its state races on the click. The primitive that works is `stays` — keep looking for longer than the write would have taken and fail on the first look that disagrees — and it is honest about being timeout-based: it shows that nothing happened *yet*. Where an ordered positive signal exists (a later action whose completion is observable), wait for that instead. The tell is a test asserting an absence right after an action: `to_have_count(0)`, an unchanged list, a value that should not have moved. §209 wrote half of this rule for the *first* render; this is the other half, for everything after it.
 
