@@ -4370,6 +4370,10 @@ filter. Harmless today — the context has no `length`, so no `group_id` is sent
 and exactly the kind of accident that stops being harmless when an argument's
 shape changes. The compiler caught that one.
 
+**1423 unit tests** (was 1395); **681 browser tests** (was 668); **1716 API
+tests**, 2 skipped (was 1712) — the four new ones are the group filter and the
+empty-list case the route cannot express.
+
 **Recounted from the table**: `workshop.md` §10 goes from 32 of 53 to **33**, and
 the ○ column from 6 to 5. The build-order line's page range was wrong too —
 p.477–481 is the widget plus the *next section's* overview; p.477–478 is the
