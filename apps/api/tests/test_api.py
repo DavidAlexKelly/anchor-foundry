@@ -440,6 +440,57 @@ def test_narrowing_to_a_group_from_another_org_finds_nobody(
     assert r.status_code == 200, r.text
     assert r.json() == []
 
+    # **And now the case that actually needs the organisation check.** Above,
+    # the foreign group's only member is also foreign, so `users.organisation_id
+    # = :org` alone excludes them and the query answers correctly even without
+    # looking at the *group's* org - a mutant deleting that check survived this
+    # test until the state below existed. `group_members` has no organisation
+    # column, so a group in one org holding a user from another is expressible;
+    # written straight to the table because no route offers to build it.
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO group_members (group_id, user_id) VALUES (%s,%s)",
+            (theirs, fx.viewer),
+        )
+    r = client.get("/api/org/members", headers=hdr(fx.viewer_sub),
+                   params={"group_id": theirs})
+    assert r.status_code == 200, r.text
+    assert r.json() == [], "a group from another org selected one of our users"
+
+
+@pytest.mark.anyio
+async def test_asking_for_the_users_in_no_groups_finds_nobody(fx: Fixture) -> None:
+    """`list_users(group_ids=[])` is nobody, and this has to be asked of the
+    **service** because no URL can express it.
+
+    A repeated query parameter has no empty form, so over HTTP the only two
+    states are absent and non-empty — which is exactly why the browser's
+    `shouldAsk` refuses to send a request it cannot express. The branch is not
+    dead code, though: `list_users` has more callers than the one route, and a
+    next caller passing `[]` must not silently get everybody. A mutation that
+    deleted it survived every route test there is, because every route test goes
+    through the door that cannot reach it.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from src.services import orgs as org_service
+
+    engine = create_async_engine(APP_DSN)
+    try:
+        async with engine.connect() as conn:
+            # RLS reads the caller from the session, the way `user_connection`
+            # sets it up for a request.
+            await conn.exec_driver_sql(
+                f"SELECT set_config('app.user_id', '{fx.viewer}', true)"
+            )
+            everybody = await org_service.list_users(conn, fx.org)
+            nobody = await org_service.list_users(conn, fx.org, group_ids=[])
+    finally:
+        await engine.dispose()
+
+    assert len(everybody) > 1, "the fixture should have several users"
+    assert nobody == []
+
 
 def test_the_member_list_is_unchanged_when_no_group_is_named(
     client: TestClient, fx: Fixture
