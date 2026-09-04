@@ -393,7 +393,13 @@ def test_the_builder_cannot_edit_rows(page, api) -> None:
     mod = build(api, "Inline builder",
                 table_props={"inlineEditByDefault": True})
     open_builder(page, mod)
-    settled(page)
+    # **The anchor is a rendered row, not the block.** The footer is gated on
+    # the rows having loaded, and `settled(page)` alone returns as soon as
+    # `.canvas-block` is visible — so both assertions below passed against a
+    # table that had not drawn yet, and a mutant deleting the `mode === "run"`
+    # guard survived. `settled`'s own docstring names this trap: "every test
+    # that asserts an absence waits for a presence first."
+    settled(page, page.get_by_text("T1", exact=True).first)
 
     expect(page.get_by_test_id("inline-edit-footer")).to_have_count(0)
     expect(page.get_by_test_id("edit-T1-status")).to_have_count(0)
@@ -503,3 +509,72 @@ def test_the_footer_settings_appear_only_once_an_action_is_chosen(page, api) -> 
     page.get_by_test_id("inline-edit-action").select_option(mod.action["id"])
     expect(page.get_by_text("Enable edit mode by default")).to_be_visible()
     expect(page.get_by_text("One-click submit")).to_be_visible()
+
+
+def test_a_table_with_nothing_mapped_offers_no_edit_mode(page, api) -> None:
+    """An action with no parameter pointed at a column is a mode with nothing in
+    it: Edit table would open, and every cell would still be a value.
+
+    **No fixture in this file reached this** until a mutant deleting the check
+    survived — every other table here supplies a mapping, so "has an action" and
+    "has an editable column" were the same condition throughout.
+    """
+    mod = build(api, "Inline unmapped", table_props={"inlineEditMapping": {}})
+    open_module(page, mod)
+    settled(page, page.get_by_text("T1", exact=True).first)
+
+    expect(page.get_by_test_id("inline-edit-footer")).to_have_count(0)
+
+
+def test_typing_in_a_cell_does_not_change_the_active_row(page, api) -> None:
+    """p.224's active object and p.242's editing, on one table.
+
+    **A fixture that could not tell two implementations apart** until now: every
+    other table in this file binds no `activeVariable` and wires no row events,
+    so `rowsAreClickable` is false and there is no row handler for the cell's
+    `stopPropagation` to stop — a mutant removing it changed nothing anywhere.
+    Here the rows *are* clickable, so clicking into a cell to type would
+    otherwise also select the row, and a reader correcting the third row would
+    watch every widget downstream jump to it.
+    """
+    mod = Module(api, "Inline cell click")
+    type_id = mod.object_type(
+        columns=["id", "status", "note"], rows=ROWS, key="id", title="id",
+    )
+    action = make_action(api, mod, type_id)
+    mod.define({
+        "format": 2,
+        "layout": layout({
+            "tbl": {
+                "resolvedName": "CanvasObjectTable",
+                "props": {
+                    "objectSetVariable": "v_all", "columns": "status,note",
+                    "pageSize": 25, "activeVariable": "v_active",
+                    "autoSelect": True,
+                    "inlineEditAction": action["id"],
+                    "inlineEditMapping": {"status": "status"},
+                    "inlineEditByDefault": True,
+                },
+            },
+        }),
+        "variables": {
+            "v_all": {"id": "v_all", "kind": "object_set", "label": "All",
+                      "object_set": object_set(type_id)},
+            "v_active": {"id": "v_active", "kind": "array", "label": "Active"},
+        },
+        "events": {},
+    })
+    open_module(page, mod)
+    settled(page, page.get_by_text("T1", exact=True).first)
+
+    # p.224's auto-selection puts the first row active; typing into the third
+    # row's cell must leave it there.
+    rows = page.locator("tbody tr")
+    expect(rows.nth(0)).to_have_attribute("aria-current", "true")
+    cell(page, "T3", "status").click()
+    cell(page, "T3", "status").fill("typed")
+
+    expect(page.get_by_test_id("inline-edit-count")).to_have_text("1 row edited")
+    stays(lambda: rows.nth(0).get_attribute("aria-current"),
+          lambda v: v == "true",
+          what="the active row unchanged by typing in another row's cell")
