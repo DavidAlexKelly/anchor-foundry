@@ -158,6 +158,11 @@ def test_an_edit_reaches_the_object_only_when_it_is_submitted(page, api) -> None
     page.get_by_test_id("inline-edit-toggle").click()
 
     cell(page, "T1", "status").fill("triaged")
+    # **The control keeps what was typed.** Without this, a cell pinned to the
+    # stored value passes every other check in this file - `staged` is updated
+    # either way, so the count is right and the submission is right, and the
+    # only thing wrong is that the reader watches their own text disappear.
+    expect(cell(page, "T1", "status")).to_have_value("triaged")
     expect(page.get_by_test_id("inline-edit-count")).to_have_text("1 row edited")
     stays(lambda: mirror_values(page),
           lambda v: "triaged" not in v,
@@ -519,11 +524,20 @@ def test_a_table_with_nothing_mapped_offers_no_edit_mode(page, api) -> None:
     survived — every other table here supplies a mapping, so "has an action" and
     "has an editable column" were the same condition throughout.
     """
-    mod = build(api, "Inline unmapped", table_props={"inlineEditMapping": {}})
+    mod = build(api, "Inline unmapped",
+                table_props={"inlineEditMapping": {}, "inlineEditByDefault": True})
     open_module(page, mod)
     settled(page, page.get_by_text("T1", exact=True).first)
 
     expect(page.get_by_test_id("inline-edit-footer")).to_have_count(0)
+    # **And no undo column**, which is the half the footer's absence does not
+    # cover: the footer is gated by its own expression, so a mutant deleting
+    # this check from `inEditMode` left the footer hidden and put an empty
+    # left-most column in every row. `inlineEditByDefault` is what makes the
+    # mutant reachable at all - without it `editing` is false and the check
+    # under test never decides anything.
+    heads = page.locator(".canvas-block > .data-grid thead th")
+    expect(heads.first).to_have_text("Key")
 
 
 def test_typing_in_a_cell_does_not_change_the_active_row(page, api) -> None:
