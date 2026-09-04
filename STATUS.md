@@ -4290,6 +4290,75 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 237. An action can upload an attachment, and one renderer instead of two (this session)
+
+§236 found this and left it, which was the right order: it is the smallest unit
+on the board and it turned out to be a **deletion** rather than an addition.
+
+**The Canvas Action Form rendered a text box for an `attachment` parameter.**
+Every piece existed — the property type (db 0029), `POST /attachments` (§39,
+§223), `attachment` in `actions._PARAMETER_TYPES` — and
+`pure.inputTypeFor` answers `"text"` for anything it does not name, while
+`property_values._coerce_attachment` requires the four-field object the upload
+endpoint returned. So the control could never produce a valid value. That is
+§214's rule about settings, applied to an input: a control that cannot work is
+worse than an absent one, because it looks like a working form.
+
+**The fix was not a new control; it was removing the second one.**
+`property-value.tsx`'s `PropertyInput` has said *"the input for one editable
+property in an action form"* in its own docstring since it was written — and the
+*Canvas* action form, the other action form, grew its own field instead. Two
+renderers for one question, disagreeing about two types: `attachment`
+(impossible) and `boolean` (a text box where the other offers a three-state
+select that can say "not set"). §231, §233 and now this: **the third time this
+session that a decision made once was made again, worse, somewhere else.**
+
+The Canvas form was better in one respect and it was kept: `inputTypeFor` moved
+*into* `PropertyInput`, so an integer gets a numeric control everywhere. The
+input type is a keyboard, not a parser — values still leave as strings and the
+server coerces against the declared type.
+
+**`hasValue` is written down because the old check had become accidentally
+correct.** `!String(values[name] ?? "").trim()` reported an attachment as
+supplied because `"[object Object]"` is non-blank, not because an object is a
+value — an *empty* object would have answered the same way. `false` and `0` are
+answers, which is `workshop_variables._truthy`'s rule at a different layer.
+
+**15 mutants, 15 caught, 0 hangs, 0 no-ops** — 7 on the model, 8 through a
+browser.
+
+**Chasing a survivor found a real bug, which is the third time this session a
+mutant meant more than "add a test".** `seedActionForm` stringifies every object
+it seeds, so a form re-opened on an object that already carries an attachment
+gets the reference as **JSON text**. `isAttachment` said no, the file input kept
+its `required`, and the browser refused to submit a value that was already
+there — the React gate said the parameter was satisfied and native validation
+disagreed, and only one of those was visible. The fix is the one the server had
+already made for itself: `_coerce_attachment` accepts a JSON string "because
+that is the round trip", and the browser now does too.
+
+**That change would have broken the read-only renderer.** `PropertyValue` used
+`isAttachment` as a *type guard* and then read `.key` off the value — true for a
+string, `undefined` at runtime. `parseAttachment` returns the object or null and
+both callers use it, so the guard cannot lie. Checked against the four suites
+that render attachments (37 tests) rather than assumed.
+
+**Two survivors were the same missing distinction**: `required` on the *button*
+and `required` on the *control* are different claims. The button reports the
+form's state, the attribute reports the field's — and the attribute is what a
+screen reader announces and what native validation acts on. Every existing test
+asserted the first.
+
+`ontology.md`'s row **split in two**, because it said "media / attachments" and
+the halves are in different states: attachments are ◑ §237, and media is ⊘ —
+p.125–126 is media *sets*, needing the `media reference` type §224 and §235
+already marked widgets out of scope for. §224's rule about keeping "blocked" and
+"declined" apart, applied to one line that held both.
+
+○ and named: p.127's **Allow multiple values** needs a list-valued parameter this
+platform has no concept of — a parameter's type is one of
+`ontology.PROPERTY_TYPES`, with no arity beside it.
+
 ### 236. An audit of what is left, and the rule §216 predicted would be forgotten (this session)
 
 With the widget library closed (§235), the question is what remains across the
@@ -7005,6 +7074,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 ## Known rough edges worth knowing about
 
+- **A browser assertion that waits less than its neighbours will be the one that fails under load, and only there.** §237's full run reddened `test_a_property_hit_says_which_object_type_it_is_on`, which passed four times in isolation afterwards. Nothing in the unit touched ontology search; what was true of that test and not of the two above it in the same file is that they wait 20s (`eventually`) for the debounced search to return and it waited `expect`'s 5s default. That is not proof of the cause, but it is the only structural difference, and widening the window leaves the claim intact — a mutant on the owner label still fails it at the assertion rather than at the wait. **When a test in a file waits on the same precondition as its siblings, it should wait on it the same way**; the odd one out is where an hour-long run finds its flake.
+
 - **A migration that adds an enum value cannot be cleanly re-applied after editing** - Postgres has no way to drop an enum label, so the usual "reset an already-applied migration" recipe (drop what it created, delete its `schema_migrations` row, re-run) leaves the label behind and the re-run fails with `enum label "x" already exists`. Hit while fixing 0025 mid-session. `ADD VALUE IF NOT EXISTS` makes the file idempotent and is now used there; any future migration adding an enum value should do the same, because the alternative on a shared dev database is recreating the type and everything that references it.
 
 - The local dev Postgres instance (this sandbox only) needs manual restarting periodically - not a real issue, just a sandbox quirk, documented in the restart command used throughout this session.
@@ -7087,6 +7158,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A surviving mutant on a guard usually means the value never has the shape the guard expects — the missing test is the symptom, not the finding.** Three times this session a mutant looked like a coverage hole and was a defect: §233's `stays`, §234's three equivalent guards, and §237's `required={required && !isAttachment(value)}`. The last is the clearest. Deleting `!isAttachment(value)` changed nothing, which reads as "nobody tested it" — and the reason it changed nothing is that `seedActionForm` **stringifies** every object it seeds, so the value reaching the guard was JSON text and `isAttachment` was answering `false` on the one path the guard exists for. Writing a test would have pinned the broken behaviour. The habit: when a guard survives, ask *what value reaches it* before asking what test is missing, and write the value down — the answer is usually that some layer between the source and the guard changed its type on the way past. Then decide whether to delete the guard (§223) or fix the shape.
 
 - **A checklist row and a build-order line go stale at different rates, and the difference is the qualifier.** §236 audited 135 ○ rows and every one spot-checked was accurate, while two build-order items in the same file had been finished for eighty-odd units without being struck. The rows survive because each was written by reading the Foundry page and carries the clause that makes it checkable — "Value formatting **local to the module not the ontology**", "Derived properties **defined at module level**". Both of those name features whose *ontology-level* twin is built and sitting in the tree under a matching filename, so a row without the qualifier would have read as stale on sight and been wrongly ticked. A build-order clause has no qualifier by construction: it is an estimate of work, written from the feature's name. **So when auditing, trust the rows and re-derive the build order** — and when writing either, the test is whether the line says something a `grep` could disagree with.
 

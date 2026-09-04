@@ -209,7 +209,7 @@ import { eventsFor, interpolate, run as runEvents, useEventContext } from "./eve
 import { invalidateCanvasReads } from "./refresh";
 import { describeSet, selectionOf, useOnScreen, useSetPage } from "./object-set";
 import {
-  MIN_SHARE, formatWeights, inputTypeFor, parseWeights, pivotClauses, resizeWeights,
+  MIN_SHARE, formatWeights, hasValue, parseWeights, pivotClauses, resizeWeights,
   roundWeight, seedActionForm, seriesLabel, seriesPointLabel, type PivotPick,
 } from "./pure";
 import {
@@ -223,7 +223,7 @@ import {
 } from "./filter-sql";
 import { Chart, PieChart, toPoints } from "./charts";
 import { MapCanvas, toLatLon, type MapPoint } from "./map";
-import { PropertyValue } from "@/components/property-value";
+import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 
 /** The grid's own line height, in pixels (`globals.css`, `.data-grid td`).
@@ -10992,7 +10992,12 @@ export function CanvasActionForm({
   });
 
   const [picked, setPicked] = useState("");
-  const [values, setValues] = useState<Record<string, string>>({});
+  // **`unknown`, not `string`, as of §237.** An attachment parameter's value is
+  // the reference object `POST /attachments` returned and a boolean's is a
+  // boolean — the map was typed `string` because the old field could only ever
+  // produce one, which is the type recording a limitation rather than a rule.
+  // The server coerces each value against the parameter's declared type.
+  const [values, setValues] = useState<Record<string, unknown>>({});
   const instanceId = subjectVariable ? String(subject?.id ?? "") : picked;
 
   // The fields start at what the object currently says, so the form shows the
@@ -11081,9 +11086,7 @@ export function CanvasActionForm({
   // p.25: hidden parameters are supplied by the caller and never drawn. The
   // form still sends them - `values` carries every parameter it seeded.
   const visible = (actionType?.parameters ?? []).filter((p) => !p.hidden);
-  const missingRequired = visible.filter(
-    (p) => p.required && !String(values[p.api_name] ?? "").trim(),
-  );
+  const missingRequired = visible.filter((p) => p.required && !hasValue(values[p.api_name]));
 
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
@@ -11136,14 +11139,25 @@ export function CanvasActionForm({
                 {parameter.display_name || parameter.api_name}
                 {parameter.required && <span aria-hidden> *</span>}
               </span>
-              <input
-                type={inputTypeFor(parameter.data_type)}
-                value={values[parameter.api_name] ?? ""}
-                required={parameter.required}
-                aria-required={parameter.required}
-                onChange={(e) => setValues({ ...values, [parameter.api_name]: e.target.value })}
-                disabled={!live}
-              />
+              {/* **`PropertyInput`, not a local `<input>`** (§237). That
+                  component's own docstring says it is "the input for one
+                  editable property in an action form", and this form — the
+                  other action form — had its own field instead. The two
+                  disagreed about `attachment`, where a text box could never
+                  produce the reference `POST /attachments` returns, and about
+                  `boolean`, which now gets a three-state select. `disabled`
+                  stays here because it is about the *builder*, not the type. */}
+              <fieldset disabled={!live} className="canvas-action-field">
+                <PropertyInput
+                  workspaceId={workspaceId}
+                  dataType={parameter.data_type as never}
+                  value={values[parameter.api_name] ?? null}
+                  onChange={(next) =>
+                    setValues({ ...values, [parameter.api_name]: next })}
+                  label={parameter.display_name || parameter.api_name}
+                  required={parameter.required}
+                />
+              </fieldset>
             </label>
           ))}
           <button

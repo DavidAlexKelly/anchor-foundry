@@ -163,6 +163,22 @@ def test_a_required_parameter_blocks_submission_until_it_has_a_value(page, reado
     expect(submit).to_be_enabled()
 
 
+def test_a_required_parameter_says_so_on_the_control_itself(page, readonly):
+    """`required` on the input, which the disabled button does not say.
+
+    **Two different claims, and only one of them was tested.** The button
+    reports the *form's* state — "something, somewhere, is missing" — and the
+    test above asserts that. The attribute reports the *field's*, which is what
+    a screen reader announces as somebody moves through the inputs and what
+    native validation acts on. A mutant deleting it from `PropertyInput` left
+    every existing test green (§237).
+    """
+    open_module(page, readonly)
+    choose_the_ticket(page)
+    expect(field(page, "status")).to_have_attribute("required", "")
+    expect(field(page, "status")).to_have_attribute("aria-required", "true")
+
+
 def test_a_refused_submission_shows_the_criterion_s_own_message(page, api, readonly):
     """p.56: "The failure message informs the user about why they are blocked
     from submitting an Action."

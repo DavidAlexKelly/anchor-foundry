@@ -18,6 +18,9 @@ import type {
   AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, ValueFormat,
 } from "@/lib/types";
 import { formatValue } from "@/lib/value-format";
+// The Canvas Action Form's rule for which control a type gets, now shared
+// rather than duplicated (§237).
+import { inputTypeFor } from "@/components/canvas/pure";
 
 function isGeoPoint(value: unknown): value is GeoPoint {
   return (
@@ -27,12 +30,47 @@ function isGeoPoint(value: unknown): value is GeoPoint {
   );
 }
 
+/** Whether this is the reference `POST /attachments` returned.
+ *
+ * **A JSON string counts, and that is the round trip rather than laxity** —
+ * exactly the reasoning `property_values._coerce_attachment` gives for
+ * accepting one on the way in. Two places produce the string form: write-back
+ * stores the whole reference as JSON text in the dataset column, so the next
+ * sync reads it back; and `pure.seedActionForm` stringifies every object it
+ * seeds a form with.
+ *
+ * §237 found the second the way the server found the first. A form re-opened on
+ * an object that already carries an attachment seeds the parameter as JSON
+ * text; reading only the object form meant the file input kept its `required`,
+ * and the browser refused to submit a value that was already there.
+ */
 function isAttachment(value: unknown): value is AttachmentRef {
-  return (
-    typeof value === "object" && value !== null &&
-    typeof (value as AttachmentRef).key === "string" &&
-    typeof (value as AttachmentRef).filename === "string"
-  );
+  const parsed = parseAttachment(value);
+  return parsed !== null;
+}
+
+function parseAttachment(value: unknown): AttachmentRef | null {
+  let candidate = value;
+  if (typeof candidate === "string") {
+    const text = candidate.trim();
+    // Cheap gate before parsing: every other seeded value is a plain string,
+    // and running `JSON.parse` over each of them to fail would be a try/catch
+    // in the render path of every text field.
+    if (!text.startsWith("{")) return null;
+    try {
+      candidate = JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  if (
+    typeof candidate === "object" && candidate !== null &&
+    typeof (candidate as AttachmentRef).key === "string" &&
+    typeof (candidate as AttachmentRef).filename === "string"
+  ) {
+    return candidate as AttachmentRef;
+  }
+  return null;
 }
 
 function humanSize(bytes: number): string {
@@ -147,24 +185,25 @@ export function PropertyValue({
       </span>
     );
   }
-  if (dataType === "attachment" && isAttachment(value)) {
+  const attached = dataType === "attachment" ? parseAttachment(value) : null;
+  if (attached) {
     // **Shown, not just offered** (decision 0009, part 2). An attachment
     // holding an image *is* the media reference this platform can honour -
     // bytes, a MIME type, and a URL that enforces the workspace boundary - and
     // the only thing missing was that a PNG drew a download link. The filename
     // and size stay under it either way: a picture with no name is not a file
     // anybody can go and find.
-    const href = objApi.attachmentUrl(workspaceId, value.key);
-    const kind = mediaKind(value.content_type);
+    const href = objApi.attachmentUrl(workspaceId, attached.key);
+    const kind = mediaKind(attached.content_type);
     const caption = (
-      <a href={href} download={value.filename} className="slug">
-        {value.filename} ({humanSize(value.size)})
+      <a href={href} download={attached.filename} className="slug">
+        {attached.filename} ({humanSize(attached.size)})
       </a>
     );
     if (kind === "file") {
       return (
-        <a href={href} download={value.filename}>
-          {value.filename} <span className="slug">({humanSize(value.size)})</span>
+        <a href={href} download={attached.filename}>
+          {attached.filename} <span className="slug">({humanSize(attached.size)})</span>
         </a>
       );
     }
@@ -173,7 +212,7 @@ export function PropertyValue({
         <Media
           workspaceId={workspaceId}
           kind={kind}
-          attachment={value}
+          attachment={attached}
         />
         {caption}
       </span>
@@ -220,30 +259,61 @@ function styleOf(style: PropertyStyle | null | undefined): CSSProperties | undef
   return Object.keys(out).length ? out : undefined;
 }
 
-/** The input for one editable property in an action form. */
+/** The input for one editable property in an action form.
+ *
+ * **One renderer for both action forms as of §237, and the docstring above was
+ * true of only one of them for a long time.** This was written for action forms
+ * — the sentence has said so since it was added — and the *Canvas* Action Form
+ * never used it: `CanvasActionForm` grew its own field, a plain `<input>` typed
+ * by `pure.inputTypeFor`. Two renderers for one question, and they disagreed
+ * about two types.
+ *
+ * The disagreement was not cosmetic. `inputTypeFor` answers `"text"` for an
+ * **attachment**, and an attachment value must be the object `POST /attachments`
+ * returned (`property_values._coerce_attachment` checks its four fields) — so
+ * the Canvas form offered a box whose contents could essentially never be valid.
+ * A control that cannot work is worse than an absent one, which is §214's rule
+ * about settings and applies to inputs for the same reason. It answered `"text"`
+ * for a **boolean** too, where this offers the three-state select that can say
+ * "not set".
+ *
+ * The Canvas form was better in one respect and that is kept: `type="number"`
+ * for an integer or a float, which brings a numeric keypad on a phone and the
+ * browser's own stepper. The comment below explains why the *value* is still
+ * not parsed here.
+ */
 export function PropertyInput({
   workspaceId,
   dataType,
   value,
   onChange,
   label,
+  required = false,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
   value: unknown;
   onChange: (next: unknown) => void;
   label: string;
+  /** p.25's required parameters. Passed through to the control rather than
+   * enforced here: the server refuses a missing required value, and a second
+   * rule in the browser would be a second answer to one question. */
+  required?: boolean;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   if (dataType === "attachment") {
-    const current = isAttachment(value) ? value : null;
+    const current = parseAttachment(value);
     return (
       <div>
         <input
           type="file"
           aria-label={label}
+          // Required only until something is attached: the value the action
+          // sends is the reference already uploaded, so re-picking a file is
+          // not what "required" is asking for.
+          required={required && !isAttachment(value)}
           disabled={uploading}
           onChange={async (e) => {
             const file = e.target.files?.[0];
@@ -272,6 +342,7 @@ export function PropertyInput({
     return (
       <select
         aria-label={label}
+        required={required}
         value={value === true ? "true" : value === false ? "false" : ""}
         onChange={(e) => onChange(e.target.value === "" ? null : e.target.value === "true")}
       >
@@ -282,14 +353,21 @@ export function PropertyInput({
     );
   }
 
-  // Everything else is text, including geopoint ("lat,lon" is both what the
-  // API accepts and what a person can type) and numbers: the API coerces a
-  // numeric string to a number, so parsing it here would only duplicate a
-  // rule that has to live server-side anyway.
+  // Everything else goes through `inputTypeFor`, which is the Canvas form's
+  // own rule and the one thing it had that this did not: a number gets a
+  // numeric control, a date a date one, and the rest text — geopoint included,
+  // since "lat,lon" is both what the API accepts and what a person can type.
+  //
+  // **The input *type* is a keyboard, not a parser.** The value still leaves
+  // here as the string that was typed: the API coerces a numeric string to a
+  // number against the declared type, and doing it here as well would be a
+  // second rule free to disagree with the one that decides.
   return (
     <input
-      type={dataType === "date" ? "date" : "text"}
+      type={inputTypeFor(dataType ?? "string")}
       aria-label={label}
+      required={required}
+      aria-required={required || undefined}
       placeholder={dataType === "geopoint" ? "lat,lon — e.g. 51.5074,-0.1278" : undefined}
       value={value === null || value === undefined ? "" : String(value)}
       onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
