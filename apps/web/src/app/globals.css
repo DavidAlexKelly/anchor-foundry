@@ -2186,6 +2186,24 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 }
 .canvas-table-pager .canvas-widget-empty { margin: 0; font-variant-numeric: tabular-nums; }
 
+/* p.242's footer controls and p.243's confirmation. The footer wraps because a
+   custom button text plus a count plus the cap's notice is more than a narrow
+   widget has room for on one line, and a control that overflows its widget is
+   one nobody can press. */
+.canvas-table-edit {
+  display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap;
+}
+.canvas-table-edit .canvas-widget-empty { margin: 0; font-variant-numeric: tabular-nums; }
+.canvas-table-edit .form-error { margin: 0; }
+/* Inside the widget rather than over the page: a module can hold several
+   tables, and a full-screen overlay would not say which one it is asking
+   about. */
+.canvas-confirm {
+  margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel);
+}
+.canvas-confirm p { margin: 0 0 8px; }
+
 .canvas-button-wrap { display: inline-flex; align-items: center; gap: 6px; }
 .canvas-button-wrap .canvas-widget-empty { margin: 0; }
 

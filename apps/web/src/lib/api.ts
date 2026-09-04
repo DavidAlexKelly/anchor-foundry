@@ -1273,6 +1273,27 @@ export const actions = {
       `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/execute`,
       { method: "POST", body: JSON.stringify({ instance_id: instanceId, values }) },
     ),
+  /** One action over many objects, as the Object Table's staged inline edits
+   * (`workshop` p.242–243, `action-types` p.137–138).
+   *
+   * **Not a loop over `execute`**, and the difference is the feature: p.138
+   * makes the whole submission succeed or fail together, which a browser
+   * running N requests could not promise — a failure on the fortieth would
+   * leave thirty-nine written and no way to describe the result. */
+  executeBatch: (
+    wid: string,
+    pid: string,
+    actionTypeId: string,
+    edits: { instance_id: string; values: Record<string, unknown> }[],
+  ) =>
+    request<import("./types").ActionBatchResult>(
+      `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/execute-batch`,
+      { method: "POST", body: JSON.stringify({ edits }) },
+    ),
+  getType: (wid: string, actionTypeId: string) =>
+    request<import("./types").ActionType>(
+      `/workspaces/${wid}/action-types/${actionTypeId}`,
+    ),
 };
 
 export const canvas = {
