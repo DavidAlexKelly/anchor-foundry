@@ -187,13 +187,11 @@ def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
             "rules": rules,
             "criteria": [{**c, "config": _parse_json(c["config"])} for c in row["criteria"]],
             "editable_properties": actions_service.editable_properties_of(rules),
-            # Computed from the *parsed* rules above, not from `row["rules"]`:
-            # a rule's config arrives as jsonb and may be text, and an
-            # eligibility check reading `"{}"` as a config would find no
-            # `object` key on any rule and pass every action.
-            "inline_edit_refusals": actions_service.inline_edit_refusals(
-                {**row, "rules": rules}
-            ),
+            # Handed the row as it came back. `inline_edit_refusals` reads every
+            # config through `_json` itself, so pre-parsing here would be a
+            # second parse of the same value - which is what a mutant said when
+            # it swapped the parsed rules for the raw ones and nothing failed.
+            "inline_edit_refusals": actions_service.inline_edit_refusals(row),
             # jsonb, so it may arrive as text depending on the driver path -
             # the same treatment `config` gets two lines up.
             "deprecation": _parse_json(row.get("deprecation")),
@@ -1036,8 +1034,12 @@ async def execute_batch(
         action_type = await actions_service.get_action_type(
             conn, access.workspace_id, action_type_id
         )
+        # Parsed once, here, because three things below read a rule's config -
+        # the eligibility check does its own, but `apply_rules` and
+        # `seed_from_instance` are handed this list per row and would otherwise
+        # parse the same configs two hundred times.
         rules = [{**r, "config": _parse_json(r["config"])} for r in action_type["rules"]]
-        refusals = actions_service.inline_edit_refusals({**action_type, "rules": rules})
+        refusals = actions_service.inline_edit_refusals(action_type)
         if refusals:
             # Refused here as well as hidden in the panel. A builder can point
             # a table at an action and then change the action, and the widget

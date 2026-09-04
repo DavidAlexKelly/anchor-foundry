@@ -99,6 +99,10 @@ def ticket_type_id(client: TestClient, fx: Fixture) -> str:
                 # A property whose value is a struct, so "single primitive"
                 # has something to refuse.
                 {"api_name": "site", "data_type": "geopoint"},
+                # No dataset column (p.113), so a synced object carries no key
+                # for it at all - which is the one shape p.135's seeding has to
+                # read past rather than out of.
+                {"api_name": "triage_note", "data_type": "string", "edit_only": True},
             ],
         },
     )
@@ -496,6 +500,93 @@ def test_an_untouched_parameter_keeps_the_object_s_value(
     got = properties_of(client, fx, ticket_type_id, "5")
     assert got["status"] == "changed"
     assert got["priority"] == "urgent"
+
+
+def test_seeding_follows_the_rule_rather_than_the_parameter_s_name(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """p.241 *recommends* matching names - "For an easier configuration
+    experience, action parameter IDs should match the property IDs displayed
+    within the table" - which means an action whose names differ is legal and
+    has to work.
+
+    **Every other test in this file is blind to this**, because an action built
+    from `editable_properties` names each parameter after the property it
+    writes, so seeding by name and seeding by rule are the same function. A
+    mutant swapping one for the other survived all of them (§232's lesson: a
+    fixture that cannot distinguish two implementations is not a check).
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    define(client, fx, action["id"], {
+        "parameters": [
+            # Named for the reader, not for the column.
+            {"api_name": "new_status", "display_name": "New status",
+             "data_type": "string"},
+            {"api_name": "new_priority", "display_name": "New priority",
+             "data_type": "string", "required": True},
+        ],
+        "rules": [
+            {"kind": "modify_object",
+             "config": {"property": "status", "parameter": "new_status"}},
+            {"kind": "modify_object",
+             "config": {"property": "priority", "parameter": "new_priority"}},
+        ],
+    })
+    client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": instances["2"], "values": {
+            "new_status": "renamed", "new_priority": "keepme"}}]},
+    )
+
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": instances["2"],
+                         "values": {"new_status": "again"}}]},
+    )
+    assert r.status_code == 200, r.text
+    got = properties_of(client, fx, ticket_type_id, "2")
+    assert got["status"] == "again"
+    # Seeded from `priority` because that is what `new_priority`'s rule writes.
+    # Seeding by name would have found no property called `new_priority`, left
+    # the required parameter unbound, and refused the row.
+    assert got["priority"] == "keepme"
+
+
+def test_a_property_the_object_has_never_had_is_left_alone(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instances: dict[str, str]
+) -> None:
+    """The seeding's other edge, and the one that crashes rather than misbehaves.
+
+    An **edit-only** property (p.113) has no dataset column, so an object that
+    no action has written carries no value for it at all - the key is simply
+    absent from the stored properties. Seeding reads the *rule's* property out
+    of that dict, so an untouched parameter for a never-written edit-only
+    property is a lookup with nothing behind it.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    define(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "status", "display_name": "Status", "data_type": "string"},
+            {"api_name": "triage_note", "display_name": "Note", "data_type": "string"},
+        ],
+        "rules": [
+            {"kind": "modify_object",
+             "config": {"property": "status", "parameter": "status"}},
+            {"kind": "modify_object",
+             "config": {"property": "triage_note", "parameter": "triage_note"}},
+        ],
+    })
+    # `triage_note` is not supplied and the object has never carried one.
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute-batch",
+        headers=hdr(fx.editor_sub),
+        json={"edits": [{"instance_id": instances["3"],
+                         "values": {"status": "noted"}}]},
+    )
+    assert r.status_code == 200, r.text
+    assert properties_of(client, fx, ticket_type_id, "3")["status"] == "noted"
 
 
 def test_an_ineligible_action_is_refused_at_submission_too(
