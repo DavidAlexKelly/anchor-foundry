@@ -284,3 +284,28 @@ export function inputTypeFor(dataType: string): string {
   if (dataType === "date") return "date";
   return "text";
 }
+
+/** Whether a parameter has been given a value, for p.25's required check.
+ *
+ * **Written down because §237 made the old expression accidentally correct.**
+ * The Action Form asked `!String(values[name] ?? "").trim()`, which worked
+ * while every value was a string. Once an attachment parameter could hold the
+ * reference object `POST /attachments` returns, that expression kept giving the
+ * right answer for the wrong reason — `String({...})` is `"[object Object]"`,
+ * which is non-blank, so an attachment counted as supplied because its
+ * stringification happens not to be empty.
+ *
+ * The rule is the one a person would state: **absent is nothing, blank text is
+ * nothing, and everything else is something.**
+ *
+ * `false` is something. A boolean parameter deliberately set to false has been
+ * answered, and treating it as missing would make the form refuse to submit
+ * the one value it was configured to collect — the same trap
+ * `workshop_variables._truthy` records for variables ("`0` and `""` are values
+ * a viewer typed"). `0` is something for the same reason.
+ */
+export function hasValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  return true;
+}

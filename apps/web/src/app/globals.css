@@ -2133,6 +2133,12 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    column rather than trailing the label and wrapping. */
 .canvas-filter-count { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
+/* A `<fieldset>` purely to carry `disabled` down to whatever control the
+   parameter's type calls for (§237) - the Canvas Action Form cannot put the
+   attribute on the input itself any more, because it no longer renders one.
+   Stripped of the browser's default box so it is invisible. */
+.canvas-action-field { border: 0; padding: 0; margin: 0; min-width: 0; }
+
 /* p.470's Exploration Filter Pills. A wrapping row rather than a column: a
    pill is one short phrase, and the set of them is read as a sentence about
    what the viewer is looking at. */

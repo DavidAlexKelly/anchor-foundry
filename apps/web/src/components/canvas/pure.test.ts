@@ -13,10 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import {
-  MIN_SHARE, formatWeights, parseWeights, pivotClauses, resizeWeights, roundWeight,
-  seedActionForm, seedFromQuery, seriesLabel, seriesPointLabel,
-} from "./pure";
+import { MIN_SHARE, formatWeights, hasValue, parseWeights, pivotClauses, resizeWeights, roundWeight, seedActionForm, seedFromQuery, seriesLabel, seriesPointLabel } from "./pure";
 
 describe("pivotClauses", () => {
   it("writes one clause per axis that is picked", () => {
@@ -347,5 +344,47 @@ describe("Workshop p.512's local parameter defaults", () => {
     // *something to say*, not whether it is truthy.
     expect(seedActionForm(PARAMETERS, {}, { status: 0 }).status).toBe("0");
     expect(seedActionForm(PARAMETERS, {}, { status: false }).status).toBe("false");
+  });
+});
+
+describe("hasValue", () => {
+  /** p.25's required check, written down in §237 because the expression it
+   * replaced had become accidentally correct. */
+
+  it("counts nothing for what was never supplied", () => {
+    expect(hasValue(null)).toBe(false);
+    expect(hasValue(undefined)).toBe(false);
+  });
+
+  it("counts nothing for text that is only whitespace", () => {
+    expect(hasValue("")).toBe(false);
+    expect(hasValue("   ")).toBe(false);
+    expect(hasValue("\t\n")).toBe(false);
+  });
+
+  it("counts a false and a zero as answers", () => {
+    // **The trap this function exists to avoid.** A boolean parameter set to
+    // false has been answered, and treating it as missing would make the form
+    // refuse to submit the one value it was configured to collect. Same rule
+    // `workshop_variables._truthy` records for variables.
+    expect(hasValue(false)).toBe(true);
+    expect(hasValue(0)).toBe(true);
+  });
+
+  it("counts an attachment reference as an answer", () => {
+    // **The case that made the old expression wrong-for-the-right-reason.**
+    // `!String({...}).trim()` said "supplied" because `"[object Object]"` is
+    // non-blank, not because an object is a value — so an *empty* object
+    // answered the same way, and so would have anything else with a
+    // stringification.
+    expect(hasValue({ key: "k", filename: "a.png", content_type: "image/png", size: 1 }))
+      .toBe(true);
+  });
+
+  it("counts an empty list as an answer, because someone chose it", () => {
+    // Not obvious, and worth pinning: nothing in this build sends one yet, and
+    // the day something does, "the viewer cleared every option" is a decision
+    // rather than a blank field.
+    expect(hasValue([])).toBe(true);
   });
 });

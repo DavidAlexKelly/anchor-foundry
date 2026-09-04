@@ -18,6 +18,9 @@ import type {
   AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, ValueFormat,
 } from "@/lib/types";
 import { formatValue } from "@/lib/value-format";
+// The Canvas Action Form's rule for which control a type gets, now shared
+// rather than duplicated (§237).
+import { inputTypeFor } from "@/components/canvas/pure";
 
 function isGeoPoint(value: unknown): value is GeoPoint {
   return (
@@ -220,19 +223,46 @@ function styleOf(style: PropertyStyle | null | undefined): CSSProperties | undef
   return Object.keys(out).length ? out : undefined;
 }
 
-/** The input for one editable property in an action form. */
+/** The input for one editable property in an action form.
+ *
+ * **One renderer for both action forms as of §237, and the docstring above was
+ * true of only one of them for a long time.** This was written for action forms
+ * — the sentence has said so since it was added — and the *Canvas* Action Form
+ * never used it: `CanvasActionForm` grew its own field, a plain `<input>` typed
+ * by `pure.inputTypeFor`. Two renderers for one question, and they disagreed
+ * about two types.
+ *
+ * The disagreement was not cosmetic. `inputTypeFor` answers `"text"` for an
+ * **attachment**, and an attachment value must be the object `POST /attachments`
+ * returned (`property_values._coerce_attachment` checks its four fields) — so
+ * the Canvas form offered a box whose contents could essentially never be valid.
+ * A control that cannot work is worse than an absent one, which is §214's rule
+ * about settings and applies to inputs for the same reason. It answered `"text"`
+ * for a **boolean** too, where this offers the three-state select that can say
+ * "not set".
+ *
+ * The Canvas form was better in one respect and that is kept: `type="number"`
+ * for an integer or a float, which brings a numeric keypad on a phone and the
+ * browser's own stepper. The comment below explains why the *value* is still
+ * not parsed here.
+ */
 export function PropertyInput({
   workspaceId,
   dataType,
   value,
   onChange,
   label,
+  required = false,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
   value: unknown;
   onChange: (next: unknown) => void;
   label: string;
+  /** p.25's required parameters. Passed through to the control rather than
+   * enforced here: the server refuses a missing required value, and a second
+   * rule in the browser would be a second answer to one question. */
+  required?: boolean;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -244,6 +274,10 @@ export function PropertyInput({
         <input
           type="file"
           aria-label={label}
+          // Required only until something is attached: the value the action
+          // sends is the reference already uploaded, so re-picking a file is
+          // not what "required" is asking for.
+          required={required && !isAttachment(value)}
           disabled={uploading}
           onChange={async (e) => {
             const file = e.target.files?.[0];
@@ -272,6 +306,7 @@ export function PropertyInput({
     return (
       <select
         aria-label={label}
+        required={required}
         value={value === true ? "true" : value === false ? "false" : ""}
         onChange={(e) => onChange(e.target.value === "" ? null : e.target.value === "true")}
       >
@@ -282,14 +317,21 @@ export function PropertyInput({
     );
   }
 
-  // Everything else is text, including geopoint ("lat,lon" is both what the
-  // API accepts and what a person can type) and numbers: the API coerces a
-  // numeric string to a number, so parsing it here would only duplicate a
-  // rule that has to live server-side anyway.
+  // Everything else goes through `inputTypeFor`, which is the Canvas form's
+  // own rule and the one thing it had that this did not: a number gets a
+  // numeric control, a date a date one, and the rest text — geopoint included,
+  // since "lat,lon" is both what the API accepts and what a person can type.
+  //
+  // **The input *type* is a keyboard, not a parser.** The value still leaves
+  // here as the string that was typed: the API coerces a numeric string to a
+  // number against the declared type, and doing it here as well would be a
+  // second rule free to disagree with the one that decides.
   return (
     <input
-      type={dataType === "date" ? "date" : "text"}
+      type={inputTypeFor(dataType ?? "string")}
       aria-label={label}
+      required={required}
+      aria-required={required || undefined}
       placeholder={dataType === "geopoint" ? "lat,lon — e.g. 51.5074,-0.1278" : undefined}
       value={value === null || value === undefined ? "" : String(value)}
       onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
