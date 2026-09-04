@@ -97,7 +97,13 @@ export function mappingOf(
   const declared = new Set((action?.parameters ?? []).map((p) => p.api_name));
   const shown = new Set(columns);
   const out: Record<string, string> = {};
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out;
+  if (typeof raw !== "object" || raw === null) return out;
+  // **No `Array.isArray` guard here, and `stagedOf` below has one.** A mutant
+  // removing it survived: `Object.entries` on an array yields the keys "0",
+  // "1", …, and a parameter api_name is `^[a-z][a-z0-9_]{0,99}$` on the server,
+  // so `declared.has` rejects every one of them already. `stagedOf` has nothing
+  // to filter against and needs its guard, which is why the two look the same
+  // and only one is a check.
   for (const [parameter, column] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof column !== "string" || !column) continue;
     if (!declared.has(parameter) || !shown.has(column)) continue;

@@ -289,7 +289,6 @@ export function PropertyInput({
   onChange,
   label,
   required = false,
-  disabled = false,
 }: {
   workspaceId: string;
   dataType: PropertyDataType | undefined;
@@ -300,12 +299,6 @@ export function PropertyInput({
    * enforced here: the server refuses a missing required value, and a second
    * rule in the browser would be a second answer to one question. */
   required?: boolean;
-  /** Why a caller might not want this control usable right now - the Canvas
-   * form's builder preview (§237), the Object Table's row cap (`workshop`
-   * p.242). **The reason stays with the caller**: this renders the control,
-   * and every rule about when one may be typed into belongs to whoever knows
-   * what the control is for. */
-  disabled?: boolean;
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -321,7 +314,7 @@ export function PropertyInput({
           // sends is the reference already uploaded, so re-picking a file is
           // not what "required" is asking for.
           required={required && !isAttachment(value)}
-          disabled={uploading || disabled}
+          disabled={uploading}
           onChange={async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
@@ -350,7 +343,6 @@ export function PropertyInput({
       <select
         aria-label={label}
         required={required}
-        disabled={disabled}
         value={value === true ? "true" : value === false ? "false" : ""}
         onChange={(e) => onChange(e.target.value === "" ? null : e.target.value === "true")}
       >
@@ -376,7 +368,6 @@ export function PropertyInput({
       aria-label={label}
       required={required}
       aria-required={required || undefined}
-      disabled={disabled}
       placeholder={dataType === "geopoint" ? "lat,lon — e.g. 51.5074,-0.1278" : undefined}
       value={value === null || value === undefined ? "" : String(value)}
       onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}

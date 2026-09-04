@@ -4147,24 +4147,35 @@ export function CanvasObjectTable({
                                     (§237). A second typed-input renderer is a
                                     second place for `attachment`, `date` and
                                     `boolean` to disagree, which is the mistake
-                                    §237 spent a unit deleting. */}
-                                <PropertyInput
-                                  workspaceId={workspaceId}
-                                  dataType={p.data_type as never}
-                                  label={p.display_name || p.api_name}
-                                  value={cellValue(
-                                    staged, instance.id, parameter,
-                                    instance.properties[p.api_name] ?? null,
-                                  ) as never}
-                                  // p.242's cap is about rows: a row nobody has
-                                  // touched cannot be started once the batch is
-                                  // full, and one already in it stays editable.
+                                    §237 spent a unit deleting.
+
+                                    **And the same way of switching it off.**
+                                    p.242's cap is about rows: a row nobody has
+                                    touched cannot be started once the batch is
+                                    full, and one already in it stays editable.
+                                    A `disabled` prop on `PropertyInput` would
+                                    have been a second mechanism for what §237's
+                                    fieldset already does, and one this suite
+                                    cannot reach - the cap is two hundred rows,
+                                    which no browser fixture stages. */}
+                                <fieldset
+                                  className="canvas-action-field"
                                   disabled={!canStage(staged, instance.id, rowLimit)}
-                                  onChange={(next) =>
-                                    setStaged(stage(
-                                      staged, instance.id, parameter, next, rowLimit,
-                                    ))}
-                                />
+                                >
+                                  <PropertyInput
+                                    workspaceId={workspaceId}
+                                    dataType={p.data_type as never}
+                                    label={p.display_name || p.api_name}
+                                    value={cellValue(
+                                      staged, instance.id, parameter,
+                                      instance.properties[p.api_name] ?? null,
+                                    ) as never}
+                                    onChange={(next) =>
+                                      setStaged(stage(
+                                        staged, instance.id, parameter, next, rowLimit,
+                                      ))}
+                                  />
+                                </fieldset>
                               </div>
                             ) : (
                               <PropertyValue
