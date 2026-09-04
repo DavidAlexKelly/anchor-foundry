@@ -4290,6 +4290,66 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 236. An audit of what is left, and the rule §216 predicted would be forgotten (this session)
+
+With the widget library closed (§235), the question is what remains across the
+five specs — and the session's own evidence says not to trust the lists without
+checking. §216 audited the build orders and found five wrong entries; §232 and
+§235 found five build-order *estimates* wrong, all under-counting. So: an audit
+before picking anything up.
+
+**The counts.** 135 rows are still ○: `code-repositories.md` 47,
+`workshop.md` 36 (all outside §10, which §235 emptied), `ontology.md` 32,
+`datasets-lineage.md` 18, `data-connection.md` 2.
+
+**The rows are accurate. The build orders were not.** That split is the
+finding, and it is not a coincidence — the two kinds of line were written
+differently. A row was written by reading the Foundry page and carries a
+*qualifier*; a build-order clause was written by estimating from the feature's
+name.
+
+Every ○ row spot-checked held up, and the near-misses are what shows why:
+
+* **Value formatting** looked built — `value-format.ts`, `value-format-editor.tsx`
+  and `test_value_format.py` all exist. The row says the *ontology-level* one is
+  built (§157) and Workshop's **per-module** one is the gap. Correct as marked.
+* **Derived properties** looked built — `services/derived_properties.py` exists.
+  Its own docstring cites `object-link-types` p.143–148: that is the
+  ontology-level one. Workshop's row is about **module-level** derived
+  properties. Correct as marked.
+* **Export** as an event effect is not merely absent: it is in
+  `workshop_events.PLANNED_EFFECTS`, named and refused with a reason.
+
+In each case the feature name matched something in the tree and the
+**qualifier** was the claim. A row saying "Value formatting" would have been
+stale; a row saying "local to the module not the ontology" is not.
+
+**§216's first rule was forgotten again, exactly as §216 said it would be.**
+That entry recorded two habits and predicted the failure: *"strike the line in
+the commit that finishes it, and open what a line cites before building on it.
+The second rule is the one that matters, because the first will be forgotten
+again."* It was. `ontology.md`'s build order items **8** and **9** each say
+"done" in their own first clause and neither was struck — item 8 since §146,
+item 9 since §168. Both now struck, with what remains named: item 8's
+indexing-issue column and the unwired development-status filter, item 9's
+**interfaces**, the one of four that has not started.
+
+**The three build orders with nothing struck are the three that are accurate**,
+which is §216's observation holding a second time: `datasets-lineage.md`,
+`data-connection.md` and `code-repositories.md` have zero struck items between
+them, and `code-repositories.md`'s first item — "delete `code/page.tsx`" — names
+a file that still exists. A plan is only wrong where work has happened.
+
+**The smallest real unit found, recorded rather than taken**: an action can
+already declare an `attachment` parameter (`actions._PARAMETER_TYPES` is
+`ontology.PROPERTY_TYPES | {"object"}`, and `attachment` is in that set), and
+§223 built the store behind `POST /attachments` — but `pure.inputTypeFor` returns
+`"text"` for it, so the Action Form renders a box a viewer would have to paste an
+opaque storage key into. `ontology.md`'s "Upload media / attachments through an
+action" is correctly ○, and closer than the mark suggests: what is missing is one
+control, not a mechanism. It is also arguably a defect rather than a gap — a text
+input for an attachment is a control that cannot work.
+
 ### 235. The widget library is closed (this session)
 
 The user's call, in their words: *"I think the widgets we have already is enough
@@ -7027,6 +7087,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A fixture with one of everything cannot tell "this widget's answer" from "an answer".** §218's Pie Chart produced five survivors and four were this: one chart per page, so a query keyed on a *constant* still showed the right slices; a colours-off case that never fetched the object type, so "the setting is off" and "the rules are not here" were the same state; two legend positions that were both *beside* the chart, so the beside-versus-stacked distinction went untested; and a slice whose label and value were the same string, so writing either narrowed correctly. §212 met this as a page limit the data never crossed, §217 as a parameter with nothing to default, and §219 as a junk fixture that was **iterable**: the only "not a list" a scan was ever given was the string `"not a list"`, so dropping the list check walked its characters and passed — a number is what separates them. **The fix is never a cleverer assertion — it is a fixture with two**, and the second one is usually the ordinary page rather than a contrived one: a chart beside another chart, a chart beside a table, a number beside a string.
 
 - **A function that drifts into a `.tsx` does not become harder to test here; it stops being tested.** §218 found the pie's angle arithmetic inline in `charts.tsx`'s JSX — and **no browser test drew a pie at all**, because Chart XY's `kind` was never set to one in any fixture. So "does a 30% slice cover 30%" had not been asked in either suite since the pie was written. `vitest` cannot parse `.tsx` in this repo by construction, so the unit suite is not merely inconvenienced by logic in a component, it is blind to it, and no coverage number says so. The tell is arithmetic — angles, offsets, thresholds — appearing between JSX tags; move it to a `.ts` and the harness can reach it.
+
+- **A checklist row and a build-order line go stale at different rates, and the difference is the qualifier.** §236 audited 135 ○ rows and every one spot-checked was accurate, while two build-order items in the same file had been finished for eighty-odd units without being struck. The rows survive because each was written by reading the Foundry page and carries the clause that makes it checkable — "Value formatting **local to the module not the ontology**", "Derived properties **defined at module level**". Both of those name features whose *ontology-level* twin is built and sitting in the tree under a matching filename, so a row without the qualifier would have read as stale on sight and been wrongly ticked. A build-order clause has no qualifier by construction: it is an estimate of work, written from the feature's name. **So when auditing, trust the rows and re-derive the build order** — and when writing either, the test is whether the line says something a `grep` could disagree with.
 
 - **A build-order estimate written from a widget's name and the endpoint it would use under-counts every time.** §235 closed the widget library and, in doing so, checked the five clauses that described what was left: four were wrong and all four in the same direction. "§222's Timeline shape with a second date" was three dense pages; "§223's attachment store plus an action to hand the upload to" was twelve pages of upload workflow and named the two ends and none of the middle; "exact-match counts, which `/object-sets/group` already answers" was true of the counts and false of the widget (§232); "one blocker away" was thirteen card types and an application. The mechanism is that a clause is written while thinking about the *mechanism* a feature needs, and a specification is mostly the **settings** around it — the three no-end-time behaviours, the six grid granularities, the retry-per-file. §216's rule catches the opposite failure, a line claiming more work than remains, and both have one habit: open the pages before writing the clause, and treat an estimate that names an endpoint as an estimate of the endpoint. The cost is not the wasted optimism — it is that a **scope decision made against the clause is made against the wrong number**, which is exactly when these lines get read.
 
