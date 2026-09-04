@@ -87,6 +87,13 @@ def test_a_property_hit_says_which_object_type_it_is_on(page, ontology):
     open_manager(page, ontology)
     page.get_by_label("Search the ontology").fill(ontology.word)
     hit = page.get_by_test_id("ontology-search-results").locator("[data-kind='property']")
+    # **Wait for the panel the way the two tests above it do.** They give the
+    # debounced search 20s to come back; this one relied on `expect`'s 5s
+    # default, and was the only assertion in the file with less patience than
+    # its siblings for the same precondition. It timed out once, in a full-suite
+    # run, and has not reproduced in isolation. The claim below is unchanged -
+    # only the window it is allowed to become true in.
+    eventually(lambda: hit.count(), lambda n: n >= 1, what="the property hit")
     expect(hit).to_contain_text(f"on Described {ontology.word}")
 
 
