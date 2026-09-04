@@ -4290,6 +4290,88 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 239. The Object Table's inline edits, and a refresh that named the wrong query (this session)
+
+Workshop p.240-243's surface over §238's server half, and the end of the Object
+Table build-order item that has been open since §207: p.241's toggle and
+parameter-to-column mapping with its automatic match, p.242's Edit table button,
+staged edits and per-row Undo, p.243's Submit and its confirmation dialog with
+the one-click override.
+
+**The cell editor is `PropertyInput`** - the same control the action form draws.
+§237 spent a whole unit deleting the *second* typed-input renderer, and writing
+one here would have been that mistake in a new place: `attachment`, `date` and
+`boolean` would have had two answers again the day one of them changed. The
+fieldset that switches it off is §237's too.
+
+**p.242's row cap arrives on the wire.** `inline_edit_row_limit` sits beside
+§238's refusals on every action type, so the table can stop a reader staging the
+two hundred and first row without a second copy of the number. This session has
+now spent five units collapsing copies of a single constraint; this is the first
+one where the copy was refused before it was written.
+
+**The browser suite caught a real bug the unit tests could not see.** The
+success handler invalidated `["object-set-page"]` - a key nothing uses.
+`useSetPage` owns `["canvas-object-set"]`, so a submission wrote correctly and
+left every table bound to that set showing the values the reader had just
+changed. **A query key is a string nothing typechecks**, which is why the guess
+survived `tsc` and three green unit files, and why the assertion that caught it
+reads the value back through a *second* table rather than out of the editor it
+was typed into.
+
+Three decisions worth naming. Edit mode is three-state (`editing`), so p.242's
+"by default" toggle sets the starting state and the button can still *close* a
+table configured to open in it - a two-state read would strand a reader who
+wanted to see their data plainly. Leaving edit mode discards what was staged,
+because edits behind a closed table are edits nobody can see or submit. And a
+refused submission keeps them, because failing and clearing loses somebody's
+work with nothing to show for it.
+
+**Both first-round unit survivors were the code's fault rather than the tests'**,
+which is the first time that has happened twice in one unit this session.
+`mappingOf`'s `Array.isArray` guard was unreachable - `Object.entries` on an
+array yields "0", "1", …, and a parameter api_name is `^[a-z][a-z0-9_]{0,99}$`
+on the server, so `declared.has` had already rejected every key an array can
+produce. It is gone, with the reason recorded beside `stagedOf`'s
+identical-looking guard, which has nothing to filter against and *is* a check.
+And the `disabled` prop this unit had added to `PropertyInput` was a second
+mechanism for what §237's fieldset already does - also untestable here, since
+the cap is two hundred rows and no browser fixture stages that many. Removed
+rather than covered: an untested prop on a component two widgets share is how
+the next divergence starts.
+
+§189's lesson arrived on schedule as well. `mappingOf`'s
+`typeof column !== "string"` mutant survived the *unit* layer and was caught by
+`tsc` - it is a type contract, not a behaviour, and a harness without a types
+layer would have argued for deleting it.
+
+**Not built, and named rather than assumed**: p.241's in-cell dropdown for a
+parameter with enumerated values (this platform's enums are value-type
+constraints on a *property*, so the constraint would have to reach the table
+before the control could offer it), and p.241's last sentence - variables passed
+as action parameters "without the user needing to edit the field in the table",
+which is a variable picker per parameter and a different idea from a column
+mapping. p.225's "Combine multiple object types … not available when Enable
+inline editing is set to true" needs nothing: this platform has no multi-type
+table for the rule to exclude.
+
+**47 mutants, 47 caught, 0 survivors** (26 unit, 1 types, 20 browser). The
+browser layer needed three rounds, and the pattern across its survivors is worth
+naming: **every one was an assertion aimed one layer off the thing it meant to
+check.** The builder test asserted an absence after `settled(page)`, which
+returns as soon as `.canvas-block` is visible while the footer waits on the
+rows - so it passed against a table that had not drawn, and the guard that stops
+somebody editing live objects while designing a module was untested.
+The unmapped-table test asserted the footer, which is gated by its own
+expression, while the check under test controls p.242's *undo column*. And
+nothing asserted that the editor shows what was typed: a mutant pinning the
+control to the stored value left `staged` correct, so the count and the
+submission were both right and the only thing wrong was that a reader watched
+their own text vanish.
+
+**1736 API tests** unchanged, **1477 unit** (was 1432), **20 browser** in the new
+file, `tsc` clean.
+
 ### 238. Which actions may back a cell edit, and a submission that is all or nothing (this session)
 
 Workshop p.240-243 and `action-types` p.135-138. The Object Table build order
