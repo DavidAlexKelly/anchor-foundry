@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MIN_SHARE, formatWeights, hasValue, parseWeights, pivotClauses, resizeWeights, roundWeight, seedActionForm, seedFromQuery, seriesLabel, seriesPointLabel } from "./pure";
+import { MIN_SHARE, formatWeights, hasValue, inputTypeFor, parseWeights, pivotClauses, resizeWeights, roundWeight, seedActionForm, seedFromQuery, seriesLabel, seriesPointLabel } from "./pure";
 
 describe("pivotClauses", () => {
   it("writes one clause per axis that is picked", () => {
@@ -386,5 +386,39 @@ describe("hasValue", () => {
     // the day something does, "the viewer cleared every option" is a decision
     // rather than a blank field.
     expect(hasValue([])).toBe(true);
+  });
+});
+
+describe("inputTypeFor", () => {
+  /** Untested until §237, which is why two mutants survived the first pass:
+   * it had one caller and looked too small to check. It has two callers now —
+   * the Canvas Action Form and `PropertyInput` — and it decides what keyboard
+   * a person gets. */
+
+  it("gives a number a numeric control", () => {
+    expect(inputTypeFor("integer")).toBe("number");
+    expect(inputTypeFor("float")).toBe("number");
+  });
+
+  it("gives a date a date picker", () => {
+    expect(inputTypeFor("date")).toBe("date");
+  });
+
+  it("gives a timestamp text, not a date picker", () => {
+    // Deliberate rather than an omission: `<input type="date">` drops the time
+    // half, so a timestamp typed into one silently loses it. Text keeps what
+    // the server will parse.
+    expect(inputTypeFor("timestamp")).toBe("text");
+  });
+
+  it("gives everything else text, including the types with their own control", () => {
+    // `attachment` and `boolean` never reach here — `PropertyInput` answers
+    // those before asking. Text is the right answer for the question *this*
+    // function is asked, which is what `<input type>` to use.
+    expect(inputTypeFor("string")).toBe("text");
+    expect(inputTypeFor("geopoint")).toBe("text");
+    expect(inputTypeFor("json")).toBe("text");
+    expect(inputTypeFor("attachment")).toBe("text");
+    expect(inputTypeFor("")).toBe("text");
   });
 });
