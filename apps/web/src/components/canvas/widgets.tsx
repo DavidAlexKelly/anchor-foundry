@@ -191,6 +191,12 @@ import {
   toRequest as tableSortsToRequest, withDirection as withSortDirection,
   withFixed as withSortFixed, withProperty as withSortProperty,
 } from "./table-sorts";
+import {
+  DEFAULT_BUTTON_TEXT, automaticMapping, buttonTextOf, canStage, canSubmit,
+  cellValue, editByDefaultOf, editing, eligibleActions, isStaged, limitNotice,
+  mappingOf, oneClickOf, parameterForColumn, rowLimitOf, stage, stagedCount,
+  toEdits, undoRow, type Staged,
+} from "./inline-edit";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -3623,6 +3629,11 @@ export function CanvasObjectTable({
   fitColumns = true,
   narrowHeaders = false,
   formatFillsCell = false,
+  inlineEditAction = null,
+  inlineEditMapping = null,
+  inlineEditButtonText = "",
+  inlineEditByDefault = false,
+  inlineEditOneClick = false,
 }: {
   objectTypeId?: string | null;
   filterProperty?: string | null;
@@ -3675,12 +3686,24 @@ export function CanvasObjectTable({
   fitColumns?: boolean;
   narrowHeaders?: boolean;
   formatFillsCell?: boolean;
+  /** p.240-243's inline edits. The action id is the toggle: p.241 makes
+   * enabling the feature and choosing the action one act, because an inline
+   * edit *is* an action and a table enabled with none configured would be a
+   * mode with nothing in it. Which actions may be named is §238's answer, not
+   * this widget's. */
+  inlineEditAction?: string | null;
+  /** p.241's parameter-to-column mapping, `{parameter: column}`. */
+  inlineEditMapping?: Record<string, string> | null;
+  /** p.242's Custom button text, and its two toggles; p.243's One-click. */
+  inlineEditButtonText?: string;
+  inlineEditByDefault?: boolean;
+  inlineEditOneClick?: boolean;
 }) {
   const {
     id: nodeId,
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, projectId, mode } = useCanvasEnv();
   const eventContext = useEventContext(undefined, useOverlayIds());
   const filterValue = useCanvasParameter(filterParameter);
   const searchValue = useCanvasParameter(searchParameter);
@@ -3830,7 +3853,63 @@ export function CanvasObjectTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiSelect, selectedVariable, selectedStated]);
 
-  const columnCount = properties.length + 1 + (multiSelect && selectedVariable ? 1 : 0);
+  // ---- p.240-243's inline edits ------------------------------------------
+  // The action is fetched by id rather than taken from the panel's list: the
+  // widget runs in a published module where no panel is mounted, and it needs
+  // the parameters (to know what a cell writes), the refusals (because the
+  // action can have changed since it was configured) and p.242's row cap.
+  const editAction = useQuery({
+    queryKey: ["action-type", workspaceId, inlineEditAction],
+    queryFn: () => actionApi.getType(workspaceId, inlineEditAction!),
+    enabled: !!inlineEditAction,
+  });
+  // **Re-checked here, not trusted from the document.** A builder can point a
+  // table at an action and then change the action; §238 refuses the submission
+  // either way, and this is what stops the table drawing editors for a
+  // submission that is going to be refused.
+  const liveAction = eligibleActions(editAction.data ? [editAction.data] : [])[0] ?? null;
+  const shownNames = properties.map((p) => p.api_name);
+  const editMapping = mappingOf(inlineEditMapping, liveAction, shownNames);
+  const rowLimit = rowLimitOf(liveAction);
+  // `null` until somebody presses the button, so p.242's toggle decides the
+  // starting state and the button can still close a table configured to open
+  // in edit mode - see `editing`.
+  const [editOpen, setEditOpen] = useState<boolean | null>(null);
+  const [staged, setStaged] = useState<Staged>({});
+  const [confirming, setConfirming] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const inEditMode = mode === "run" && !!liveAction
+    && Object.keys(editMapping).length > 0 && editing(editOpen, inlineEditByDefault);
+  const queryClient = useQueryClient();
+  const submit = useMutation({
+    mutationFn: () =>
+      actionApi.executeBatch(workspaceId, projectId, liveAction!.id, toEdits(staged)),
+    onSuccess: () => {
+      setStaged({});
+      setConfirming(false);
+      setSubmitError(null);
+      // The rows on screen are now stale in exactly the cells that were
+      // edited, and p.243 says nothing about what a reader sees afterwards -
+      // showing them their own edits confirmed is the only answer that does
+      // not require a reload.
+      //
+      // **Both keys, because a table is populated two ways** (p.65's choice):
+      // `canvas-object-table` is the explore path and `canvas-object-set` is
+      // the bound-set one, which `useSetPage` owns. Invalidating only one
+      // leaves every table on the *other* path showing the values the reader
+      // has just changed - and it is not this widget's own rows that matter
+      // most, it is the ones beside it reading the same set.
+      queryClient.invalidateQueries({ queryKey: ["canvas-object-table"] });
+      queryClient.invalidateQueries({ queryKey: ["canvas-object-set"] });
+    },
+    onError: (err: unknown) => {
+      setConfirming(false);
+      setSubmitError(err instanceof Error ? err.message : "The edits were not saved.");
+    },
+  });
+
+  const columnCount = properties.length + 1 + (multiSelect && selectedVariable ? 1 : 0)
+    + (inEditMode ? 1 : 0);
   const frozen = frozenOf(frozenColumns, columnCount);
   useEffect(() => {
     const head = headRef.current;
@@ -3838,6 +3917,11 @@ export function CanvasObjectTable({
     setWidths(Array.from(head.children, (cellEl) => (cellEl as HTMLElement).offsetWidth));
   }, [frozen, columnCount, rows?.length, rowLines, wrapValues, fitColumns]);
   const lefts = stickyLefts(widths, frozen);
+  // **How many columns come before the key**, computed once. Every sticky
+  // offset and every `colSpan` below is relative to it, and p.242's undo column
+  // is the second thing to change it - the first was p.224's checkbox, and that
+  // one was written out at four call sites.
+  const leading = (inEditMode ? 1 : 0) + (multiSelect && selectedVariable ? 1 : 0);
   const stick = (index: number) => {
     const left = lefts[index];
     return left === null || left === undefined
@@ -3903,8 +3987,14 @@ export function CanvasObjectTable({
             <table style={fitColumnsOf(fitColumns) ? undefined : { width: "auto" }}>
               <thead>
                 <tr ref={headRef}>
+                  {/* p.242 draws Undo in "the left-most column of the table",
+                      so the header above it is a blank cell rather than a
+                      label - there is nothing to call a column of buttons. */}
+                  {inEditMode && (
+                    <th className="canvas-table-check" style={stick(0)} aria-label="Undo" />
+                  )}
                   {multiSelect && selectedVariable && (
-                    <th className="canvas-table-check" style={stick(0)}>
+                    <th className="canvas-table-check" style={stick(inEditMode ? 1 : 0)}>
                       <input
                         type="checkbox"
                         aria-label="Select all rows on this page"
@@ -3929,12 +4019,9 @@ export function CanvasObjectTable({
                       />
                     </th>
                   )}
-                  <th style={stick(multiSelect && selectedVariable ? 1 : 0)}>Key</th>
+                  <th style={stick(leading)}>Key</th>
                   {properties.map((p, column) => (
-                    <th
-                      key={p.api_name}
-                      style={stick(column + 1 + (multiSelect && selectedVariable ? 1 : 0))}
-                    >
+                    <th key={p.api_name} style={stick(column + 1 + leading)}>
                       {p.display_name || p.api_name}
                     </th>
                   ))}
@@ -3965,8 +4052,29 @@ export function CanvasObjectTable({
                         : undefined
                     }
                   >
-                    {multiSelect && selectedVariable && (
+                    {inEditMode && (
                       <td className="canvas-table-check" style={stick(0)}>
+                        {isStaged(staged, instance.id) && (
+                          <button
+                            type="button"
+                            className="btn quiet"
+                            data-testid={`undo-${instance.primary_key}`}
+                            aria-label={`Undo edits to ${instance.primary_key}`}
+                            // Not a row click: undoing an edit is not choosing
+                            // an active object, and without this one press
+                            // would do both and fire the row's events.
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setStaged(undoRow(staged, instance.id));
+                            }}
+                          >
+                            Undo
+                          </button>
+                        )}
+                      </td>
+                    )}
+                    {multiSelect && selectedVariable && (
+                      <td className="canvas-table-check" style={stick(inEditMode ? 1 : 0)}>
                         <input
                           type="checkbox"
                           aria-label={`Select ${instance.primary_key}`}
@@ -3994,7 +4102,7 @@ export function CanvasObjectTable({
                         // a difference somewhere else. The defined one is the
                         // one to rely on.
                         height: minHeight,
-                        ...stick(multiSelect && selectedVariable ? 1 : 0),
+                        ...stick(leading),
                       }}
                     >
                       {/* **The clamp lives on an inner element**, because
@@ -4006,6 +4114,12 @@ export function CanvasObjectTable({
                       const paint = conditionalStyle(
                         p.conditional_format, instance.properties,
                       );
+                      // p.242: "users can edit any modifiable column mapped to
+                      // an action parameter" - so a column with no parameter
+                      // pointed at it stays a value, in edit mode or out of it.
+                      const parameter = inEditMode
+                        ? parameterForColumn(editMapping, p.api_name)
+                        : undefined;
                       return (
                         <td
                           key={p.api_name}
@@ -4017,18 +4131,62 @@ export function CanvasObjectTable({
                             ...(fillsCell && paint?.background
                               ? { background: paint.background }
                               : {}),
-                            ...stick(column + 1 + (multiSelect && selectedVariable ? 1 : 0)),
+                            ...stick(column + 1 + leading),
                           }}
                         >
                           <div style={cell}>
-                            <PropertyValue
-                              workspaceId={workspaceId}
-                              dataType={p.data_type}
-                              valueFormat={p.value_format}
-                              style={paint}
-                              value={instance.properties[p.api_name]}
-                              emptyText={emptyText}
-                            />
+                            {parameter ? (
+                              <div
+                                data-testid={`edit-${instance.primary_key}-${p.api_name}`}
+                                // A click in a cell is typing, not choosing a
+                                // row - the same reason p.224's checkbox stops
+                                // its own click.
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {/* **The same control the action form draws**
+                                    (§237). A second typed-input renderer is a
+                                    second place for `attachment`, `date` and
+                                    `boolean` to disagree, which is the mistake
+                                    §237 spent a unit deleting.
+
+                                    **And the same way of switching it off.**
+                                    p.242's cap is about rows: a row nobody has
+                                    touched cannot be started once the batch is
+                                    full, and one already in it stays editable.
+                                    A `disabled` prop on `PropertyInput` would
+                                    have been a second mechanism for what §237's
+                                    fieldset already does, and one this suite
+                                    cannot reach - the cap is two hundred rows,
+                                    which no browser fixture stages. */}
+                                <fieldset
+                                  className="canvas-action-field"
+                                  disabled={!canStage(staged, instance.id, rowLimit)}
+                                >
+                                  <PropertyInput
+                                    workspaceId={workspaceId}
+                                    dataType={p.data_type as never}
+                                    label={p.display_name || p.api_name}
+                                    value={cellValue(
+                                      staged, instance.id, parameter,
+                                      instance.properties[p.api_name] ?? null,
+                                    ) as never}
+                                    onChange={(next) =>
+                                      setStaged(stage(
+                                        staged, instance.id, parameter, next, rowLimit,
+                                      ))}
+                                  />
+                                </fieldset>
+                              </div>
+                            ) : (
+                              <PropertyValue
+                                workspaceId={workspaceId}
+                                dataType={p.data_type}
+                                valueFormat={p.value_format}
+                                style={paint}
+                                value={instance.properties[p.api_name]}
+                                emptyText={emptyText}
+                              />
+                            )}
                           </div>
                         </td>
                       );
@@ -4065,6 +4223,87 @@ export function CanvasObjectTable({
             <p className="canvas-widget-empty">
               Showing the first {rows.length} of {total.toLocaleString()}.
             </p>
+          )}
+          {/* p.242: the button lives "in the table footer", and p.243 puts
+              Submit "in the bottom right corner of the table". */}
+          {mode === "run" && !!liveAction && Object.keys(editMapping).length > 0 && (
+            <div className="canvas-table-edit" data-testid="inline-edit-footer">
+              <button
+                type="button"
+                className="btn quiet"
+                data-testid="inline-edit-toggle"
+                onClick={() => {
+                  const next = !inEditMode;
+                  setEditOpen(next);
+                  // **Leaving edit mode discards what was staged**, and says so
+                  // on the button below. Keeping it would leave edits pending
+                  // behind a closed table, where the only sign of them is a
+                  // Submit nobody can see.
+                  if (!next) {
+                    setStaged({});
+                    setSubmitError(null);
+                  }
+                }}
+              >
+                {inEditMode ? "Done" : buttonTextOf(inlineEditButtonText)}
+              </button>
+              {inEditMode && (
+                <>
+                  <span className="canvas-widget-empty" data-testid="inline-edit-count">
+                    {stagedCount(staged) === 1
+                      ? "1 row edited"
+                      : `${stagedCount(staged)} rows edited`}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn"
+                    data-testid="inline-edit-submit"
+                    disabled={!canSubmit(staged, liveAction) || submit.isPending}
+                    onClick={() =>
+                      // p.243's dialog is the default and the toggle is the way
+                      // past it - the safer direction for a control that writes
+                      // to every staged row at once.
+                      oneClickOf(inlineEditOneClick) ? submit.mutate() : setConfirming(true)
+                    }
+                  >
+                    {submit.isPending ? "Submitting…" : "Submit"}
+                  </button>
+                </>
+              )}
+              {limitNotice(staged, rowLimit) && (
+                <span className="form-error" data-testid="inline-edit-limit">
+                  {limitNotice(staged, rowLimit)}
+                </span>
+              )}
+              {submitError && (
+                <span className="form-error" data-testid="inline-edit-error">
+                  {submitError}
+                </span>
+              )}
+            </div>
+          )}
+          {confirming && (
+            /* p.243: "A confirmation dialog will appear where you will again
+               press Submit to submit your changes." */
+            <div className="canvas-confirm" role="dialog" aria-modal="true"
+              aria-label="Submit these edits" data-testid="inline-edit-confirm">
+              <p>
+                Submit {stagedCount(staged) === 1
+                  ? "1 edited row" : `${stagedCount(staged)} edited rows`}?
+                {" "}They are written together, or not at all.
+              </p>
+              <div className="canvas-table-edit">
+                <button type="button" className="btn quiet"
+                  onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn"
+                  data-testid="inline-edit-confirm-submit"
+                  onClick={() => submit.mutate()}>
+                  Submit
+                </button>
+              </div>
+            </div>
           )}
         </>
       )}
@@ -4312,6 +4551,104 @@ function TableSortsField({ sort, properties, setProp }: {
   );
 }
 
+/** p.241's inline-edit block, which p.241 places "within the Column
+ * configuration section below the Columns list" - so that is where it is.
+ *
+ * **The picker offers only what the executor will accept.** `eligibleActions`
+ * reads §238's `inline_edit_refusals`, computed on the server, rather than
+ * deciding here: p.240's criteria govern writes, and a panel that judged them
+ * in another language would be free to disagree with the endpoint that runs
+ * them. When nothing on this object type qualifies the block says so and names
+ * why for the nearest miss, because "no actions" and "none that can do this"
+ * send a builder to two different places.
+ */
+function InlineEditField({ actions, columns, inlineEdit, mapping, setProp }: {
+  actions: readonly import("@/lib/types").ActionType[] | undefined;
+  /** The columns the table is currently displaying, which p.241 makes the
+   * only things a parameter may be mapped onto. */
+  columns: readonly string[];
+  inlineEdit: unknown;
+  mapping: unknown;
+  setProp: (cb: (props: Record<string, unknown>) => void) => void;
+}) {
+  const eligible = eligibleActions(actions);
+  const chosen = eligible.find((a) => a.id === inlineEdit) ?? null;
+  const current = mappingOf(mapping, chosen, columns);
+  const refusedExample = (actions ?? []).find(
+    (a) => (a.inline_edit_refusals?.length ?? 0) > 0,
+  );
+
+  return (
+    <div className="field" data-testid="inline-edit">
+      <span className="field-label">Enable inline editing</span>
+      <select
+        value={typeof inlineEdit === "string" ? inlineEdit : ""}
+        data-testid="inline-edit-action"
+        onChange={(e) =>
+          setProp((p) => {
+            p.inlineEditAction = e.target.value || null;
+            // **Seeded on the way in, not derived on every render** (p.241's
+            // "automatic mapping"). Derived, a builder could never unmap a
+            // matching column - the mapping would come straight back. Seeded,
+            // it is a starting point they own.
+            p.inlineEditMapping = e.target.value
+              ? automaticMapping(eligible.find((a) => a.id === e.target.value), columns)
+              : {};
+          })
+        }
+      >
+        <option value="">Off</option>
+        {eligible.map((a) => (
+          <option key={a.id} value={a.id}>{a.display_name || a.api_name}</option>
+        ))}
+      </select>
+      {eligible.length === 0 && (
+        <span className="field-hint" data-testid="inline-edit-none">
+          {refusedExample
+            ? `No action on this object type can back a cell edit. ${
+              refusedExample.display_name || refusedExample.api_name}: ${
+              refusedExample.inline_edit_refusals?.[0]}`
+            : "No actions on this object type yet — create one in the Ontology Manager"}
+        </span>
+      )}
+      {chosen && (
+        <div data-testid="inline-edit-mapping">
+          {(chosen.parameters ?? []).map((parameter) => (
+            <label className="field" key={parameter.api_name}>
+              <span className="field-label">
+                {parameter.display_name || parameter.api_name}
+              </span>
+              <select
+                value={current[parameter.api_name] ?? ""}
+                data-parameter={parameter.api_name}
+                onChange={(e) =>
+                  setProp((p) => {
+                    const next = { ...current };
+                    if (e.target.value) next[parameter.api_name] = e.target.value;
+                    else delete next[parameter.api_name];
+                    p.inlineEditMapping = next;
+                  })
+                }
+              >
+                <option value="">Not editable</option>
+                {columns.map((column) => (
+                  <option key={column} value={column}>{column}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+          <span className="field-hint">
+            {/* p.135: an unmapped parameter is not a gap. The batch seeds every
+                untouched parameter from the object, so a parameter left "Not
+                editable" keeps its value rather than clearing it. */}
+            A parameter left unmapped keeps whatever the object already holds.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ObjectTableSettings() {
   const { workspaceId } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
@@ -4321,6 +4658,8 @@ function ObjectTableSettings() {
     activeVariable, autoSelect, multiSelect, selectedVariable,
     lines, valueWrap, frozenColumns, emptyMode, emptyMessage,
     customNoValue, noValueText, fitColumns, narrowHeaders, formatFillsCell,
+    inlineEditAction, inlineEditMapping, inlineEditButtonText,
+    inlineEditByDefault, inlineEditOneClick,
     actions: { setProp },
   } = useNode((node) => ({
     objectTypeId: node.data.props.objectTypeId,
@@ -4345,6 +4684,11 @@ function ObjectTableSettings() {
     fitColumns: node.data.props.fitColumns,
     narrowHeaders: node.data.props.narrowHeaders,
     formatFillsCell: node.data.props.formatFillsCell,
+    inlineEditAction: node.data.props.inlineEditAction,
+    inlineEditMapping: node.data.props.inlineEditMapping,
+    inlineEditButtonText: node.data.props.inlineEditButtonText,
+    inlineEditByDefault: node.data.props.inlineEditByDefault,
+    inlineEditOneClick: node.data.props.inlineEditOneClick,
   }));
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
   // **`array`, not `object_set`.** p.224 calls these outputs object sets and
@@ -4371,6 +4715,24 @@ function ObjectTableSettings() {
     queryFn: () => objApi.getType(workspaceId, sortTypeId!),
     enabled: !!sortTypeId,
   });
+  // p.241's action picker. Asked of the *object type* rather than of the bound
+  // set, for the reason §212's link endpoint exists: a builder configures a
+  // widget before there is data, and answering from today's rows would make the
+  // set of configurable actions depend on whether the table happened to be
+  // empty.
+  const tableActions = useQuery({
+    queryKey: ["action-types", workspaceId, sortTypeId],
+    queryFn: () => actionApi.listTypes(workspaceId, sortTypeId!),
+    enabled: !!sortTypeId,
+  });
+  // The columns p.241 lets a parameter be mapped onto: what the table displays,
+  // which is the configured list when there is one and every property when
+  // there is not - the same rule the widget itself renders by.
+  const shownColumns = useMemo(() => {
+    const wanted = String(columns || "").split(",").map((c) => c.trim()).filter(Boolean);
+    const all = (detail.data?.properties ?? []).map((p) => p.api_name);
+    return wanted.length ? wanted.filter((c) => all.includes(c)) : all;
+  }, [columns, detail.data]);
 
   // p.65's order, and p.66's disclosure. **A choice rather than a
   // requirement**: this widget is populated either by a bound object set or
@@ -4492,6 +4854,59 @@ function ObjectTableSettings() {
           Property names in the order to show them. Blank shows all of them.
         </span>
       </label>
+      {/* p.241: "the toggle to Enable inline editing will appear within the
+          Column configuration section below the Columns list". */}
+      <InlineEditField
+        actions={tableActions.data}
+        columns={shownColumns}
+        inlineEdit={inlineEditAction}
+        mapping={inlineEditMapping}
+        setProp={setProp}
+      />
+      {inlineEditAction && (
+        <>
+          <label className="field">
+            <span className="field-label">Custom button text</span>
+            <input
+              type="text"
+              value={typeof inlineEditButtonText === "string" ? inlineEditButtonText : ""}
+              placeholder={DEFAULT_BUTTON_TEXT}
+              onChange={(e) =>
+                setProp((p: { inlineEditButtonText: string }) =>
+                  (p.inlineEditButtonText = e.target.value))
+              }
+            />
+          </label>
+          <label className="field-check">
+            <input
+              type="checkbox"
+              checked={editByDefaultOf(inlineEditByDefault)}
+              onChange={(e) =>
+                setProp((p: { inlineEditByDefault: boolean }) =>
+                  (p.inlineEditByDefault = e.target.checked))
+              }
+            />
+            <span>Enable edit mode by default</span>
+          </label>
+          <label className="field-check">
+            <input
+              type="checkbox"
+              checked={oneClickOf(inlineEditOneClick)}
+              onChange={(e) =>
+                setProp((p: { inlineEditOneClick: boolean }) =>
+                  (p.inlineEditOneClick = e.target.checked))
+              }
+            />
+            <span>One-click submit</span>
+          </label>
+          <span className="field-hint">
+            {/* p.243 makes the dialog the default and the toggle the way past
+                it, which is the safer direction for a control that writes to
+                every staged row at once. */}
+            Without this, Submit asks for confirmation before writing.
+          </span>
+        </>
+      )}
       <TableSortsField
         sort={sort}
         properties={detail.data?.properties ?? []}
@@ -4699,6 +5114,8 @@ CanvasObjectTable.craft = {
     frozenColumns: 0, emptyMode: "default", emptyMessage: "",
     customNoValue: false, noValueText: "", fitColumns: true,
     narrowHeaders: false, formatFillsCell: false,
+    inlineEditAction: null, inlineEditMapping: null, inlineEditButtonText: "",
+    inlineEditByDefault: false, inlineEditOneClick: false,
   },
   related: { settings: ObjectTableSettings },
 };

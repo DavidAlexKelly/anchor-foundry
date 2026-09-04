@@ -1756,6 +1756,19 @@ export interface ActionType {
    * action hangs off it. */
   status: OntologyStatus;
   deprecation: Deprecation | null;
+  /** Why this action cannot back an Object Table's inline edits, empty if it
+   * can (`workshop` p.240-241, `action-types` p.136-137).
+   *
+   * **Computed on the server** (§238). The panel offers only the actions whose
+   * list is empty and the widget re-checks before drawing an editor, but
+   * neither decides: p.240's criteria govern writes, and a browser judging them
+   * in another language would be free to disagree with the endpoint that runs
+   * them. */
+  inline_edit_refusals: string[];
+  /** p.242: "up to 200 rows at a time for actions that are not
+   * function-backed". Sent so the table can stop a reader staging the two
+   * hundred and first row before Submit, without a second copy of the number. */
+  inline_edit_row_limit: number;
   created_at: string;
   updated_at: string;
 }
@@ -1768,6 +1781,9 @@ export interface ActionRun {
   submitted_values: Record<string, unknown>;
   status: "running" | "succeeded" | "failed";
   error: string | null;
+  /** The inline-edit submission this run was part of, or null for an action
+   * submitted on its own (db 0063). */
+  batch_id: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -1777,6 +1793,20 @@ export interface ActionExecuteResult {
   error: string | null;
   dataset_version: number | null;
   instance: ObjectInstance;
+}
+
+/** What one inline-edit submission did (`workshop` p.242-243).
+ *
+ * **No per-row outcome**, because there is no such thing: p.138 makes the batch
+ * succeed or fail whole, so a list of results would be one word repeated. What
+ * varies is which dataset versions it produced - a table's rows can come from
+ * more than one mapping of one object type. */
+export interface ActionBatchResult {
+  ok: boolean;
+  error: string | null;
+  batch_id: string;
+  rows: number;
+  dataset_versions: Record<string, number>;
 }
 
 // ---- canvas apps (low-code app builder) --------------------------------------

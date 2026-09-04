@@ -113,6 +113,14 @@ class ActionTypeOut(BaseModel):
     # own copy of the rules is the seventh copy of a constraint this session has
     # spent four units collapsing.
     inline_edit_refusals: list[str]
+    # p.242: "Users can stage edits for up to … 200 rows at a time for actions
+    # that are not function-backed." **Sent rather than known by the browser**,
+    # for the same reason as the refusals above: the table has to stop a reader
+    # staging the two hundred and first row *before* Submit, and a number typed
+    # into the widget would be an eighth copy of a constraint this session has
+    # spent four units collapsing. One place says 200, and it is the place that
+    # enforces it.
+    inline_edit_row_limit: int
     # p.253: "every object type, property, link type, action, or interface in
     # the Ontology has a status". p.255 excludes `promoted` from action types
     # by name.
@@ -192,6 +200,7 @@ def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
             # second parse of the same value - which is what a mutant said when
             # it swapped the parsed rules for the raw ones and nothing failed.
             "inline_edit_refusals": actions_service.inline_edit_refusals(row),
+            "inline_edit_row_limit": actions_service.INLINE_EDIT_ROW_LIMIT,
             # jsonb, so it may arrive as text depending on the driver path -
             # the same treatment `config` gets two lines up.
             "deprecation": _parse_json(row.get("deprecation")),
