@@ -4290,6 +4290,81 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 238. Which actions may back a cell edit, and a submission that is all or nothing (this session)
+
+Workshop p.240-243 and `action-types` p.135-138. The Object Table build order
+has said "inline editing is its own unit" since §225 finished the sorts, and
+described it as "writeback with permissions behind it". That under-read it in
+the direction this item has now under-read four times: the permissions were
+already there (`execute` has had a project-editor floor since §127), and what
+was actually missing was two things neither of which is a widget.
+
+**The compatibility rules are not a checklist bolted onto a feature - they are
+what makes the feature expressible.** p.240's criteria and p.136-137's
+requirements read together say one thing: an eligible action's entire effect is
+"set these columns on this row". One `modify_object` on the subject, no creates,
+no deletes, no links, no second object, every parameter a single primitive and
+none of them hidden. Every clause buys the batch path something it could not
+otherwise do - a batch of arbitrary actions could not share a dataset version,
+and a create is an appended row where a modify is an update.
+
+`inline_edit_refusals` is computed on the server and sent on every action type,
+so the panel that will offer these actions cannot disagree with the executor
+that runs them. That is §214's rule (a setting the platform refuses must not be
+offered) meeting this session's running theme from the other side: four units
+have now been spent collapsing copies of one constraint, and this one starts
+with a single copy.
+
+**Two of the criteria are absent rather than implemented**, and saying which is
+the point. p.240's "all modified properties must be defined 'from parameter'
+(not 'as static value')" cannot fail here - a `modify_object` reads a
+`parameter` and `_validate_definition` refuses one that does not, so there is no
+static-value shape to catch. p.137's "side effect webhooks or notifications
+cannot be enabled" has nothing to disable. A check you cannot make fail is not a
+check, which is §234's lesson about three redundant guards applied before
+writing them rather than after.
+
+**The batch is all-or-nothing, and the test proves it by ordering.** p.138: "the
+edits will be submitted all at once and will succeed if they all pass". Every
+row is seeded, bound, checked against p.49-56's criteria and validated against
+the ontology before the first one is written. The row that fails in
+`test_a_row_that_fails_criteria_stops_the_whole_batch` is deliberately the
+**second**, because a write-as-you-go implementation passes every other check in
+the file and fails only that one - it would have written the first row before
+finding out.
+
+**db 0063 exists because two rules pull opposite ways and both have to hold.**
+A run is how this platform answers "who changed this row and to what", so a
+hundred edits recorded as one run answers it for none of them; and decision 0008
+already argued that several versions carrying one submission is "a history that
+has to be interpreted". So: one run per object, one dataset version per
+submission, and a `batch_id` for the version to name instead of picking one run
+out of a hundred. Not a table - a batch has no attribute its runs do not each
+carry identically.
+
+`action-types` p.135's "every parameter is optional and defaults to the existing
+value of the object" is what makes a single-cell edit legal, and it is seeded
+**from the rule** rather than by name match: p.241 only *recommends* that
+parameter ids match property ids, so an action whose names differ is legal and
+has to work.
+
+**25 mutants, 25 caught, 0 survivors**, and the first run's four survivors split
+cleanly in two. Two were fixtures that could not distinguish two implementations
+(§232's lesson): every action in the file was built from `editable_properties`,
+which names each parameter after the property it writes, so seeding by rule and
+seeding by name are the same function - and every object carried every property,
+so the guard against seeding one it had never had was unreachable until an
+edit-only property (p.113) gave it a shape. **Two were one redundant parse**:
+`inline_edit_refusals` reads each config through `_json` itself, so pre-parsing
+the rules at both call sites was parsing the same value twice. Removed rather
+than tested.
+
+**1736 API tests** (was 1716), 2 skipped; `tsc` clean. No browser work, because
+nothing renders it yet - the surface is the next unit, and p.240-243 names it:
+the Enable inline editing toggle, the parameter-to-column mapping with p.241's
+automatic match, p.242's Edit table button and staged edits with Undo, and
+p.243's confirmation dialog with its one-click override.
+
 ### 237. An action can upload an attachment, and one renderer instead of two (this session)
 
 §236 found this and left it, which was the right order: it is the smallest unit
