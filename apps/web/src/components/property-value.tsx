@@ -30,12 +30,47 @@ function isGeoPoint(value: unknown): value is GeoPoint {
   );
 }
 
+/** Whether this is the reference `POST /attachments` returned.
+ *
+ * **A JSON string counts, and that is the round trip rather than laxity** —
+ * exactly the reasoning `property_values._coerce_attachment` gives for
+ * accepting one on the way in. Two places produce the string form: write-back
+ * stores the whole reference as JSON text in the dataset column, so the next
+ * sync reads it back; and `pure.seedActionForm` stringifies every object it
+ * seeds a form with.
+ *
+ * §237 found the second the way the server found the first. A form re-opened on
+ * an object that already carries an attachment seeds the parameter as JSON
+ * text; reading only the object form meant the file input kept its `required`,
+ * and the browser refused to submit a value that was already there.
+ */
 function isAttachment(value: unknown): value is AttachmentRef {
-  return (
-    typeof value === "object" && value !== null &&
-    typeof (value as AttachmentRef).key === "string" &&
-    typeof (value as AttachmentRef).filename === "string"
-  );
+  const parsed = parseAttachment(value);
+  return parsed !== null;
+}
+
+function parseAttachment(value: unknown): AttachmentRef | null {
+  let candidate = value;
+  if (typeof candidate === "string") {
+    const text = candidate.trim();
+    // Cheap gate before parsing: every other seeded value is a plain string,
+    // and running `JSON.parse` over each of them to fail would be a try/catch
+    // in the render path of every text field.
+    if (!text.startsWith("{")) return null;
+    try {
+      candidate = JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
+  if (
+    typeof candidate === "object" && candidate !== null &&
+    typeof (candidate as AttachmentRef).key === "string" &&
+    typeof (candidate as AttachmentRef).filename === "string"
+  ) {
+    return candidate as AttachmentRef;
+  }
+  return null;
 }
 
 function humanSize(bytes: number): string {
@@ -150,24 +185,25 @@ export function PropertyValue({
       </span>
     );
   }
-  if (dataType === "attachment" && isAttachment(value)) {
+  const attached = dataType === "attachment" ? parseAttachment(value) : null;
+  if (attached) {
     // **Shown, not just offered** (decision 0009, part 2). An attachment
     // holding an image *is* the media reference this platform can honour -
     // bytes, a MIME type, and a URL that enforces the workspace boundary - and
     // the only thing missing was that a PNG drew a download link. The filename
     // and size stay under it either way: a picture with no name is not a file
     // anybody can go and find.
-    const href = objApi.attachmentUrl(workspaceId, value.key);
-    const kind = mediaKind(value.content_type);
+    const href = objApi.attachmentUrl(workspaceId, attached.key);
+    const kind = mediaKind(attached.content_type);
     const caption = (
-      <a href={href} download={value.filename} className="slug">
-        {value.filename} ({humanSize(value.size)})
+      <a href={href} download={attached.filename} className="slug">
+        {attached.filename} ({humanSize(attached.size)})
       </a>
     );
     if (kind === "file") {
       return (
-        <a href={href} download={value.filename}>
-          {value.filename} <span className="slug">({humanSize(value.size)})</span>
+        <a href={href} download={attached.filename}>
+          {attached.filename} <span className="slug">({humanSize(attached.size)})</span>
         </a>
       );
     }
@@ -176,7 +212,7 @@ export function PropertyValue({
         <Media
           workspaceId={workspaceId}
           kind={kind}
-          attachment={value}
+          attachment={attached}
         />
         {caption}
       </span>
@@ -268,7 +304,7 @@ export function PropertyInput({
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   if (dataType === "attachment") {
-    const current = isAttachment(value) ? value : null;
+    const current = parseAttachment(value);
     return (
       <div>
         <input

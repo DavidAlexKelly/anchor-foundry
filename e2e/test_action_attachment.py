@@ -49,6 +49,7 @@ def tickets(api):
         rows=[
             {"ticket_id": "1", "status": "open", "evidence": ""},
             {"ticket_id": "2", "status": "open", "evidence": ""},
+            {"ticket_id": "3", "status": "open", "evidence": ""},
         ],
         key="ticket_id", title="ticket_id",
         types={"evidence": "attachment"},
@@ -188,6 +189,61 @@ def test_a_required_attachment_blocks_submission_until_one_is_picked(
     upload.write_text("x")
     field(page).locator("input").set_input_files(str(upload))
     expect(page.get_by_role("button", name="Submit")).to_be_enabled()
+
+
+def test_a_form_reopened_on_an_object_that_already_has_one_can_submit(
+    page, api, tickets, tmp_path
+) -> None:
+    """**The case the `!isAttachment(value)` guard exists for**, and nothing
+    reached it until a mutant said so.
+
+    A file input's `required` is satisfied by a *file being picked*, not by the
+    parameter having a value. Re-open the form on an object that already
+    carries an attachment and p.25's seeding fills the parameter — but the
+    input is empty, so a plain `required` would have the browser refuse the
+    submission for a value that is already there. The guard drops `required`
+    once the parameter holds a reference.
+
+    Ticket 3 is this test's own, and it attaches once and submits twice.
+    """
+    mod = build(api, tickets, "Attach reopen")
+    open_module(page, mod)
+    settled(page)
+
+    page.locator("form select").select_option(label="3")
+    upload = tmp_path / "first.txt"
+    upload.write_text("first")
+    field(page).locator("input").set_input_files(str(upload))
+    page.get_by_role("button", name="Submit").click()
+    expect(page.locator("text=Saved.")).to_be_visible()
+
+    # Re-opened: the parameter is seeded from the object, the file input is
+    # empty, and the form must still be submittable without re-picking.
+    reopened = build(api, tickets, "Attach reopened again")
+    open_module(page, reopened)
+    settled(page)
+    page.locator("form select").select_option(label="3")
+
+    expect(field(page).locator("input")).not_to_have_attribute("required", "")
+    expect(page.get_by_role("button", name="Submit")).to_be_enabled()
+    page.get_by_role("button", name="Submit").click()
+    expect(page.locator("text=Saved.")).to_be_visible()
+
+
+def test_a_required_parameter_says_so_to_a_screen_reader(page, api, tickets) -> None:
+    """`aria-required` on the control, which the disabled Submit button does not
+    say. The button reports the *form's* state; this reports the *field's*, and
+    a reader moving through the inputs gets only the second.
+
+    Untested until a mutant removed the attribute and nothing failed —
+    `test_action_form.py`'s required test asserts the button gate, which is a
+    different claim.
+    """
+    mod = build(api, tickets, "Attach aria")
+    open_module(page, mod)
+    settled(page)
+
+    expect(field(page).locator("input")).to_have_attribute("required", "")
 
 
 def test_the_picker_is_inert_in_the_builder(page, api, tickets) -> None:
