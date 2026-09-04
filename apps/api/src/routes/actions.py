@@ -21,7 +21,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -105,6 +105,14 @@ class ActionTypeOut(BaseModel):
     # itself moves to parameters (decision 0007, "the form gets harder before
     # it gets better").
     editable_properties: list[str]
+    # Why this action cannot back an Object Table's inline edits, empty if it
+    # can (`workshop` p.240-241, `action-types` p.136-137). **Derived on the
+    # server and sent**, rather than left for the panel to work out: the panel
+    # has to offer only eligible actions (§214's rule - a setting the platform
+    # refuses must not be offered), and a browser deciding eligibility from its
+    # own copy of the rules is the seventh copy of a constraint this session has
+    # spent four units collapsing.
+    inline_edit_refusals: list[str]
     # p.253: "every object type, property, link type, action, or interface in
     # the Ontology has a status". p.255 excludes `promoted` from action types
     # by name.
@@ -145,6 +153,11 @@ class ActionRunOut(BaseModel):
     submitted_values: dict[str, Any]
     status: str
     error: str | None
+    # The inline-edit submission this run belonged to, or null for an action
+    # submitted on its own (db 0063). On the wire because the action log's
+    # question is "what happened to this object", and "as one of forty edits
+    # somebody submitted together" is part of the answer.
+    batch_id: UUID | None = None
     started_at: datetime
     finished_at: datetime | None
 
@@ -174,6 +187,13 @@ def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
             "rules": rules,
             "criteria": [{**c, "config": _parse_json(c["config"])} for c in row["criteria"]],
             "editable_properties": actions_service.editable_properties_of(rules),
+            # Computed from the *parsed* rules above, not from `row["rules"]`:
+            # a rule's config arrives as jsonb and may be text, and an
+            # eligibility check reading `"{}"` as a config would find no
+            # `object` key on any rule and pass every action.
+            "inline_edit_refusals": actions_service.inline_edit_refusals(
+                {**row, "rules": rules}
+            ),
             # jsonb, so it may arrive as text depending on the driver path -
             # the same treatment `config` gets two lines up.
             "deprecation": _parse_json(row.get("deprecation")),
@@ -945,4 +965,294 @@ async def execute_action(
         instance=InstanceOut(
             **{**updated_instance, "properties": _parse_json(updated_instance["properties"])}
         ),
+    )
+
+
+# ---- inline edits (Workshop p.240-243, action-types p.135-138) ---------------
+class InlineEdit(BaseModel):
+    """One row's worth of an inline-edit submission."""
+
+    instance_id: UUID
+    values: dict[str, Any] = Field(default_factory=dict, max_length=50)
+
+
+class BatchRequest(BaseModel):
+    # p.242's cap, enforced by the schema rather than by a check inside the
+    # handler: a request of a thousand rows should be refused before anything
+    # reads a thousand instances out of the store.
+    edits: list[InlineEdit] = Field(
+        min_length=1, max_length=actions_service.INLINE_EDIT_ROW_LIMIT
+    )
+
+
+class BatchResult(BaseModel):
+    """What one inline-edit submission did.
+
+    **No per-row outcome**, because there is no such thing: p.138 makes the
+    batch succeed or fail whole, so a list of results would be a list of the
+    same word repeated. What varies, and is therefore reported, is which
+    dataset versions the submission produced - a table's rows can come from
+    more than one mapping of one object type.
+    """
+
+    ok: bool
+    error: str | None
+    batch_id: UUID
+    rows: int
+    dataset_versions: dict[str, int]
+
+
+@project_router.post("/{action_type_id}/execute-batch", response_model=BatchResult)
+async def execute_batch(
+    action_type_id: UUID,
+    body: BatchRequest,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> BatchResult:
+    """Submit an Object Table's staged inline edits (`workshop` p.242-243).
+
+    > "Inline edits differ in that they are validated and submitted in bulk."
+    > (`action-types` p.137)
+
+    > "At final submission, the edits will be submitted all at once and will
+    > succeed if they all pass parameter and global submission criteria for the
+    > corresponding object." (p.138)
+
+    **The two halves of that sentence are two loops here, and the order between
+    them is the whole guarantee**: every row is bound, seeded, checked against
+    p.49-56's criteria and validated against the ontology *before* the first
+    row is written. A per-row write-as-you-go would leave a submission that
+    half-happened, which is precisely the state p.138 says must not exist and
+    which nothing on the reader's screen could describe.
+
+    This is `execute_action` with the shapes eligibility rules out: no creates,
+    no deletes, no links, no far-side modifies. That is not a simplification
+    somebody chose - it is what `inline_edit_refusals` guarantees, and it is why
+    a hundred rows can share one dataset version.
+    """
+    storage = _dataset_storage()
+    batch_id = uuid4()
+    async with user_connection(access.auth.user_id) as conn:
+        action_type = await actions_service.get_action_type(
+            conn, access.workspace_id, action_type_id
+        )
+        rules = [{**r, "config": _parse_json(r["config"])} for r in action_type["rules"]]
+        refusals = actions_service.inline_edit_refusals({**action_type, "rules": rules})
+        if refusals:
+            # Refused here as well as hidden in the panel. A builder can point
+            # a table at an action and then change the action, and the widget
+            # that was configured while it was eligible would go on submitting.
+            raise ValueError(
+                "this action cannot back inline edits: " + "; ".join(refusals)
+            )
+        seen: set[UUID] = set()
+        for edit in body.edits:
+            if edit.instance_id in seen:
+                # p.138: "Actions will return an error if an inline edit
+                # attempts to edit the same object twice." Refused rather than
+                # merged, because two edits of one cell are two answers and
+                # nothing here can say which the reader meant last.
+                raise ValueError(
+                    "this submission edits the same object twice, which an inline "
+                    "edit cannot do"
+                )
+            seen.add(edit.instance_id)
+
+        object_type_id = UUID(str(action_type["object_type_id"]))
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        properties = await ontology_service.list_properties(conn, object_type_id)
+        property_types = {p["api_name"]: p["data_type"] for p in properties}
+        edit_only = ontology_service.edit_only_properties(properties)
+        required = ontology_service.required_properties(properties)
+        constrained = ontology_service.constrained_properties(properties)
+        user = await actions_service.criteria_user(conn, access.auth.user_id)
+        link_types = await actions_service.link_types_for(conn, access.workspace_id)
+
+        # Two instances of one type can come from different mappings, so the
+        # source is a per-row lookup - cached, because a table's rows usually
+        # share one and re-reading it two hundred times is two hundred queries
+        # for one answer.
+        sources: dict[str, dict[str, Any]] = {}
+
+        async def source_for(source_id: str) -> dict[str, Any]:
+            if source_id not in sources:
+                # 404s for a source this project does not map, which is the
+                # refusal that stops a batch reaching into a project the caller
+                # is not in - the same one `execute_action` relies on.
+                sources[source_id] = dict(
+                    await ontology_service.get_source(
+                        conn, access.project_id, UUID(source_id)
+                    )
+                )
+            return sources[source_id]
+
+        planned: list[dict[str, Any]] = []
+        for edit in body.edits:
+            instance = await instance_store.store_for(conn).get_instance(
+                search_prefix=prefix, object_type_id=object_type_id,
+                instance_id=str(edit.instance_id),
+            )
+            if instance is None:
+                raise NotFoundError("object instance")
+            source = await source_for(str(instance["source_id"]))
+            mappings: dict[str, str] = _parse_json(source["column_mappings"])
+            stored: dict[str, Any] = _parse_json(instance["properties"])
+            bound = actions_service.bind_parameters(
+                actions_service.seed_from_instance(
+                    edit.values,
+                    parameters=action_type["parameters"],
+                    properties=stored,
+                    rules=rules,
+                ),
+                parameters=action_type["parameters"],
+            )
+            actions_service.check_criteria(
+                bound, criteria=action_type["criteria"], user=user
+            )
+            values = actions_service.apply_rules(
+                bound,
+                rules=rules,
+                property_types=property_types,
+                mapped_properties=set(mappings.values()),
+                edit_only=edit_only,
+                link_types=link_types,
+            )
+            actions_service.check_required(values, required=required)
+            actions_service.check_constraints(values, constrained)
+            columns = {prop: col for col, prop in mappings.items()}
+            planned.append({
+                "instance_id": edit.instance_id,
+                "primary_key": str(instance["primary_key"]),
+                "source": source,
+                "values": values,
+                # Edit-only properties have no column by definition (p.113), so
+                # they reach the instance store below and nothing else.
+                "column_updates": {
+                    columns[prop]: ontology_service.column_value(
+                        property_types.get(prop, "string"), value
+                    )
+                    for prop, value in values.items()
+                    if prop not in edit_only
+                },
+            })
+
+        # Every row validated, so the runs can be opened: a run that exists is
+        # a submission that was accepted, and one opened before the checks
+        # would record a hundred attempts for a batch refused on its first row.
+        for row in planned:
+            row["run_id"] = await actions_service.open_run(
+                conn,
+                action_type_id=action_type_id,
+                instance_id=row["instance_id"],
+                dataset_id=UUID(str(row["source"]["dataset_id"])),
+                requested_by=access.auth.user_id,
+                submitted_values=row["values"],
+                batch_id=batch_id,
+            )
+
+    ok, error = True, None
+    dataset_versions: dict[str, int] = {}
+    try:
+        # **One entry per dataset**, for the reason `execute_action` states: two
+        # staged versions of one dataset collide on the version the first
+        # claimed. Here it is the common case rather than the odd one - a table
+        # of two hundred rows is one dataset two hundred times.
+        plan: dict[str, dict[str, Any]] = {}
+        for row in planned:
+            entry = plan.setdefault(
+                str(row["source"]["dataset_id"]),
+                {"source": row["source"], "updates": []},
+            )
+            if row["column_updates"]:
+                entry["updates"].append((row["primary_key"], row["column_updates"]))
+
+        staged_all = []
+        async with user_connection(access.auth.user_id) as conn:
+            for dataset_key, work in plan.items():
+                if not work["updates"]:
+                    # Every row this dataset carries wrote edit-only properties
+                    # only (p.113). Staging a version identical to the one
+                    # before it would be a lineage entry for a file that did
+                    # not change.
+                    continue
+                work_source = work["source"]
+                work_path = await anyio.to_thread.run_sync(
+                    storage.local_path, str(work_source["s3_location"])
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    dest = os.path.join(tmp, "out.parquet")
+                    work_schema, work_rows = await anyio.to_thread.run_sync(
+                        engine.write_rows,
+                        work_path,
+                        str(work_source["primary_key_column"]),
+                        work["updates"],
+                        [],
+                        dest,
+                        [],
+                    )
+                    with open(dest, "rb") as handle:
+                        work_bytes = handle.read()
+                staged_all.append(
+                    await dataset_service.stage_version(
+                        conn, storage,
+                        dataset_id=UUID(dataset_key),
+                        workspace_id=access.workspace_id,
+                        parquet_bytes=work_bytes,
+                        schema=work_schema,
+                        row_count=work_rows,
+                        # The submission produced this version, not any one of
+                        # its runs (db 0063). Naming the first run would be a
+                        # lineage entry that is wrong for every other row.
+                        produced_by_kind="action_batch",
+                        produced_by_id=batch_id,
+                        created_by=access.auth.user_id,
+                    )
+                )
+            committed = await dataset_service.commit_versions(conn, staged_all)
+            for dataset_key, record in committed.items():
+                dataset_versions[str(dataset_key)] = int(record["current_version"])
+            for row in planned:
+                if not row["values"]:
+                    continue
+                # The dataset is the record and the index is a projection
+                # (decision 0008), so this follows the commit above - a failure
+                # here leaves objects stale until the next sync rather than a
+                # dataset that disagrees with itself.
+                await instance_store.store_for(conn).update_properties(
+                    search_prefix=prefix,
+                    object_type_id=object_type_id,
+                    instance_id=str(row["instance_id"]),
+                    properties=row["values"],
+                )
+    except DatasetEngineError as exc:
+        ok, error = False, str(exc)
+
+    async with user_connection(access.auth.user_id) as conn:
+        for row in planned:
+            await actions_service.close_run(
+                conn, row["run_id"], ok=ok,
+                dataset_version=dataset_versions.get(str(row["source"]["dataset_id"])),
+                error=error,
+            )
+        # **One audit entry for the submission**, matching what the reader did:
+        # they pressed Submit once. The per-object record is the runs, which is
+        # what `batch_id` exists to let somebody read back.
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="action.execute_batch",
+            resource_type="action_type",
+            resource_id=action_type_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={
+                "batch_id": str(batch_id), "rows": len(planned), "ok": ok,
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return BatchResult(
+        ok=ok, error=error, batch_id=batch_id, rows=len(planned),
+        dataset_versions=dataset_versions,
     )

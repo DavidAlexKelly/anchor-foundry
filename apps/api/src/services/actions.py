@@ -826,6 +826,160 @@ def editable_properties_of(rules: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+# ---- inline edits (Workshop p.240-243, action-types p.135-138) ---------------
+#
+# **The compatibility rules are not a checklist bolted onto a feature; they are
+# what makes the feature expressible.** An action restricted to one
+# `modify_object` on its own subject, reading only primitive parameters, is
+# exactly an action whose whole effect is "set these columns on this row" - and
+# that is the only shape a hundred rows can be written in one dataset version.
+# Every rule below buys the batch path something it could not otherwise do.
+
+#: p.242: "up to 200 rows at a time for actions that are not function-backed".
+#: The other number on that page - 20 - is for function-backed actions, which
+#: this platform does not have, so it is not a constant here: a limit nothing
+#: can reach is a limit nobody can read the meaning of.
+INLINE_EDIT_ROW_LIMIT = 200
+
+#: p.241: "Property parameters must be of single, primitive types (for example,
+#: boolean, integer, or string, not an object reference or array)."
+#:
+#: Read against this platform's own types rather than transcribed. `object` is
+#: p.241's own exclusion. The other four are excluded because their *values*
+#: are not single primitives here, which is p.241's actual criterion:
+#: `attachment` is the four-field object `_coerce_attachment` requires (§237),
+#: `geopoint` is a lat/lon struct, and `json` is arbitrary structure. Arrays
+#: need no entry at all - this platform has no array parameter type, so
+#: refusing one would be a check nothing can fail.
+#:
+#: `time_series` is the judgement call, and it is stated rather than hidden: its
+#: stored value *is* a scalar, so the literal reading of p.241 would admit it -
+#: but the value is a series **id** (decision 0009), and a cell that let a
+#: reader retype it would silently repoint a chart at another object's history.
+#: Excluded on that ground; reverse it knowingly.
+INLINE_EDIT_PARAMETER_TYPES = frozenset(
+    {"string", "integer", "float", "boolean", "date", "timestamp"}
+)
+
+
+def inline_edit_refusals(action_type: dict[str, Any]) -> list[str]:
+    """Why this action type cannot back an Object Table's inline edits, if it
+    cannot (Workshop p.240-241, `action-types` p.136-137).
+
+    Empty means it can. **Computed on the server and sent to the browser**
+    rather than re-derived in the panel: the alternative is two copies of one
+    rule, and this session has now found seven places a single constraint had
+    been written down and gone stale in all but one of them (§231, §233, §237).
+    The panel's job is to *offer* only eligible actions; deciding which are
+    eligible is the ontology's.
+
+    Two of p.240-241's criteria are deliberately **absent**, because neither
+    can fail here and a check that cannot fail is not a check:
+
+    * "All modified properties must be defined 'from parameter' (not 'as static
+      value' or 'from property of object parameter')" - a `modify_object` rule
+      in this platform reads a `parameter` and nothing else; `_validate_definition`
+      refuses one that does not. There is no static-value shape to catch.
+    * `action-types` p.137's "side effect webhooks or side effect notifications
+      cannot be enabled" - this platform has neither.
+
+    Every reason returned is a sentence a builder can act on, in the same voice
+    as the executor's refusals: it names what is wrong and what would fix it.
+    """
+    reasons: list[str] = []
+    rules = list(action_type.get("rules") or [])
+    subject_modifies = [
+        r for r in rules
+        if str(r.get("kind")) == "modify_object" and not _json(r.get("config")).get("object")
+    ]
+    # p.240: "should either use a single 'Modify object' rule or be
+    # function-backed"; p.136: "May only modify a single object of a single
+    # object type". **Counted as rules, not as properties** - p.240 says a
+    # single rule, and this platform's rules are one property each, so several
+    # columns on one row would be several rules. That reading would refuse
+    # every useful inline edit, since a table with two editable columns needs
+    # two of them. What p.136 means by "a single object" is the *target*, and
+    # that is what is checked: every rule must write the subject, and nothing
+    # may create, delete or link.
+    if not subject_modifies:
+        reasons.append(
+            "an inline edit needs a rule that changes this action's own object; "
+            "this action has none"
+        )
+    for rule in rules:
+        kind = str(rule.get("kind"))
+        if kind != "modify_object":
+            reasons.append(
+                f"an inline edit may only change properties, and this action has a "
+                f"{kind!r} rule"
+            )
+        elif _json(rule.get("config")).get("object"):
+            reasons.append(
+                "an inline edit changes the row it is typed into, and this action also "
+                "changes an object named by a parameter"
+            )
+    for parameter in action_type.get("parameters") or []:
+        name = str(parameter.get("api_name"))
+        data_type = str(parameter.get("data_type"))
+        if data_type not in INLINE_EDIT_PARAMETER_TYPES:
+            reasons.append(
+                f"{name!r} is a {data_type} parameter, and a table cell can only hold a "
+                "single primitive value"
+            )
+        # p.241: "Parameters' visibility options should not be set to 'hidden'
+        # (as each parameter will be tied to a visible column with the table)."
+        if parameter.get("hidden"):
+            reasons.append(
+                f"{name!r} is hidden, and every inline-edit parameter is tied to a "
+                "column the reader can see"
+            )
+    return reasons
+
+
+def seed_from_instance(
+    values: dict[str, Any],
+    *,
+    parameters: list[dict[str, Any]],
+    properties: dict[str, Any],
+    rules: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The submitted values, with every untouched parameter filled from the
+    object it edits (`action-types` p.135).
+
+    > "For standard actions, multiple parameters need to be set in order for
+    > the action to be valid. However, for action-backed inline edits, every
+    > parameter is optional and defaults to the existing value of the object,
+    > so a user can make individual changes to properties one at a time."
+
+    **This is the rule that makes a single-cell edit legal**, and it is the
+    reason `required` does not refuse a batch row: a reader who typed in one
+    column has not omitted the others, they have left them as they are. The
+    same substitution p.25's form does in the browser, done here because the
+    batch path has no form.
+
+    Seeded from the *rule*, not from a name match: a parameter is filled with
+    the property its own `modify_object` rule writes, so an action whose
+    parameter and property are named differently seeds correctly and one whose
+    parameter writes nothing is left alone rather than filled from a property
+    that happens to share its name.
+    """
+    by_parameter = {
+        str(_json(r.get("config")).get("parameter")): str(_json(r.get("config")).get("property"))
+        for r in rules
+        if str(r.get("kind")) == "modify_object" and not _json(r.get("config")).get("object")
+    }
+    seeded = dict(values)
+    for parameter in parameters:
+        name = str(parameter.get("api_name"))
+        if name in seeded:
+            continue
+        prop = by_parameter.get(name)
+        if prop is None or prop not in properties:
+            continue
+        seeded[name] = properties[prop]
+    return seeded
+
+
 # ---- parameters and rules ----------------------------------------------------
 _PARAMETER_COLUMNS = (
     "id, action_type_id, api_name, display_name, data_type, required, "
@@ -1169,18 +1323,24 @@ async def open_run(
     dataset_id: UUID,
     requested_by: UUID,
     submitted_values: dict[str, Any],
+    batch_id: UUID | None = None,
 ) -> UUID:
+    """One row per object changed, whether it was submitted on its own or as
+    one of a hundred (db 0063). `batch_id` groups an inline-edit submission;
+    `NULL` says this action was submitted by itself, which is the truth for
+    every run this platform wrote before inline edits existed."""
     row = await fetch_one(
         conn,
         """
         INSERT INTO action_runs (action_type_id, instance_id, dataset_id,
-                                 requested_by, submitted_values)
-        VALUES (:atid, :iid, :did, :by, CAST(:vals AS jsonb))
+                                 requested_by, submitted_values, batch_id)
+        VALUES (:atid, :iid, :did, :by, CAST(:vals AS jsonb), :batch)
         RETURNING id
         """,
         {
             "atid": str(action_type_id), "iid": str(instance_id), "did": str(dataset_id),
             "by": str(requested_by), "vals": json.dumps(submitted_values),
+            "batch": str(batch_id) if batch_id else None,
         },
     )
     assert row is not None
@@ -1218,7 +1378,7 @@ async def list_runs(conn: AsyncConnection, action_type_id: UUID) -> list[dict[st
         conn,
         """
         SELECT id, instance_id, dataset_id, dataset_version, submitted_values,
-               status, error, started_at, finished_at
+               status, error, batch_id, started_at, finished_at
           FROM action_runs
          WHERE action_type_id = :atid
          ORDER BY started_at DESC
