@@ -114,7 +114,7 @@ def test_editing_a_type_keeps_the_settings_the_edit_did_not_touch(
     open_type_editor(page, module)
     name = page.get_by_role("textbox", name="Display name")
     name.fill(f"Seed {module.tag} renamed")
-    page.get_by_role("button", name="Save").click()
+    page.get_by_role("button", name="Save", exact=True).click()
     expect(page.get_by_role("dialog")).to_have_count(0)
 
     eventually(
