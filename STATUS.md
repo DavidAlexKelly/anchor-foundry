@@ -4290,6 +4290,48 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 243. p.165's debugging link, which is §242's query with a second caller (this session)
+
+> "In edit mode, when you open a module from a module reference (for example,
+> opening an embedded child module in its own editor), the module opens with the
+> current values of any module interface variables that were passed from the
+> source module. This allows you to debug the opened module using the same state
+> that was present where it was referenced." (p.165)
+
+The row called this "small, and a genuinely thoughtful touch". It was small for
+a specific reason, and the reason is the point: **§242 built the mechanism one
+unit earlier**. The embed's `interface` prop is already keyed the way
+`interfaceQuery` wants - child external ID to host variable id - and the host's
+values are already in hand, so this is one more caller of one function rather
+than a second way to build a link.
+
+**In the other order it would have gone differently.** This row would have
+invented its own query, and §242 - arriving at the same page from the events
+side - would have found a second one and spent the unit collapsing them, which
+is what four earlier units in this session did spend. Adjacent rows citing the
+same page are worth doing adjacently, and that is a scheduling observation
+rather than a coding one.
+
+**The link carries the host's value, not the child's default.** That is the
+whole of "the same state that was present where it was referenced" - a link to
+the child's own defaults is one anybody could have typed. The test reads the
+opened module by *counting its rows*: the host passes `south`, the child
+defaults to `north`, and the two regions have different counts, so the assertion
+does not rest on trusting the query string.
+
+**Edit mode only**, because p.165 says so and because a viewer has no editor to
+be sent to; a link into one from a published module would be an invitation to a
+page they cannot open. The absence is asserted with the embed itself as the
+anchor, so it cannot pass against a page that has not drawn - §233's rule, which
+§241 had to be reminded of twice.
+
+**6 mutants, 6 caught, 0 survivors, 0 no-ops.** Browser-only, because
+`interfaceQuery` is already unit-tested by §242 and this unit adds no arithmetic
+of its own - which is what a unit that is genuinely one caller looks like.
+
+**1492 unit tests**, unchanged; 5 browser tests in `test_module_interface.py`;
+`tsc` clean. No API change at all.
+
 ### 242. p.165's Open Workshop module, and a value one round trip out of date (this session)
 
 p.165 sizes this unit in its own first clause. The event "can be used to
@@ -7387,6 +7429,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 ---
 
 ## Known rough edges worth knowing about
+
+- **Playwright's five-second `expect` default produced five failures in this suite that had nothing to do with the code under test**, and they are all one shape: an assertion that follows a server round trip, given five seconds because nobody chose a number. §237's ontology search; §241's two (a formatter dialog, and a `<select>` whose options were still being fetched); §243's two — a shared property asserted straight after a save, and the action editor's cross-module rename check, **which is the same test §233 saw fail once and recorded as unexplained**. Every one passes in isolation and fails in a full run, which is exactly when the box is slowest, so the suite reports as flaky when what it is really saying is that one assertion was budgeted differently from its neighbours (which wait 20–30s through `eventually` and `FIRST_RENDER_MS`). Fixing them one at a time did not work; `conftest` now sets a suite-wide 15s default, **measured rather than assumed** — a probe against a locator that never appears waited 15005ms. This is not a licence to skip `eventually` or `stays`: those exist for *derived* reads and for negative claims, neither of which is a timeout question.
 
 - **A mutation run leaves the browser suite unrunnable until the stack is restarted, and the symptom looks like catastrophe.** The harness restores every file it mutates by rewriting it, which bumps its mtime past the running API's start time — so §230's stale-API guard correctly refuses the whole suite afterwards. It reports as *"722 errors in 8 seconds"*, which reads like the platform collapsing and is in fact the guard doing precisely its job. It happened twice (§241, §242) before being written down. **`scripts/dev-down.sh && scripts/dev-up.sh` between a mutation run and a full browser run**, every time; `mutate240.py` does it inside `run_browser` because that unit changed the executor, and the same line at the *end* of a harness would save the next person the fifteen seconds of alarm.
 

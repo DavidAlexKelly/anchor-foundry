@@ -55,6 +55,28 @@ FIRST_RENDER_MS = int(os.environ.get("ANCHOR_E2E_FIRST_RENDER_MS", "30000"))
 # invisible, large enough not to spin.
 POLL_MS = 100
 
+# **What `expect(...)` waits, when nobody said.** Playwright's own default is
+# five seconds, and that default has now produced five failures in this suite
+# that had nothing to do with the code under test: §237's ontology search,
+# §241's two (a formatter dialog and a `<select>` still being fetched), and
+# §243's two - a shared property asserted straight after a save, and the action
+# editor's cross-module rename check, which is the same test §233 saw fail once
+# and recorded as unexplained.
+#
+# Every one is the same shape: **an assertion that follows a server round trip,
+# given five seconds because nobody chose a number.** They pass in isolation and
+# fail in a full run, which is exactly when the box is slowest - so the suite
+# reports as flaky when what it is really saying is that one assertion was
+# budgeted differently from its neighbours.
+#
+# Fixing them one at a time has not worked; five is enough evidence for a
+# default. This is not a licence to skip `eventually` or `stays`: those exist
+# for *derived* reads and for negative claims, and neither is a timeout
+# question. It only means a positive locator assertion no longer has to
+# out-guess the machine it runs on.
+EXPECT_MS = int(os.environ.get("ANCHOR_E2E_EXPECT_MS", "15000"))
+expect.set_options(timeout=EXPECT_MS)
+
 
 def _reachable(url: str) -> bool:
     try:
