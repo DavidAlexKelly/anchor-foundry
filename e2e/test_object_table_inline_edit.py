@@ -444,11 +444,14 @@ def test_the_panel_offers_only_actions_the_server_accepts(page, api) -> None:
     select_table(page)
 
     picker = page.get_by_test_id("inline-edit-action")
-    expect(picker).to_be_visible()
+    # **The count is asserted with `expect`, not read once.** The select exists
+    # immediately holding only "Off"; the eligible action arrives when the
+    # action-types query resolves, so `all_inner_texts()` on its own is a read
+    # of whatever moment it happened to run in - and under a full-suite run that
+    # moment was before the fetch returned. "Off" plus the eligible action: the
+    # refused one shares its display name, so the count is what tells them apart.
+    expect(picker.locator("option")).to_have_count(2)
     options = picker.locator("option").all_inner_texts()
-    # "Off" plus the eligible action. The refused one shares its display name,
-    # so the *count* is what tells them apart.
-    assert len(options) == 2, options
     assert options[0] == "Off", options
 
 
