@@ -4290,6 +4290,48 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 243. p.165's debugging link, which is §242's query with a second caller (this session)
+
+> "In edit mode, when you open a module from a module reference (for example,
+> opening an embedded child module in its own editor), the module opens with the
+> current values of any module interface variables that were passed from the
+> source module. This allows you to debug the opened module using the same state
+> that was present where it was referenced." (p.165)
+
+The row called this "small, and a genuinely thoughtful touch". It was small for
+a specific reason, and the reason is the point: **§242 built the mechanism one
+unit earlier**. The embed's `interface` prop is already keyed the way
+`interfaceQuery` wants - child external ID to host variable id - and the host's
+values are already in hand, so this is one more caller of one function rather
+than a second way to build a link.
+
+**In the other order it would have gone differently.** This row would have
+invented its own query, and §242 - arriving at the same page from the events
+side - would have found a second one and spent the unit collapsing them, which
+is what four earlier units in this session did spend. Adjacent rows citing the
+same page are worth doing adjacently, and that is a scheduling observation
+rather than a coding one.
+
+**The link carries the host's value, not the child's default.** That is the
+whole of "the same state that was present where it was referenced" - a link to
+the child's own defaults is one anybody could have typed. The test reads the
+opened module by *counting its rows*: the host passes `south`, the child
+defaults to `north`, and the two regions have different counts, so the assertion
+does not rest on trusting the query string.
+
+**Edit mode only**, because p.165 says so and because a viewer has no editor to
+be sent to; a link into one from a published module would be an invitation to a
+page they cannot open. The absence is asserted with the embed itself as the
+anchor, so it cannot pass against a page that has not drawn - §233's rule, which
+§241 had to be reminded of twice.
+
+**6 mutants, 6 caught, 0 survivors, 0 no-ops.** Browser-only, because
+`interfaceQuery` is already unit-tested by §242 and this unit adds no arithmetic
+of its own - which is what a unit that is genuinely one caller looks like.
+
+**1492 unit tests**, unchanged; 5 browser tests in `test_module_interface.py`;
+`tsc` clean. No API change at all.
+
 ### 242. p.165's Open Workshop module, and a value one round trip out of date (this session)
 
 p.165 sizes this unit in its own first clause. The event "can be used to
