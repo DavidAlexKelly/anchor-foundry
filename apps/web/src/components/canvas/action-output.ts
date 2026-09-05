@@ -36,7 +36,10 @@ export function outputKeys(
   touched: readonly Touched[] | undefined,
   objectTypeId: string | null | undefined,
 ): string[] {
-  if (!objectTypeId) return [];
+  // **No `if (!objectTypeId) return []` here, and a mutant is why.** The
+  // comparison below already answers it: every entry the server sends carries a
+  // real type id, so nothing matches a null or empty one and the result is the
+  // same empty list. The early return read like a check and could not fail.
   const out: string[] = [];
   for (const entry of touched ?? []) {
     if (entry?.object_type_id !== objectTypeId) continue;
