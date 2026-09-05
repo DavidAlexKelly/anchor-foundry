@@ -3057,3 +3057,65 @@ def test_neither_of_p91_s_events_needs_a_target() -> None:
         layout={"btn": node({})},
     )
     assert events["e_1"].effects[0].config == {}
+
+
+# ---- p.165's Open Workshop module --------------------------------------------
+def _open_module(module: str = "r-1", values=None) -> dict:
+    return {"type": "open_module",
+            "config": {"module": module, **({"values": values} if values else {})}}
+
+
+def test_opening_a_module_passes_this_module_s_variables_into_it() -> None:
+    """p.165: "allowing variable values to be passed from the current module to
+    the chosen module's interface variables"."""
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    events = we.parse(
+        {"e_1": event("e_1", effects=[_open_module(values={"region": "v_a"})])},
+        layout={"btn": node({})},
+        variables=variables,
+    )
+    assert events["e_1"].effects[0].config["values"] == {"region": "v_a"}
+
+
+def test_opening_a_module_needs_a_module() -> None:
+    with pytest.raises(we.EventError, match="needs the module to open"):
+        we.parse({"e_1": event("e_1", effects=[_open_module(module="")])},
+                 layout={"btn": node({})})
+
+
+def test_passing_a_variable_this_module_does_not_declare_is_refused() -> None:
+    """**The host half, and the only half checkable here.**
+
+    The value names a variable of *this* module, so a stale one is a link that
+    silently passes nothing and leaves the opened module on its own default —
+    the same failure, and the same message, as the embed mapping's. Whether the
+    target declares `region` at all needs the target's document, which is why
+    that half is the builder's to check and not this parser's.
+    """
+    variables = wv.parse({"v_a": var("v_a", label="A")})
+    with pytest.raises(we.EventError, match="does not declare"):
+        we.parse(
+            {"e_1": event("e_1", effects=[_open_module(values={"region": "v_gone"})])},
+            layout={"btn": node({})},
+            variables=variables,
+        )
+
+
+def test_opening_a_module_with_nothing_to_pass_is_allowed() -> None:
+    """p.165's event opens the module; passing nothing into it is a link rather
+    than a mistake. **Said out loud because `run_action` refuses the same
+    shape** — an action that writes nothing fails every time it is clicked, and
+    a module opened with no parameters simply opens."""
+    events = we.parse({"e_1": event("e_1", effects=[_open_module()])},
+                      layout={"btn": node({})})
+    assert events["e_1"].effects[0].config.get("values") in (None, {})
+
+
+def test_a_mapping_to_nothing_is_refused() -> None:
+    """An external ID left pointing at no variable would pass nothing and read,
+    in the document, exactly like one that was configured."""
+    with pytest.raises(we.EventError, match="maps 'region' to nothing"):
+        we.parse(
+            {"e_1": event("e_1", effects=[_open_module(values={"region": ""})])},
+            layout={"btn": node({})},
+        )

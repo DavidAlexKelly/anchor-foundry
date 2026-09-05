@@ -32,7 +32,7 @@ export function useEventContext(
   overlayIds?: Set<string>,
   object?: EventContext["object"],
 ): EventContext {
-  const { setMany, reset } = useCanvasParameters();
+  const { setMany, reset, values: parameterValues } = useCanvasParameters();
   const {
     go, openOverlay, closeOverlay, collapsed, setCollapsed, tabs, setTab, recompute,
     toggleScheme,
@@ -47,6 +47,7 @@ export function useEventContext(
     recomputeVariables: recompute,
     runAction,
     variables: resolved,
+    parameterValues,
     goToPage: go,
     openOverlay,
     closeOverlay,
@@ -56,6 +57,16 @@ export function useEventContext(
     // prefix, which is the only form of that sentence a widget added tomorrow
     // is already covered by.
     refreshData: () => { void invalidateCanvasReads(queryClient); },
+    // p.90: these events "provide a way to open other Foundry resources in a
+    // **new browser tab**". Through `openUrl`'s own window.open rather than a
+    // second one, so a module opens the way a link does.
+    openModule: (moduleId, query) => {
+      const search = new URLSearchParams(query).toString();
+      window.open(
+        `/r/${moduleId}${search ? `?${search}` : ""}`,
+        "_blank", "noopener,noreferrer",
+      );
+    },
     toggleTheme: toggleScheme,
     // **Toggle is resolved here, against what is on screen.** The section's
     // own props say which variable backs it and how it starts, and `resolved`

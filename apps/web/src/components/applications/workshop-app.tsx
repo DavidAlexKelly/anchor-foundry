@@ -39,6 +39,7 @@ import {
   EventsPanel,
   TRIGGER_WIDGETS,
   type ActionCandidate,
+  type ModuleCandidate,
   type PageCandidate,
   type TriggerCandidate,
 } from "@/components/canvas/EventsPanel";
@@ -773,6 +774,27 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
     editable: a.editable_properties,
   }));
 
+  // p.165's Open Workshop module: which modules this one may open. Fetched here
+  // for `actionTypes`'s reason - the panel is given what the workspace contains
+  // and does not reach out for it.
+  //
+  // **Addressed by resource id, because that is where a module opens** (`/r/…`,
+  // §115). The app id is what the API takes and the resource id is what a
+  // reader's URL says; an event storing the wrong one would build a link that
+  // 404s, and the two are both uuids so nothing would look wrong.
+  const projectModules = useQuery({
+    queryKey: ["canvas-apps", workspaceId, projectId],
+    queryFn: () => canvasApi.list(workspaceId, projectId!),
+    // Same guard the definition query above uses: the project comes from the
+    // resource, so it is null for the first render.
+    enabled: !!projectId,
+  });
+  const moduleCandidates: ModuleCandidate[] = (projectModules.data ?? [])
+    // Not itself: a module that opens itself in a new tab is a loop a builder
+    // can create by accident and cannot see until they click it.
+    .filter((m) => m.id !== appId)
+    .map((m) => ({ id: m.resource_id, appId: m.id, label: m.name }));
+
   // The variables half of the document. Held here rather than in the panel
   // because the Save button has to write both halves at once - and reseeded
   // only when a *new version* arrives, so a refetch cannot discard edits
@@ -879,6 +901,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
           stateSaving={stateSaving}
           onStateSavingChange={setStateSaving}
           actions={actionCandidates}
+          modules={moduleCandidates}
         />
       </CanvasEnvBridge>
     </Editor>
@@ -903,6 +926,7 @@ function CanvasBody({
   stateSaving,
   onStateSavingChange,
   actions,
+  modules,
 }: {
   hasSavedLayout: boolean;
   definition: Record<string, unknown>;
@@ -923,6 +947,7 @@ function CanvasBody({
     next: NonNullable<import("@/lib/types").WorkshopModule["state_saving"]>,
   ) => void;
   actions: ActionCandidate[];
+  modules: ModuleCandidate[];
 }) {
   const { enabled, triggerNodes, pageNodes, sectionNodes, tabSectionNodes } = useEditor((state) => {
     // Read from the editor's own node map rather than from the saved
@@ -1045,6 +1070,9 @@ function CanvasBody({
               tabSections={tabSectionNodes}
               sections={sectionNodes}
               actions={actions}
+              modules={modules}
+              workspaceId={workspaceId}
+              projectId={projectId}
               onChange={onEventsChange}
               readOnly={!canEdit}
             />
