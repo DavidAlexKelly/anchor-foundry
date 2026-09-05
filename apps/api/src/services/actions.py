@@ -826,6 +826,54 @@ def editable_properties_of(rules: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def touched_objects(
+    *,
+    subject: dict[str, Any] | None,
+    creations: list[dict[str, Any]],
+    modifications: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Which objects this action created or modified (Workshop p.513).
+
+    > "Output object set: Specify the object set that will be created or
+    > modified when the Action is submitted."
+
+    p.513's own two verbs, and **the third is deliberately absent**: an action
+    that deletes an object has not produced one for a set to hold, and a
+    deleted row named in an output set would resolve to nothing on the next
+    read - a set that quietly empties itself is worse than one that never held
+    the row.
+
+    `subject` is the action's own object, passed only when the action actually
+    wrote to it: a rule that creates one object and touches nothing on the
+    subject has not modified the subject, and reporting it would put an
+    unchanged row in the set the whole widget exists to describe.
+
+    **Deduplicated on (type, key), first mention winning**, because an action
+    can write the subject *and* name it through a parameter - the same object
+    twice, which a set cannot hold twice. Order is the order the writes were
+    described in, so the same submission always reports the same list.
+    """
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(object_type_id: str, primary_key: str, change: str) -> None:
+        key = (str(object_type_id), str(primary_key))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({
+            "object_type_id": key[0], "primary_key": key[1], "change": change,
+        })
+
+    if subject is not None:
+        add(subject["object_type_id"], subject["primary_key"], "modified")
+    for creation in creations:
+        add(creation["object_type_id"], creation["primary_key"], "created")
+    for modification in modifications:
+        add(modification["object_type_id"], modification["primary_key"], "modified")
+    return out
+
+
 # ---- inline edits (Workshop p.240-243, action-types p.135-138) ---------------
 #
 # **The compatibility rules are not a checklist bolted onto a feature; they are

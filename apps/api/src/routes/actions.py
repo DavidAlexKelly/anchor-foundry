@@ -175,11 +175,30 @@ class ExecuteRequest(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict, max_length=50)
 
 
+class TouchedObject(BaseModel):
+    """One object this action created or modified (Workshop p.513).
+
+    A primary key rather than an instance id, because that is what an object
+    set names: p.513's output is narrowed against a set of the type, and
+    `$primary_key in [...]` is the clause language both stores speak.
+    """
+
+    object_type_id: UUID
+    primary_key: str
+    change: str
+
+
 class ExecuteResult(BaseModel):
     ok: bool
     error: str | None
     dataset_version: int | None
     instance: InstanceOut
+    # p.513's **Output object set**, as the half only the executor can answer.
+    # The widget turns these into clauses and writes them to a variable; which
+    # objects were written is not something a browser can work out, because a
+    # rule can create an object whose primary key comes from a parameter it
+    # never sent.
+    touched: list[TouchedObject] = Field(default_factory=list)
 
 
 def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
@@ -971,6 +990,29 @@ async def execute_action(
         dataset_version=dataset_version,
         instance=InstanceOut(
             **{**updated_instance, "properties": _parse_json(updated_instance["properties"])}
+        ),
+        # p.513's Output object set. **Empty when the write failed**, because
+        # a set naming rows the action did not manage to produce is worse than
+        # an empty one - the reader would act on objects that never changed.
+        touched=[] if not ok else actions_service.touched_objects(
+            # The subject counts only when this action actually wrote to it:
+            # `values` is empty for an action whose every rule targets
+            # somewhere else, and an unchanged row does not belong in a set
+            # describing what changed.
+            subject={
+                "object_type_id": str(object_type_id),
+                "primary_key": str(instance["primary_key"]),
+            } if values else None,
+            creations=creations,
+            modifications=[
+                {
+                    "object_type_id": modification["object_type_id"],
+                    "primary_key": modification_rows[
+                        (modification["object_type_id"], modification["instance_id"])
+                    ]["primary_key"],
+                }
+                for modification in modifications
+            ],
         ),
     )
 

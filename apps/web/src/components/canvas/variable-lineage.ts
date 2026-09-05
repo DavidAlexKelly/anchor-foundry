@@ -68,6 +68,7 @@ export const PROP_DIRECTION: Record<(typeof REFERENCE_PROPS)[number], "read" | "
   // The User Select *reads* its group filter and writes its selection
   // elsewhere, so this one prop is upstream while `variable` is downstream.
   groupsVariable: "read",
+  outputVariable: "write",
   objectSetVariable: "read",
   enabledVariable: "read",
   visibleWhen: "read",

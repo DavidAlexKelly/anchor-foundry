@@ -197,6 +197,7 @@ import {
   mappingOf, oneClickOf, parameterForColumn, rowLimitOf, stage, stagedCount,
   toEdits, undoRow, type Staged,
 } from "./inline-edit";
+import { outputClauses } from "./action-output";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -11366,6 +11367,7 @@ export function CanvasActionForm({
   hideHeader = false,
   parameterDefaults = {},
   invalidState = "disabled",
+  outputVariable = null,
 }: {
   actionTypeId?: string | null;
   /** p.512's "Set custom Action title". */
@@ -11376,6 +11378,15 @@ export function CanvasActionForm({
   parameterDefaults?: Record<string, unknown>;
   /** p.513's "form state if invalid". */
   invalidState?: string;
+  /** p.513's **Output object set**: an `array` variable holding the clauses
+   * that name what this submission created or modified.
+   *
+   * **An array, not an object set** - the same split p.224's Object Table
+   * outputs use (§207). What the widget writes is a clause list; a `narrow_set`
+   * derivation over a base set of the type turns it into the set. Offering an
+   * object-set variable here would invite binding the *derived* one and
+   * overwriting the thing that derives it. */
+  outputVariable?: string | null;
   /** A `single_object` variable naming what to edit (roadmap 1.5, the inline
    * action form). Bound, the form edits the object somebody picked and the
    * record dropdown disappears — which is the difference between a form beside
@@ -11389,7 +11400,10 @@ export function CanvasActionForm({
   } = useNode();
   const { workspaceId, projectId, mode } = useCanvasEnv();
   const queryClient = useQueryClient();
-  const { events: moduleEvents } = useCanvasVariables();
+  const {
+    events: moduleEvents, declared: moduleVariables,
+    pending: variablesPending,
+  } = useCanvasVariables();
   const eventContext = useEventContext(undefined, useOverlayIds());
   const subject = useCanvasVariable(subjectVariable) as
     | { id?: string; primary_key?: unknown; properties?: Record<string, unknown> }
@@ -11441,6 +11455,49 @@ export function CanvasActionForm({
     ));
   }
 
+  // p.513's output, **stated rather than merely empty**, and §207's rule
+  // arrived at from the other side. A variable nothing has written holds no
+  // clauses, and no clauses means *no narrowing* - so a module showing "what
+  // this submission changed" would show the whole table until the first
+  // submit. `hasSelection` is how the widget knows it still has to say so, and
+  // is what keeps a state restored on load (§153) from being wiped.
+  const outputRaw = useCanvasParameter(outputVariable);
+  // **A declared default counts as stated, and the browser cannot see it in
+  // `values`.** The server resolves an unbound variable as
+  // `values.get(vid, variable.default)`, so a default never reaches the local
+  // map - and writing the empty set here would *replace* it, destroying a
+  // starting selection the builder declared on purpose.
+  //
+  // Not the question p.224's Object Table asks with `activeStated`: p.224 says
+  // in as many words that the table "results in an empty active object at load
+  // time", so there the empty write is the requirement. p.513 says nothing of
+  // the sort about an output set.
+  const outputStated = hasSelection(outputRaw) || hasSelection(
+    outputVariable
+      ? (moduleVariables[outputVariable] as { default?: unknown } | undefined)?.default
+      : undefined,
+  );
+  useEffect(() => {
+    // **Nothing is written while the variables are still resolving**
+    // (§210's rule: unresolved is not empty). `declared` is `{}` on the
+    // first render, so a default would read as absent and the empty set
+    // would be written over it before the module had finished loading -
+    // which is exactly what the browser test saw.
+    // **`pending` alone is not enough**, and this is the bug the preset test
+    // found. The default `VariableContext` is `{declared: {}, pending: false}`,
+    // so on any render before the provider is in place the guard above passes,
+    // the declared default reads as absent, and the empty set is written over
+    // it - after which nothing puts it back. A module that binds an output
+    // variable necessarily declares variables, so an empty map means "not
+    // loaded yet", never "none".
+    if (variablesPending || Object.keys(moduleVariables).length === 0) return;
+    if (!outputVariable || outputStated) return;
+    setParameter(outputVariable, selectionClauses([]));
+    // `setParameter` is stable for the life of the provider; listing it would
+    // re-run this on every render of every widget in the module.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outputVariable, outputStated, variablesPending, moduleVariables]);
+
   const execute = useMutation({
     mutationFn: () => actionApi.execute(workspaceId, projectId, actionType!.id, instanceId, values),
     onSuccess: async (result) => {
@@ -11459,6 +11516,16 @@ export function CanvasActionForm({
           ...subject,
           properties: { ...(subject.properties ?? {}), ...values },
         });
+      }
+      // p.513's **Output object set**, written before the event below fires -
+      // an event that navigates or opens an overlay would otherwise act on the
+      // previous submission's objects. **Written even when this action touched
+      // nothing of its own type**, as the empty set: leaving it alone would
+      // leave the last submission's rows on screen for a reader to act on.
+      if (outputVariable) {
+        setParameter(outputVariable, outputClauses(
+          result.touched, actionType?.object_type_id ?? null,
+        ));
       }
       // p.513's "On successful action submit". **On success only**, which is
       // what p.513 says and what makes it usable: an event that also fired on
@@ -11627,6 +11694,7 @@ function ActionFormSettings() {
     title,
     hideHeader,
     invalidState,
+    outputVariable,
     actions: { setProp },
   } = useNode((node) => ({
     actionTypeId: node.data.props.actionTypeId,
@@ -11634,9 +11702,16 @@ function ActionFormSettings() {
     title: node.data.props.title,
     hideHeader: node.data.props.hideHeader,
     invalidState: node.data.props.invalidState,
+    outputVariable: node.data.props.outputVariable,
   }));
   const { declared } = useCanvasVariables();
   const objects = Object.values(declared).filter((v) => v.kind === "single_object");
+  // **`array`, not `object_set`** — p.224's Object Table outputs took the same
+  // decision for the same reason (§207): what this widget writes is the clause
+  // list a `narrow_set` derivation reads, so the variable to bind is the array
+  // in the middle. Offering the derived set would invite binding the thing that
+  // is computed *from* this one and overwriting it on every submit.
+  const clauseVariables = Object.values(declared).filter((v) => v.kind === "array");
   const list = useQuery({
     queryKey: ["action-types", workspaceId],
     queryFn: () => actionApi.listTypes(workspaceId),
@@ -11733,6 +11808,28 @@ function ActionFormSettings() {
         </span>
       </label>
       </>}
+      outputs={<>
+      <label className="field">
+        <span className="field-label">Output object set</span>
+        <select
+          value={outputVariable || ""}
+          data-testid="action-form-output"
+          onChange={(e) =>
+            setProp((p: { outputVariable: string | null }) =>
+              (p.outputVariable = e.target.value || null))}
+        >
+          <option value="">Not bound</option>
+          {clauseVariables.map((v) => (
+            <option key={v.id} value={v.id}>{v.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {clauseVariables.length === 0
+            ? "Declare an array variable, and derive a narrowed set from it"
+            : "The objects each submission creates or modifies, as clauses to narrow a set with"}
+        </span>
+      </label>
+      </>}
     />
   );
 }
@@ -11741,7 +11838,7 @@ CanvasActionForm.craft = {
   displayName: "Action form",
   props: {
     actionTypeId: null, subjectVariable: null, title: "", hideHeader: false,
-    parameterDefaults: {}, invalidState: "disabled",
+    parameterDefaults: {}, invalidState: "disabled", outputVariable: null,
   },
   related: { settings: ActionFormSettings },
 };
