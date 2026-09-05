@@ -4290,6 +4290,56 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 241. p.91's two events, and a prose summary nothing guards (this session)
+
+`workshop.md` §5 had two ○ rows carrying nothing but a page number: **Refresh
+data in module** and **Toggle light / dark mode**. Opening p.91 (§216's rule)
+settled both in one sentence each, and settled the scope with them: **neither
+names anything.** Every other effect this platform accepts names a variable, a
+section, a page or an action, and the parser refuses one that names it wrongly.
+These two are the exception, so neither takes a config and neither has a field
+under it in the panel — a setting the page does not describe is one a builder
+would have to guess at.
+
+**The theme was one attribute, not a theme system.** `[data-scheme="dark"]` has
+existed since p.59-60's per-section brightness rule, and its own comment already
+made the argument: "redefining the tokens rather than restyling the widgets is
+the whole point - every widget already reads `--ink`, `--line` and `--panel`, so
+one attribute makes the rule reach widgets written years before it existed". A
+module-wide scheme is that same attribute one level up. **The browser test
+therefore asserts a computed colour rather than the attribute**: the attribute is
+this unit's own work, and the colour is what proves a widget that has never
+heard of the event follows it.
+
+The scheme is runtime state beside the current page and the section overrides
+(decision 0002 §3): a module opens light for every viewer, and there is a test
+for the reload. One divergence, stated: Foundry's toggle is a viewer preference
+across the platform; ours is per module, which is the scope an event can
+honestly reach.
+
+**Refresh is `invalidateCanvasReads`** — p.91's "all data in the module" said by
+prefix, which is the only form of that sentence a widget added tomorrow is
+already covered by; the hand-kept list it replaced had already drifted once. The
+test changes a row through the API *behind the module's back* and asserts the
+page is **still stale** before the click, because without that half a module
+refetching on its own would pass.
+
+**14 mutants, 14 caught, 0 survivors, 0 no-ops** — the first unit this session to
+come back clean on the first pass, which is what a feature with no branches
+looks like when the tests are pointed at behaviour rather than at wiring.
+
+**And a stale line found on the way out.** §5's summary said "3 triggers and 5
+effects" while the server accepted twelve; it had been wrong since §185 added
+p.82's three, and nothing noticed because **a prose summary has no guard**. The
+table under it is the checked list — §190's drift test compares the server's
+`EFFECTS` with the builder's catalogue — and neither is compared with the
+sentence above them. Corrected, with that noted in place, because the next
+person to add an effect will update the table and the panel and walk past the
+sentence exactly as everyone has.
+
+**1744 API tests** (was 1742), 2 skipped; **1486 unit**; 4 browser tests in the
+new file; `tsc` clean.
+
 ### 240. p.513's Output object set, and a default destroyed before the module loaded (this session)
 
 The last of the Inline Action row's ○ items that was described as real work
