@@ -1930,3 +1930,110 @@ def test_deleting_the_subject_and_changing_another_object_is_allowed(
         },
     )
     assert r.status_code == 200, r.text
+
+
+# ---- p.513's Output object set -------------------------------------------------
+def _touched(result: dict) -> dict[str, str]:
+    """`primary_key` → `change`, which is what every assertion below asks."""
+    return {t["primary_key"]: t["change"] for t in result["touched"]}
+
+
+def test_an_action_reports_the_object_it_modified(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str
+) -> None:
+    """Workshop p.513: "Specify the object set that will be created or modified
+    when the Action is submitted."
+
+    **Only the executor can answer this.** A browser cannot work out which
+    objects an action wrote: a rule can create one whose primary key comes from
+    a parameter, and can modify one a *different* parameter names.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id, "values": {"status": "reported"}},
+    )
+    assert r.status_code == 200, r.text
+    assert _touched(r.json()) == {"1": "modified"}
+    assert r.json()["touched"][0]["object_type_id"] == ticket_type_id
+
+
+def test_a_created_object_is_reported_as_created(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str
+) -> None:
+    """Both of p.513's verbs in one submission, told apart.
+
+    The action modifies the ticket it runs on and creates another, so a report
+    that lost the distinction - or lost one of the two rows - has something to
+    be wrong about.
+    """
+    action = with_create(client, fx, ticket_type_id)
+    key = str(uuid.uuid4().int % 9_000_000 + 1000)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "triaged", "new_key": key, "new_status": "open"}},
+    )
+    assert r.status_code == 200, r.text
+    assert _touched(r.json()) == {"1": "modified", key: "created"}
+
+
+def test_an_action_that_writes_nothing_to_its_subject_does_not_report_it(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str
+) -> None:
+    """**The distinction the whole feature turns on.** An action whose only
+    rule creates an object has not modified the one it ran on, and putting that
+    row in the output set would hand a module an object that did not change -
+    which is precisely what p.513's set is supposed to tell it apart from.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    r = client.put(
+        f"{wbase(fx)}/action-types/{action['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={
+            "parameters": [
+                {"api_name": "new_key", "display_name": "New id", "data_type": "string"},
+                {"api_name": "new_status", "display_name": "New status",
+                 "data_type": "string"},
+            ],
+            "rules": [
+                {"kind": "create_object",
+                 "config": {"primary_key": "new_key",
+                            "properties": {"status": "new_status"}}},
+            ],
+            "criteria": [],
+        },
+    )
+    assert r.status_code == 200, r.text
+    key = str(uuid.uuid4().int % 9_000_000 + 1000)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"new_key": key, "new_status": "open"}},
+    )
+    assert r.status_code == 200, r.text
+    assert _touched(r.json()) == {key: "created"}
+
+
+def test_a_refused_write_reports_nothing(
+    client: TestClient, fx: Fixture, ticket_type_id: str, instance_id: str
+) -> None:
+    """A set naming rows the action did not manage to write is worse than an
+    empty one: the reader acts on objects that never changed.
+
+    The create names a primary key that already exists, which the engine
+    refuses - so `ok` is false and nothing was written at all.
+    """
+    action = with_create(client, fx, ticket_type_id)
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute",
+        headers=hdr(fx.editor_sub),
+        json={"instance_id": instance_id,
+              "values": {"status": "x", "new_key": "1", "new_status": "open"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False, r.json()
+    assert r.json()["touched"] == []

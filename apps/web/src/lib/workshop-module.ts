@@ -168,6 +168,9 @@ export const REFERENCE_PROPS = [
   // p.478's dynamic group filter on the User Select - a variable id, and so a
   // usage. See the API's copy.
   "groupsVariable",
+  // p.513's Output object set on the Inline Action widget - the clauses naming
+  // what a submission created or modified. A write. See the API's copy.
+  "outputVariable",
   "name",
 ] as const;
 

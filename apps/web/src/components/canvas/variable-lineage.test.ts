@@ -40,6 +40,7 @@ const EXPECTED_DIRECTION: Record<string, "read" | "write"> = {
   // widget reads it — its own output is `variable`, which is the write.
   // One widget with an edge in each direction.
   groupsVariable: "read",
+  outputVariable: "write",
   variable: "read",
   objectSetVariable: "read",
   enabledVariable: "read",

@@ -321,6 +321,12 @@ REFERENCE_PROPS = (
     # has stopped: the widget's obvious binding is its *output*, and a prop that
     # merely filters what a widget offers is exactly the shape that gets missed.
     "groupsVariable",
+    # p.513's **Output object set** - the clause list the Inline Action widget
+    # writes naming what the submission created or modified (§240). A write, and
+    # the fifth new prop §191's drift guard has stopped: an *output* is the
+    # obvious binding to remember, and this one was still nearly missed because
+    # the widget already had `subjectVariable` and looked complete.
+    "outputVariable",
     "name",
 )
 

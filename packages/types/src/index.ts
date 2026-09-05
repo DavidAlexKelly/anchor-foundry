@@ -1788,11 +1788,25 @@ export interface ActionRun {
   finished_at: string | null;
 }
 
+/** One object an action created or modified (`workshop` p.513). */
+export interface TouchedObject {
+  object_type_id: string;
+  primary_key: string;
+  /** p.513's two verbs: `"created"` or `"modified"`. A deletion is absent -
+   * an object that no longer exists cannot be in a set. */
+  change: string;
+}
+
 export interface ActionExecuteResult {
   ok: boolean;
   error: string | null;
   dataset_version: number | null;
   instance: ObjectInstance;
+  /** p.513's **Output object set**, as the half only the executor can answer:
+   * a rule can create an object whose primary key comes from a parameter and
+   * modify one a different parameter names, so which objects were written is
+   * not something a browser can work out. Empty when the write failed. */
+  touched: TouchedObject[];
 }
 
 /** What one inline-edit submission did (`workshop` p.242-243).
