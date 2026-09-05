@@ -106,6 +106,21 @@ export interface EventContext {
   /** The module's variables as last resolved. Read by `run_action` to find
    * the object its subject variable holds, when this click did not set it. */
   variables?: Record<string, unknown>;
+  /** p.91: "The Refresh data in module event allows all data in the module to
+   * be reloaded when this event is triggered."
+   *
+   * **All of it, by prefix rather than by a list** - `invalidateCanvasReads`
+   * already makes that argument, and p.91's "all data" is the sentence that
+   * makes a hand-kept list of readers wrong the first time a widget is added
+   * without being added to it. */
+  refreshData?: () => void;
+  /** p.91: "The Toggle between light and dark mode event allows the theme of
+   * the module to be changed by the user when this event is triggered."
+   *
+   * **Runtime state, never persisted** (decision 0002 §3): a published module
+   * opens in its light scheme for every viewer, because a saved app is not a
+   * saved session. */
+  toggleTheme?: () => void;
 }
 
 /** Events on one widget for one act, in id order — the same order the server's
@@ -254,6 +269,13 @@ export function run(
           const wrote = context.setSectionTab?.(section, tab);
           if (wrote) written[wrote.variable] = tab;
         }
+      } else if (effect.type === "refresh_data") {
+        // **Not added to `written`.** A refresh changes no variable - it makes
+        // the server answer the same questions again - so it has nothing to
+        // contribute to the single write this run performs at the end.
+        context.refreshData?.();
+      } else if (effect.type === "toggle_theme") {
+        context.toggleTheme?.();
       } else if (effect.type === "open_url") {
         const url = typeof config.url === "string"
           ? interpolate(config.url, { ...payload, ...written })

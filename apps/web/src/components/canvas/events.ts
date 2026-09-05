@@ -11,6 +11,9 @@
  */
 
 import { useEditor } from "@craftjs/core";
+import { useQueryClient } from "@tanstack/react-query";
+
+import { invalidateCanvasReads } from "./refresh";
 
 import { collapseState, nextCollapsed } from "./collapse";
 import { asTabName, tabLabels } from "./tab-selection";
@@ -32,7 +35,9 @@ export function useEventContext(
   const { setMany, reset } = useCanvasParameters();
   const {
     go, openOverlay, closeOverlay, collapsed, setCollapsed, tabs, setTab, recompute,
+    toggleScheme,
   } = useCanvasPage();
+  const queryClient = useQueryClient();
   const { run: runAction } = useCanvasActions();
   const { resolved } = useCanvasVariables();
   const { query } = useEditor();
@@ -47,6 +52,11 @@ export function useEventContext(
     closeOverlay,
     overlayIds,
     openUrl: (url: string) => window.open(url, "_blank", "noopener,noreferrer"),
+    // p.91's two. `invalidateCanvasReads` is "all data in the module" said by
+    // prefix, which is the only form of that sentence a widget added tomorrow
+    // is already covered by.
+    refreshData: () => { void invalidateCanvasReads(queryClient); },
+    toggleTheme: toggleScheme,
     // **Toggle is resolved here, against what is on screen.** The section's
     // own props say which variable backs it and how it starts, and `resolved`
     // says what that variable currently holds - so this is the only place with

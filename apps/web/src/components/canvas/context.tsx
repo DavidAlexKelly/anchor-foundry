@@ -298,6 +298,20 @@ export interface CanvasPageState {
    * things that section is doing. */
   tabs: Record<string, TabOverride>;
   setTab: (nodeId: string, override: TabOverride) => void;
+  /** p.91's "Module appearance": which scheme the module is showing.
+   *
+   * **Module-level runtime state**, beside the current page and the section
+   * overrides, and for their reason: p.91's event fires from a button that
+   * knows nothing about who is listening, so the answer cannot live inside a
+   * widget. Never persisted (decision 0002 §3) - a published module opens
+   * light for every viewer, because a saved app is not a saved session.
+   *
+   * The dark half is `[data-scheme="dark"]`, which p.59-60's per-section
+   * brightness rule already defines: every widget reads `--ink`, `--line` and
+   * `--panel`, so a module-wide scheme is the same attribute one level up
+   * rather than a second set of colours. */
+  scheme: "light" | "dark";
+  toggleScheme: () => void;
   /** p.85's Recompute (p.76's behaviours). Forget what these variables last
    * computed and resolve again, so the server computes them fresh.
    *
@@ -317,6 +331,8 @@ const PageContext = createContext<CanvasPageState>({
   setCollapsed: () => {},
   tabs: {},
   setTab: () => {},
+  scheme: "light",
+  toggleScheme: () => {},
   recompute: () => {},
 });
 

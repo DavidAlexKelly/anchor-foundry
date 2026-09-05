@@ -3025,3 +3025,35 @@ def test_an_untyped_array_leaves_the_item_kind_unknown() -> None:
         {"v_arr": {"id": "v_arr", "kind": "array", "label": "Names"}},
     ))
     assert [e.item_kind for e in embeds] == [None]
+
+
+# ---- p.91's two events (Data staleness, Module appearance) -------------------
+def test_the_two_events_p91_names_are_accepted() -> None:
+    """p.91: "The Refresh data in module event allows all data in the module to
+    be reloaded"; "The Toggle between light and dark mode event allows the
+    theme of the module to be changed by the user".
+
+    Both were ○ with nothing but the page number beside them. Opening p.91
+    settled the scope in one line each: **neither names anything**, so neither
+    takes a config, and there is nothing here for a builder to get wrong.
+    """
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "refresh_data"},
+                                      {"type": "toggle_theme"}])},
+        layout={"btn": node({})},
+    )
+    assert [e.type for e in events["e_1"].effects] == ["refresh_data", "toggle_theme"]
+
+
+def test_neither_of_p91_s_events_needs_a_target() -> None:
+    """**The claim worth stating rather than assuming.** Every other effect this
+    module accepts names something - a variable, a section, a page, an action -
+    and the parser refuses one that names nothing or names it wrongly. These two
+    are the exception, and a test that only ever passed them a config would not
+    say so.
+    """
+    events = we.parse(
+        {"e_1": event("e_1", effects=[{"type": "refresh_data"}])},
+        layout={"btn": node({})},
+    )
+    assert events["e_1"].effects[0].config == {}
