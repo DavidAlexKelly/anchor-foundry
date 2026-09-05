@@ -26,6 +26,7 @@
  */
 
 import { collapseState, nextCollapsed } from "./collapse";
+import { interfaceQuery } from "./routing";
 import { asTabName, tabLabels } from "./tab-selection";
 
 export interface WorkshopEffect {
@@ -105,7 +106,19 @@ export interface EventContext {
   ) => void;
   /** The module's variables as last resolved. Read by `run_action` to find
    * the object its subject variable holds, when this click did not set it. */
-  variables?: Record<string, unknown>;
+   variables?: Record<string, unknown>;
+  /** What a viewer has set, before the server has resolved it back.
+   *
+   * **Separate from `variables`, and p.165 is why.** "The URL uses the current
+   * value" — and the resolved map is one round trip behind, so a reader who
+   * types into a control and immediately presses the button would send the
+   * value they replaced. This is the local map the controls write; laid over
+   * the resolved one, it is what is on screen now.
+   *
+   * Its own field rather than merged into `variables` because `run_action`
+   * reads that one to find an object, and quietly changing what it sees is a
+   * different unit's question. */
+  parameterValues?: Record<string, unknown>;
   /** p.91: "The Refresh data in module event allows all data in the module to
    * be reloaded when this event is triggered."
    *
@@ -114,6 +127,11 @@ export interface EventContext {
    * makes a hand-kept list of readers wrong the first time a widget is added
    * without being added to it. */
   refreshData?: () => void;
+  /** p.165's **Open Workshop module**. Takes the module and the query rather
+   * than a finished URL, because where a module lives is the app's routing to
+   * know and this list has no view of it — the same split every other effect
+   * here makes with `goToPage` and `openUrl`. */
+  openModule?: (moduleId: string, query: Record<string, string>) => void;
   /** p.91: "The Toggle between light and dark mode event allows the theme of
    * the module to be changed by the user when this event is triggered."
    *
@@ -268,6 +286,22 @@ export function run(
         if (section && tab) {
           const wrote = context.setSectionTab?.(section, tab);
           if (wrote) written[wrote.variable] = tab;
+        }
+      } else if (effect.type === "open_module") {
+        const module = String(config.module ?? "");
+        // **`written` first, then the last resolved values.** p.80 runs effects
+        // in order and a `set_variable` before this one is meant to be visible
+        // to it - the same precedence `open_url`'s interpolation uses two
+        // branches down, for the same reason.
+        if (module) {
+          context.openModule?.(module, interfaceQuery(
+            (config.values ?? {}) as Record<string, string>,
+            {
+              ...(context.variables ?? {}),
+              ...(context.parameterValues ?? {}),
+              ...written,
+            },
+          ));
         }
       } else if (effect.type === "refresh_data") {
         // **Not added to `written`.** A refresh changes no variable - it makes

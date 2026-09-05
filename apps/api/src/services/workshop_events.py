@@ -72,6 +72,13 @@ EFFECTS = (
     # page does not describe is a setting somebody would have to guess at.
     "refresh_data",
     "toggle_theme",
+    # p.165's "Open Workshop module", and p.165 is also what makes it small:
+    # "The Open Workshop module event can be used to **avoid manually creating
+    # a URL** … When the event is called, the URL uses the current value to
+    # open the selected module." The URL it avoids is the one §152 already
+    # reads - `?externalId=value` per interface variable - so this effect is
+    # that query built from a mapping rather than by hand.
+    "open_module",
 )
 
 # The three above, and the fact that binds them: each names a section.
@@ -95,6 +102,10 @@ PLANNED_EFFECTS = ("export",)
 
 # What a `run_action` may write. A wider form is a form, not an event.
 MAX_ACTION_VALUES = 20
+
+# How many interface variables one `open_module` may pass. The same number and
+# the same argument: a link carrying more than twenty values is a form.
+MAX_MODULE_VALUES = 20
 
 # The variable kind a `run_action`'s subject must be. An action executes
 # against an object instance, so the subject has to be something that holds
@@ -428,6 +439,38 @@ def _parse_effect(
                 f"event {eid!r} navigates to {target!r}, which is a widget rather than a "
                 "page or an overlay"
             )
+    elif kind == "open_module":
+        module = config.get("module")
+        if not module or not isinstance(module, str):
+            raise EventError(
+                f"event {eid!r}: open_module needs the module to open"
+            )
+        values = config.get("values") or {}
+        if not isinstance(values, dict):
+            raise EventError(f"event {eid!r}: open_module values must be an object")
+        if len(values) > MAX_MODULE_VALUES:
+            raise EventError(
+                f"event {eid!r}: open_module may pass at most {MAX_MODULE_VALUES} "
+                "interface variables"
+            )
+        # **The host half only, which is the same split the embed mapping makes
+        # and for the same reason** (see `validate_document`): every value must
+        # name a variable *this* module declares, and whether the target's
+        # external ID exists needs the target's document - which is not here.
+        # An empty mapping is legal: p.165's event opens the module, and
+        # passing nothing into it is a link, not a mistake.
+        for external_id, source in sorted(values.items()):
+            if not isinstance(source, str) or not source:
+                raise EventError(
+                    f"event {eid!r}: open_module maps {external_id!r} to nothing"
+                )
+            if declared and source not in declared:
+                raise EventError(
+                    f"event {eid!r} passes {source!r} into the opened module's "
+                    f"{external_id!r}, and this module does not declare it - so "
+                    "nothing would be passed and the opened module would quietly "
+                    "fall back to its own default"
+                )
     elif kind == "run_action":
         action = config.get("action")
         if not action or not isinstance(action, str):

@@ -27,6 +27,8 @@
 
 import { useState } from "react";
 import type { WorkshopEffect, WorkshopEvent, WorkshopVariable } from "@/lib/types";
+import { useQuery } from "@tanstack/react-query";
+import { canvas as canvasApi } from "@/lib/api";
 import { newEventId } from "@/lib/workshop-module";
 
 /** Mirrors `TRIGGERS` in the service, with the widgets each one belongs to.
@@ -136,12 +138,35 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
     label: "Toggle light / dark mode",
     hint: "for this viewer, until they leave — a module always opens light",
   },
+  // p.165's, and p.165 also says what it is *for*: "can be used to avoid
+  // manually creating a URL". The hint says so, because a builder who does not
+  // know that sentence cannot tell this from `navigate`.
+  {
+    type: "open_module",
+    label: "Open a Workshop module",
+    hint: "a new tab, with values passed into that module's interface",
+  },
 ];
 
 /** Widget names that can fire something, for the caller reading the tree.
  * Derived from TRIGGERS so the two cannot disagree - a widget listed here but
  * with no trigger would show up as an option that offers nothing. */
 export const TRIGGER_WIDGETS: string[] = [...new Set(TRIGGERS.flatMap((t) => t.widgets))];
+
+/** A module this one may open (p.165's Open Workshop module).
+ *
+ * **`id` is the resource id, not the app id**, because that is where a module
+ * opens (`/r/…`, §115) and the event's job is to build that link. The two are
+ * both uuids, so storing the wrong one would produce an event that 404s with
+ * nothing about it looking wrong. */
+export interface ModuleCandidate {
+  /** Where the module opens (`/r/…`, §115), which is what the event stores. */
+  id: string;
+  /** What the API takes, so the panel can read the target's interface. Both
+   * are uuids, which is why they are named apart rather than passed as one. */
+  appId: string;
+  label: string;
+}
 
 export interface TriggerCandidate {
   id: string;
@@ -179,6 +204,9 @@ export function EventsPanel({
   tabSections,
   sections,
   actions = [],
+  modules = [],
+  workspaceId,
+  projectId,
   onChange,
   readOnly,
 }: {
@@ -199,6 +227,16 @@ export function EventsPanel({
   sections?: PageCandidate[];
   /** The workspace's action types, which is what `run_action` accepts. */
   actions?: ActionCandidate[];
+  /** The project's other modules, which is what p.165's `open_module` accepts.
+   * Not this one: a module that opens itself in a new tab is a loop a builder
+   * can make by accident and cannot see until they click it. */
+  modules?: ModuleCandidate[];
+  /** Only `open_module` needs these, and only to read the *target* module's
+   * interface — the one question about an event that cannot be answered from
+   * this module's own document. `VariablesPanel` takes the same two for the
+   * same kind of reason. */
+  workspaceId?: string;
+  projectId?: string;
   onChange: (next: Record<string, WorkshopEvent>) => void;
   readOnly: boolean;
 }) {
@@ -351,6 +389,9 @@ export function EventsPanel({
                     tabSections={tabSections ?? []}
                     sections={sections ?? []}
                     actions={actions}
+                    modules={modules}
+                    workspaceId={workspaceId}
+                    projectId={projectId}
                     readOnly={readOnly}
                     onChange={(next) => setEffect(event, index, next)}
                     onMove={(by) => moveEffect(event, index, by)}
@@ -406,6 +447,9 @@ function EffectEditor({
   tabSections,
   sections,
   actions,
+  modules,
+  workspaceId,
+  projectId,
   readOnly,
   onChange,
   onMove,
@@ -424,6 +468,9 @@ function EffectEditor({
   tabSections: { id: string; label: string; tabs: string[] }[];
   sections: PageCandidate[];
   actions: ActionCandidate[];
+  modules: ModuleCandidate[];
+  workspaceId?: string;
+  projectId?: string;
   readOnly: boolean;
   onChange: (next: WorkshopEffect) => void;
   onMove: (by: number) => void;
@@ -531,6 +578,18 @@ function EffectEditor({
             </label>
           )}
         </>
+      )}
+
+      {effect.type === "open_module" && (
+        <OpenModuleEditor
+          config={config}
+          variables={variables}
+          modules={modules}
+          workspaceId={workspaceId}
+          projectId={projectId}
+          readOnly={readOnly}
+          onChange={(next) => onChange({ type: effect.type, config: next })}
+        />
       )}
 
       {effect.type === "run_action" && (
@@ -717,6 +776,121 @@ function EffectEditor({
  * from a different action would be refused on save with a message about a
  * property nobody typed.
  */
+/** p.165's Open Workshop module: which module, and what to pass into it.
+ *
+ * > "The selected module's interface will appear, allowing variable values to
+ * > be passed from the current module to the chosen module's interface
+ * > variables." (p.165)
+ *
+ * **"The selected module's interface will appear" is why this fetches.** The
+ * server validates the host half of the mapping - every value names a variable
+ * *this* module declares - and deliberately not the other half, because the
+ * target's external IDs live in the target's document. The builder is the one
+ * place that can go and read it, so offering a typed box here would hand a
+ * builder the one question the platform can answer and ask them to guess.
+ *
+ * One fetch, and only once a module is chosen: before that there is no
+ * interface to show.
+ */
+function OpenModuleEditor({
+  config,
+  variables,
+  modules,
+  workspaceId,
+  projectId,
+  readOnly,
+  onChange,
+}: {
+  config: Record<string, unknown>;
+  variables: WorkshopVariable[];
+  modules: ModuleCandidate[];
+  workspaceId?: string;
+  projectId?: string;
+  readOnly: boolean;
+  onChange: (next: Record<string, unknown>) => void;
+}) {
+  const chosenId = String(config.module ?? "");
+  const chosen = modules.find((m) => m.id === chosenId);
+  const target = useQuery({
+    queryKey: ["canvas-app", workspaceId, projectId, chosen?.appId],
+    queryFn: () => canvasApi.get(workspaceId!, projectId!, chosen!.appId),
+    enabled: !!workspaceId && !!projectId && !!chosen,
+  });
+  // p.165 passes values into *interface* variables, so only those are offered -
+  // an external ID on a variable the target does not expose is not part of its
+  // interface and nothing would read it.
+  const targetInterface = Object.values(
+    ((target.data?.definition as Record<string, unknown> | undefined)
+      ?.variables ?? {}) as Record<string, WorkshopVariable>,
+  ).filter((v) => v.interface && v.external_id);
+  const values = (config.values ?? {}) as Record<string, string>;
+
+  return (
+    <>
+      <label className="field">
+        <span className="field-label">Module</span>
+        <select
+          disabled={readOnly}
+          data-testid="effect-open-module"
+          value={chosenId}
+          onChange={(e) =>
+            // The mapping is per target, so changing the target discards it -
+            // keeping it would leave external IDs from the previous module
+            // pointing at nothing, which the server accepts (it cannot see the
+            // target) and which would silently pass nothing.
+            onChange({ ...config, module: e.target.value || undefined, values: {} })
+          }
+        >
+          <option value="">Pick a module</option>
+          {modules.map((m) => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+        </select>
+        <span className="field-hint">
+          {modules.length === 0
+            ? "No other modules in this project yet"
+            : "Opens in a new tab, with the values below in its URL"}
+        </span>
+      </label>
+      {chosen && (
+        <div data-testid="effect-open-module-interface">
+          {targetInterface.length === 0 ? (
+            <span className="field-hint">
+              {target.isPending
+                ? "Reading that module's interface…"
+                : "That module has no interface variables, so there is nothing to pass into it"}
+            </span>
+          ) : (
+            targetInterface.map((v) => (
+              <label className="field" key={v.external_id ?? v.id}>
+                <span className="field-label">{v.label || v.external_id}</span>
+                <select
+                  disabled={readOnly}
+                  data-external-id={v.external_id ?? ""}
+                  value={values[String(v.external_id)] ?? ""}
+                  onChange={(e) => {
+                    const next = { ...values };
+                    if (e.target.value) next[String(v.external_id)] = e.target.value;
+                    else delete next[String(v.external_id)];
+                    onChange({ ...config, values: next });
+                  }}
+                >
+                  <option value="">Pass nothing</option>
+                  {variables.map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.label || source.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function RunActionEditor({
   config,
   objects,

@@ -211,3 +211,41 @@ export function pageNodeFor(layout: unknown, pageId: string | null): string | nu
   }
   return null;
 }
+
+/** p.165's **Open Workshop module**: the query that carries this module's
+ * values into another module's interface.
+ *
+ * > "The Open Workshop module event can be used to avoid manually creating a
+ * > URL… The selected module's interface will appear, allowing variable values
+ * > to be passed from the current module to the chosen module's interface
+ * > variables. When the event is called, the URL uses the current value to open
+ * > the selected module." (p.165)
+ *
+ * **The URL it avoids is the one `queryFor` writes and `seedFromQuery` reads**,
+ * so this builds the same shape rather than a second one: one parameter per
+ * external ID, the value stringified the same way. p.165 spells the manual form
+ * out immediately below that sentence (`?interfaceVariable=123`), which is what
+ * makes "the same shape" a requirement rather than a convenience.
+ *
+ * A mapping whose variable holds nothing is **left out**. p.165 says the URL
+ * uses "the current value", and a parameter carrying an empty string is not the
+ * absence of a value — it would arrive at the target as a deliberate blank and
+ * override the default the target declares, which is the one thing an unset
+ * variable must not do.
+ */
+export function interfaceQuery(
+  mapping: Record<string, string> | null | undefined,
+  values: Record<string, unknown>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!mapping || typeof mapping !== "object") return out;
+  for (const [externalId, source] of Object.entries(mapping)) {
+    if (!externalId || typeof source !== "string" || !source) continue;
+    const value = values[source];
+    // `chosen(value, undefined)` is "has a value at all" - the same emptiness
+    // rule the URL writer uses, rather than a second opinion about what counts.
+    if (!chosen(value, undefined)) continue;
+    out[externalId] = String(value);
+  }
+  return out;
+}

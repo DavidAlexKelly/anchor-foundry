@@ -4290,6 +4290,56 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 242. p.165's Open Workshop module, and a value one round trip out of date (this session)
+
+p.165 sizes this unit in its own first clause. The event "can be used to
+**avoid manually creating a URL**", and p.165 spells that URL out immediately
+below - `?externalId=value` per interface variable - which §152 already reads.
+So the event is that query built from a mapping rather than by hand, and
+`interfaceQuery` builds the same shape `queryFor` writes rather than a second
+one. **Opening the cited page is what turned a row that reads like a feature
+into an hour's work**, which is §216's rule paying rather than catching.
+
+**The validation splits exactly the way the embed mapping's already did**, and
+the reason was already written down one function away: the server checks the
+host half - every mapped value names a variable *this* module declares, with the
+same failure and the same message - and deliberately not whether the target
+declares that external ID, because that needs the target's document. So the
+**panel** fetches the chosen module and offers its interface, which is p.165's
+"the selected module's interface will appear". Handing a builder a typed box
+would be asking them to guess at the one question the platform can answer.
+
+**The browser test found a real bug, and it is p.165's own word.** "The URL uses
+the **current** value" - and the runner was reading `context.variables`, the
+server-resolved map, which is one round trip behind. A reader who typed into a
+control and immediately pressed the button sent the value they had just
+replaced. The local parameter map is now laid over the resolved one, in its own
+field rather than merged into `variables`: `run_action` reads that to find an
+object, and quietly changing what it sees is a different unit's question.
+
+Two rules worth stating. A mapping whose variable holds nothing is **left out of
+the URL rather than sent blank**, because p.128 makes a passed value win over
+the child's own definition - so an empty parameter would beat the default the
+target declares, which is the one thing an unset variable must not do. And an
+**empty mapping is legal**, said out loud because `run_action` refuses the same
+shape: an action that writes nothing fails every click, while a module opened
+with no parameters simply opens.
+
+**20 mutants, 20 caught, 0 survivors, 0 no-ops** - clean on the first pass, the
+second unit running to do so.
+
+Three fixture corrections on the way, all the same shape: a test that could not
+see the thing it named. The two modules were in different projects, so the panel
+half was silently untested (the *event* works across projects - a module opens
+at `/r/{id}`, which names no project - and only the panel is project-scoped).
+The opened tab lands in the **builder** for an editor, as every module link
+does, so a readout is only readable after switching to Preview. And the value
+assertion had to name the URL as well as the readout, which is what localised
+the staleness bug to the query rather than to the seeding.
+
+**1749 API tests** (was 1744), 2 skipped; **1492 unit** (was 1486); 5 browser
+tests in the new file; `tsc` clean.
+
 ### 241. p.91's two events, and a prose summary nothing guards (this session)
 
 `workshop.md` §5 had two ○ rows carrying nothing but a page number: **Refresh
@@ -7337,6 +7387,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 ---
 
 ## Known rough edges worth knowing about
+
+- **A mutation run leaves the browser suite unrunnable until the stack is restarted, and the symptom looks like catastrophe.** The harness restores every file it mutates by rewriting it, which bumps its mtime past the running API's start time — so §230's stale-API guard correctly refuses the whole suite afterwards. It reports as *"722 errors in 8 seconds"*, which reads like the platform collapsing and is in fact the guard doing precisely its job. It happened twice (§241, §242) before being written down. **`scripts/dev-down.sh && scripts/dev-up.sh` between a mutation run and a full browser run**, every time; `mutate240.py` does it inside `run_browser` because that unit changed the executor, and the same line at the *end* of a harness would save the next person the fifteen seconds of alarm.
 
 - **A browser assertion that waits less than its neighbours will be the one that fails under load, and only there.** §237's full run reddened `test_a_property_hit_says_which_object_type_it_is_on`, which passed four times in isolation afterwards. Nothing in the unit touched ontology search; what was true of that test and not of the two above it in the same file is that they wait 20s (`eventually`) for the debounced search to return and it waited `expect`'s 5s default. That is not proof of the cause, but it is the only structural difference, and widening the window leaves the claim intact — a mutant on the owner label still fails it at the assertion rather than at the wait. **When a test in a file waits on the same precondition as its siblings, it should wait on it the same way**; the odd one out is where an hour-long run finds its flake.
 
