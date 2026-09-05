@@ -600,6 +600,10 @@ export interface PropertyInput {
    * Null is p.188's Detach, which is why it is sent explicitly rather than
    * omitted — an absent field and a cleared one would be the same request. */
   shared_property_id?: string | null;
+  /** The declared fields of a struct property (`object-link-types` p.149).
+   * Null for anything else, which the server refuses to store rather than
+   * ignoring — a schema on a string property is a claim nothing reads. */
+  struct_fields?: import("./types").StructField[] | null;
   /** The value type constraining this property (`object-link-types` p.227).
    * Null detaches it, so it is sent explicitly rather than omitted. */
   value_type_id?: string | null;

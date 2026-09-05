@@ -20,6 +20,7 @@ function prop(
     conditional_format: null,
     edit_only: false,
     derivation: null,
+    struct_fields: null,
     shared_property_id: null,
     shared_property_api_name: null,
     value_type_id: null,
