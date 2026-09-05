@@ -120,6 +120,67 @@ def _coerce_attachment(value: Any) -> dict[str, Any]:
     return {f: value[f] for f in ATTACHMENT_FIELDS}
 
 
+def _coerce_struct(value: Any, fields: Any) -> dict[str, Any]:
+    """A struct value, against the fields its property declares (db 0064;
+    Foundry `object-link-types` p.149).
+
+    **The schema is what makes this different from `json`**, so the schema is
+    the only thing that decides what comes out: the result holds the declared
+    fields, in the declared order, each coerced by its own declared type.
+
+    Three judgements, and each is the same one made elsewhere in this file:
+
+    * A **JSON string** is accepted, for `_coerce_attachment`'s reason exactly
+      - `column_value` writes a struct back to a dataset column as JSON text,
+      and the next sync reads that column and comes back through here. A struct
+      that survived until the source was re-synced would not work.
+    * An **undeclared key is dropped, not refused**. A struct is a schema over
+      a column the way an object type is a schema over a table, and this is the
+      same rule one level down: the sync reads the columns the mapping names
+      and ignores the rest, so a struct reads the fields the property declares
+      and ignores the rest. Refusing here would make adding a column to a
+      source dataset break every object of that type.
+    * A **missing declared field is `None`**, not an error, which is
+      `coerce_property_value`'s own rule about absence: `required` is a
+      separate concern the ontology already models, and a struct field has no
+      way to say it yet.
+    """
+    if isinstance(value, str):
+        import json as _json
+
+        try:
+            value = _json.loads(value)
+        except ValueError as exc:
+            raise PropertyValueError(
+                f"expected a struct, got {value[:40]!r}"
+            ) from exc
+    if not isinstance(value, dict):
+        raise PropertyValueError(
+            f"a struct value must be an object, got {type(value).__name__}"
+        )
+    if not isinstance(fields, list) or not fields:
+        # A struct with no declared fields cannot be checked against anything,
+        # and passing the value through would be `json` behaviour under a
+        # struct's name. The ontology refuses to store one (db 0064), so
+        # reaching here means a caller did not pass the declaration.
+        raise PropertyValueError(
+            "a struct value cannot be read without its property's declared fields"
+        )
+    out: dict[str, Any] = {}
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        name = field.get("api_name")
+        data_type = field.get("data_type")
+        if not isinstance(name, str) or not isinstance(data_type, str):
+            continue
+        try:
+            out[name] = coerce_property_value(data_type, value.get(name))
+        except PropertyValueError as exc:
+            raise PropertyValueError(f"field {name} ({data_type}) - {exc}") from exc
+    return out
+
+
 def _coerce_temporal(value: Any, *, data_type: str) -> str:
     """ISO-8601 in, ISO-8601 out. An offset is preserved when the value has
     one and simply absent when it does not - see migration 0029 for why there
@@ -202,7 +263,9 @@ def _coerce_boolean(value: Any) -> bool:
     raise PropertyValueError(f"expected a boolean, got {value!r}")
 
 
-def coerce_property_value(data_type: str, value: Any) -> Any:
+def coerce_property_value(
+    data_type: str, value: Any, *, struct_fields: Any = None
+) -> Any:
     """The single definition of what a property value may be (db 0029).
 
     Used by both write paths - dataset sync (`instances.extract_rows`) and
@@ -220,9 +283,17 @@ def coerce_property_value(data_type: str, value: Any) -> Any:
 
     None passes through: absent is not a type error, and `required` is a
     separate concern the ontology already models.
+
+    `struct_fields` is the one type whose meaning is not carried by its name
+    (db 0064): a struct is a *schema*, so coercing one needs the declaration as
+    well as the label. It is a keyword rather than a second positional because
+    every other type ignores it, and a caller that forgets it for a struct is
+    refused rather than served - see `_coerce_struct`.
     """
     if value is None:
         return None
+    if data_type == "struct":
+        return _coerce_struct(value, struct_fields)
     if data_type == "geopoint":
         return _coerce_geopoint(value)
     if data_type == "attachment":
@@ -273,11 +344,17 @@ def column_value(data_type: str, value: Any) -> Any:
         return None
     if data_type == "geopoint" and isinstance(value, dict):
         return f"{value['lat']},{value['lon']}"
-    if data_type == "attachment" and isinstance(value, dict):
+    if data_type in ("attachment", "struct") and isinstance(value, dict):
         # The whole reference, as JSON text, not just the key: filename,
         # content type and size are not derivable from a storage key, and a
         # round trip that lost them would degrade the attachment a little on
         # every sync.
+        #
+        # A struct for the same reason with none of the ambiguity: it is fields
+        # all the way down and there is no one of them to flatten to. `sort_keys`
+        # costs the declared order in the column and keeps the text stable, and
+        # the order that matters is the declaration's - `_coerce_struct` rebuilds
+        # it from the property on the way back in.
         import json as _json
 
         return _json.dumps(value, sort_keys=True)
@@ -287,7 +364,9 @@ def column_value(data_type: str, value: Any) -> Any:
 
 
 def coerce_rows(
-    rows: list[tuple[str, dict[str, Any]]], property_types: dict[str, str]
+    rows: list[tuple[str, dict[str, Any]]],
+    property_types: dict[str, str],
+    struct_fields: dict[str, Any] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Apply the declared types to a whole sync's worth of extracted rows.
 
@@ -307,7 +386,13 @@ def coerce_rows(
     A property with no declared type is passed through untouched rather than
     guessed at - the mapping names properties that exist, and one that does
     not is a §38 edit racing a sync, not a value to reinterpret.
+
+    `struct_fields` is `{property: its declared fields}` (db 0064), a second
+    mapping rather than a richer `property_types` because every caller builds
+    both from the same property list in the same loop, and widening the first
+    would change a signature four call sites and two mirrored copies read.
     """
+    struct_fields = struct_fields or {}
     out: list[tuple[str, dict[str, Any]]] = []
     for primary_key, properties in rows:
         coerced: dict[str, Any] = {}
@@ -317,7 +402,9 @@ def coerce_rows(
                 coerced[name] = value
                 continue
             try:
-                coerced[name] = coerce_property_value(data_type, value)
+                coerced[name] = coerce_property_value(
+                    data_type, value, struct_fields=struct_fields.get(name)
+                )
             except PropertyValueError as exc:
                 raise PropertyValueError(
                     f"row {primary_key!r}: {name} ({data_type}) - {exc}"

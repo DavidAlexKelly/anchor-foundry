@@ -61,6 +61,17 @@ from uuid import UUID
 #   composite values nothing filters on, and indexing them would map whatever
 #   keys the first document happened to carry — a mapping written by data
 #   rather than by a declaration, which is the failure this file exists to end.
+# - `struct` is **`object` with `enabled: false`** as well, and it is the one
+#   entry here where that is a narrowing rather than a consequence. A struct
+#   *does* have a declaration (db 0064), so this file could map each field to
+#   the type it declares — and Foundry does not yet: `object-link-types` p.150
+#   lists Object Explorer's struct support with "struct field search is under
+#   development", and warns in the same breath that a query over an array of
+#   structs matches the fields independently rather than within one entry. So
+#   the source has not settled what a field filter means, and a mapping written
+#   now would have to pick a side of that. The cost is stated on the row in
+#   `docs/parity/ontology.md`: nothing filters, sorts or aggregates on a struct
+#   field, on either store.
 FIELD_TYPES: dict[str, dict[str, Any]] = {
     "string": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 8192}}},
     "integer": {"type": "long"},
@@ -71,6 +82,7 @@ FIELD_TYPES: dict[str, dict[str, Any]] = {
     "geopoint": {"type": "geo_point"},
     "json": {"type": "object", "enabled": False},
     "attachment": {"type": "object", "enabled": False},
+    "struct": {"type": "object", "enabled": False},
 }
 
 # What an ordered comparison may be asked of (0006 §2). Not used by anything in

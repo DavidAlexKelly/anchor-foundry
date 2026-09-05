@@ -358,6 +358,20 @@ def test_every_property_type_can_be_an_action_parameter() -> None:
     # And the one word p.25 needs that the ontology has no use for.
     assert "object" in labels["action_parameter_type"]
 
+    # **The link in the chain nothing was holding.** Everything else compares
+    # one Python list against another - `instance_mapping.FIELD_TYPES` against
+    # `ontology.PROPERTY_TYPES`, `struct_fields.FIELD_TYPES` against the same -
+    # and all of them would agree happily about a type the *database* does not
+    # have. A label in `PROPERTY_TYPES` that is not in the enum is a 500 on the
+    # first insert; one in the enum that is not in `PROPERTY_TYPES` is a type
+    # nobody can declare, which is what `time_series` was for one commit.
+    from src.services import ontology as ontology_service
+
+    assert set(ontology_service.PROPERTY_TYPES) == labels["property_data_type"], (
+        "the declared property types and the database enum disagree: "
+        f"{sorted(set(ontology_service.PROPERTY_TYPES) ^ labels['property_data_type'])}"
+    )
+
 
 # ---- editing the definition ---------------------------------------------------
 def definition(client: TestClient, fx: Fixture, action_id: str, body: dict) -> object:

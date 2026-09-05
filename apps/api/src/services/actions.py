@@ -1186,10 +1186,28 @@ async def create_action_type(
     from . import ontology as ontology_service
 
     await ontology_service.get_type(conn, workspace_id, object_type_id)  # 404 if invisible
-    known = {p["api_name"] for p in await ontology_service.list_properties(conn, object_type_id)}
+    declared = await ontology_service.list_properties(conn, object_type_id)
+    known = {p["api_name"] for p in declared}
     unknown = [p for p in editable_properties if p not in known]
     if unknown:
         raise ValueError(f"not properties of this object type: {', '.join(unknown)}")
+    # **The same refusal `_validate_definition` makes, on the path that does not
+    # go through it.** This conversion writes one parameter per editable
+    # property, typed from the property, so a struct property here would insert
+    # a struct parameter that the definition PUT would refuse a moment later -
+    # two answers to one question, and the one a person meets first would be
+    # silence. See `_UNSUPPORTED_PARAMETER_TYPES`.
+    declared_types = {p["api_name"]: str(p["data_type"]) for p in declared}
+    refused = [
+        prop for prop in editable_properties
+        if declared_types.get(prop) in _UNSUPPORTED_PARAMETER_TYPES
+    ]
+    if refused:
+        kind = declared_types[refused[0]]
+        raise ValueError(
+            f"{', '.join(refused)} cannot be made editable by an action: "
+            + _UNSUPPORTED_PARAMETER_TYPES[kind]
+        )
 
     existing = await fetch_one(
         conn,
@@ -1218,8 +1236,7 @@ async def create_action_type(
     )
     assert row is not None
     action_type_id = UUID(str(row["id"]))
-    declared = await ontology_service.list_properties(conn, object_type_id)
-    property_types = {p["api_name"]: p["data_type"] for p in declared}
+    property_types = declared_types
     display_names = {p["api_name"]: p["display_name"] for p in declared}
     # **The same conversion migration 0044 ran**, in Python, and deliberately
     # so: one property per parameter, named after it, plus one `modify_object`
@@ -1444,6 +1461,32 @@ async def list_runs(conn: AsyncConnection, action_type_id: UUID) -> list[dict[st
 # ever write. `object` is the one word p.25 needs that the ontology has no use
 # for - a parameter that takes a whole instance.
 _PARAMETER_TYPES = frozenset(_ONTOLOGY_PROPERTY_TYPES | {"object"})
+
+# **`struct` is refused as a parameter, and it is a boundary rather than an
+# oversight** (db 0064). p.150 lists Actions among the applications that "use
+# actions to create and modify struct property values", so this is a gap, and
+# it is named here rather than discovered at click time.
+#
+# Why not simply allow it: a struct is a *schema* (`object-link-types` p.149),
+# so coercing one needs the property's declared fields as well as its type -
+# and every write path in this module reads a `property_types` map of
+# `{name: type}` built in eight places across this file and `routes/actions.py`.
+# Threading a second parallel map through all eight is the shape this codebase
+# has found stale five times (§191, §244); the fields belong *in* that map, and
+# widening it is its own unit rather than a rider on the type's.
+#
+# Refused **at save time**, where the person who typed it is still looking at
+# it, for `_validate_definition`'s stated reason - and refused rather than
+# offered-and-broken for §237's: `pure.inputTypeFor` answers "text" for any
+# type it does not name, so an allowed struct parameter would render as a box
+# no viewer could ever fill in correctly, which is a control that cannot work.
+_UNSUPPORTED_PARAMETER_TYPES = {
+    "struct": (
+        "a struct parameter needs the property's declared fields to check a "
+        "value against, which this action's write path does not carry yet "
+        "(object-link-types p.149-150)"
+    ),
+}
 _RULE_KINDS = frozenset(
     {"modify_object", "create_object", "delete_object", "create_link", "delete_link"}
 )
@@ -1577,6 +1620,11 @@ def _validate_definition(
         data_type = str(parameter.get("data_type", ""))
         if data_type not in _PARAMETER_TYPES:
             raise ValueError(f"parameter {name!r} has unknown type {data_type!r}")
+        if data_type in _UNSUPPORTED_PARAMETER_TYPES:
+            raise ValueError(
+                f"parameter {name!r} cannot be a {data_type}: "
+                + _UNSUPPORTED_PARAMETER_TYPES[data_type]
+            )
         if not str(parameter.get("display_name") or "").strip():
             raise ValueError(f"parameter {name!r} needs a display name")
 

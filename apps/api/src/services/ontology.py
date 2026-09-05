@@ -30,7 +30,7 @@ from ..lib.errors import BreakingChangeError, ConflictError, NotFoundError
 # copy of them (see that module's docstring).
 from . import (
     conditional_format, derived_properties, ontology_status, shared_properties,
-    value_format, value_types,
+    struct_fields, value_format, value_types,
 )
 from .property_values import (  # noqa: F401
     ATTACHMENT_FIELDS,
@@ -48,6 +48,11 @@ PROPERTY_TYPES = {
     # primary key - and `object_type_series` says which dataset, key column,
     # timestamp column and value column hold the points behind it.
     "time_series",
+    # A **schema**, not just a shape (db 0064, `object-link-types` p.149). The
+    # value is a mapping, which `json` already accepted; what `struct` adds is
+    # the property saying which fields it holds and what each one is, so the
+    # fields travel with the property row in `struct_fields`.
+    "struct",
 }
 
 # How prominently an application should show a property (Foundry
@@ -184,6 +189,7 @@ async def list_properties(conn: AsyncConnection, type_id: UUID) -> list[dict[str
         SELECT p.id, p.api_name, p.display_name, p.data_type, p.required,
                p.description, p.sort_order, p.visibility, p.value_format,
                p.conditional_format, p.edit_only, p.derivation,
+               p.struct_fields,
                p.status, p.deprecation,
                p.shared_property_id,
                sp.api_name AS shared_property_api_name,
@@ -412,6 +418,11 @@ def _validate_properties(properties: list[dict[str, Any]]) -> None:
             property_name=api,
             types_by_property=types_by_property,
         )
+        prop["struct_fields"] = struct_fields.parse(
+            prop.get("struct_fields"),
+            data_type=str(prop["data_type"]),
+            property_name=api,
+        )
         if prop.get("derivation") is not None:
             # p.148's own list, checked here because each item is a fact about
             # the *property* rather than about the chain.
@@ -621,12 +632,14 @@ async def _write_property_rows(
                                                 data_type, required, description, sort_order,
                                                 visibility, value_format,
                                                 conditional_format, edit_only,
-                                                derivation, shared_property_id,
+                                                derivation, struct_fields,
+                                                shared_property_id,
                                                 value_type_id, status, deprecation)
             VALUES (:tid, :api, :name, CAST(:dtype AS property_data_type),
                     :required, :descr, :sort, CAST(:vis AS property_visibility),
                     CAST(:vfmt AS jsonb), CAST(:cfmt AS jsonb), :editonly,
-                    CAST(:deriv AS jsonb), :shared, :valuetype,
+                    CAST(:deriv AS jsonb), CAST(:sfields AS jsonb),
+                    :shared, :valuetype,
                     CAST(:status AS ontology_status), CAST(:depr AS jsonb))
             RETURNING id
             """,
@@ -653,6 +666,11 @@ async def _write_property_rows(
                 "deriv": (
                     json.dumps(prop["derivation"])
                     if prop.get("derivation") is not None
+                    else None
+                ),
+                "sfields": (
+                    json.dumps(prop["struct_fields"])
+                    if prop.get("struct_fields") is not None
                     else None
                 ),
                 # p.187: attaching is part of saving the object type, so the
@@ -793,6 +811,7 @@ async def _snapshot_version(
                                'conditional_format', p.conditional_format,
                                'edit_only', p.edit_only,
                                'derivation', p.derivation,
+                               'struct_fields', p.struct_fields,
                                'shared_property_id', p.shared_property_id,
                                'value_type_id', p.value_type_id,
                                'status', p.status,
