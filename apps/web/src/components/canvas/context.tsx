@@ -165,6 +165,14 @@ export function CanvasParameterProvider({
           if (hostName) link.set(hostName, value);
         }
       }
+      // **The filter keeps state honest, not the read.** A mutant removing it
+      // survived §244: a bound name written locally is masked by the overlay
+      // below, so nothing anybody can see changes. What it prevents is a second
+      // copy sitting in state — which is what the overlay's own comment says
+      // this design is for, and what a saved module state (§153) would
+      // otherwise persist and hand back later. Two guards where either suffices
+      // for reads; this is the one that is about the state rather than the
+      // value, and it is recorded here because no test can tell them apart.
       setValues((current) => ({
         ...current,
         ...Object.fromEntries(

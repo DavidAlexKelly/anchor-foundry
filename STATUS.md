@@ -4290,6 +4290,54 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 244. Two rows that said "works by construction", and what verifying them found (this session)
+
+p.164 makes two claims about embedded modules - that siblings can communicate
+through a shared interface variable, and that a child "may modify the value of
+interface variables through events". Both rows had been ◑ since §114 with the
+same note, written in the roadmap itself: *"works by construction … but
+untested, so it is a claim about the design rather than a demonstrated
+behaviour."*
+
+**No new feature. The unit is the verification** - and the verification found a
+real defect, which is the argument for doing units like this at all.
+
+One fixture answers both, because they are one mechanism seen from two sides:
+the same child embedded twice, both mapped to one host variable, with three
+distinct values in play (child default `north`, host default `west`, the button
+writes `south`) so every assertion says which of the three won rather than
+"something changed". The sibling test reads the **second copy** - the two embeds
+name nothing of each other - and the write test reads the **host's own widget**,
+because a child showing its own write is the child agreeing with itself.
+
+**The first mutation run came back 4 survivors of 10, and three were the entire
+write path.** The tests passed and the mutants passed, and both cannot be right.
+The cause: `CanvasParameterProvider` had **two copies of the link-routing rule**
+- `set` had one, `setMany` had another, and an *event* writes through `setMany`,
+so every mutant aimed at `set` was mutating code these tests never execute.
+Correct today, free to diverge, no test able to tell. **This repo has spent five
+units collapsing exactly that shape elsewhere and it was sitting in the
+parameter provider the whole time.** The two were exactly equivalent, so `set`
+is now `setMany({[name]: value})` and there is one copy to aim at; the re-run
+caught 8 of 9.
+
+**Two mutants withdrawn, and they are mirrors of each other.** Swapping the
+overlay order changes nothing any caller can observe, because a bound name never
+has a local value; removing the filter that keeps a bound name *out* of local
+state changes nothing either, because the overlay masks it. Two guards where
+either alone answers every read - one about the value, one about the state (no
+second copy for §153 to save and hand back later). Both are recorded in the code
+beside the lines rather than covered by tests that cannot exist, which is §234's
+rule applied to a pair instead of a single guard.
+
+**The lesson worth carrying is about aim.** A mutant that survives says one of
+two things - the test is weak, or *the mutant is not in the path the test
+runs*. Three survivors on one code path should have been read as the second
+immediately; it took looking at which function the event runner actually calls.
+
+**8 mutants caught, 2 withdrawn, 0 unexplained survivors.** 3 browser tests;
+1492 unit; `tsc` clean; no API change.
+
 ### 243. p.165's debugging link, which is §242's query with a second caller (this session)
 
 > "In edit mode, when you open a module from a module reference (for example,
