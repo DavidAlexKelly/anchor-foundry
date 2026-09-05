@@ -161,6 +161,10 @@ export function VariableBridge({
   // said and what the variable said at the time.
   const [pageOverride, setPageOverride] = useState<PageOverride | undefined>(undefined);
   const [overlay, setOverlay] = useState<string | null>(null);
+  // p.91's "Module appearance". Runtime state beside the current page and
+  // the section overrides (decision 0002 §3): a published module opens light
+  // for every viewer, because a saved app is not a saved session.
+  const [scheme, setScheme] = useState<"light" | "dark">("light");
   // `undefined` when this module has no Variable-Based Page Selection at all,
   // which `pageState` reads differently from a variable holding "".
   //
@@ -240,6 +244,8 @@ export function VariableBridge({
           tabs,
           setTab: (id, override) =>
             setTabState((current) => ({ ...current, [id]: override })),
+          scheme,
+          toggleScheme: () => setScheme((s) => (s === "dark" ? "light" : "dark")),
           // p.85's Recompute: record the ask, then make a resolve happen. The
           // tick is what makes it happen at all, since none of the *parameter*
           // values changed - and the ask travels as its own field rather than
@@ -273,7 +279,18 @@ export function VariableBridge({
           }}
         >
           {routing && <RoutingSync layout={layout} declared={declared} />}
-          {children}
+          {/* p.91's theme, applied where every widget under it is reached at
+              once. `data-scheme` redefines the tokens rather than restyling
+              anything (p.59-60's rule, one level up), so a widget written
+              before this existed follows it too - which is the same argument
+              that block's own comment makes for sections. The wrapper is
+              `display: contents` so it changes no layout: a module whose
+              widgets suddenly sat inside an extra box would be a theme toggle
+              that moved things. */}
+          <div data-scheme={scheme} data-testid="module-scheme"
+            style={{ display: "contents" }}>
+            {children}
+          </div>
           {/* Below the module rather than in it: p.206 ties state saving to
               the module *header*, and this is the nearest thing we have to
               module chrome that every route already renders. */}

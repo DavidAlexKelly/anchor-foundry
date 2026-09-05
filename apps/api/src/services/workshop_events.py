@@ -63,6 +63,15 @@ EFFECTS = (
     # types" - the complement of reset_variable, and the thing p.76's two
     # non-automatic behaviours exist to be triggered by.
     "recompute",
+    # p.91's two, under its own headings "Data staleness" and "Module
+    # appearance". **Neither names anything**: p.91 gives each one sentence and
+    # the sentence has no object in it - "allows all data in the module to be
+    # reloaded", "allows the theme of the module to be changed". So neither
+    # takes a config, which is why there is nothing for `_parse_effect` to
+    # refuse below and no reason to invent one: an effect with a setting the
+    # page does not describe is a setting somebody would have to guess at.
+    "refresh_data",
+    "toggle_theme",
 )
 
 # The three above, and the fact that binds them: each names a section.

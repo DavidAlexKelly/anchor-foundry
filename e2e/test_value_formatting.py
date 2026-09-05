@@ -23,7 +23,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module
-from conftest import WEB_BASE, eventually
+from conftest import FIRST_RENDER_MS, WEB_BASE, eventually
 
 ROWS = [
     {"id": "S1", "name": "Alpha", "value": "100000", "weight": "72.5"},
@@ -66,6 +66,19 @@ def open_type_editor(page, module):
     row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
     expect(row).to_be_visible(timeout=30000)
     row.get_by_role("button", name="Edit").click()
+    # **And wait for the editor to have drawn its rows.** The click was waited
+    # for; what comes after it was not, so every assertion in this file about
+    # the dialog's contents ran against Playwright's five-second default while
+    # the type detail was still being fetched. Under a full-suite run that is
+    # not enough, and the failure looks like the feature being wrong rather
+    # than like the page being slow - `test_a_string_property_is_not_offered_a
+    # _formatter` failed exactly that way, on its *presence* assertion, which
+    # is the one its own comment says makes the absence meaningful.
+    #
+    # `Property 1 name` is the anchor because every property row has one
+    # whatever its type - and the questions this file asks are about which
+    # *other* controls each type gets.
+    expect(page.get_by_label("Property 1 name")).to_be_visible(timeout=FIRST_RENDER_MS)
 
 
 def open_first_object(page, module):

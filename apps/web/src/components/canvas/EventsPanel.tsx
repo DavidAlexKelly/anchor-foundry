@@ -122,6 +122,20 @@ const EFFECTS: { type: string; label: string; hint: string }[] = [
     label: "Recompute a variable",
     hint: "for a derived variable that does not recompute automatically",
   },
+  // p.91's two, and the only effects here that name nothing: p.91 gives each
+  // one sentence with no object in it, so neither has a field under it. The
+  // hint is where the difference from `recompute` gets said, because a builder
+  // looking for "make this current" will meet both.
+  {
+    type: "refresh_data",
+    label: "Refresh data in module",
+    hint: "reloads every widget's data — not the same as recomputing one variable",
+  },
+  {
+    type: "toggle_theme",
+    label: "Toggle light / dark mode",
+    hint: "for this viewer, until they leave — a module always opens light",
+  },
 ];
 
 /** Widget names that can fire something, for the caller reading the tree.
