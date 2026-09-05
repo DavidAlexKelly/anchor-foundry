@@ -157,17 +157,6 @@ export function CanvasParameterProvider({
     seeded.current = seedKey;
     setValues((current) => ({ ...seed, ...current }));
   }, [seedKey, seed]);
-  const set = useCallback(
-    (name: string, value: unknown) => {
-      const hostName = link?.bindings[name];
-      if (hostName) {
-        link.set(hostName, value);
-        return;
-      }
-      setValues((current) => ({ ...current, [name]: value }));
-    },
-    [link],
-  );
   const setMany = useCallback(
     (next: Record<string, unknown>) => {
       if (link) {
@@ -176,6 +165,14 @@ export function CanvasParameterProvider({
           if (hostName) link.set(hostName, value);
         }
       }
+      // **The filter keeps state honest, not the read.** A mutant removing it
+      // survived §244: a bound name written locally is masked by the overlay
+      // below, so nothing anybody can see changes. What it prevents is a second
+      // copy sitting in state — which is what the overlay's own comment says
+      // this design is for, and what a saved module state (§153) would
+      // otherwise persist and hand back later. Two guards where either suffices
+      // for reads; this is the one that is about the state rather than the
+      // value, and it is recorded here because no test can tell them apart.
       setValues((current) => ({
         ...current,
         ...Object.fromEntries(
@@ -184,6 +181,24 @@ export function CanvasParameterProvider({
       }));
     },
     [link],
+  );
+  /** One name, through the many-name path.
+   *
+   * **These were two copies of the link-routing rule until §244**, and a
+   * mutation run is what showed it: every mutant aimed at `set`'s copy survived,
+   * because an *event* writes through `setMany` and never touched the one being
+   * mutated. Two implementations of "a bound name goes to the host instead of
+   * here", correct today and free to diverge, with no test able to tell — which
+   * is the shape this repo has spent five units collapsing elsewhere.
+   *
+   * The two were exactly equivalent: a bound name routed and was not written
+   * locally either way (`set` returned early; `setMany` filters it out), and an
+   * unbound one was written locally by both. So this is the same behaviour with
+   * one copy of the rule.
+   */
+  const set = useCallback(
+    (name: string, value: unknown) => setMany({ [name]: value }),
+    [setMany],
   );
 
   /** p.85's Reset: forget what the viewer set, so the value falls back to the
@@ -216,6 +231,14 @@ export function CanvasParameterProvider({
   // than merged into state so there is exactly one copy: a bound name that also
   // had a local value would drift the moment the host changed and nothing here
   // noticed.
+  //
+  // **The overlay *order* is currently unreachable, and saying so is more use
+  // than pretending it is checked.** A mutant swapping it survived §244, and the
+  // reason is that no caller can produce a bound name with a local value:
+  // `setMany` filters one out, and `seed` is only ever passed to the top-level
+  // provider, which has no `link`. The order is what would be right if the two
+  // ever met - a host's mapped value beats a URL seed, p.127 - so it stays, as
+  // intent rather than as a check.
   const linked = link
     ? Object.fromEntries(
         Object.entries(link.bindings).map(([childName, hostName]) => [
