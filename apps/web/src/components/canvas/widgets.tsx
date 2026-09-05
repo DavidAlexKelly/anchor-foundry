@@ -11400,7 +11400,10 @@ export function CanvasActionForm({
   } = useNode();
   const { workspaceId, projectId, mode } = useCanvasEnv();
   const queryClient = useQueryClient();
-  const { events: moduleEvents } = useCanvasVariables();
+  const {
+    events: moduleEvents, declared: moduleVariables,
+    pending: variablesPending,
+  } = useCanvasVariables();
   const eventContext = useEventContext(undefined, useOverlayIds());
   const subject = useCanvasVariable(subjectVariable) as
     | { id?: string; primary_key?: unknown; properties?: Record<string, unknown> }
@@ -11459,14 +11462,41 @@ export function CanvasActionForm({
   // submit. `hasSelection` is how the widget knows it still has to say so, and
   // is what keeps a state restored on load (§153) from being wiped.
   const outputRaw = useCanvasParameter(outputVariable);
-  const outputStated = hasSelection(outputRaw);
+  // **A declared default counts as stated, and the browser cannot see it in
+  // `values`.** The server resolves an unbound variable as
+  // `values.get(vid, variable.default)`, so a default never reaches the local
+  // map - and writing the empty set here would *replace* it, destroying a
+  // starting selection the builder declared on purpose.
+  //
+  // Not the question p.224's Object Table asks with `activeStated`: p.224 says
+  // in as many words that the table "results in an empty active object at load
+  // time", so there the empty write is the requirement. p.513 says nothing of
+  // the sort about an output set.
+  const outputStated = hasSelection(outputRaw) || hasSelection(
+    outputVariable
+      ? (moduleVariables[outputVariable] as { default?: unknown } | undefined)?.default
+      : undefined,
+  );
   useEffect(() => {
+    // **Nothing is written while the variables are still resolving**
+    // (§210's rule: unresolved is not empty). `declared` is `{}` on the
+    // first render, so a default would read as absent and the empty set
+    // would be written over it before the module had finished loading -
+    // which is exactly what the browser test saw.
+    // **`pending` alone is not enough**, and this is the bug the preset test
+    // found. The default `VariableContext` is `{declared: {}, pending: false}`,
+    // so on any render before the provider is in place the guard above passes,
+    // the declared default reads as absent, and the empty set is written over
+    // it - after which nothing puts it back. A module that binds an output
+    // variable necessarily declares variables, so an empty map means "not
+    // loaded yet", never "none".
+    if (variablesPending || Object.keys(moduleVariables).length === 0) return;
     if (!outputVariable || outputStated) return;
     setParameter(outputVariable, selectionClauses([]));
     // `setParameter` is stable for the life of the provider; listing it would
     // re-run this on every render of every widget in the module.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outputVariable, outputStated]);
+  }, [outputVariable, outputStated, variablesPending, moduleVariables]);
 
   const execute = useMutation({
     mutationFn: () => actionApi.execute(workspaceId, projectId, actionType!.id, instanceId, values),

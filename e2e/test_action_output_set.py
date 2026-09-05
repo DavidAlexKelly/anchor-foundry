@@ -34,7 +34,7 @@ ROWS = [
 ]
 
 
-def build(api, name: str, *, bind_output: bool = True) -> Module:
+def build(api, name: str, *, bind_output: bool = True, preset=None) -> Module:
     mod = Module(api, name)
     type_id = mod.object_type(
         columns=["ticket_id", "status"], rows=ROWS, key="ticket_id", title="ticket_id",
@@ -74,7 +74,8 @@ def build(api, name: str, *, bind_output: bool = True) -> Module:
         "variables": {
             "v_all": {"id": "v_all", "kind": "object_set", "label": "All tickets",
                       "object_set": object_set(type_id)},
-            "v_out": {"id": "v_out", "kind": "array", "label": "Output clauses"},
+            "v_out": {"id": "v_out", "kind": "array", "label": "Output clauses",
+                      **({"default": preset} if preset is not None else {})},
             "v_out_set": {
                 "id": "v_out_set", "kind": "object_set", "label": "What changed",
                 "derivation": {"transform": "narrow_set", "inputs": ["v_all", "v_out"]},
@@ -183,3 +184,22 @@ def test_the_panel_offers_the_array_variable(page, api) -> None:
     options = picker.locator("option").all_inner_texts()
     assert "Output clauses" in options, options
     assert "What changed" not in options, options
+
+
+def test_a_variable_that_already_holds_a_selection_is_left_alone(page, api) -> None:
+    """**The case the load-time write is guarded for**, and nothing reached it
+    until a mutant removed the guard and every test still passed.
+
+    The widget states the empty set on load so a module showing "what changed"
+    does not start out showing everything — but only when the variable says
+    *nothing yet*. A variable that already holds a real selection has one for a
+    reason: a default declared here, or a module state restored on load (§153).
+    Wiping it would throw away what the reader came back to.
+    """
+    mod = build(api, "Output preset",
+                preset=[{"property": "$primary_key", "op": "in", "value": ["T1"]}])
+    open_module(page, mod)
+    settled(page)
+
+    eventually(lambda: downstream_keys(page), lambda k: k == ["T1"],
+               what="the preset selection, not wiped by the load-time write")
