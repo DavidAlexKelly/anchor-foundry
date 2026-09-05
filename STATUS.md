@@ -4290,6 +4290,90 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 245. The struct property type, and a list that had already lost a setting (this session)
+
+`ontology.md`'s build order item 7 reads "**Struct property type**, then
+Workshop struct variables" - one line, apparently one item. Opening the pages
+first (§216) makes it at least three: `object-link-types` p.149-160 is the
+type and its editor, `ontology` p.58-59 is the modelling argument plus main
+fields and reducers, and `workshop` p.75/143/152-155 is the variable, the
+Extract-struct-field transform and struct arrays. **Every build-order estimate
+in this repo has been wrong in the same direction** (§232, §235) and this is
+another. This unit is the first third: the type.
+
+**The schema is the whole difference from `json`.** A `json` property has
+accepted the same *values* since db 0003 - "deliberately unconstrained", in
+`property_values`' own words - so a struct is not a new value, it is a claim
+about one. p.149 states four constraints and all four are refusals here, not
+conventions: depth of one, at least one field, a field-type list *narrower*
+than this platform's property types, and unique named fields in a declared
+order that a stored value is rebuilt in. The nesting refusal carries **its own
+message** rather than falling through to "expected one of string, number…",
+because p.58's own worked example is a five-field address and somebody who has
+read it will try nesting one - a refusal that reads like a typo sends them
+looking for the right spelling of a thing that does not exist.
+
+**The fields are a column on the property row, not a child table, and 0028 is
+the argument.** An edit deletes every `object_type_properties` row for the type
+and re-inserts the list it was given, which is why 0028's own version snapshot
+keeps the title property by api_name: property ids do not survive an edit. A
+child table keyed on the property id would have a struct's schema emptied by
+renaming a *neighbouring* property. 0044's counter-precedent - splitting action
+parameters *out* of a JSON column - does not apply, and the distinction is
+worth keeping: a parameter is named from three other places (rules, criteria,
+saved Workshop modules) so it needs an identity other rows can point at.
+Nothing points at a struct field.
+
+**Three things decline to carry a struct and say so.** A shared property (p.178
+shares one *definition*; a struct's definition is its fields and that table has
+no column for them, so a shared struct would be one borrowed name over two
+schemas). An action parameter - p.150 lists Actions, so this is a gap rather
+than a scope call, and the reason it is deferred is structural: coercing a
+struct needs the declaration as well as the type, and the `{name: type}` map
+every write path reads is built in **eight places** across `actions.py` and
+`routes/actions.py`. Threading a second parallel map through all eight is the
+shape this repo has found stale five times; the fields belong *in* that map,
+and widening it is its own unit. Refused at **save time**, where the person who
+typed it is still looking at it, and refused rather than offered-and-broken for
+§237's reason: `inputTypeFor` answers "text" for anything it does not name, so
+an allowed struct parameter would render as a box no viewer could fill in
+correctly. And field search or sort on either store, which is **Foundry's own
+position** rather than a shortcut - p.150 ships struct support with "struct
+field search is under development" and warns in the same breath that a query
+over an array of structs matches its fields independently rather than within
+one entry, so the source has not settled what a field filter means.
+
+**A drift guard failed, and it was right to.** `test_every_declared_type_has_a
+_field` was a hand-written copy of `instance_mapping.FIELD_TYPES` - §191's
+blind spot exactly, because two lists agreeing tell you nothing about what is
+missing from *both*, and `time_series` had been absent from both since db 0047
+with nothing recording whether that was a decision. It now checks against the
+thing it describes and anything unmapped has to be named with its reason. The
+chain had one more link nothing was holding, now closed: `ontology.PROPERTY
+_TYPES` is compared with the `property_data_type` enum itself, since every
+other guard in this area compares one Python list with another and all of them
+would agree happily about a type the database does not have.
+
+**And the list that had already lost a setting.** `object-type-editor` rebuilds
+the whole property list and PATCHes it, mapping each property into a
+`PropertyInput` by hand; the comment beside that map has said since §157 what
+the risk was - *"every new property setting has to be added here, and nothing
+fails if it is not."* Going to add `struct_fields` to it found `description`
+already missing, so **opening the edit dialog and saving, for any reason at
+all, erased every property description on the type.** Nothing failed, exactly
+as the comment predicted, for however many units it has been true.
+
+The fix is not a longer list. `CARRIED` is typed
+`{ [K in keyof Required<PropertyInput>]: true }`, so adding an optional field
+to `PropertyInput` fails to compile until it is carried - the same
+guard-as-a-type §200 put on `PROP_DIRECTION`. **A comment that names a risk is
+not a guard**, and this one had been standing next to the failure it described.
+
+**23 mutants, 23 caught, 0 survivors, 0 hangs.** One reported NO-OP first:
+`    return out` matches twice in `struct_fields.py` because `types_by_field`
+ends the same way, and the harness said so rather than reporting a survivor -
+which is the distinction §189 paid two by-hand investigations to learn.
+
 ### 244. Two rows that said "works by construction", and what verifying them found (this session)
 
 p.164 makes two claims about embedded modules - that siblings can communicate
@@ -7477,6 +7561,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 ---
 
 ## Known rough edges worth knowing about
+
+- **A comment that names a risk is not a guard, and this one had been standing next to its own failure.** `object-type-editor` rebuilds a type's whole property list and PATCHes it, mapping each property into a `PropertyInput` by hand. Beside that map, since §157: *"every new property setting has to be added here, and nothing fails if it is not."* §245 went to add `struct_fields` and found `description` **already missing** — so opening the edit dialog and saving, for any reason at all, erased every property description on the type. The comment was written by somebody who saw the failure mode clearly enough to describe it in a sentence, and describing it is all it did. The fix is `{ [K in keyof Required<PropertyInput>]: true }`: adding an optional field to the input type now fails to compile until it is carried. **The tell is a comment containing the words "has to be" or "must remember to"** — those are the sentences where a type or a test belongs instead, and this repo has now written the same guard-as-a-type three times (§200's `PROP_DIRECTION`, §191's wish for `REFERENCE_PROPS`, this).
+
+- **A `{name: type}` map built in eight places is a signature you cannot widen, and that is a design constraint rather than a chore.** §245 could not let an action write a struct property, because coercing one needs the property's *declaration* as well as its type — and `property_types: dict[str, str]` is constructed in eight sites across `services/actions.py` and `routes/actions.py`. Threading a second parallel map through all eight is exactly the shape this repo has found stale five times (§191, §244 among them), so the honest move was to **refuse the struct parameter with a stated reason** and leave widening the map to its own unit. Worth recording because the instinct is the other way: the feature looks one `if` away, and the one `if` would have been the sixth copy of a fact. When a value's meaning needs a companion, the companion goes *in* the map — and the cost of not doing that on day one is measured in construction sites.
 
 - **Playwright's five-second `expect` default produced five failures in this suite that had nothing to do with the code under test**, and they are all one shape: an assertion that follows a server round trip, given five seconds because nobody chose a number. §237's ontology search; §241's two (a formatter dialog, and a `<select>` whose options were still being fetched); §243's two — a shared property asserted straight after a save, and the action editor's cross-module rename check, **which is the same test §233 saw fail once and recorded as unexplained**. Every one passes in isolation and fails in a full run, which is exactly when the box is slowest, so the suite reports as flaky when what it is really saying is that one assertion was budgeted differently from its neighbours (which wait 20–30s through `eventually` and `FIRST_RENDER_MS`). Fixing them one at a time did not work; `conftest` now sets a suite-wide 15s default, **measured rather than assumed** — a probe against a locator that never appears waited 15005ms. This is not a licence to skip `eventually` or `stays`: those exist for *derived* reads and for negative claims, neither of which is a timeout question.
 
