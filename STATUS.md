@@ -4369,10 +4369,19 @@ to `PropertyInput` fails to compile until it is carried - the same
 guard-as-a-type §200 put on `PROP_DIRECTION`. **A comment that names a risk is
 not a guard**, and this one had been standing next to the failure it described.
 
-**23 mutants, 23 caught, 0 survivors, 0 hangs.** One reported NO-OP first:
-`    return out` matches twice in `struct_fields.py` because `types_by_field`
-ends the same way, and the harness said so rather than reporting a survivor -
-which is the distinction §189 paid two by-hand investigations to learn.
+**25 mutants, 25 caught, 0 survivors, 0 hangs** - 23 on the API layer and 2
+through a browser. One reported NO-OP first: `    return out` matches twice in
+`struct_fields.py` because `types_by_field` ends the same way, and the harness
+said so rather than reporting a survivor - which is the distinction §189 paid
+two by-hand investigations to learn.
+
+The two browser mutants are the same bug twice, and they had to attack the
+*loop* rather than `CARRIED` itself: the omission the type guards against
+cannot be written in the source any more, so what is left to check is that
+dropping a key on the way out is caught by a test rather than only by the
+compiler. **The guard itself was demonstrated separately**, by deleting
+`description` from `CARRIED` and watching `tsc` refuse it by name - §209's
+rule, measure rather than reason.
 
 ### 244. Two rows that said "works by construction", and what verifying them found (this session)
 
