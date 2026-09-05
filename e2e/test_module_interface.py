@@ -164,3 +164,59 @@ def test_a_query_parameter_that_is_not_an_interface_variable_does_nothing(page, 
     rows = page.locator(".canvas-block table tbody tr")
     eventually(lambda: rows.count(), lambda n: n == COUNTS["north"],
                what="the default, because neither parameter names the interface")
+
+
+# ---- p.165's debugging link --------------------------------------------------
+def test_the_builder_can_open_the_child_with_the_values_it_was_given(page, modules):
+    """p.165's second paragraph, and the reason this row was one line of work.
+
+    > "In edit mode, when you open a module from a module reference (for
+    > example, opening an embedded child module in its own editor), the module
+    > opens with the current values of any module interface variables that were
+    > passed from the source module. This allows you to debug the opened module
+    > using the same state that was present where it was referenced." (p.165)
+
+    **The link carries the host's value, not the child's own default**, which is
+    the whole of "the same state that was present where it was referenced" — a
+    link to the child's own defaults is a link anybody could have typed. The
+    host passes `south` and the child defaults to `north`, so the two are
+    visibly different, and the opened module is read by *counting its rows*
+    rather than by trusting the query string.
+    """
+    from conftest import open_builder
+
+    host, child = modules
+    open_builder(page, host)
+    settled(page)
+
+    link = page.get_by_test_id("embed-open-child")
+    expect(link).to_be_visible(timeout=30000)
+    href = link.get_attribute("href")
+    assert f"/r/{child.resource_id}" in href, href
+    assert "region=south" in href, href
+
+    with page.context.expect_page() as opened:
+        link.click()
+    tab = opened.value
+    tab.wait_for_load_state()
+    preview = tab.get_by_role("button", name="Preview", exact=True)
+    expect(preview).to_be_visible(timeout=30000)
+    preview.click()
+
+    # Two rows, because `south` arrived — four would mean the child's own
+    # default had won and the link had carried nothing worth carrying.
+    rows = tab.locator(".canvas-block table tbody tr")
+    eventually(lambda: rows.count(), lambda n: n == COUNTS["south"],
+               what="the child opened in the state the host had it in")
+
+
+def test_the_debugging_link_is_not_offered_to_a_viewer(page, modules):
+    """p.165 says "**In edit mode**", and it is a debugging affordance: a viewer
+    has no editor to be sent to, so a link into one from a published module
+    would be an invitation to a page they cannot open."""
+    host, _ = modules
+    open_module(page, host)
+    # The embed itself is the anchor — asserting the link's absence before the
+    # module has drawn would pass against a page with nothing on it at all.
+    expect(page.locator(".canvas-embedded")).to_be_visible(timeout=30000)
+    expect(page.get_by_test_id("embed-open-child")).to_have_count(0)

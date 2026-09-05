@@ -198,6 +198,7 @@ import {
   toEdits, undoRow, type Staged,
 } from "./inline-edit";
 import { outputClauses } from "./action-output";
+import { interfaceQuery } from "./routing";
 import { LayoutTemplatePicker } from "./LayoutTemplatePicker";
 import { activeTab, asTabName, tabLabels } from "./tab-selection";
 import { CanvasNode } from "./SettingsPanel";
@@ -9412,7 +9413,7 @@ export function CanvasEmbeddedModule({
   const {
     connectors: { connect, drag },
   } = useNode();
-  const { workspaceId, projectId } = useCanvasEnv();
+  const { workspaceId, projectId, mode } = useCanvasEnv();
   // The host's side of the boundary. `resolved` rather than raw values because
   // the host's *definition* is what backs a mapped variable (p.127) - and a
   // definition's output is its resolved value, not whatever a widget last typed
@@ -9445,6 +9446,29 @@ export function CanvasEmbeddedModule({
   }
   const boundIds = Object.keys(bindings);
 
+  // p.165's second paragraph:
+  //
+  // > "In edit mode, when you open a module from a module reference (for
+  // > example, opening an embedded child module in its own editor), the module
+  // > opens with the current values of any module interface variables that were
+  // > passed from the source module. This allows you to debug the opened module
+  // > using the same state that was present where it was referenced."
+  //
+  // **The same query §242's event builds**, from the same function - which is
+  // the whole reason this row is a link rather than a feature. `mapping` is
+  // already keyed the way `interfaceQuery` wants (child external ID -> host
+  // variable id), and the values are the host's, laid over the same way the
+  // event lays them: what is on screen now, not what the server last resolved.
+  //
+  // **Edit mode only**, because p.165 says so and because it is a debugging
+  // affordance: a viewer has no editor to be sent to, and a link into one from
+  // a published module would be an invitation to a page they cannot open.
+  const debugQuery = interfaceQuery(mapping, {
+    ...host.resolved, ...hostParams.values,
+  });
+  const debugSearch = new URLSearchParams(debugQuery).toString();
+  const childResource = embedded.data?.resource_id ?? null;
+
   return (
     <div ref={(ref) => connectDragDrop(ref, connect, drag)} className="canvas-block">
       {title && <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>{title}</h3>}
@@ -9468,6 +9492,20 @@ export function CanvasEmbeddedModule({
         <p className="canvas-widget-empty">
           {embedded.data?.name ?? "That module"} has nothing on it yet.
         </p>
+      )}
+      {mode === "edit" && childResource && (
+        // Below the title and above the module, where it reads as being about
+        // the embed rather than about anything inside it.
+        <a
+          className="slug"
+          data-testid="embed-open-child"
+          href={`/r/${childResource}${debugSearch ? `?${debugSearch}` : ""}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open {embedded.data?.name ?? "this module"} in its own editor
+          {debugSearch ? " with these values" : ""}
+        </a>
       )}
       {layout && Object.keys(layout).length > 0 && (
         <div
