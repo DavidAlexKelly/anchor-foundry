@@ -4290,6 +4290,63 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 240. p.513's Output object set, and a default destroyed before the module loaded (this session)
+
+The last of the Inline Action row's ○ items that was described as real work
+rather than as a blocked one: "needs the executor to report which objects it
+touched — a change to `execute`'s response rather than to this widget." That
+reading held, which is worth saying because §216's audit exists for the times it
+does not.
+
+**Only the executor can answer p.513's question.** A rule can create an object
+whose primary key comes from a parameter and modify one a *different* parameter
+names, so which objects a submission wrote is not something a browser can work
+out. `touched_objects` reports p.513's two verbs and deliberately not the third:
+an action that deletes an object has not produced one for a set to hold, and a
+deleted row named in an output set resolves to nothing on the next read. The
+subject counts **only when the action actually wrote to it** — an action whose
+every rule creates elsewhere has not modified the row it ran on, and putting it
+in the set is exactly what p.513's set exists to tell apart.
+
+The widget writes **clauses, not a set definition** — §207's rule from the other
+side — and names **one object type**, because a set here is a set *of a type*
+and a mixed list would name rows the base set does not contain.
+
+**The unit's real finding is a bug that took four wrong guesses and then a
+probe.** A mutant said the load-time guard was untested; writing the test that
+would catch it turned up a defect behind it. A declared default on the output
+variable was being silently destroyed: the server resolves an unbound variable
+as `values.get(vid, variable.default)`, so a default never reaches the browser's
+local `values` map, and the widget read `undefined`, decided the variable said
+nothing yet, and wrote the empty set over it. Three guesses at the cause were
+wrong. **Instrumenting the running page** — a temporary `data-` attribute
+exposing what the widget actually saw — gave the answer in one run: the default
+`VariableContext` is `{declared: {}, pending: false}`, so on any render before
+the provider is in place the pending guard passes too. A module that binds an
+output variable necessarily declares variables, so an empty map means "not
+loaded yet", never "none".
+
+That is not p.224's question, and the distinction is stated in the code: the
+Object Table's `activeStated` writes the empty set on load because p.224 says in
+as many words that the table "results in an empty active object at load time".
+p.513 says nothing of the sort, so a default there is a starting selection
+somebody meant.
+
+**19 mutants, 19 caught, 0 survivors, 1 withdrawn.** Two of the first three API
+survivors were branches nothing exercised — the objects a *parameter* names, and
+the dedupe for an object written twice — and the third was a guard that could not
+fail (`if (!objectTypeId) return []`, already answered by the comparison after
+it). The withdrawn one is §193's shape: removing `if (outputVariable)` makes the
+handler write a variable literally named `"null"`, which nothing declares,
+nothing reads, and no assertion about what a reader sees can distinguish. What
+would make it checkable is a single refusal inside `set` rather than the same
+guard at all eighteen call sites — named here rather than built.
+
+§191's drift guard took `outputVariable` as a **write** across all four sites.
+
+**1742 API tests** (was 1736), 2 skipped; **1486 unit** (was 1477); 5 browser
+tests in the new file; `tsc` clean.
+
 ### 239. The Object Table's inline edits, and a refresh that named the wrong query (this session)
 
 Workshop p.240-243's surface over §238's server half, and the end of the Object
