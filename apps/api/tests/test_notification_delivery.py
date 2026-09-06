@@ -497,13 +497,61 @@ def test_a_failed_action_sends_nothing(
         "subject": "Should never arrive", "body": "b",
     }).status_code == 200
 
-    before = inbox(client, fx.viewer_sub)["total"]
-    # An instance id that is not there: the run opens, and the write fails.
-    r = client.post(
-        f"{abase(fx)}/{action['id']}/execute", headers=hdr(fx.editor_sub),
-        json={"instance_id": str(uuid.uuid4()), "values": {"priority": "x"}},
+    # **The failure has to land in the write**, past the point where the
+    # notifications were already resolved and permitted. A bad instance id is
+    # refused earlier than that and would leave `notices` empty, which is a
+    # test that passes for the wrong reason — the first version of this did
+    # exactly that and a mutant dropping the `if ok:` walked through it.
+    #
+    # An unreadable source file is the cheapest failure on the far side: the
+    # engine refuses the extension, the route catches `DatasetEngineError` and
+    # closes the run with `ok=False`.
+    import psycopg
+
+    from test_api import ADMIN_DSN
+
+    # A second dataset whose file exists and whose *columns* are wrong: the
+    # file opens, and the query referencing `priority` does not. Pointing at a
+    # missing path instead would raise before the try block and prove nothing.
+    other = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/datasets/upload",
+        headers=hdr(fx.editor_sub), data={"name": f"Wrong shape {uuid.uuid4().hex[:6]}"},
+        files={"file": ("wrong.csv", io.BytesIO(b"only_column\nx\n"), "text/csv")},
     )
-    assert r.status_code != 200 or r.json()["ok"] is False, r.text
+    assert other.status_code == 201, other.text
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        original = conn.execute(
+            """SELECT d.id, d.s3_location FROM datasets d
+                JOIN object_type_sources s ON s.dataset_id = d.id
+               WHERE s.object_type_id = %s LIMIT 1""",
+            (alert_type,),
+        ).fetchone()
+        assert original, "the fixture should have mapped a dataset"
+        wrong = conn.execute(
+            "SELECT s3_location FROM datasets WHERE id = %s",
+            (other.json()["id"],),
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE datasets SET s3_location = %s WHERE id = %s",
+            (wrong, original[0]),
+        )
+
+    before = inbox(client, fx.viewer_sub)["total"]
+    try:
+        r = client.post(
+            f"{abase(fx)}/{action['id']}/execute", headers=hdr(fx.editor_sub),
+            json={"instance_id": alert, "values": {"priority": "x"}},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] is False, "the write should have failed"
+    finally:
+        with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+            conn.execute(
+                "UPDATE datasets SET s3_location = %s WHERE id = %s",
+                (original[1], original[0]),
+            )
+
     assert inbox(client, fx.viewer_sub)["total"] == before
     assert "Should never arrive" not in str(
         inbox(client, fx.viewer_sub)["items"]
@@ -518,8 +566,14 @@ def test_a_member_of_another_workspace_still_cannot_be_notified(
     A mutant that dropped the workspace from the permission query survived the
     strict-mode test above, because that test's outsider is a member of no
     workspace at all — so "everybody who is a member of something" and "the
-    members of this workspace" were the same set. This gives them a membership
-    somewhere else, which is the only fixture in which those two differ.
+    members of this workspace" were the same set.
+
+    **And the actor has to be in both**, which is the second half and the one
+    that took instrumenting to find. `workspace_members` is itself under RLS,
+    so a membership in a workspace the *actor* cannot see is invisible to the
+    permission query whether or not it filters on the workspace — the explicit
+    filter is only observable when the actor can see both memberships and one
+    of them is still the wrong workspace.
     """
     import psycopg
 
@@ -534,11 +588,12 @@ def test_a_member_of_another_workspace_still_cannot_be_notified(
              f"workspaces/other-{fx.tag}/", f"ws_other_{fx.tag}",
              f"ws-other-{fx.tag}-", fx.owner),
         ).fetchone()[0]
-        conn.execute(
-            "INSERT INTO workspace_members (workspace_id, user_id, role) "
-            "VALUES (%s,%s,'editor')",
-            (other, fx.outsider),
-        )
+        for member in (fx.outsider, fx.editor):
+            conn.execute(
+                "INSERT INTO workspace_members (workspace_id, user_id, role) "
+                "VALUES (%s,%s,'editor')",
+                (other, member),
+            )
 
     action = make_action(client, fx, alert_type)
     assert define(client, fx, action, {
