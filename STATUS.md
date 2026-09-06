@@ -4352,9 +4352,67 @@ consumer that makes it a feature is an object set **over** an interface, which
 is p.61's "target the interface directly" and is the next unit rather than
 this one.
 
-19 new API tests, nine of them without a database - the whole of p.53's "any
-number of other interfaces" is checkable as a pure function, and that is where
-a wrong answer is a line rather than a fixture. 1810 API tests, 2 skipped.
+**19 mutants attacked, 17 caught, 2 withdrawn, 0 survivors** - and the first
+run's five survivors are the useful part of the unit.
+
+**Three were real gaps in the same place**: nothing had ever handed
+`parse_properties` a bad declaration, so an interface property could have had
+any base type at all, two of them could have shared a name, and a name could
+have been shaped like nothing else in the ontology. Three tests now, and the
+tell is worth carrying - a *parser* with no test that gives it something
+invalid is a parser nobody has asked to refuse anything.
+
+**Two were unobservable, and one took a line of code with it.** Moving the
+delete above the validation loop in `set_implementations` survived, because
+the whole request is one transaction and a refusal rolls it back either way -
+so the ordering there is legibility rather than a guarantee, and the docstring
+says which now. And `_write_shape` used to close by re-resolving the graph to
+prove the new shape had no cycle; that survived too, because both callers end
+with `get_interface`, which resolves it to build its answer, and a refusal
+there rolls back the same transaction. A second check behind one that already
+holds, so §213's answer applies: the line is gone rather than covered by a
+test that could not fail.
+
+24 API tests in that file, nine of them without a database - the whole of
+p.53's "any number of other interfaces" is checkable as a pure function, and
+that is where a wrong answer is a line rather than a fixture. **1815 API
+tests, 2 skipped** (was 1810).
+
+One aside worth recording rather than explaining away: a single full API run
+ended `1815 passed, 2 skipped, 1 error`, the error at *setup* of
+`test_full_bootstrap_flow_on_empty_platform`, whose fixture creates and drops
+a real database per test. It did not reproduce in the file alone (6 passed) or
+in a second identical full run. Migration 0065 landing on an empty database
+was the obvious suspect and is not the answer - the second full run migrates
+the same scratch database the same way. §243's lesson is that a plausible
+mechanism is not a diagnosis, so this is logged as one unexplained transient
+rather than fixed.
+
+### 252. Two places that already answer "what shapes exist here" (this session)
+
+§251 built the resource; this is the pair of surfaces that would otherwise
+have made it invisible, and both are places the platform *already* answers a
+question interfaces are now part of the answer to.
+
+**Ontology search** (§133, `ontology` p.52's "search across your ontology")
+had six of seven ontology kinds and would have quietly kept saying six. Its
+docstring said "Five of those seven" and had been wrong since a kind was added
+without it; it says six now, and the count is the kind of line that only stays
+true because a test reads it. An interface's `usage_count` is its
+**implementations**, not its properties - the number a searcher is deciding
+with is how much depends on this shape, which is the same reading
+`shared_property`'s count already has.
+
+**The object type listing** now says what each type claims to be, which is
+p.61's argument made visible: the reason to model `Inspectable` at all is that
+you can look at Vehicle, Equipment and Facility and see the shape they share.
+One query for every type's implementations rather than one per row - §248's
+lesson from four units ago, applied before it could become a defect.
+
+Both mutants were caught by tests written with them. The listing one is worth
+naming: `interfaces=[]` is what an un-wired feature looks like from the
+outside, and it is indistinguishable from "this type implements nothing"
+unless a test declares an implementation first.
 
 ### 250. p.29's other two home-page filters, and a guard written for one (this session)
 
