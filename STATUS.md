@@ -4427,6 +4427,12 @@ server sends `skipped` instead and the module says where the function went.
 §213's answer, reached before the thing shipped rather than after a mutant
 found it.
 
+**13 mutants attacked, 13 caught, 0 survivors** — after one survivor that was
+the same shape as the withdrawal above. `skipped=[]` survived, because the test
+that *produces* a skipped type checked which types were read and never checked
+which were not. It is the half of the fact only the server can supply, which
+makes it the half most worth asserting and the one easiest to leave out.
+
 **1557 unit tests** (was 1546); **11 browser tests** in
 `e2e/test_interfaces.py`.
 
