@@ -5,15 +5,20 @@
 > properties, link types, action types, shared properties, interfaces, and
 > functions." (p.28)
 
-Five of those seven exist here, plus **object type groups**, which p.28's list
+Six of those seven exist here, plus **object type groups**, which p.28's list
 predates: p.262 says separately that "Groups are searchable in Ontology
 Manager's Search bar and Search bar dialog", and §172 added them here in the
 same commit that created them, so there was never a window where a group could
-exist and not be findable. Interfaces and functions are `○` in §1.2/§1.3 and
-are absent from this search for the same reason they are absent from the
-Ontology Manager - there is nothing to find. Named rather than silently
-skipped, because "search found nothing" and "search does not look there" read
-identically to whoever typed the query.
+exist and not be findable.
+
+**Interfaces are the sixth and arrived one unit after the thing itself** (§251
+declared them, §252 made them findable), which is a gap this file has been
+here before: §164 built shared properties and §167 added them to this search,
+and the note below says why that window is worth closing fast. Functions are
+still `○` in §1.3 and are absent for the reason interfaces used to be - there
+is nothing to find. Named rather than silently skipped, because "search found
+nothing" and "search does not look there" read identically to whoever typed
+the query.
 
 **Shared properties were the fifth, and were missing for a while after they
 existed** (§164 built them, §167 added them here). That gap was worth closing
@@ -77,6 +82,7 @@ async def search(
     already has one of those.
     """
     from . import actions as actions_service
+    from . import interfaces as interfaces_service
     from . import object_type_groups
     from . import ontology as ontology_service
     from . import shared_properties
@@ -208,6 +214,32 @@ async def search(
             "object_type_id": None,
             "object_type_name": "",
             "usage_count": int(row["member_count"]),
+            "matched_field": field,
+            "matched_value": str(row[field] or ""),
+        })
+
+    # **The sixth kind p.28 names, arriving the unit after the thing itself**
+    # (§251). An interface is a shape somebody looks for by name *before*
+    # declaring a second one that means the same - which is the argument §167
+    # made about shared properties, and it applies harder here: two interfaces
+    # with the same shape are two sets of implementations to keep in step.
+    #
+    # The count in `usage_count` is **implementations**, not properties, for the
+    # group's reason one row down: "6 object types" is what somebody is deciding
+    # on when the name comes back, and how many properties it declares is a
+    # question for after they open it.
+    for row in await interfaces_service.list_interfaces(conn, workspace_id):
+        field = _matched_field(row, needle)
+        if not field:
+            continue
+        results.append({
+            "kind": "interface",
+            "id": str(row["id"]),
+            "api_name": row["api_name"],
+            "display_name": row["display_name"],
+            "object_type_id": None,
+            "object_type_name": "",
+            "usage_count": int(row["implementation_count"]),
             "matched_field": field,
             "matched_value": str(row[field] or ""),
         })

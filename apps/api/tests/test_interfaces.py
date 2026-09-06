@@ -413,3 +413,39 @@ def test_two_interfaces_cannot_share_a_name(client: TestClient, fx: Fixture) -> 
     )
     assert r.status_code == 422, r.text
     assert "already exists" in r.text
+
+
+def test_an_interface_is_findable_by_name(client: TestClient, fx: Fixture) -> None:
+    """p.28 lists interfaces among the seven kinds the header search covers, and
+    §167 made the argument for closing this window fast: a shape somebody
+    cannot find by name is a shape they declare a second time.
+
+    The count that comes back is **implementations**, not properties, for the
+    reason a group reports members: "3 object types" is what somebody is
+    deciding on when the name comes back.
+    """
+    tag = uuid.uuid4().hex[:6]
+    made = make_interface(
+        client, fx, api_name=f"Schedulable{tag}", display_name=f"Schedulable {tag}"
+    )
+    kind = make_type(client, fx, [
+        {"api_name": "last_checked", "display_name": "Last checked",
+         "data_type": "date"},
+        {"api_name": "state", "display_name": "State", "data_type": "string"},
+    ])
+    assert implement(client, fx, kind["id"], [{
+        "interface_id": made["id"],
+        "property_mapping": {"last_inspection_date": "last_checked",
+                             "inspection_status": "state"},
+    }]).status_code == 200
+
+    r = client.get(
+        f"{wbase(fx)}/ontology-search?q=Schedulable{tag}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    hits = [h for h in r.json() if h["kind"] == "interface"]
+    assert [h["id"] for h in hits] == [made["id"]]
+    assert hits[0]["usage_count"] == 1
+    # It belongs to no object type, and a made-up owner would send whoever
+    # clicked it somewhere unrelated to what they searched for.
+    assert hits[0]["object_type_id"] is None

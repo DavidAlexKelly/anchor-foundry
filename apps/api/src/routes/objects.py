@@ -398,7 +398,8 @@ class OntologySearchHit(BaseModel):
     the one that put the row in the list.
     """
 
-    # object_type | property | link_type | action_type | shared_property | group
+    # object_type | property | link_type | action_type | shared_property |
+    # group | interface
     kind: str
     id: UUID
     api_name: str
@@ -406,8 +407,10 @@ class OntologySearchHit(BaseModel):
     # Where it lives. A property called "status" is not somewhere anybody can
     # navigate to; "status on Ticket" is.
     #
-    # **Null for a shared property and for a group**, neither of which belongs
-    # to an object type by definition (`object-link-types` p.178, p.261).
+    # **Null for a shared property, a group and an interface**, none of which
+    # belongs to an object type by definition (`object-link-types` p.178,
+    # p.261, p.4 - an interface is implemented *by* types rather than owned by
+    # one, which is the whole point of it).
     # Optional rather than faked: a made-up owner would send whoever clicked it
     # to a type that has nothing to do with what they searched for.
     object_type_id: UUID | None = None
