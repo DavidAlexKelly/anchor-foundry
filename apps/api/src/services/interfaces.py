@@ -499,12 +499,16 @@ async def _write_shape(
 ) -> None:
     """The properties and the parents, written whole and then checked together.
 
-    **Checked after writing, inside the caller's transaction**, which is the
-    only order that can see the answer: whether this shape resolves depends on
-    the *graph*, and the graph is not complete until these rows are in it. A
-    refusal rolls the transaction back, so nothing invalid is ever visible -
-    the same trick `set_definition` uses for a rule that names a parameter in
-    the same document.
+    **Nothing here re-resolves the graph, and a mutant is why.** This function
+    used to end by calling `effective_properties` to prove the new shape
+    resolved - a cycle, a contradiction - and a mutant removing that call
+    survived every test. It had to: both callers end with `get_interface`,
+    which resolves the graph to build its answer, and a refusal there rolls the
+    same transaction back. The check was real and it was the *second* one, so
+    it is gone rather than covered by a test that could not fail (§213).
+
+    What still holds, and where: the write is inside the caller's transaction,
+    so a shape that does not resolve is never visible to anybody.
     """
     if len(extends) > MAX_EXTENDS:
         raise InterfaceError(
@@ -540,8 +544,6 @@ async def _write_shape(
             ),
             {"iid": str(interface_id), "pid": str(parent)},
         )
-    own, graph = await _graph(conn, workspace_id)
-    effective_properties(str(interface_id), own=own, extends=graph)
 
 
 async def delete_interface(
@@ -596,9 +598,13 @@ async def set_implementations(
     is checked against the object type's *current* properties, so a per-entry
     API would let two of them disagree about which properties exist.
 
-    Every entry is checked before any is written, so a list with one bad
-    mapping changes nothing. A partial application would leave somebody
-    working out which half went in.
+    Every entry is checked before any is written - and **the transaction is
+    what makes that safe, not the ordering**. A mutant that moved the delete
+    above the checks survived, because the refusal rolls the request back
+    either way; the order is here because a function that validates and then
+    writes is one anybody can read in a sitting, which is a different kind of
+    good from a guarantee. Recorded rather than covered by a test that could
+    not fail.
     """
     from . import ontology as ontology_service
 

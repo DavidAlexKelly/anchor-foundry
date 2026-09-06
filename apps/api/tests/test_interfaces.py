@@ -223,6 +223,36 @@ def test_a_mapping_for_a_property_the_interface_never_declared_is_refused() -> N
         )
 
 
+def test_an_interface_property_must_have_a_real_base_type() -> None:
+    """The vocabulary is the ontology's, so an interface cannot promise a type
+    no object type could ever have. Found by a mutant: nothing had asked."""
+    with pytest.raises(interfaces_service.InterfaceError, match="expected one of"):
+        interfaces_service.parse_properties(
+            [{"api_name": "checked", "data_type": "quaternion"}]
+        )
+
+
+def test_an_interface_cannot_declare_one_name_twice() -> None:
+    """Two properties with one name is a shape with two answers to the same
+    question, and the second would silently win at resolution time."""
+    with pytest.raises(interfaces_service.InterfaceError, match="duplicate"):
+        interfaces_service.parse_properties([
+            {"api_name": "checked", "data_type": "date"},
+            {"api_name": "checked", "data_type": "string"},
+        ])
+
+
+def test_an_interface_property_follows_the_property_naming_rule() -> None:
+    """The same rule an object type's property has (0003), because an
+    implementation maps one onto the other and a name shape only one of them
+    could hold would be a difference with nothing behind it."""
+    for bad in ("Checked", "1st_check", ""):
+        with pytest.raises(interfaces_service.InterfaceError, match="invalid"):
+            interfaces_service.parse_properties(
+                [{"api_name": bad, "data_type": "date"}]
+            )
+
+
 # ---- through the API ----------------------------------------------------------
 def test_an_interface_round_trips(client: TestClient, fx: Fixture) -> None:
     made = make_interface(client, fx)
