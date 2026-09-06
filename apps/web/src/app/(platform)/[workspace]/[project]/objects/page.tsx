@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
+import { InterfacesPanel } from "@/components/interfaces-panel";
 import { OntologySearch } from "@/components/ontology-search";
 import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
 import {
@@ -1258,6 +1259,20 @@ export default function ObjectsPage() {
                         describes. */}
                     <GroupChips groups={t.groups} />
                     <div className="slug">{t.api_name}</div>
+                    {/* What this type claims to be (`ontology` p.61). On its
+                        own line rather than beside the group chips, because a
+                        group is where a type is *filed* and an interface is
+                        what it *is* — and reading "Inspectable" as a folder
+                        name is exactly the confusion the two would cause
+                        sharing a row. p.61's argument for interfaces is that
+                        you can see the shape Vehicle, Equipment and Facility
+                        share, and this is where you see it. */}
+                    {t.interfaces.length > 0 && (
+                      <div className="slug" data-testid={`type-interfaces-${t.api_name}`}>
+                        implements{" "}
+                        {t.interfaces.map((i) => i.display_name).join(", ")}
+                      </div>
+                    )}
                   </td>
                   <td className="count">{t.source_count}</td>
                   <td>
@@ -1347,7 +1362,19 @@ export default function ObjectsPage() {
             canEdit={canEditOntology}
           />
 
-          {/* Groups last of the three, because it is the only one that says
+          {/* Interfaces after both, because it is the largest of the three
+              claims a type can make about itself and the only one that says
+              what the type *is* rather than what one property means. p.61's
+              argument reads in that order too: shared properties and value
+              types make one field consistent, an interface makes a whole
+              shape consistent across types. */}
+          <InterfacesPanel
+            workspaceId={workspace!.id}
+            canEdit={canEditOntology}
+            types={types.data}
+          />
+
+          {/* Groups last of the four, because it is the only one that says
               nothing about what an object type *is* - p.261 makes it a way of
               finding types rather than a way of defining them. */}
           <ObjectTypeGroupsPanel

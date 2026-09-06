@@ -549,16 +549,27 @@ async def _write_shape(
 async def delete_interface(
     conn: AsyncConnection, workspace_id: UUID, interface_id: UUID
 ) -> None:
-    """**Refused while anything implements it or extends it.**
+    """Two refusals: p.256's status gate, then anything that depends on it.
 
-    p.185's shared property reverts its users to ordinary properties when it is
+    **p.256 applies here like everywhere else** - "a resource's status must be
+    `experimental` or `deprecated` before it can be deleted". An interface has
+    a status for the reason every ontology resource does (0055), and a status
+    nothing consults is a label rather than a state. Checked *first* because it
+    is about this resource rather than about others, which is the order
+    `ontology.delete_type` and `actions.delete_action_type` already use.
+
+    **Then: refused while anything implements it or extends it.** p.185's
+    shared property reverts its users to ordinary properties when it is
     deleted, and this deliberately does not: a shared property gives an object
     type *metadata* it can live without, and an interface is a claim other
     resources are written against ("target the interface directly", p.61).
     Silently un-implementing three object types is a change to three object
     types, and it should be typed by whoever wants it.
     """
-    await get_interface(conn, workspace_id, interface_id)
+    row = await get_interface(conn, workspace_id, interface_id)
+    ontology_status.check_deletable(
+        str(row["status"]), kind="interface", name=str(row["api_name"])
+    )
     users = await fetch_all(
         conn,
         """

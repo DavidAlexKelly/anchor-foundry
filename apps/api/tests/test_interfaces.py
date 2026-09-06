@@ -35,6 +35,7 @@ from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.services import interfaces as interfaces_service  # noqa: E402
+from src.services import ontology as ontology_service  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -425,6 +426,180 @@ def test_an_interface_in_use_cannot_be_deleted(client: TestClient, fx: Fixture) 
     )
     assert r.status_code == 422, r.text
     assert kind["display_name"] in r.text
+
+
+def test_an_active_interface_cannot_be_deleted(client: TestClient, fx: Fixture) -> None:
+    """p.256's status gate, which every other ontology resource here already
+    has and this one did not until a panel tried to explain the rule to
+    somebody.
+
+    An interface carries a status for the reason all of them do (0055), and a
+    status nothing consults is a label rather than a state - which is worse
+    than no status, because it reads as a promise about deletion that nothing
+    keeps.
+    """
+    interface = make_interface(client, fx)
+    r = client.put(
+        f"{wbase(fx)}/interfaces/{interface['id']}", headers=hdr(fx.editor_sub),
+        json={"display_name": interface["display_name"],
+              "properties": INSPECTABLE, "status": "active"},
+    )
+    assert r.status_code == 200, r.text
+
+    r = client.delete(
+        f"{wbase(fx)}/interfaces/{interface['id']}", headers=hdr(fx.editor_sub)
+    )
+    assert r.status_code == 422, r.text
+    assert "deprecated or experimental" in r.text
+    assert client.get(
+        f"{wbase(fx)}/interfaces/{interface['id']}", headers=hdr(fx.viewer_sub)
+    ).status_code == 200, "the refused delete removed it anyway"
+
+
+def test_deprecating_an_interface_makes_it_deletable_again(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The other half, and the half that makes the refusal a step rather than a
+    dead end: the message says what to do, and doing it works."""
+    interface = make_interface(client, fx)
+    for status in ("active", "deprecated"):
+        assert client.put(
+            f"{wbase(fx)}/interfaces/{interface['id']}", headers=hdr(fx.editor_sub),
+            json={"display_name": interface["display_name"],
+                  "properties": INSPECTABLE, "status": status,
+                  "deprecation": {"reason": "folded into Trackable"}
+                  if status == "deprecated" else None},
+        ).status_code == 200
+
+    r = client.delete(
+        f"{wbase(fx)}/interfaces/{interface['id']}", headers=hdr(fx.editor_sub)
+    )
+    assert r.status_code == 204, r.text
+
+
+def test_an_experimental_interface_in_use_is_still_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Two refusals rather than one, and passing the first does not clear the
+    second - the ordering means an implemented interface at the default status
+    still reports the thing that actually blocks it."""
+    interface = make_interface(client, fx)
+    assert interface["status"] == "experimental"
+    kind = make_type(client, fx, [
+        {"api_name": "last_checked", "display_name": "Last checked",
+         "data_type": "date"},
+        {"api_name": "state", "display_name": "State", "data_type": "string"},
+    ])
+    assert implement(client, fx, kind["id"], [{
+        "interface_id": interface["id"],
+        "property_mapping": {"last_inspection_date": "last_checked",
+                             "inspection_status": "state"},
+    }]).status_code == 200
+
+    r = client.delete(
+        f"{wbase(fx)}/interfaces/{interface['id']}", headers=hdr(fx.editor_sub)
+    )
+    assert r.status_code == 422, r.text
+    assert kind["display_name"] in r.text
+
+
+# ---- the panel's offer against the server's vocabulary (§190's pattern) ----
+def _web(*parts: str) -> str:
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return open(os.path.join(root, "web", "src", *parts), encoding="utf-8").read()
+
+
+#: Base types the *object type editor* does not offer, each because the dialog
+#: has no way to complete the declaration - the reasons are written out beside
+#: `PROPERTY_TYPES` in `object-type-editor.tsx`. Named here so a new base type
+#: with no editor is a failing test rather than a silent gap.
+EDITOR_GAPS = {"attachment", "time_series"}
+
+
+def test_every_base_type_is_offered_or_deliberately_held_back() -> None:
+    """The interface property dropdown is `PROPERTY_TYPES` minus
+    `NOT_INTERFACE_TYPES`, and both lists are in the browser while the
+    vocabulary they narrow is here.
+
+    Guarding against **the server's own list** rather than a second copy of it
+    is the point (§191): a base type added to `ontology.PROPERTY_TYPES` is
+    invisible to a test that only compares the two browser lists to each other.
+    """
+    import re
+
+    offered = set(re.findall(
+        r'"([a-z_]+)"',
+        re.search(
+            r"export const PROPERTY_TYPES: PropertyDataType\[\] = \[(.*?)\];",
+            _web("components", "object-type-editor.tsx"), re.S,
+        ).group(1),
+    ))
+    assert offered, "PROPERTY_TYPES not found - has object-type-editor.tsx moved?"
+
+    excluded = set(re.findall(
+        r'"([a-z_]+)"',
+        re.search(
+            r"export const NOT_INTERFACE_TYPES: string\[\] = \[(.*?)\];",
+            _web("lib", "interfaces.ts"), re.S,
+        ).group(1),
+    ))
+    assert excluded, (
+        "NOT_INTERFACE_TYPES not found or empty - it is a subtraction with a "
+        "written reason, and an empty one would make this test vacuous"
+    )
+
+    server = set(ontology_service.PROPERTY_TYPES)
+    assert offered <= server, (
+        "the editor offers base types the server does not accept: "
+        f"{sorted(offered - server)}"
+    )
+    assert excluded <= server, (
+        f"NOT_INTERFACE_TYPES names something that is not a base type: "
+        f"{sorted(excluded - server)}"
+    )
+    assert server - offered == EDITOR_GAPS, (
+        "a base type is neither offered by the object type editor nor listed "
+        f"as a gap with a reason: {sorted((server - offered) ^ EDITOR_GAPS)}"
+    )
+
+
+def test_the_interface_dropdown_is_narrower_than_the_object_type_one() -> None:
+    """The vacuity guard on the test above.
+
+    If `NOT_INTERFACE_TYPES` ever became empty the subtraction would still
+    pass every assertion there while offering `struct` again - an interface
+    property whose promise `check_implementation` cannot check, because it
+    compares base types and a struct's promise is its fields.
+    """
+    import re
+
+    excluded = set(re.findall(
+        r'"([a-z_]+)"',
+        re.search(
+            r"export const NOT_INTERFACE_TYPES: string\[\] = \[(.*?)\];",
+            _web("lib", "interfaces.ts"), re.S,
+        ).group(1),
+    ))
+    assert "struct" in excluded
+
+
+def test_a_struct_interface_property_would_promise_nothing(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Why `struct` is off that list, stated as the failure it would cause.
+
+    The server **accepts** the declaration - `interface_properties.data_type`
+    is the full `property_data_type` enum - and then `check_implementation`
+    compares base types, so any struct at all satisfies it. This test asserts
+    that hole exists rather than pretending it does not, and the dropdown is
+    where it is closed.
+    """
+    interfaces_service.check_implementation(
+        interface_name="Addressable",
+        required=[{"api_name": "address", "data_type": "struct", "required": True}],
+        property_types={"postal": "struct"},
+        mapping={"address": "postal"},
+    )  # no refusal, whatever fields either side declares
 
 
 def test_a_viewer_cannot_declare_an_interface(client: TestClient, fx: Fixture) -> None:

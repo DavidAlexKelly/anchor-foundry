@@ -4388,6 +4388,81 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 253. The screens for a shape, and a status that was only a label (this session)
+
+§251 built interfaces and §252 put them where the platform already answers
+"what shapes exist here". Neither could be non-empty, because nothing in the
+browser could declare an interface or claim one — including §252's own
+*implements* line on the object type listing, which is the exact shape of a
+column that is always blank. This is the surface, and it is the one the row
+had been marked ○ for since §251.
+
+**A section beside shared properties and value types**, which is the decision
+§165 and §168 already made for the same reason: one ontology per workspace and
+nothing to import across, so Foundry's separate manager application has no
+second thing to be separate from.
+
+**Two dialogs, and the split is p.60's own.** What a shape *is* belongs to
+whoever wrote `Inspectable`; what a type *claims* belongs to whoever owns
+Vehicle. One Save over both would put "add a property to the interface" — a
+change to every implementation — behind the same button as "point this type's
+column at it", a change to one type.
+
+**Three of the server's four refusals are made unreachable rather than
+restated.** `check_implementation` refuses a property the interface never
+declared, a mapping to a property the type lacks, a base type that does not
+match, and a required property answered by nothing. The dialog has a row per
+declared property and no way to add one; its select offers the object type's
+own properties; and it offers only those whose base type matches. So exactly
+one rule is stated on both sides — and it is the one somebody needs answered
+before they click rather than after. The other three are absent for §213's
+reason: a control that cannot produce a bad request does not need to check for
+one.
+
+**The mapping is the thing that needed a browser test.** An API test can post
+`{"last_inspection_date": "checked_on"}`; only a browser test shows that the
+dialog offers `checked_on` and not `name`, that it suggests nothing when the
+names disagree, and that it will not save until the required promise is
+answered. p.66's mapping exists because p.60's argument requires it — types
+satisfy one interface *while differing in everything else*, and what they call
+things is part of everything else.
+
+**A suggestion is withheld where names agree and types do not.** That is the
+case where matching names are a coincidence, and filling it in would turn a
+question into a refusal.
+
+**`struct` is held out of the interface property dropdown**, and the test that
+says why asserts the hole rather than pretending it is closed:
+`check_implementation` compares base types, and a struct's promise is its
+*fields*, so an interface declaring one would be satisfied by any struct at
+all. §214's rule — a control that cannot work is worse than an absent one —
+applied to a base type rather than a button.
+
+**§251 left a status that was only a label, and building the screen found
+it.** p.256 says a resource must be `experimental` or `deprecated` before it
+can be deleted, and every other ontology resource here enforces it.
+`delete_interface` did not, so the panel's Delete tooltip was about to explain
+a rule nobody kept. The refusal is in the service now, checked before the
+usage refusal because it is about this resource rather than about others, and
+the browser disables Delete only for that one — the usage refusal is half
+visible from a listing (the summary carries the implementation count and not
+the extension count), so it arrives as the server's sentence with the names in
+it instead.
+
+**And the suite tidies up after a resource it never created.** §209 and §249
+taught the harness to delete its own object types and canvas apps, and both
+hang off `Api.call` — but a panel declares an interface from a dialog, which
+that funnel never sees. Swept by *time* instead: anything in the workspace
+newer than the run is the run's. After the object types, because an
+implemented interface refuses deletion until nothing claims it.
+
+**A drift guard on the browser's dropdown, against the server's vocabulary
+rather than against a second copy of it** (§191): every base type in
+`ontology.PROPERTY_TYPES` must be offered by the object type editor, listed as
+an editor gap with a reason, or named in `NOT_INTERFACE_TYPES` — with a
+vacuity guard, because an empty exclusion list would satisfy every assertion
+while offering `struct` again.
+
 ### 252. Two places that already answer "what shapes exist here" (this session)
 
 §251 built the resource; this is the pair of surfaces that would otherwise
