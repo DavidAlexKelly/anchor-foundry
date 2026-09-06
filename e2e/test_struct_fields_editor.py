@@ -138,7 +138,11 @@ def test_a_struct_is_declared_entirely_through_the_dialog(page, api, module) -> 
     # The dialog already identifies Apply and its problem line this way.
     page.get_by_test_id("struct-add-field").click()
     page.get_by_role("textbox", name="Field 2 name").fill("phone number")
-    page.get_by_role("textbox", name="Field 2 label").fill("Phone")
+    # **Padded on purpose.** The label is free text and is trimmed on the way
+    # out; the *name* beside it is not, because `toFieldApiName` already
+    # guarantees it. A mutation run found the name's trim unreachable and this
+    # is the half that is reachable, so it is the half with an assertion.
+    page.get_by_role("textbox", name="Field 2 label").fill("  Phone  ")
     page.get_by_test_id("struct-add-field").click()
     page.get_by_role("textbox", name="Field 3 name").fill("floors")
     page.get_by_role("combobox", name="Field 3 type").select_option("integer")

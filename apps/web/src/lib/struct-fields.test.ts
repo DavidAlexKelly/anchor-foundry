@@ -55,11 +55,13 @@ describe("problem", () => {
     expect(answer).toBe("Field 1 needs a name.");
   });
 
-  it("ignores surrounding whitespace when deciding", () => {
-    // The input is typed into, and a trailing space is not a different name -
-    // the server trims nothing, so a name that only *looks* valid here would
-    // be refused there.
-    expect(problem([field("  street  ")])).toBeNull();
+  it("refuses a padded name rather than trimming it", () => {
+    // **The trim used to be here and it was dead code.** `toFieldApiName` is
+    // what fills the name box and it cannot produce whitespace, so nothing
+    // could reach a trim — a mutant removing it survived. Refusing is also the
+    // more honest answer: the server trims nothing, so a name that only
+    // *looked* valid here would have been refused there.
+    expect(problem([field("  street  ")])).toMatch(/not a valid field name/);
   });
 });
 

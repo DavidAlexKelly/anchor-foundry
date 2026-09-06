@@ -4290,6 +4290,71 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 246. The struct field editor, and a button that took the ✕'s place (this session)
+
+The second third of `ontology.md` build order item 7. §245 built the `struct`
+type and deliberately kept it *off* the property-type dropdown, on §214's rule:
+the dropdown is not the whole declaration, so choosing it there would have
+produced a property the server refuses. That comment said the type would
+"arrive on this list the day its editor does", and this is that day - which is
+also the first time in this repo that a §214 deferral has been *closed* rather
+than restated.
+
+**p.152–158's flow, less the mapping half.** Base type → Struct, then a Struct
+fields section with add, edit and remove: a name, a label, a type from p.149's
+narrower list, a description. p.153's *Backing column*, p.155's per-field
+column mapping and p.160's *Automap all* are absent on purpose and they are one
+feature in three places - they say where a field's value comes from, and this
+platform maps a struct the way p.149's own first sentence describes, from one
+"struct type dataset column", which `column_mappings` already expresses.
+
+**p.158's warning, translated rather than copied.** Foundry's is about a RID
+being regenerated when a field's API name changes. There is no RID here, and
+the consequence lands somewhere else: a stored value is a mapping keyed by
+field name, so a rename leaves every existing object holding the old key until
+the next sync. Same warning, different mechanism - and the mechanism is what
+makes it actionable, because the fix is a sync and the dialog says so.
+
+**A struct now renders as its fields rather than as JSON**, which needs the
+declaration for the labels *and* for the order. The order is the half that
+cannot be recovered any other way: `_coerce_struct` hands the store a value in
+the declared order and then `jsonb` reorders its keys by length and bytes, so
+the value itself no longer remembers what p.154's author chose. This is the
+**second per-property declaration threaded by hand** through the same nine call
+sites after `value_format`; the note in `property-value.tsx` says a third
+should collapse them into one prop rather than becoming a third, which is the
+threshold `property_values.py` sets for its own mirrors.
+
+**The finding: a control that removes itself lets the next control take its
+place.** Emptying a three-field struct produced *three removals and one add*
+from three clicks. Removing the last row collapsed the table by one row, which
+slid *Add field* up into the position the ✕ had just occupied, and a click at
+that position landed on it. Four wrong guesses went by first - a stale closure,
+a one-shot `count()`, a remount, a stale bundle - and what settled it was
+counting the handlers: a `data-probe-adds` / `data-probe-removes` pair reported
+`adds: 1, removes: 3`, and `dispatch_event` on the same buttons emptied the
+list cleanly, which located the cause in the pointer rather than in the state.
+*Add field* now sits **above** the list, where nothing a shrinking table does
+can move it, and the table keeps an empty-state row rather than collapsing.
+
+**§240's rule again, and again a guess too late.** The probe that answered it
+took one run; the four hypotheses before it took five. The tell was there from
+the first trace - `['floors'] → ['']`, a *blank* row where a named one had been
+- and a blank row has exactly two producers in that file, which is a question a
+counter answers and an argument does not.
+
+Two corrections to tests that were passing. `test_struct_fields_editor.py`'s
+three cases were **order-dependent**: two of them worked only after the first
+had converted the property, and running either alone found a plain string with
+no Fields button at all. And §245's rendering test resolved
+`get_by_role("heading", name="A1")` against *two* headings once the breadcrumb
+caught up - `get_by_role`'s name match is a substring - so it passed or failed
+on which of them rendered first.
+
+23 new unit tests, 3 new browser tests, and a drift guard scanning the field
+types the dialog offers against the server's list (§190's shape, and it was
+demonstrated by deleting one and watching it fail). 1515 unit, `tsc` clean.
+
 ### 245. The struct property type, and a list that had already lost a setting (this session)
 
 `ontology.md`'s build order item 7 reads "**Struct property type**, then
@@ -7570,6 +7635,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 ---
 
 ## Known rough edges worth knowing about
+
+- **A control that removes itself lets the next control take its place, and a repeated click at one position walks down the page.** §246's struct dialog put *Add field* under the list; emptying a three-field struct produced **three removals and one add from three clicks**, because removing the last row collapsed the table by exactly one row and slid the button into the position the ✕ had just occupied. The fix is layout, not state: anything above a shrinking list cannot move, so the button went above it and the table keeps an empty-state row rather than collapsing. **The tell is a destructive control with something clickable below it** — a Remove button above an Add, a delete above a Save. It also has a testing corollary: a browser test that removes N rows by pointing at one place is asserting about the layout, and `dispatch_event("click")` is the right tool when the claim under test is the rule rather than the pointer.
+
+- **`get_by_role(name=…)` matches a substring, so a heading can be two headings.** §245's rendering test waited for `get_by_role("heading", name="A1")` and passed for a week; §246 made it fail, because the breadcrumb's own heading reads "Seed <tag> · A1" and *contains* the object's title. Which one resolved first decided whether the test passed — a strict-mode violation hiding behind a race. Two habits, both cheap: scope a role query to the region it is about (`get_by_test_id("standard-object-view").get_by_role(…)`), and pass `exact=True` whenever the name is short enough to be a substring of something else. The same applies to buttons: `name="Save"` matches "Save anyway".
 
 - **A comment that names a risk is not a guard, and this one had been standing next to its own failure.** `object-type-editor` rebuilds a type's whole property list and PATCHes it, mapping each property into a `PropertyInput` by hand. Beside that map, since §157: *"every new property setting has to be added here, and nothing fails if it is not."* §245 went to add `struct_fields` and found `description` **already missing** — so opening the edit dialog and saving, for any reason at all, erased every property description on the type. The comment was written by somebody who saw the failure mode clearly enough to describe it in a sentence, and describing it is all it did. The fix is `{ [K in keyof Required<PropertyInput>]: true }`: adding an optional field to the input type now fails to compile until it is carried. **The tell is a comment containing the words "has to be" or "must remember to"** — those are the sentences where a type or a test belongs instead, and this repo has now written the same guard-as-a-type three times (§200's `PROP_DIRECTION`, §191's wish for `REFERENCE_PROPS`, this).
 

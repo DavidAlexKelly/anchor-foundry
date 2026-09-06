@@ -209,13 +209,18 @@ export function StructFieldsEditor({
           disabled={missing !== null}
           data-testid="struct-save"
           onClick={() => {
-            // Trimmed on the way out rather than on the way in, so a name can
-            // still be typed with a stray space and fixed without the box
-            // fighting the cursor. `problem` has already read it the same way.
+            // **The label and the description are trimmed; the name is not,
+            // and that asymmetry is the point.** `toFieldApiName` runs on every
+            // keystroke into the name box, so a field name cannot contain
+            // whitespace by the time it gets here — a `.trim()` on it was a
+            // second guard behind one that already holds, and a mutant
+            // removing it survived because nothing could tell the difference
+            // (§213: ask who else already refuses this, then delete rather
+            // than test). The other two boxes take free text and are trimmed
+            // where a trailing space is a real thing to type.
             onSave(
               fields.map((f) => ({
                 ...f,
-                api_name: f.api_name.trim(),
                 display_name: f.display_name.trim(),
                 description: f.description.trim(),
               })),

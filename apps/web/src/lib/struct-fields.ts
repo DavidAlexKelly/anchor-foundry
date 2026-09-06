@@ -68,7 +68,12 @@ export function problem(fields: StructField[]): string | null {
   if (fields.length === 0) return "A struct needs at least one field.";
   const seen = new Set<string>();
   for (const [index, field] of fields.entries()) {
-    const name = field.api_name.trim();
+    // **Not trimmed**, for the same reason the dialog no longer trims it on
+    // the way out: `toFieldApiName` is what fills this box, and it cannot
+    // produce whitespace. Trimming here would be a normalisation nothing can
+    // exercise, and it would quietly *accept* a name the server refuses if a
+    // future caller ever did hand one over.
+    const name = field.api_name;
     if (!name) return `Field ${index + 1} needs a name.`;
     if (!FIELD_NAME.test(name)) {
       return `${name} is not a valid field name: lower case, digits and underscores, starting with a letter.`;
@@ -105,7 +110,7 @@ export function renamedFields(
   const out: string[] = [];
   for (const [index, field] of after.entries()) {
     const was = previous[index]?.api_name;
-    const now = field.api_name.trim();
+    const now = field.api_name;
     if (was && now && was !== now) out.push(was);
   }
   return out;
