@@ -4290,6 +4290,66 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 250. p.29's other two home-page filters, and a guard written for one (this session)
+
+`ontology.md`'s build order said "filtering by development status is now
+possible in principle since §170 built statuses, and is not wired to the
+listing yet". Opening the page it cites - §216's rule - says something the
+line did not: `ontology-manager` **p.29** lists **three** filters, not one.
+
+> "These pages allow for filtering object types and link types based on their
+> visibility, development status, and indexing issues." (p.29)
+
+Two of the three are built here, beside p.262's group filter that §172 already
+had. The third is the indexing-issue column, which wants indexing state the
+sync path does not record - so there is nothing to filter on rather than
+nothing built, and the row says which.
+
+**One value per filter, and-ed**, which is the group control's shape rather
+than a new one. p.29 does not say which it is, so the precedent decides: a
+second control with different multiplicity beside the first would be a
+difference nobody could see the reason for. §199 chose the other way for the
+Workshop variables panel and said why - "an object set OR a function is a
+question somebody asks" - and that argument is about a list of *kinds* a
+variable can be, not about a status, which each type has exactly one of.
+
+**Visibility is not the status filter under another name**, and the case that
+proves it is the interesting part of the unit. p.255 makes `promoted` set a
+type's visibility to `prominent`, and `visibility_for` **raises without ever
+lowering** - a type somebody deliberately made prominent should not quietly
+stop being so when its status steps down. So a type promoted and then demoted
+is prominent and *not* promoted: the one type these two controls disagree
+about, and if they never disagreed one of them would be worth deleting. It is
+also why `hidden` matches nothing anywhere - a type's visibility is only ever
+a consequence of promotion, never a setting - which turns out to be the one
+filter value safe to assert an empty state with in a workspace this suite
+shares with hundreds of accumulated fixtures.
+
+**A guard written for one filter, which had to grow.** The page's "an empty
+filter result is not an empty ontology" branch tested `groupFilter` alone.
+That was right when there was one filter and would have quietly regressed the
+moment there were three: filtering to a status nothing matches would have
+fallen through to "The ontology starts here" and offered a Define button as
+the way out of a filter. It is now one `filtered` value, read in one place,
+and the mutant that narrows it back to the group alone is caught.
+
+**And `page.locator("tbody tr")` is every table on that page.** The sources
+table carries the same `seed_<tag>` text as the types table, so an assertion
+that a filtered-out type is *gone* counted rows in a table the filter does not
+touch and could never reach zero. Scoped by the column header, which is the
+one thing only the types table has.
+
+An unknown value is **refused rather than ignored**: a typo in a URL that
+quietly returns everything is a filter nobody can see the effect of, and the
+reader believes they are looking at a narrowed list.
+
+**12 mutants, 12 caught, 0 survivors.** Everything here is a filter, and a
+filter has two ways of being wrong a happy-path test cannot tell apart - it
+can stop narrowing, or narrow by the wrong thing - so there are mutants for
+both, including the two that swap the columns the filters read.
+
+4 new API tests, 3 new browser tests; 1520 unit, `tsc` clean.
+
 ### 249. The suite tidies up its modules too (this session)
 
 §209 taught the browser suite to delete the object types it creates, after
