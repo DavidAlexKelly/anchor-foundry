@@ -4351,9 +4351,20 @@ no Fields button at all. And §245's rendering test resolved
 caught up - `get_by_role`'s name match is a substring - so it passed or failed
 on which of them rendered first.
 
+**21 mutants attacked, 20 caught, 1 withdrawn, 0 survivors.** The withdrawn
+one is §213's shape and it is the reason a line of code is gone: removing
+`api_name.trim()` on Apply changed nothing anybody could observe, because
+`toFieldApiName` runs on every keystroke into that box and cannot produce
+whitespace. Ask who else already refuses this, then delete rather than test -
+so the trim went, from the dialog and from `problem`, which had been reading
+the name the same way. Refusing a padded name is also the more honest answer,
+since the server trims nothing. The label beside it *is* free text, so the
+mutant moved to the half that is reachable and a browser test now types a
+padded one; the clean re-run caught all 20.
+
 23 new unit tests, 3 new browser tests, and a drift guard scanning the field
-types the dialog offers against the server's list (§190's shape, and it was
-demonstrated by deleting one and watching it fail). 1515 unit, `tsc` clean.
+types the dialog offers against the server's list (§190's shape, demonstrated
+by deleting one and watching it fail). 1515 unit, `tsc` clean.
 
 ### 245. The struct property type, and a list that had already lost a setting (this session)
 
