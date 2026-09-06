@@ -72,6 +72,20 @@ def group_row(page, group):
     return row
 
 
+def types_table(page):
+    """The object types table, and not the three others on this page.
+
+    **`page.locator("tbody tr")` is every table on the page**, and the sources
+    table below carries the same `seed_<tag>` text — so an assertion that a
+    filtered-out type is *gone* counts rows in a table the filter does not
+    touch and never reaches zero. Scoped by the column header, which is the
+    one thing only this table has.
+    """
+    return page.locator("table").filter(
+        has=page.get_by_role("columnheader", name="Object type")
+    ).first
+
+
 def type_row(page, module):
     row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
     expect(row).to_be_visible(timeout=30000)
@@ -324,3 +338,107 @@ def test_deleting_a_group_keeps_the_object_types(page, module, group, api) -> No
     # The object type is still there, and no longer wearing the chip.
     row = type_row(page, module)
     expect(row).not_to_contain_text(group["display_name"])
+
+
+# ---- p.29's other two home-page filters -------------------------------------
+def test_the_status_filter_narrows_the_table(page, api, module) -> None:
+    """`ontology-manager` p.29: "These pages allow for filtering object types
+    and link types based on their **visibility, development status**, and
+    indexing issues."
+
+    Two-sided, like the group filter above: a control that returned everything
+    would pass a test that only checked the match was present. The fixture's
+    own type is `experimental` (p.256's default) and the other is `active`, so
+    the two differ in the one thing being filtered on.
+    """
+    tag = uuid.uuid4().hex[:6]
+    other = api.call(
+        "POST", f"/workspaces/{module.workspace_id}/object-types",
+        {"api_name": f"active_{tag}", "display_name": f"Active {tag}",
+         "properties": [{"api_name": "id", "display_name": "Id",
+                         "data_type": "string"}],
+         "title_property": "id"},
+    )
+    api.call(
+        "POST", f"/workspaces/{module.workspace_id}/object-types/bulk-status",
+        {"object_type_ids": [other["id"]], "status": "active"},
+    )
+
+    open_objects(page, module)
+    expect(type_row(page, module)).to_be_visible()
+
+    page.get_by_test_id("status-filter").select_option("active")
+    rows = types_table(page).locator("tbody tr")
+    expect(rows.filter(has_text=other["api_name"]).first).to_be_visible(timeout=15000)
+    expect(rows.filter(has_text=f"seed_{module.tag}")).to_have_count(0)
+
+
+def test_an_empty_result_from_the_new_filters_does_not_claim_an_empty_ontology(
+    page, module
+) -> None:
+    """**The guard that was written for one filter and had to grow.**
+
+    The "Nothing matches these filters" branch used to test the *group* filter
+    alone, which was right when there was one and would have quietly regressed
+    the moment there were three — filtering to a status nothing matches would
+    have fallen through to "The ontology starts here" and offered a Define
+    button as the way out of a filter.
+
+    **`visibility=hidden` is the value to ask for, and it is the only one that
+    is safe.** This suite shares a long-lived workspace with hundreds of
+    accumulated types, so "a status nothing has" is a premise about other
+    people's fixtures rather than about this one. `hidden` is different: a
+    type's visibility is never set directly — p.255 makes it a consequence of
+    promotion, and `visibility_for` only ever raises it to `prominent` — so
+    nothing in any workspace can be a hidden object type. The empty state is
+    what this test is about; the filter is how it gets there.
+    """
+    open_objects(page, module)
+    expect(type_row(page, module)).to_be_visible()
+    page.get_by_test_id("visibility-filter").select_option("hidden")
+
+    empty = page.get_by_test_id("empty-group-filter")
+    expect(empty).to_be_visible(timeout=15000)
+    expect(page.get_by_role("heading", name="The ontology starts here")).to_have_count(0)
+
+    # And clearing puts *all three* back, not just the one somebody last used.
+    page.get_by_test_id("clear-group-filter").click()
+    expect(type_row(page, module)).to_be_visible(timeout=15000)
+    expect(page.get_by_test_id("visibility-filter")).to_have_value("")
+
+
+def test_visibility_is_not_the_status_filter_wearing_another_name(
+    page, api, module
+) -> None:
+    """The reason p.29 lists two controls rather than one.
+
+    p.255: "setting an object type's status to `promoted` will automatically
+    set its visibility to `prominent`" — and `visibility_for` raises without
+    ever lowering, because a type somebody deliberately made prominent should
+    not quietly stop being so when its status steps down.
+
+    So a type promoted and then demoted is **prominent and not promoted**. It
+    is the one case where the two filters disagree, and if they never disagreed
+    one of them would be worth deleting.
+    """
+    tag = uuid.uuid4().hex[:6]
+    demoted = api.call(
+        "POST", f"/workspaces/{module.workspace_id}/object-types",
+        {"api_name": f"demoted_{tag}", "display_name": f"Demoted {tag}",
+         "properties": [{"api_name": "id", "display_name": "Id",
+                         "data_type": "string"}],
+         "title_property": "id"},
+    )
+    base = f"/workspaces/{module.workspace_id}/object-types/bulk-status"
+    api.call("POST", base, {"object_type_ids": [demoted["id"]], "status": "promoted"})
+    api.call("POST", base, {"object_type_ids": [demoted["id"]], "status": "active"})
+
+    open_objects(page, module)
+    rows = types_table(page).locator("tbody tr")
+    page.get_by_test_id("visibility-filter").select_option("prominent")
+    expect(rows.filter(has_text=demoted["api_name"]).first).to_be_visible(timeout=15000)
+
+    # The status filter beside it does not find the same type.
+    page.get_by_test_id("visibility-filter").select_option("")
+    page.get_by_test_id("status-filter").select_option("promoted")
+    expect(rows.filter(has_text=demoted["api_name"])).to_have_count(0, timeout=15000)

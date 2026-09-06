@@ -885,11 +885,32 @@ export const objects = {
    * group". `groupId` is the filtering half — server-side, so narrowing to a
    * group of four does not make the client pay for every type in the
    * ontology. */
-  listTypes: (wid: string, groupId?: string | null) =>
-    request<import("./types").ObjectTypeSummary[]>(
-      `/workspaces/${wid}/object-types` +
-        (groupId ? `?group_id=${encodeURIComponent(groupId)}` : ""),
-    ),
+  /** The object types page's table, and every type picker in the product.
+   *
+   * Three filters, all optional and all and-ed: p.262's group and
+   * `ontology-manager` p.29's "visibility, development status, and indexing
+   * issues" — less the third, which is state the sync path does not record.
+   *
+   * Built as a `URLSearchParams` rather than by concatenating, because with
+   * three optional parameters the string-building version has a `?`-versus-`&`
+   * bug in it waiting for whichever one somebody adds next. */
+  listTypes: (
+    wid: string,
+    groupId?: string | null,
+    filters?: {
+      status?: import("./types").OntologyStatus | null;
+      visibility?: import("./types").PropertyVisibility | null;
+    },
+  ) => {
+    const query = new URLSearchParams();
+    if (groupId) query.set("group_id", groupId);
+    if (filters?.status) query.set("status", filters.status);
+    if (filters?.visibility) query.set("visibility", filters.visibility);
+    const search = query.toString();
+    return request<import("./types").ObjectTypeSummary[]>(
+      `/workspaces/${wid}/object-types${search ? `?${search}` : ""}`,
+    );
+  },
   /** p.258's Edit status button, over the types somebody ticked. All or
    * nothing: one refusal fails the request rather than leaving half of them
    * changed. */

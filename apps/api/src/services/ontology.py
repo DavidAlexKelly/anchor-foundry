@@ -103,16 +103,50 @@ def to_api_name(display: str, *, type_case: bool) -> str:
 
 # ---- object types -----------------------------------------------------------
 async def list_types(
-    conn: AsyncConnection, workspace_id: UUID, *, group_id: UUID | None = None
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    group_id: UUID | None = None,
+    status: str | None = None,
+    visibility: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Every object type in the workspace, optionally only those in one group.
+    """Every object type in the workspace, narrowed by any of three filters.
 
     `group_id` is p.262's "The table of object types in Ontology Manager
-    supports displaying and filtering by group". Filtering here rather than in
-    the caller because an ontology is the thing being narrowed - a client that
-    fetched everything and dropped rows would still pay for every type's
-    hidden-property scan to show a group of four.
+    supports displaying and filtering by group". `status` and `visibility` are
+    `ontology-manager` **p.29**: "These pages allow for filtering object types
+    and link types based on their visibility, development status, and indexing
+    issues." The third of those three is not here and is not forgotten - an
+    indexing issue is state the sync path does not record, so there is nothing
+    to filter on; the row in `ontology.md` says so.
+
+    **Filtering here rather than in the caller** because an ontology is the
+    thing being narrowed - a client that fetched everything and dropped rows
+    would still pay for every type's hidden-property scan to show a group of
+    four. At 760 types in this build's development workspace that response is
+    352KB and half a second, and every type *picker* in the product asks for it.
+
+    **One value per filter, and-ed**, which is the group filter's shape rather
+    than a new one. p.29 does not say which it is, so the precedent decides:
+    a second control with different multiplicity beside the first would be a
+    difference nobody could see the reason for. §199 chose the other way for
+    the Workshop variables panel and said why - "an object set OR a function is
+    a question somebody asks" - and that argument is about a list of *kinds* a
+    variable can be, not about a status, which each type has exactly one of.
     """
+    # **Refused rather than ignored**, which is the difference between a typo
+    # in a URL and a listing that quietly shows everything: a filter nobody can
+    # see the effect of is worse than no filter.
+    if status is not None and status not in ontology_status.STATUSES:
+        raise ValueError(
+            f"unknown status {status!r}; expected one of "
+            + ", ".join(ontology_status.STATUSES)
+        )
+    if visibility is not None and visibility not in PROPERTY_VISIBILITIES:
+        raise ValueError(
+            f"unknown visibility {visibility!r}; expected one of "
+            + ", ".join(PROPERTY_VISIBILITIES)
+        )
     rows = await fetch_all(
         conn,
         """
@@ -140,9 +174,20 @@ async def list_types(
                    SELECT 1 FROM object_type_group_members m
                     WHERE m.object_type_id = ot.id
                       AND m.group_id = CAST(:gid AS uuid)))
+           -- Compared as text rather than cast to the enums: a value outside
+           -- them is already refused above, so a cast here would only turn a
+           -- refusal this function has made into a 500 from Postgres if it
+           -- ever stopped making it.
+           AND (CAST(:status AS text) IS NULL OR ot.status::text = :status)
+           AND (CAST(:vis AS text) IS NULL OR ot.visibility::text = :vis)
          ORDER BY ot.display_name
         """,
-        {"wid": str(workspace_id), "gid": str(group_id) if group_id else None},
+        {
+            "wid": str(workspace_id),
+            "gid": str(group_id) if group_id else None,
+            "status": status,
+            "vis": visibility,
+        },
     )
     return [dict(r) for r in rows]
 

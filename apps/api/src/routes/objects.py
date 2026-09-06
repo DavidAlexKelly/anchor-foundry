@@ -435,9 +435,18 @@ async def search_ontology(
 @router.get("/object-types", response_model=list[ObjectTypeSummary])
 async def list_object_types(
     group_id: UUID | None = Query(default=None),
+    status: str | None = Query(default=None),
+    visibility: str | None = Query(default=None),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> list[ObjectTypeSummary]:
-    """p.262's table, which "supports displaying and filtering by group".
+    """p.262's table, which "supports displaying and filtering by group", and
+    `ontology-manager` p.29's other two: "filtering object types and link types
+    based on their visibility, development status, and indexing issues".
+
+    **Free-form here and checked in the service**, unlike the patterns on the
+    property models above, because these two are the service's own vocabulary -
+    `ontology_status.STATUSES` and `PROPERTY_VISIBILITIES` - and a pattern
+    built here would be a second copy of a list that already refuses.
 
     The memberships come back in **one** query for the whole list rather than
     one per row - §169's N+1 is recent enough to still be the first thing to
@@ -445,7 +454,8 @@ async def list_object_types(
     """
     async with user_connection(access.auth.user_id) as conn:
         rows = await ontology_service.list_types(
-            conn, access.workspace_id, group_id=group_id
+            conn, access.workspace_id, group_id=group_id,
+            status=status, visibility=visibility,
         )
         by_type = await groups_service.groups_by_type(conn, access.workspace_id)
     return [

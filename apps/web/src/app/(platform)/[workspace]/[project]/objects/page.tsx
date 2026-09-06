@@ -26,6 +26,7 @@ import { ValueTypesPanel } from "@/components/value-types-panel";
 import { Dialog, Field } from "@/components/dialog";
 import {
   EditObjectTypeDialog,
+  PROPERTY_VISIBILITIES,
   PropertyRows,
   TitlePropertyField,
 } from "@/components/object-type-editor";
@@ -39,6 +40,7 @@ import {
   type ObjectTypeSource,
   type ObjectTypeSummary,
   type OntologyStatus,
+  type PropertyVisibility,
   type ObjectTypeSuggestion,
 } from "@/lib/types";
 
@@ -916,6 +918,27 @@ export default function ObjectsPage() {
   const [editingShared, setEditingShared] = useState<string | null>(null);
   const [openingGroup, setOpeningGroup] = useState<string | null>(null);
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
+  // `ontology-manager` p.29's other two home-page filters. Separate pieces of
+  // state rather than one object, because each is one control and combining
+  // them would make "which filter is set" a thing to destructure before it can
+  // be read.
+  const [statusFilter, setStatusFilter] = useState<OntologyStatus | null>(null);
+  const [visibilityFilter, setVisibilityFilter] =
+    useState<PropertyVisibility | null>(null);
+  /** Whether the table is showing a narrowed ontology rather than the whole one.
+   *
+   * **Read by the empty state, and that is why it is a value rather than three
+   * comparisons.** The "Nothing in this group" branch used to test
+   * `groupFilter` alone, which was right when there was one filter and would
+   * have quietly regressed the moment there were three: filtering to a status
+   * nothing matches would have fallen through to "The ontology starts here"
+   * and offered a Define button as the way out of a filter. */
+  const filtered = Boolean(groupFilter || statusFilter || visibilityFilter);
+  const clearFilters = () => {
+    setGroupFilter(null);
+    setStatusFilter(null);
+    setVisibilityFilter(null);
+  };
   // p.258's checkboxes. A Set rather than a per-row flag, because the thing
   // the Edit status button needs is the selection, not the rows.
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
@@ -936,8 +959,12 @@ export default function ObjectsPage() {
   // filtered to could never move a type out of it. React Query matches keys by
   // prefix, so invalidating the shorter key still refreshes this one.
   const types = useQuery({
-    queryKey: ["object-types", workspace?.id, groupFilter],
-    queryFn: () => objApi.listTypes(workspace!.id, groupFilter),
+    queryKey: ["object-types", workspace?.id, groupFilter, statusFilter, visibilityFilter],
+    queryFn: () =>
+      objApi.listTypes(workspace!.id, groupFilter, {
+        status: statusFilter,
+        visibility: visibilityFilter,
+      }),
     enabled: !!workspace,
   });
   const linkTypes = useQuery({
@@ -1053,18 +1080,18 @@ export default function ObjectsPage() {
           to "The ontology starts here" because a group happens to hold nothing
           would tell somebody with two hundred object types that they have
           none - and offer them a Define button as the way out of a filter. */}
-      {types.data && types.data.length === 0 && groupFilter && (
+      {types.data && types.data.length === 0 && filtered && (
         <div className="empty" data-testid="empty-group-filter">
-          <h2>Nothing in this group</h2>
+          <h2>Nothing matches these filters</h2>
           <p>
-            The group exists and this workspace has object types — none of them
-            is filed under it yet.
+            This workspace has object types — none of them is filed, statused
+            and visible the way these filters ask for.
           </p>
           <div className="row-actions" style={{ justifyContent: "center" }}>
             <button
               className="btn"
               data-testid="clear-group-filter"
-              onClick={() => setGroupFilter(null)}
+              onClick={clearFilters}
             >
               Show all object types
             </button>
@@ -1072,7 +1099,7 @@ export default function ObjectsPage() {
         </div>
       )}
 
-      {types.data && types.data.length === 0 && !groupFilter && (
+      {types.data && types.data.length === 0 && !filtered && (
         <div className="empty">
           <h2>The ontology starts here</h2>
           <p>Object types give your data business meaning: a Customer, an Order, a Shipment - typed properties, typed relationships, shared across the workspace.</p>
@@ -1150,6 +1177,43 @@ export default function ObjectsPage() {
             value={groupFilter}
             onChange={setGroupFilter}
           />
+          {/* p.29's development status. Every value is offered, including the
+              ones this workspace happens to have none of: a filter that hid
+              the statuses with no matches would answer "how many are
+              deprecated" with silence rather than with none. */}
+          <select
+            data-testid="status-filter"
+            aria-label="Filter object types by development status"
+            value={statusFilter ?? ""}
+            onChange={(e) =>
+              setStatusFilter((e.target.value || null) as OntologyStatus | null)
+            }
+          >
+            <option value="">Any status</option>
+            {(Object.keys(STATUS_LABELS) as OntologyStatus[]).map((s) => (
+              <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+            ))}
+          </select>
+          {/* p.29's visibility, and **not a synonym for the status beside it**:
+              p.255 makes `promoted` set a type's visibility to `prominent`,
+              and `visibility_for` raises without ever lowering — so a type
+              promoted and later demoted is prominent and not promoted, which
+              is exactly what this control finds and that one does not. */}
+          <select
+            data-testid="visibility-filter"
+            aria-label="Filter object types by visibility"
+            value={visibilityFilter ?? ""}
+            onChange={(e) =>
+              setVisibilityFilter(
+                (e.target.value || null) as PropertyVisibility | null,
+              )
+            }
+          >
+            <option value="">Any visibility</option>
+            {PROPERTY_VISIBILITIES.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
         </div>
       )}
 
