@@ -4458,6 +4458,32 @@ not here" would have passed because it was on another page rather than because
 the filter worked. They share the module's tag now, so one search shows both
 and the filter is the only thing that can separate them.
 
+**25 mutants attacked, 25 caught** — after a first run with four survivors,
+and two of those were the unit's own central claim.
+
+`memberFirst` had no unit tests at all; it was written, used in two components
+and never asked a question. Two mutants walked straight through it.
+
+And **nothing asserted that the default is a page.** Every listing test passed
+`limit=` explicitly, so changing the default back to "the whole ontology"
+survived the entire suite — at both layers. That is the shape of a defect that
+ships: the behaviour everybody relies on and nobody asks for by name. The test
+seeds fifty-*one* types, because a fixture of fifty would pass against no bound
+at all. The service's default needed its own test for a smaller reason worth
+recording: the route always passes a limit, so that default is reachable only
+by a caller that does not — and the three that want the whole ontology all say
+`limit=None` out loud. The test is about the next one.
+
+**One survivor was withdrawn rather than covered.** Narrowing `groups_by_type`
+to the page's ids has no observable effect: the result is a lookup by id, so a
+wider read returns more entries nobody asks for and the rendered answer is
+identical. It is a performance property, not a check, and there is nothing for
+a test to catch — recorded here rather than covered by an assertion that could
+not fail (§213).
+
+**1867 API tests**, 2 skipped (was 1855); **1571 unit tests** (was 1557); 7
+new browser tests in `e2e/test_type_paging.py`.
+
 ### 255. The screen that makes p.61's argument (this session)
 
 §254 built the read; this is the one place it is visible, and it is the point of
