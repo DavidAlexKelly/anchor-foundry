@@ -4447,6 +4447,12 @@ keys interleave now, and the comment says why. Same family as §106's timezone
 and §246's dropdown: a fixture chosen without thinking about what it would fail
 against is a fixture that cannot fail.
 
+**19 mutants attacked, 19 caught, 0 survivors, 0 no-ops** — including the two
+that only a real page could see: asking each type for its own slice instead of
+the merged prefix, and reporting every implementation as read when one was
+skipped. Both were written *because* the tests above them existed; neither
+would have been attackable a commit earlier.
+
 ### 253. The screens for a shape, and a status that was only a label (this session)
 
 §251 built interfaces and §252 put them where the platform already answers
