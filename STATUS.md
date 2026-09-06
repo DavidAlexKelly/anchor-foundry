@@ -4441,6 +4441,15 @@ clean full API runs since, including this one. Still unexplained, and still
 recorded as unexplained — a failure that stops happening is not a failure that
 was understood.
 
+**One wasted run, and the guard that made it cheap.** The first full browser
+run after this unit's mutation harness ended `750 errors in 6.81s`, all at
+setup: restoring a mutated `apps/api` file updates its mtime, so §233's
+staleness check correctly refused to test a build the running API had not
+loaded. Seven seconds to be told, rather than an hour and three-quarters of a
+suite exercising the previous build and passing. The rule that follows is
+small enough to keep: **a mutation harness that touches `apps/api` ends with a
+`dev-up.sh`**, whatever it is followed by.
+
 ### 254. Targeting the interface directly (this session)
 
 `ontology` p.61 puts it in four words — *"Target the interface directly. A
