@@ -187,6 +187,79 @@ def test_an_implemented_interface_cannot_be_deleted_out_from_under_the_type(
     expect(page.get_by_test_id("iface-table")).to_contain_text(api_name)
 
 
+def test_claiming_a_second_shape_does_not_withdraw_the_first(page, module):
+    """**The endpoint replaces the whole list**, so a dialog that sent only the
+    claim it was editing would silently un-implement everything else the type
+    said about itself — and nothing would say so, because the type would simply
+    stop appearing under the other interface.
+
+    Found by a mutant: removing the line that sends the other claims back
+    survived a suite where no type had ever claimed two shapes.
+    """
+    first_name = f"Inspectable {uuid.uuid4().hex[:4]}"
+    first = declare(page, module, name=first_name,
+                    properties=[("Last inspection date", "date", True)])
+    second = declare(page, module, name=f"Trackable {uuid.uuid4().hex[:4]}",
+                     properties=[("Tracking tag", "string", True)])
+
+    page.get_by_role("button", name=f"Implement {first}").click()
+    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    page.get_by_role(
+        "combobox", name="Answered by for last_inspection_date"
+    ).select_option("checked_on")
+    page.get_by_test_id("impl-save").click()
+    expect(page.get_by_test_id(f"iface-impls-{first}")).to_have_text(
+        "1 object type", timeout=15000
+    )
+
+    page.get_by_role("button", name=f"Implement {second}").click()
+    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    page.get_by_role(
+        "combobox", name="Answered by for tracking_tag"
+    ).select_option("name")
+    page.get_by_test_id("impl-save").click()
+
+    expect(page.get_by_test_id(f"iface-impls-{second}")).to_have_text(
+        "1 object type", timeout=15000
+    )
+    # The claim that would have gone silently.
+    expect(page.get_by_test_id(f"iface-impls-{first}")).to_have_text("1 object type")
+    expect(
+        page.get_by_test_id(f"type-interfaces-seed_{module.tag}")
+    ).to_contain_text(first_name)
+
+
+def test_an_active_interface_offers_no_delete_button(page, module):
+    """p.256's status gate, on the control rather than in the response.
+
+    An interface has a status like every other ontology resource, and until
+    §253 nothing consulted it — the gate is in `delete_interface` now, and this
+    is the half a person meets first. The whole rule is one value on the row,
+    so the button is disabled rather than left to fail."""
+    name = f"Inspectable {uuid.uuid4().hex[:4]}"
+    api_name = declare(page, module, name=name,
+                       properties=[("Last inspection date", "date", True)])
+    # Presence before absence: it is deletable at the default status.
+    expect(page.get_by_role("button", name=f"Delete {api_name}")).to_be_enabled()
+
+    page.get_by_role("button", name=f"Edit {api_name}").click()
+    page.get_by_test_id("status-select").select_option("active")
+    page.get_by_test_id("iface-save").click()
+
+    expect(page.get_by_test_id("iface-table")).to_contain_text("active", timeout=15000)
+    expect(page.get_by_role("button", name=f"Delete {api_name}")).to_be_disabled()
+
+    # Back to experimental, so the run's sweep can take it: a cleanup that
+    # cannot remove what a test deliberately made undeletable leaves one more
+    # of these in the workspace on every run, which is §209's problem again.
+    page.get_by_role("button", name=f"Edit {api_name}").click()
+    page.get_by_test_id("status-select").select_option("experimental")
+    page.get_by_test_id("iface-save").click()
+    expect(page.get_by_role("button", name=f"Delete {api_name}")).to_be_enabled(
+        timeout=15000
+    )
+
+
 def test_an_interface_cannot_be_offered_as_its_own_parent(page, module):
     """p.53 allows any number of parents; a circle is refused by the server,
     which names the path it followed. The one cycle a list of summaries can
