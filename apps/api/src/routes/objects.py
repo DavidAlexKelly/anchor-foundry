@@ -46,6 +46,7 @@ from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
 from ..services import ontology_search
+from ..services import interfaces as interfaces_service
 from ..services import shared_properties as shared_properties_service
 from ..services import value_types as value_types_service
 from ..services.dataset_engine import DatasetEngineError
@@ -1521,6 +1522,221 @@ class SharedPropertyUpdate(BaseModel):
     visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
     value_format: dict[str, Any] | None = None
     value_type_id: UUID | None = None
+
+
+# ---- interfaces (`object-link-types` p.4, p.53; `ontology` p.60-62) ---------
+class InterfacePropertyIn(BaseModel):
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    # Free-form here and checked in `services/interfaces`, for `PropertyIn`'s
+    # reason: the vocabulary is the ontology's and a pattern built here would
+    # be a second copy of a list that already refuses.
+    data_type: str
+    # **Defaults to required**, which is the direction that cannot silently
+    # weaken a promise: a client that has never heard of this flag declares a
+    # property every implementation must have.
+    required: bool = True
+
+
+class InterfacePropertyOut(BaseModel):
+    api_name: str
+    display_name: str
+    description: str = ""
+    data_type: str
+    required: bool = True
+
+
+class InterfaceIn(BaseModel):
+    """The whole shape, saved as one document — `set_definition`'s shape and
+    its reason: the properties and the extension list constrain each other."""
+
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    properties: list[InterfacePropertyIn] = Field(default_factory=list, max_length=100)
+    # p.53: "interfaces may extend any number of other interfaces".
+    extends: list[UUID] = Field(default_factory=list, max_length=10)
+    status: str = Field(
+        default="experimental",
+        pattern="^(active|experimental|deprecated|example)$",
+    )
+    deprecation: dict[str, Any] | None = None
+
+
+class InterfaceUpdate(BaseModel):
+    """No `api_name`: it is the stable machine name a consumer holds, for
+    `object_types.api_name`'s reason (db 0003), and an interface is a promise
+    other resources point at."""
+
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    properties: list[InterfacePropertyIn] = Field(default_factory=list, max_length=100)
+    extends: list[UUID] = Field(default_factory=list, max_length=10)
+    status: str | None = Field(
+        default=None, pattern="^(active|experimental|deprecated|example)$"
+    )
+    deprecation: dict[str, Any] | None = None
+
+
+class InterfaceSummary(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    description: str = ""
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
+    property_count: int = 0
+    implementation_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class InterfaceDetail(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    description: str = ""
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
+    properties: list[InterfacePropertyOut] = Field(default_factory=list)
+    extends: list[UUID] = Field(default_factory=list)
+    # **Its own properties plus every ancestor's**, which is the list an
+    # implementation is checked against — resolved here rather than by the
+    # browser, because it is the server that refuses.
+    effective_properties: list[InterfacePropertyOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ImplementationIn(BaseModel):
+    interface_id: UUID
+    # `{interface property: this type's property}` (p.66). Free-form because
+    # which keys are legal depends on the interface's *effective* shape, which
+    # this model cannot see.
+    property_mapping: dict[str, str] = Field(default_factory=dict)
+
+
+class ImplementationOut(BaseModel):
+    interface_id: UUID
+    api_name: str
+    display_name: str
+    property_mapping: dict[str, str] = Field(default_factory=dict)
+
+
+@router.get("/interfaces", response_model=list[InterfaceSummary])
+async def list_interfaces(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[InterfaceSummary]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await interfaces_service.list_interfaces(conn, access.workspace_id)
+    return [InterfaceSummary(**r) for r in rows]
+
+
+@router.get("/interfaces/{interface_id}", response_model=InterfaceDetail)
+async def get_interface(
+    interface_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> InterfaceDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await interfaces_service.get_interface(
+            conn, access.workspace_id, interface_id
+        )
+    return InterfaceDetail(**row)
+
+
+@router.post(
+    "/interfaces", response_model=InterfaceDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_interface(
+    body: InterfaceIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> InterfaceDetail:
+    """Editor, like every other ontology write. An interface is a claim other
+    object types are written against, so it is the same level of
+    permission as declaring one of them."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await interfaces_service.create_interface(
+            conn, access.workspace_id,
+            api_name=body.api_name, display_name=body.display_name,
+            description=body.description,
+            properties=[p.model_dump() for p in body.properties],
+            extends=body.extends, status=body.status,
+            deprecation=body.deprecation, created_by=access.auth.user_id,
+        )
+    return InterfaceDetail(**row)
+
+
+@router.put("/interfaces/{interface_id}", response_model=InterfaceDetail)
+async def update_interface(
+    interface_id: UUID,
+    body: InterfaceUpdate,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> InterfaceDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await interfaces_service.update_interface(
+            conn, access.workspace_id, interface_id,
+            display_name=body.display_name, description=body.description,
+            properties=[p.model_dump() for p in body.properties],
+            extends=body.extends, status=body.status,
+            deprecation=body.deprecation,
+        )
+    return InterfaceDetail(**row)
+
+
+@router.delete(
+    "/interfaces/{interface_id}", status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def delete_interface(
+    interface_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await interfaces_service.delete_interface(
+            conn, access.workspace_id, interface_id
+        )
+
+
+@router.get(
+    "/object-types/{type_id}/interfaces", response_model=list[ImplementationOut]
+)
+async def list_implementations(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ImplementationOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        by_type = await interfaces_service.implementations_by_type(
+            conn, access.workspace_id
+        )
+    return [ImplementationOut(**r) for r in by_type.get(str(type_id), [])]
+
+
+@router.put(
+    "/object-types/{type_id}/interfaces", response_model=list[ImplementationOut]
+)
+async def set_implementations(
+    type_id: UUID,
+    body: list[ImplementationIn],
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[ImplementationOut]:
+    """The whole list, replacing what was there.
+
+    Its own endpoint rather than a field on the object type PUT, for the reason
+    §172's groups have one: what an object type *is* and what it *claims to be*
+    are different statements, and folding one into the other would make every
+    property edit an implementation write — the carry-through failure §246
+    found, avoided by not creating the opportunity.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await interfaces_service.set_implementations(
+            conn, access.workspace_id, type_id,
+            [e.model_dump() for e in body], created_by=access.auth.user_id,
+        )
+    return [ImplementationOut(**r) for r in rows]
 
 
 @router.get("/shared-properties", response_model=list[SharedPropertyOut])
