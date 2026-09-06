@@ -4290,6 +4290,28 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 249. The suite tidies up its modules too (this session)
+
+§209 taught the browser suite to delete the object types it creates, after
+1,400 of them aged a passing test into a failing one - the Ontology Manager's
+listing fetches every type in the workspace, and at 1,400 it took seven
+seconds to open a dialog. That fixture's docstring makes the argument in full.
+
+**Nothing was doing the same for canvas apps**, which is how there came to be
+**28,500 of them in one workspace** (§248). The argument did not need making
+again; it needed applying one table over, and nobody had. Every `Module` in
+every browser test creates one, and every one of them stayed.
+
+Apps are deleted **before** types, because an app can reference a type and a
+type deleted out from under one is the cascade the API refuses - so the other
+order would leave the apps behind on precisely the runs that created the most.
+Best-effort like the rest of that cleanup: it runs after the last assertion,
+and an exception there would turn a green suite red for tidying up.
+
+**The existing backlog is left alone.** It is shared development state, and
+clearing 28,500 rows is a decision to take deliberately rather than in
+passing. What this stops is the growth.
+
 ### 248. The action-definition save read every module in the workspace (this session)
 
 Found by asking why the browser suite had slowed to a third of its usual rate -
