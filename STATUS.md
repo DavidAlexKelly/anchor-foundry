@@ -4290,6 +4290,72 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 251. Interfaces, and the decision a row had been asking for since §168 (this session)
+
+`ontology.md` §1.2's Interfaces row has carried `[?]` and a precise request
+since §168: *"needs the missing pages, or an explicit decision to design it
+from the fragments and mark what was guessed."* This is that decision, taken
+and marked.
+
+**The gap is real and it is a missing chapter, not a scheduling problem.**
+`docs/pal/` has no Interfaces section: `object-link-types` p.4 and p.8 define
+one - "an Ontology type that describes the shape of an object type and its
+capabilities … object type polymorphism" - and then say "Learn more about
+interfaces", pointing at a page the export does not carry. Every other mention
+is the Gaia/Gotham integration (p.51-73), which is out of scope.
+
+**What the fragments do settle is the model**, and it is more than enough to
+build from: a shared shape of properties, links and actions (`ontology` p.60);
+many object types implementing one, and interfaces extending "any number" of
+others (p.53); a worked example with three implementing types and the argument
+for it (p.61 - Vehicle, Equipment and Facility, each with its own copy of
+`lastInspectionDate`, `inspectionStatus` and a duplicate Schedule-inspection
+action); and an implementation that **maps** the interface's property onto the
+type's own (p.66) rather than matching names.
+
+That last one is the design decision the rest follows from. p.60's argument is
+that three types satisfy one interface **while differing in everything else** -
+and that has to include what they call things. A Vehicle whose column is
+`last_checked` is still Inspectable.
+
+**Every refusal is a promise that would otherwise be unenforced.** A required
+property with nothing mapped to it. A mapping to a property the type does not
+have, which is the shape of a rename that happened somewhere else. A base type
+that does not match, which is p.181's shared-property rule one resource over,
+refused with *both* types named. A circle of extensions, named in the order it
+was followed. And two ancestors declaring one name with different base types -
+refused where the **hierarchy** is declared rather than when somebody tries to
+implement it, because the person who typed the extension is not the person who
+would otherwise meet the failure.
+
+**What was guessed is on the row, because the row asked.** That an interface
+is named like an object type (inferred from p.60's `Inspectable`,
+`SchedulableResource`). That a property may be *optional* - nothing in the
+source says so, and it is here because p.62's "design interfaces around
+capabilities" needs a capability with one mandatory field and two optional
+ones. That an interface carries a status like every other ontology resource.
+And that deleting one in use is refused, which is deliberately **unlike**
+p.185's shared property reverting its users to ordinary properties: a shared
+property gives a type metadata it can live without, and an interface is a claim
+other resources are written against.
+
+**Properties only**, which is a boundary rather than an omission: p.60 names
+links and actions too, and a link has two ends while an action has parameters
+and rules, so each raises its own question about what "the implementing type
+must supply" means.
+
+**And it is metadata until something reads it**, which p.61 anticipates and
+blesses - *"even where current platform tooling does not fully support
+interface-backed workflows, designing with interfaces establishes a foundation
+that pays off as support expands … scaffold now, consolidate later."* The
+consumer that makes it a feature is an object set **over** an interface, which
+is p.61's "target the interface directly" and is the next unit rather than
+this one.
+
+19 new API tests, nine of them without a database - the whole of p.53's "any
+number of other interfaces" is checkable as a pure function, and that is where
+a wrong answer is a line rather than a fixture. 1810 API tests, 2 skipped.
+
 ### 250. p.29's other two home-page filters, and a guard written for one (this session)
 
 `ontology.md`'s build order said "filtering by development status is now
