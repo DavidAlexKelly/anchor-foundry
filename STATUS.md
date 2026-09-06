@@ -4388,6 +4388,76 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 256. The ontology listing is a page, and it says so (this session)
+
+Build order item 11, which had been sitting there since §209 with its own
+reason for not being a one-line `LIMIT` written into it: *"the pickers are what
+make it a unit … a dropdown that silently truncates is worse than a slow one."*
+
+**Measured before and after, on the only ontology large enough to measure.**
+`GET /object-types` had no bound and eight call sites read it. This build's
+development workspace holds **791 object types**:
+
+| | rows | time | payload |
+| --- | --- | --- | --- |
+| unbounded | 791 | 253.8 ms | 379.5 KB |
+| one page | 50 | 17.4 ms | 23.9 KB |
+
+Fifteen times faster and sixteen times smaller, per read, on an endpoint every
+type picker in the product opens with.
+
+**The total is the whole difference between a fix and a regression.** A
+bounded list on its own truncates silently, and fifty of six hundred types
+looks exactly like a workspace with fifty — which is worse than the slow
+version, because the slow version was at least right. So the response is a
+page object and every caller is handed the count whether it draws it or not,
+and the endpoint gained a **search** so a picker can reach the fifty-first
+type. `position` rather than `LIKE`, so nothing somebody typed is a wildcard:
+a search for `%` finding everything would be a listing pretending to be a
+search.
+
+**The same defect, one query down.** `groups_by_type` and
+`implementations_by_type` read every membership in the workspace to draw a
+column on every row — which was one query rather than N and therefore right,
+until the listing above them became fifty rows. A bounded page joined against
+the whole workspace has fewer rows and the same work. Both take the page's ids
+now.
+
+**`ids` exists because of p.111.** The Object Explorer needs each *selected*
+type's hidden-property list to know which columns not to draw, and a selected
+type that fell off the page would have had its hidden properties drawn — a
+page-size change quietly becoming a visibility change. It reads exactly those
+types, and-ed with the filters so it can never name its way past one.
+
+**Seven dropdowns became one component**, and the rule it exists to keep is
+that a select's value is always among its options: a type chosen and then
+searched away would render blank and be written as blank on the next save.
+§175 found that in a status dropdown; this is the same fix before it could
+happen again.
+
+**A control that removed itself, found by a browser test.** `needsSearch`
+read the total *matching the current search*, so narrowing 791 types to one
+took the search box off the screen mid-word with the query still applied.
+§246's shape exactly — a control that disappears as a consequence of being
+used — and it took a browser to see it, because every unit test that could
+have caught it would have been written by the same reasoning that produced
+the bug.
+
+**And the suite had been leaning on the bound not existing.** Ten browser
+tests across five files failed the moment it landed, all the same way: each
+file had grown its own four-line `open_type_editor` that scanned `tbody tr`
+for its seeded type. That worked for as long as the page was the whole
+ontology. They share `e2e/ontology_page.py` now — the duplication was
+invisible while the assumption held, which is the general shape of this kind
+of finding.
+
+Two fixture tests had to change more than mechanically. Both compared a type
+that matched a filter against one that did not, and both gave the second type
+an *independent* random tag — so once the table was a page, "the other one is
+not here" would have passed because it was on another page rather than because
+the filter worked. They share the module's tag now, so one search shows both
+and the filter is the only thing that can separate them.
+
 ### 255. The screen that makes p.61's argument (this session)
 
 §254 built the read; this is the one place it is visible, and it is the point of
