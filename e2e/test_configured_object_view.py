@@ -16,6 +16,7 @@ from playwright.sync_api import expect
 
 from api import Module, layout
 from conftest import WEB_BASE, eventually
+from ontology_page import find_type_row
 
 ROWS = [
     {"id": "C1", "name": "Alpha customer", "region": "north"},
@@ -160,6 +161,9 @@ def test_the_ontology_manager_nominates_a_module_as_the_view(page, api):
     )
 
     page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects")
+    # Searched first, because the types table is a page since §256 and this
+    # fixture's type has no reason to be on it.
+    find_type_row(page, f"seed_{mod.tag}")
     # **Filtered by the button, not only by the name.** This page has two tables
     # that mention an object type - the types themselves and the dataset
     # mappings below them - so matching on the name alone is two rows, and

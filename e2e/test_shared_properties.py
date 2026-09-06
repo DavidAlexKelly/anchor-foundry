@@ -175,7 +175,10 @@ def test_the_ontology_search_finds_one_and_opens_it(page, module) -> None:
     row = page.get_by_test_id("shared-table").locator("tbody tr").first
     api_name = row.locator(".slug").inner_text()
 
-    page.get_by_role("searchbox").fill(api_name)
+    # **Named**, because §256 put a second search on this page: the ontology
+    # search in the header and the object type table's own. A bare
+    # `get_by_role("searchbox")` is two elements now.
+    page.get_by_role("searchbox", name="Search the ontology").fill(api_name)
     hit = page.locator("[data-kind='shared_property']").first
     expect(hit).to_be_visible(timeout=15000)
     # No owner to name, so it says how many properties use it instead.

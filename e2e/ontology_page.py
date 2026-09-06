@@ -30,10 +30,39 @@ def find_type_row(page, needle: str):
     expect(search).to_be_visible(timeout=30000)
     # `fill` rather than `type`: the query is state, and a leftover value from
     # a previous call in the same test would narrow this one to nothing.
-    search.fill(needle)
-    row = page.locator("tbody tr").filter(has_text=needle).first
+    #
+    # **And checked, then re-filled.** The box is a controlled input, so a
+    # render that lands between the keystroke and React's state update writes
+    # the old value straight back over it — and the page then searches for
+    # nothing while the test waits for a row. It is not hypothetical: a save
+    # elsewhere on the page invalidates the types query, and
+    # `test_shared_properties` fills this box a few milliseconds after one.
+    for _ in range(4):
+        search.fill(needle)
+        try:
+            expect(search).to_have_value(needle, timeout=2000)
+            break
+        except AssertionError:
+            continue
+    expect(search).to_have_value(needle, timeout=5000)
+    # **Scoped to the types table**, which is the whole reason this is a
+    # function. The objects page draws eight tables and several of them mention
+    # an object type by name - shared properties, value types, interfaces,
+    # groups, link types, action types, dataset sources. An unscoped
+    # `tbody tr` was right only because the types table was long enough to
+    # contain the match first; a page of fifty narrowed by a search is one row,
+    # and `.first` then lands wherever the DOM happens to put it.
+    row = types_table(page).locator("tbody tr").filter(has_text=needle).first
     expect(row).to_be_visible(timeout=30000)
     return row
+
+
+def types_table(page):
+    """The object types table, told apart from the seven others on the page by
+    the one column heading only it has."""
+    return page.locator("table").filter(
+        has=page.get_by_role("columnheader", name="Object type")
+    ).first
 
 
 def open_type_editor(page, needle: str) -> None:
