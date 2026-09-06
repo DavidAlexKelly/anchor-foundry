@@ -551,6 +551,53 @@ def test_renaming_a_parameter_nobody_calls_is_allowed(
     assert [p["api_name"] for p in r.json()["parameters"]] == ["new_status"]
 
 
+def test_a_module_that_only_mentions_the_action_is_not_a_usage(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """**The guard on the narrowing, and it is the only new risk.**
+
+    `parameter_usages` fetches with `position(<action id> in definition) > 0`,
+    which is a way of not shipping every module in the workspace into Python
+    on every save — 1.44s against 83ms on a workspace with 28,500 of them.
+    The clause is a *necessary condition*: a module that never mentions the id
+    cannot name one of its parameters. The loop is still what decides.
+
+    The way that goes wrong is the clause quietly becoming the check, so this
+    is a module that mentions the id and uses nothing: a text widget with the
+    id typed into it. It passes the filter and must still not count, because a
+    rename it does not depend on has to stay allowed.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    app = client.post(
+        f"{wbase(fx)}/projects/{fx.project}/canvas-apps",
+        headers=hdr(fx.editor_sub), json={"name": f"Mentions {uuid.uuid4().hex[:6]}"},
+    ).json()
+    saved = client.put(
+        f"{wbase(fx)}/projects/{fx.project}/canvas-apps/{app['id']}/definition",
+        headers=hdr(fx.editor_sub),
+        json={"definition": {
+            "format": 2,
+            "layout": {"ROOT": {"type": {"resolvedName": "CanvasContainer"}, "isCanvas": True,
+                                "props": {}, "nodes": ["txt"], "linkedNodes": {}},
+                       "txt": {"type": {"resolvedName": "CanvasText"},
+                               "props": {"tag": "p", "text": f"see {action['id']}"},
+                               "parent": "ROOT", "nodes": [], "linkedNodes": {}}},
+            "variables": {},
+            "events": {},
+        }},
+    )
+    assert saved.status_code in (200, 201), saved.text
+
+    r = definition(client, fx, action["id"], {
+        "parameters": [{"api_name": "new_status", "display_name": "Status",
+                        "data_type": "string"}],
+        "rules": [{"kind": "modify_object",
+                   "config": {"property": "status", "parameter": "new_status"}}],
+        "criteria": [],
+    })
+    assert r.status_code == 200, r.text
+
+
 def test_a_viewer_cannot_edit_a_definition(
     client: TestClient, fx: Fixture, ticket_type_id: str
 ) -> None:

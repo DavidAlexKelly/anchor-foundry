@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FIELD_TYPES,
   blankField,
+  parseStructDefault,
   problem,
   renamedFields,
   structRows,
@@ -189,5 +190,49 @@ describe("blankField", () => {
     // undoing a state nobody chose.
     expect(blankField().data_type).toBe("string");
     expect(blankField().api_name).toBe("");
+  });
+});
+
+describe("parseStructDefault", () => {
+  it("reads what somebody typed as a struct", () => {
+    // `workshop` p.152: "A struct variable can be initialized statically
+    // within Workshop." The box holds text; the document has to hold an
+    // object, because `extract_struct_field` refuses anything else.
+    expect(parseStructDefault('{"street": "1 Main St", "floors": 3}')).toEqual({
+      value: { street: "1 Main St", floors: 3 },
+    });
+  });
+
+  it("treats an empty box as no default rather than as an empty struct", () => {
+    // Two different statements: "this variable starts from nothing" and "this
+    // variable starts from a struct with no fields in it".
+    expect(parseStructDefault("")).toEqual({});
+    expect(parseStructDefault("   ")).toEqual({});
+  });
+
+  it("says what is wrong with half-written JSON without losing the last value", () => {
+    // Half-written is the normal state of a box being typed into. The caller
+    // writes nothing when there is an error, so the variable keeps the last
+    // thing that parsed.
+    const answer = parseStructDefault('{"street": ');
+    expect(answer.error).toMatch(/valid JSON/);
+    expect(answer.value).toBeUndefined();
+  });
+
+  it("refuses a list, because a struct is not one", () => {
+    // p.75: a struct "maps string fieldIDs to values". An array of them is the
+    // struct-array kind this platform does not have, and accepting one here
+    // would produce a variable whose first extraction fails at view time.
+    expect(parseStructDefault('["a", "b"]').error).toMatch(/field names and values/);
+    expect(parseStructDefault("7").error).toMatch(/field names and values/);
+    expect(parseStructDefault('"text"').error).toMatch(/field names and values/);
+    expect(parseStructDefault("null").error).toMatch(/field names and values/);
+  });
+
+  it("accepts a struct with no fields typed into it", () => {
+    // Distinct from the empty box above: `{}` is a value, and the server
+    // stores it. Nothing about a *variable* requires at least one field —
+    // p.149's "at least 1 field" is a rule about a property's declaration.
+    expect(parseStructDefault("{}")).toEqual({ value: {} });
   });
 });
