@@ -117,6 +117,40 @@ export function renamedFields(
 }
 
 /**
+ * A struct variable's static default, from what somebody typed
+ * (`workshop` p.152: "A struct variable can be initialized statically within
+ * Workshop").
+ *
+ * **A struct default is the one default that is not a string**, which is why
+ * it needs a function rather than an input. Every other kind's default box
+ * stores what was typed; a struct's has to be an object by the time it reaches
+ * the server, because `extract_struct_field` refuses anything else — so a box
+ * that stored the text would be a control that cannot work (§214).
+ *
+ * Returns the parsed object, `undefined` for an empty box (which is "no
+ * default", not "an empty struct"), or an `error` for anything else. A *list*
+ * is an error rather than a struct: p.75 says a struct "maps string fieldIDs
+ * to values", and an array of them is the struct-array kind this platform does
+ * not have yet.
+ */
+export function parseStructDefault(
+  typed: string,
+): { value?: Record<string, unknown>; error?: string } {
+  const text = typed.trim();
+  if (!text) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: "Not valid JSON." };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { error: "A struct default is an object of field names and values." };
+  }
+  return { value: parsed as Record<string, unknown> };
+}
+
+/**
  * What to show for a struct value when the declaration is to hand.
  *
  * `[[display name, rendered value], …]` in the **declared** order, which is

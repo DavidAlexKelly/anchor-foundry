@@ -138,12 +138,16 @@ def test_the_panel_offers_the_kind_and_the_transform_and_the_server_takes_it(
     fails to save with the form already gone.
     """
     open_builder(page, module)
+    settled(page)
     page.get_by_role("button", name="Variables", exact=False).first.click()
 
+    # **No click on the row afterwards.** `add()` opens the new variable's
+    # editor itself, so clicking it is a *toggle* that closes it again — the
+    # first version of this test did exactly that and spent thirty seconds
+    # waiting for a Label box that was no longer on screen.
     page.get_by_role("button", name="New", exact=True).click()
-    page.locator(".vars-row").last.click()
     page.get_by_label("Label").fill("Typed address")
-    page.get_by_label("Type", exact=True).select_option("struct")
+    page.get_by_test_id("variable-kind").select_option("struct")
 
     # p.152's first source — "initialized statically within Workshop".
     page.get_by_test_id("struct-default").fill('{"street": "1 Panel Way"}')
@@ -172,8 +176,14 @@ def test_a_default_that_is_not_a_struct_says_so_before_the_save(page, module):
     leaves the last good value alone.
     """
     open_builder(page, module)
+    settled(page)
     page.get_by_role("button", name="Variables", exact=False).first.click()
-    page.locator(".vars-row").filter(has_text="Typed address").first.click()
+
+    # **Its own variable, not the one above.** A test that only passes after
+    # another one is not a test — the same order-dependence §246 found in its
+    # own file, and worth not repeating one unit later.
+    page.get_by_role("button", name="New", exact=True).click()
+    page.get_by_test_id("variable-kind").select_option("struct")
 
     page.get_by_test_id("struct-default").fill('{"street": ')
     expect(page.get_by_test_id("struct-default-problem")).to_contain_text("valid JSON")

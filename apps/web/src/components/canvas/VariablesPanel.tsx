@@ -33,6 +33,7 @@ import type { WorkshopTransform, WorkshopVariable, WorkshopVariableKind } from "
 import { newVariableId, usagesOf } from "@/lib/workshop-module";
 import { OPERATOR_LABELS, operatorsFor } from "./filter-clause";
 import { ROUTABLE_KINDS } from "./routing";
+import { parseStructDefault } from "@/lib/struct-fields";
 import { VariableLineage } from "./VariableLineage";
 import {
   canCreateFrom, duplicate, fromCurrent, UNIQUE_SETTINGS,
@@ -58,14 +59,17 @@ const KINDS: WorkshopVariableKind[] = [
   "single_object",
   "object_set",
   "time_series_set",
+  "struct",
 ];
 
 /** p.132's array element types, mirroring `ARRAY_ELEMENTS` in the service.
  *
- * `struct` is absent for the reason `object_set_aggregation` is absent from
- * `TRANSFORMS` below: the API refuses it until there is a kind carrying named
- * fields, and offering a choice that fails on save is the thing these lists
- * exist to avoid. */
+ * `struct` is absent because the API still refuses it, and offering a choice
+ * that fails on save is the thing these lists exist to avoid — but **the
+ * reason changed in §247** and the sentence here changed with it (§213). It
+ * used to be that no kind carried a struct at all; there is one now, and
+ * `extract_struct_field` is the "variable transform" p.134 describes. What is
+ * missing is the loop handing each *entry* to a child of that kind. */
 const ARRAY_ELEMENTS = ["string", "number", "boolean", "date", "timestamp"] as const;
 
 /** p.72's filter options, with their labels. Derived from the module's own
@@ -144,6 +148,10 @@ const TRANSFORMS: { value: WorkshopTransform; label: string; arity: string }[] =
   // state to a set, this reads a value back out of it for a heading, a
   // chart title, or an action's default.
   { value: "filter_value", label: "A value chosen in a filter", arity: "one" },
+  // p.143, and p.155's "individual struct fields must be extracted for use" —
+  // so this is not one option among many for a struct variable, it is the only
+  // door out of one.
+  { value: "extract_struct_field", label: "A field of a struct", arity: "one" },
 ];
 
 /** Offered on `time_series_set` variables, and the only thing offered there -
@@ -186,9 +194,60 @@ function slotLabels(transform: WorkshopTransform): string[] {
   if (transform === "filter_set") return ["Set to narrow", "Filter value from"];
   if (transform === "cast") return ["Value"];
   if (transform === "object_property") return ["Object"];
+  if (transform === "extract_struct_field") return ["Struct"];
   if (transform === "filter_value") return ["Filter clauses"];
   if (transform === "object_series") return ["Object"];
   return ["Value"];
+}
+
+/** p.152's "initialized statically within Workshop", for the one kind whose
+ * default is not a string.
+ *
+ * **The box holds text and the document holds an object**, so the two are kept
+ * apart: typing is never interrupted by a re-serialisation of a half-written
+ * value, and the variable is only written when what is in the box parses. An
+ * unparseable box says so and leaves the last good value alone — clearing the
+ * variable on every keystroke that is not yet valid JSON would delete the
+ * default somebody was editing. */
+function StructDefaultField({
+  value,
+  readOnly,
+  onChange,
+}: {
+  value: unknown;
+  readOnly?: boolean;
+  onChange: (next: unknown) => void;
+}) {
+  const [typed, setTyped] = useState(() =>
+    value === undefined || value === null ? "" : JSON.stringify(value, null, 2),
+  );
+  const { error } = parseStructDefault(typed);
+  return (
+    <label>
+      Default
+      <textarea
+        value={typed}
+        readOnly={readOnly}
+        rows={4}
+        data-testid="struct-default"
+        placeholder={'{ "street": "12 Main St" }'}
+        onChange={(e) => {
+          setTyped(e.target.value);
+          const answer = parseStructDefault(e.target.value);
+          if (answer.error) return;
+          onChange(answer.value);
+        }}
+      />
+      {error ? (
+        <span className="field-hint" data-testid="struct-default-problem">{error}</span>
+      ) : (
+        <span className="field-hint">
+          p.152 — a struct can start from a value typed here, from an object&rsquo;s
+          struct property, or from a function
+        </span>
+      )}
+    </label>
+  );
 }
 
 export function VariablesPanel({
@@ -484,6 +543,12 @@ export function VariablesPanel({
                     <label>
                       Type
                       <select
+                        // **By test id, because the accessible name is not
+                        // "Type".** The `<label>` wraps the `<select>`, so the
+                        // name computed for it is the label's whole text
+                        // content — "Type" followed by every option — and a
+                        // test asking for the exact string waits forever.
+                        data-testid="variable-kind"
                         value={variable.kind}
                         disabled={readOnly}
                         onChange={(e) => {
@@ -578,17 +643,25 @@ export function VariablesPanel({
                       />
                     ) : (
                       <>
-                        <label>
-                          Default
-                          <input
-                            value={String(variable.default ?? "")}
+                        {variable.kind === "struct" ? (
+                          <StructDefaultField
+                            value={variable.default}
                             readOnly={readOnly}
-                            placeholder="empty"
-                            onChange={(e) =>
-                              update(id, { default: e.target.value === "" ? undefined : e.target.value })
-                            }
+                            onChange={(next) => update(id, { default: next })}
                           />
-                        </label>
+                        ) : (
+                          <label>
+                            Default
+                            <input
+                              value={String(variable.default ?? "")}
+                              readOnly={readOnly}
+                              placeholder="empty"
+                              onChange={(e) =>
+                                update(id, { default: e.target.value === "" ? undefined : e.target.value })
+                              }
+                            />
+                          </label>
+                        )}
                         {!readOnly && (
                           <button
                             type="button"
@@ -1014,6 +1087,33 @@ function DerivationEditor({
               empty until the viewer filters on it
             </span>
           )}
+        </label>
+      )}
+
+      {derivation.transform === "extract_struct_field" && (
+        <label>
+          Field
+          <input
+            value={String(derivation.config?.field ?? "")}
+            readOnly={readOnly}
+            data-testid="derive-struct-field"
+            placeholder="e.g. postal_code"
+            onChange={(e) =>
+              onChange({
+                ...derivation,
+                config: { ...derivation.config, field: e.target.value },
+              })
+            }
+          />
+          {/* **Typed rather than picked, and the reason is p.155's own.** The
+              fields a struct variable holds are whatever its value holds —
+              the kind carries no schema — so there is no list to offer until
+              something has resolved. Foundry answers the same question the
+              same way, by "referencing it to the struct variable's raw Current
+              value". A field the value does not hold reads as empty. */}
+          <span className="field-hint">
+            empty if the struct has no field by that name
+          </span>
         </label>
       )}
 
