@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv as csv_module
 import io
 import json
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 import uuid
@@ -52,6 +53,12 @@ class Api:
         # the workspace every browser test uses, which is what
         # `parameter_usages` was reading on every action-definition save.
         self.created_canvas_apps: list[str] = []
+        # **Interfaces are created by the browser, so `call` never sees them.**
+        # §209's and §249's tracking hangs off this class's own POSTs; §253's
+        # panel declares an interface from a dialog, which means the same
+        # accumulation with none of the same machinery. Swept by *time* instead:
+        # anything in the workspace newer than this run is this run's.
+        self.started = datetime.now(timezone.utc)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -126,10 +133,55 @@ class Api:
             except Exception:
                 pass
         created = len(self.created_object_types) + len(self.created_canvas_apps)
+        swept, attempted = self._sweep_interfaces()
+        removed += swept
+        created += attempted
         left = created - removed
         self.created_object_types.clear()
         self.created_canvas_apps.clear()
         return removed, left
+
+    def _sweep_interfaces(self) -> tuple[int, int]:
+        """Remove interfaces this run's browser tests declared.
+
+        **After the object types**, because an implemented interface refuses
+        deletion until nothing claims it - and the claim goes when the type
+        does. Reversing this order would leave every implemented interface
+        behind and report it as a refusal, which is the shape of a cleanup that
+        looks like it is working.
+
+        Matched on `created_at` rather than on a name pattern: the panel's
+        tests name interfaces after p.60's examples with a random suffix, and a
+        prefix list here would be a second copy of those names that nothing
+        keeps in step. Anything older than this process is somebody else's.
+        """
+        removed = attempted = 0
+        try:
+            workspaces = self.call("GET", "/workspaces")
+        except Exception:
+            return 0, 0
+        for workspace in workspaces:
+            base = f"/workspaces/{workspace['id']}/interfaces"
+            try:
+                rows = self.call("GET", base)
+            except Exception:
+                continue
+            for row in rows:
+                try:
+                    made = datetime.fromisoformat(str(row["created_at"]))
+                except ValueError:
+                    continue
+                if made.tzinfo is None:
+                    made = made.replace(tzinfo=timezone.utc)
+                if made < self.started:
+                    continue
+                attempted += 1
+                try:
+                    self.call("DELETE", f"{base}/{row['id']}")
+                    removed += 1
+                except Exception:
+                    pass
+        return removed, attempted
 
     def upload_file(
         self, path: str, data: bytes, *, filename: str, content_type: str

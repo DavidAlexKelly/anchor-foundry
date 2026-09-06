@@ -322,6 +322,144 @@ def test_the_object_type_listing_filters_by_group(
     assert outside["id"] not in ids
 
 
+# ---- p.29's other two home-page filters ---------------------------------------
+def set_status(client: TestClient, fx: Fixture, kind: dict, status: str, *, sub=None):
+    """Put a type at a status the way the product does.
+
+    **Not a field on create**, which is the thing to know: `ObjectTypeCreate`
+    has no `status`, so every type is born `experimental` (p.256) and moves by
+    a whole-definition PATCH. A test that passed `status=` to the create would
+    have it silently dropped — pydantic ignores what it does not declare — and
+    would then be filtering a set of types that are all the same.
+    """
+    detail = client.get(
+        f"{wbase(fx)}/object-types/{kind['id']}", headers=hdr(fx.editor_sub)
+    ).json()
+    return client.patch(
+        f"{wbase(fx)}/object-types/{kind['id']}",
+        headers=hdr(sub or fx.editor_sub),
+        json={
+            "display_name": detail["display_name"],
+            "properties": [
+                {k: p[k] for k in ("api_name", "display_name", "data_type")}
+                for p in detail["properties"]
+            ],
+            "title_property": "id",
+            "status": status,
+            "acknowledge_breaking": True,
+        },
+    )
+
+
+def test_the_listing_filters_by_development_status(
+    client: TestClient, fx: Fixture
+) -> None:
+    """`ontology-manager` p.29: "These pages allow for filtering object types
+    and link types based on their visibility, development status, and indexing
+    issues."
+
+    Two-sided for the group filter's reason: a filter that returned everything
+    would pass a test that only checked the match was present. The two types
+    differ **only** in status, so nothing else could be doing the narrowing.
+    """
+    active = make_type(client, fx)
+    experimental = make_type(client, fx)  # p.256's default, left alone
+    assert set_status(client, fx, active, "active").status_code == 200
+
+    r = client.get(
+        f"{wbase(fx)}/object-types?status=active", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    ids = {t["id"] for t in r.json()}
+    assert active["id"] in ids
+    assert experimental["id"] not in ids
+
+
+def test_the_listing_filters_by_visibility_and_it_is_not_the_status_filter(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.29's first of the three, and the reason it is a **separate** control.
+
+    A type's visibility is never set directly here: p.255 says "setting an
+    object type's status to `promoted` will automatically set its visibility to
+    `prominent`", and `visibility_for` raises without ever lowering — a type
+    somebody deliberately made prominent should not quietly stop being so
+    because its status stepped down.
+
+    So a type promoted and then demoted is `prominent` and **not** `promoted`,
+    which is precisely the type this filter finds and `status=promoted` does
+    not. Without that case the two controls would be synonyms and one of them
+    would be worth deleting.
+    """
+    demoted = make_type(client, fx)
+    plain = make_type(client, fx)
+    assert set_status(
+        client, fx, demoted, "promoted", sub=fx.admin_sub
+    ).status_code == 200
+    assert set_status(client, fx, demoted, "active").status_code == 200
+
+    r = client.get(
+        f"{wbase(fx)}/object-types?visibility=prominent", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    assert demoted["id"] in {t["id"] for t in r.json()}
+    assert plain["id"] not in {t["id"] for t in r.json()}
+
+    # And the status filter does not find it, which is the whole point.
+    r = client.get(
+        f"{wbase(fx)}/object-types?status=promoted", headers=hdr(fx.viewer_sub)
+    )
+    assert demoted["id"] not in {t["id"] for t in r.json()}
+
+
+def test_the_three_filters_narrow_together(client: TestClient, fx: Fixture) -> None:
+    """**One value per filter, and-ed**, which is the group filter's shape
+    rather than a new one - p.29 does not say which it is, so the control that
+    already exists decides.
+
+    The fixture is three types that each fail exactly one of the three
+    conditions, so a filter dropped from the query lets exactly one of them
+    through and the failure names which filter stopped working.
+    """
+    group = make_group(client, fx)
+    wanted = make_type(client, fx)
+    wrong_status = make_type(client, fx)
+    outside_group = make_type(client, fx)
+    for kind in (wanted, wrong_status, outside_group):
+        assert set_status(
+            client, fx, kind, "promoted", sub=fx.admin_sub
+        ).status_code == 200
+    assert set_status(client, fx, wrong_status, "active").status_code == 200
+    assert set_members(
+        client, fx, group["id"], [wanted["id"], wrong_status["id"]]
+    ).status_code == 200
+
+    r = client.get(
+        f"{wbase(fx)}/object-types"
+        f"?group_id={group['id']}&status=promoted&visibility=prominent",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    assert {t["id"] for t in r.json()} == {wanted["id"]}, (
+        "each of the other two fails exactly one condition, so whichever "
+        "appears names the filter that stopped working"
+    )
+
+
+def test_a_filter_value_outside_the_vocabulary_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**Refused rather than ignored.** A typo in a URL that quietly returns
+    everything is a filter nobody can see the effect of, which is worse than no
+    filter - the reader thinks they are looking at a narrowed list."""
+    for query in ("status=nonsense", "visibility=nonsense", "status=Active"):
+        r = client.get(
+            f"{wbase(fx)}/object-types?{query}", headers=hdr(fx.viewer_sub)
+        )
+        assert r.status_code == 422, (query, r.text)
+        assert "expected one of" in r.text
+
+
 def test_a_group_is_findable_by_name(client: TestClient, fx: Fixture) -> None:
     """p.262: "Groups are searchable in Ontology Manager's Search bar and
     Search bar dialog." A classification nobody can find classifies nothing."""

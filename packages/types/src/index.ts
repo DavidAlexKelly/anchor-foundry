@@ -1407,6 +1407,10 @@ export interface ObjectTypeSummary {
   /** The groups this type is filed under (Foundry `object-link-types` p.262:
    * the table of object types "supports displaying and filtering by group"). */
   groups: ObjectTypeGroupRef[];
+  /** The shapes this type claims to have (Foundry `ontology` p.60-61). A group
+   * says where a type is *filed*; an interface says what it *is*, which is why
+   * both are here and neither stands in for the other. */
+  interfaces: InterfaceRef[];
   created_at: string;
   updated_at: string;
 }
@@ -1427,6 +1431,114 @@ export interface ObjectTypeGroup {
   member_count: number;
   created_at: string;
   updated_at: string;
+}
+
+/** A shared shape several object types implement (Foundry `object-link-types`
+ * p.4, p.8; `ontology` p.60-62) — "an Ontology type that describes the shape
+ * of an object type and its capabilities … object type polymorphism".
+ *
+ * **Metadata, not storage.** An interface has no instances; p.61's Vehicle,
+ * Equipment and Facility each keep their own `lastInspectionDate` column and
+ * their own data, and the interface is the statement that all three have one.
+ *
+ * `property_count` is its **own** declarations; `effective_properties` on the
+ * detail is those plus every ancestor's, which is the list an implementation
+ * is actually checked against. The two differ exactly when the interface
+ * extends something, and a listing that showed the resolved count would make
+ * "what did I declare here" unanswerable. */
+export interface InterfaceSummary {
+  id: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  status: OntologyStatus;
+  deprecation: Deprecation | null;
+  property_count: number;
+  /** How many object types claim this shape (p.53's "multiple object types").
+   * The number that decides whether an edit here is cheap. */
+  implementation_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One field of a shared shape. Deliberately fewer columns than an
+ * {@link ObjectTypeProperty} has: an interface says a type must have a
+ * `lastInspectionDate` that is a date, and how the type stores or formats it
+ * is the type's business (p.60). */
+export interface InterfaceProperty {
+  api_name: string;
+  display_name: string;
+  description: string;
+  data_type: PropertyDataType;
+  /** Nothing in the source says a property may be optional; it is here because
+   * p.62's "design interfaces around capabilities" needs a capability with one
+   * mandatory field and two optional ones. Defaults to required, which is the
+   * direction that cannot silently weaken a promise. */
+  required: boolean;
+}
+
+export interface InterfaceDetail extends InterfaceSummary {
+  properties: InterfaceProperty[];
+  /** p.53: "interfaces may extend any number of other interfaces". */
+  extends: string[];
+  /** Own plus inherited, resolved by the server because it is the server that
+   * refuses an implementation. */
+  effective_properties: InterfaceProperty[];
+}
+
+/** An interface as it appears on an object type: enough to draw a label. */
+export interface InterfaceRef {
+  id: string;
+  api_name: string;
+  display_name: string;
+}
+
+/** One object type's claim to one shape.
+ *
+ * `property_mapping` is `{interface property: this type's property}` — a
+ * **mapping** rather than a name match, which is p.66's own shape and follows
+ * from p.60's argument that types satisfy one interface while differing in
+ * everything else. A Vehicle whose column is `last_checked` is still
+ * Inspectable. */
+export interface Implementation {
+  interface_id: string;
+  api_name: string;
+  display_name: string;
+  property_mapping: Record<string, string>;
+}
+
+/** One object of an interface set (Foundry `ontology` p.61 — "target the
+ * interface directly").
+ *
+ * `object_type_name` is here and not on {@link Instance} because this is the
+ * one read whose answer is heterogeneous: a page of `Inspectable` holds
+ * Vehicles and Facilities, and "which is this" is a question a single-type
+ * page never has.
+ *
+ * `properties` is keyed by the **interface's** names, whatever each type calls
+ * them, and carries nothing the interface does not declare — a page whose
+ * columns depended on which type each row happened to be is exactly what
+ * p.61's single workflow is defined against. */
+export interface InterfaceInstance {
+  id: string;
+  primary_key: string;
+  object_type_id: string;
+  object_type_name: string;
+  properties: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface InterfaceSetPage {
+  instances: InterfaceInstance[];
+  /** Across every implementing type, not this page's. */
+  total: number;
+  limit: number;
+  offset: number;
+  /** Which types were actually read, in the order they were read. */
+  object_types: string[];
+  /** And the ones a filter excluded before they were read — a different fact
+   * from "matched nothing", and one only the server can name. */
+  skipped: string[];
 }
 
 /** A group as it appears on an object type: enough to draw a label, not the

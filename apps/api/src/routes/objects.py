@@ -46,6 +46,8 @@ from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
 from ..services import ontology_search
+from ..services import interfaces as interfaces_service
+from ..services import interface_sets
 from ..services import shared_properties as shared_properties_service
 from ..services import value_types as value_types_service
 from ..services.dataset_engine import DatasetEngineError
@@ -176,6 +178,14 @@ class ObjectTypeGroupRef(BaseModel):
     display_name: str
 
 
+class ObjectTypeInterfaceRef(BaseModel):
+    """An interface a type implements, as a listing needs it (§251)."""
+
+    id: UUID
+    api_name: str
+    display_name: str
+
+
 class ObjectTypeSummary(BaseModel):
     id: UUID
     api_name: str
@@ -202,6 +212,13 @@ class ObjectTypeSummary(BaseModel):
     # displaying and filtering by group." Displaying needs them on the row;
     # filtering is the `group_id` query parameter below.
     groups: list[ObjectTypeGroupRef] = Field(default_factory=list)
+    # What this type claims to be (`object-link-types` p.53; §251). Names only,
+    # not the mapping: a listing answers "what is this" and the mapping is the
+    # answer to "how", which is a question for the type's own page. The same
+    # split `hidden_properties` above makes for the same reason - a list
+    # endpoint that carried every detail would be a detail endpoint that
+    # happens to return several rows.
+    interfaces: list[ObjectTypeInterfaceRef] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -397,7 +414,8 @@ class OntologySearchHit(BaseModel):
     the one that put the row in the list.
     """
 
-    # object_type | property | link_type | action_type | shared_property | group
+    # object_type | property | link_type | action_type | shared_property |
+    # group | interface
     kind: str
     id: UUID
     api_name: str
@@ -405,8 +423,10 @@ class OntologySearchHit(BaseModel):
     # Where it lives. A property called "status" is not somewhere anybody can
     # navigate to; "status on Ticket" is.
     #
-    # **Null for a shared property and for a group**, neither of which belongs
-    # to an object type by definition (`object-link-types` p.178, p.261).
+    # **Null for a shared property, a group and an interface**, none of which
+    # belongs to an object type by definition (`object-link-types` p.178,
+    # p.261, p.4 - an interface is implemented *by* types rather than owned by
+    # one, which is the whole point of it).
     # Optional rather than faked: a made-up owner would send whoever clicked it
     # to a type that has nothing to do with what they searched for.
     object_type_id: UUID | None = None
@@ -435,9 +455,18 @@ async def search_ontology(
 @router.get("/object-types", response_model=list[ObjectTypeSummary])
 async def list_object_types(
     group_id: UUID | None = Query(default=None),
+    status: str | None = Query(default=None),
+    visibility: str | None = Query(default=None),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
 ) -> list[ObjectTypeSummary]:
-    """p.262's table, which "supports displaying and filtering by group".
+    """p.262's table, which "supports displaying and filtering by group", and
+    `ontology-manager` p.29's other two: "filtering object types and link types
+    based on their visibility, development status, and indexing issues".
+
+    **Free-form here and checked in the service**, unlike the patterns on the
+    property models above, because these two are the service's own vocabulary -
+    `ontology_status.STATUSES` and `PROPERTY_VISIBILITIES` - and a pattern
+    built here would be a second copy of a list that already refuses.
 
     The memberships come back in **one** query for the whole list rather than
     one per row - §169's N+1 is recent enough to still be the first thing to
@@ -445,11 +474,29 @@ async def list_object_types(
     """
     async with user_connection(access.auth.user_id) as conn:
         rows = await ontology_service.list_types(
-            conn, access.workspace_id, group_id=group_id
+            conn, access.workspace_id, group_id=group_id,
+            status=status, visibility=visibility,
         )
         by_type = await groups_service.groups_by_type(conn, access.workspace_id)
+        # One query for the workspace, like the groups above and for the same
+        # reason - §169's N+1 is recent enough to still be the first thing to
+        # check when a loop wants a lookup.
+        implemented = await interfaces_service.implementations_by_type(
+            conn, access.workspace_id
+        )
     return [
-        ObjectTypeSummary(**r, groups=by_type.get(str(r["id"]), []))
+        ObjectTypeSummary(
+            **r,
+            groups=by_type.get(str(r["id"]), []),
+            interfaces=[
+                ObjectTypeInterfaceRef(
+                    id=i["interface_id"],
+                    api_name=i["api_name"],
+                    display_name=i["display_name"],
+                )
+                for i in implemented.get(str(r["id"]), [])
+            ],
+        )
         for r in rows
     ]
 
@@ -1511,6 +1558,413 @@ class SharedPropertyUpdate(BaseModel):
     visibility: str = Field(default="normal", pattern="^(normal|prominent|hidden)$")
     value_format: dict[str, Any] | None = None
     value_type_id: UUID | None = None
+
+
+# ---- interfaces (`object-link-types` p.4, p.53; `ontology` p.60-62) ---------
+class InterfacePropertyIn(BaseModel):
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    # Free-form here and checked in `services/interfaces`, for `PropertyIn`'s
+    # reason: the vocabulary is the ontology's and a pattern built here would
+    # be a second copy of a list that already refuses.
+    data_type: str
+    # **Defaults to required**, which is the direction that cannot silently
+    # weaken a promise: a client that has never heard of this flag declares a
+    # property every implementation must have.
+    required: bool = True
+
+
+class InterfacePropertyOut(BaseModel):
+    api_name: str
+    display_name: str
+    description: str = ""
+    data_type: str
+    required: bool = True
+
+
+class InterfaceIn(BaseModel):
+    """The whole shape, saved as one document — `set_definition`'s shape and
+    its reason: the properties and the extension list constrain each other."""
+
+    api_name: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    properties: list[InterfacePropertyIn] = Field(default_factory=list, max_length=100)
+    # p.53: "interfaces may extend any number of other interfaces".
+    extends: list[UUID] = Field(default_factory=list, max_length=10)
+    status: str = Field(
+        default="experimental",
+        pattern="^(active|experimental|deprecated|example)$",
+    )
+    deprecation: dict[str, Any] | None = None
+
+
+class InterfaceUpdate(BaseModel):
+    """No `api_name`: it is the stable machine name a consumer holds, for
+    `object_types.api_name`'s reason (db 0003), and an interface is a promise
+    other resources point at."""
+
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    properties: list[InterfacePropertyIn] = Field(default_factory=list, max_length=100)
+    extends: list[UUID] = Field(default_factory=list, max_length=10)
+    status: str | None = Field(
+        default=None, pattern="^(active|experimental|deprecated|example)$"
+    )
+    deprecation: dict[str, Any] | None = None
+
+
+class InterfaceSummary(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    description: str = ""
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
+    property_count: int = 0
+    implementation_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class InterfaceDetail(BaseModel):
+    id: UUID
+    api_name: str
+    display_name: str
+    description: str = ""
+    status: str = "experimental"
+    deprecation: dict[str, Any] | None = None
+    properties: list[InterfacePropertyOut] = Field(default_factory=list)
+    extends: list[UUID] = Field(default_factory=list)
+    # **Its own properties plus every ancestor's**, which is the list an
+    # implementation is checked against — resolved here rather than by the
+    # browser, because it is the server that refuses.
+    effective_properties: list[InterfacePropertyOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ImplementationIn(BaseModel):
+    interface_id: UUID
+    # `{interface property: this type's property}` (p.66). Free-form because
+    # which keys are legal depends on the interface's *effective* shape, which
+    # this model cannot see.
+    property_mapping: dict[str, str] = Field(default_factory=dict)
+
+
+class ImplementationOut(BaseModel):
+    interface_id: UUID
+    api_name: str
+    display_name: str
+    property_mapping: dict[str, str] = Field(default_factory=dict)
+
+
+@router.get("/interfaces", response_model=list[InterfaceSummary])
+async def list_interfaces(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[InterfaceSummary]:
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await interfaces_service.list_interfaces(conn, access.workspace_id)
+    return [InterfaceSummary(**r) for r in rows]
+
+
+@router.get("/interfaces/{interface_id}", response_model=InterfaceDetail)
+async def get_interface(
+    interface_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> InterfaceDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await interfaces_service.get_interface(
+            conn, access.workspace_id, interface_id
+        )
+    return InterfaceDetail(**row)
+
+
+@router.post(
+    "/interfaces", response_model=InterfaceDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_interface(
+    body: InterfaceIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> InterfaceDetail:
+    """Editor, like every other ontology write. An interface is a claim other
+    object types are written against, so it is the same level of
+    permission as declaring one of them."""
+    async with user_connection(access.auth.user_id) as conn:
+        row = await interfaces_service.create_interface(
+            conn, access.workspace_id,
+            api_name=body.api_name, display_name=body.display_name,
+            description=body.description,
+            properties=[p.model_dump() for p in body.properties],
+            extends=body.extends, status=body.status,
+            deprecation=body.deprecation, created_by=access.auth.user_id,
+        )
+    return InterfaceDetail(**row)
+
+
+@router.put("/interfaces/{interface_id}", response_model=InterfaceDetail)
+async def update_interface(
+    interface_id: UUID,
+    body: InterfaceUpdate,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> InterfaceDetail:
+    async with user_connection(access.auth.user_id) as conn:
+        row = await interfaces_service.update_interface(
+            conn, access.workspace_id, interface_id,
+            display_name=body.display_name, description=body.description,
+            properties=[p.model_dump() for p in body.properties],
+            extends=body.extends, status=body.status,
+            deprecation=body.deprecation,
+        )
+    return InterfaceDetail(**row)
+
+
+@router.delete(
+    "/interfaces/{interface_id}", status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def delete_interface(
+    interface_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await interfaces_service.delete_interface(
+            conn, access.workspace_id, interface_id
+        )
+
+
+@router.get(
+    "/object-types/{type_id}/interfaces", response_model=list[ImplementationOut]
+)
+async def list_implementations(
+    type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ImplementationOut]:
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        by_type = await interfaces_service.implementations_by_type(
+            conn, access.workspace_id
+        )
+    return [ImplementationOut(**r) for r in by_type.get(str(type_id), [])]
+
+
+@router.put(
+    "/object-types/{type_id}/interfaces", response_model=list[ImplementationOut]
+)
+async def set_implementations(
+    type_id: UUID,
+    body: list[ImplementationIn],
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> list[ImplementationOut]:
+    """The whole list, replacing what was there.
+
+    Its own endpoint rather than a field on the object type PUT, for the reason
+    §172's groups have one: what an object type *is* and what it *claims to be*
+    are different statements, and folding one into the other would make every
+    property edit an implementation write — the carry-through failure §246
+    found, avoided by not creating the opportunity.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await interfaces_service.set_implementations(
+            conn, access.workspace_id, type_id,
+            [e.model_dump() for e in body], created_by=access.auth.user_id,
+        )
+    return [ImplementationOut(**r) for r in rows]
+
+
+class InterfaceSetIn(BaseModel):
+    """What to read from an interface's objects.
+
+    No `definition`, unlike `ObjectSetIn`: the object types are not chosen,
+    they are *whoever implements this interface*, which is the whole of p.61's
+    "a single workflow covers all implementing types". Naming them would make
+    this a list of one-type sets somebody has to keep in step with the
+    implementations, which is the duplication the interface removes.
+    """
+
+    filters: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
+    # `le` is one store page rather than `ObjectSetIn`'s 200, because that is
+    # what an interface set can actually serve: the merge needs `offset + limit`
+    # rows from every type, and both stores clamp a read to `INSTANCE_PAGE_SIZE`.
+    # `check_depth` refuses the combination; this refuses the obvious half of it
+    # where Pydantic can say so first.
+    limit: int = Field(default=25, ge=1, le=interface_sets.MAX_DEPTH)
+    offset: int = Field(default=0, ge=0)
+    # Validated in the service, so an unsupported sort gets the sentence
+    # saying what a property sort would need rather than a list of literals.
+    sort: str | None = None
+
+
+class InterfaceInstanceOut(BaseModel):
+    """One object, seen as the interface sees it.
+
+    `object_type_id` and `object_type_name` are here and not on `InstanceOut`
+    because this is the one read where the answer is heterogeneous: a page of
+    `Inspectable` holds Vehicles and Facilities, and "which is this" is the
+    question a consumer has that a single-type page never does.
+
+    `properties` is keyed by the **interface's** names, whatever the type calls
+    them (p.66's mapping, read backwards).
+    """
+
+    id: UUID
+    primary_key: str
+    object_type_id: UUID
+    object_type_name: str
+    properties: dict[str, Any]
+    updated_at: datetime
+
+
+class InterfaceSetOut(BaseModel):
+    instances: list[InterfaceInstanceOut]
+    #: Across every implementing type, not this page's.
+    total: int
+    limit: int
+    offset: int
+    #: Which types were actually read, in the order they were read.
+    #:
+    #: A page of twelve rows that all happen to be Vehicles is a different
+    #: thing depending on whether Facility was searched and empty or never
+    #: searched at all — and it is the second whenever a filter names an
+    #: optional property Facility answers nothing to, which is a shape p.62's
+    #: capability interfaces make ordinary. Reporting the implementations
+    #: instead would say a type was consulted when it was skipped.
+    object_types: list[str]
+    #: And the ones that were not, which is the other half of that fact.
+    #:
+    #: **Sent rather than left for the caller to subtract**, because the caller
+    #: does not have the list to subtract from: a listing row carries an
+    #: implementation *count* and no names. A browser computing this would need
+    #: a second request to answer a question the server had already answered.
+    skipped: list[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/interfaces/{interface_id}/evaluate", response_model=InterfaceSetOut
+)
+async def evaluate_interface_set(
+    interface_id: UUID,
+    body: InterfaceSetIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> InterfaceSetOut:
+    """Every object of every type that implements this interface (p.61).
+
+    **A fan-out over the existing evaluator, not a new one.** One
+    `evaluate_object_set` per implementing type, with the filters rewritten
+    onto that type's own property names, and the pages merged on a key each row
+    carries. No store code, so Postgres and OpenSearch cannot disagree about
+    what an interface set means - there is only one thing evaluating it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        interface = await interfaces_service.get_interface(
+            conn, access.workspace_id, interface_id
+        )
+        members_raw = await interfaces_service.implementations_of(
+            conn, access.workspace_id, interface_id
+        )
+        declared = {
+            str(p["api_name"]): str(p["data_type"])
+            for p in interface["effective_properties"]
+        }
+        members = [
+            interface_sets.Member(
+                object_type_id=UUID(r["object_type_id"]),
+                property_mapping=r["property_mapping"],
+            )
+            for r in members_raw
+        ]
+        try:
+            # **The request before the resource.** Depth and sort are wrong
+            # about what was asked for whatever this interface looks like, and
+            # answering "nothing implements it" to somebody who asked for page
+            # nine sends them to fix the wrong thing.
+            interface_sets.check_depth(limit=body.limit, offset=body.offset)
+            sort = interface_sets.parse_sort(body.sort)
+            interface_sets.check_fan_out(
+                members, interface_name=str(interface["api_name"])
+            )
+        except interface_sets.InterfaceSetError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        pages: list[list[dict[str, Any]]] = []
+        read: list[str] = []
+        total = 0
+        for member, raw in zip(members, members_raw):
+            try:
+                translated = interface_sets.filters_for(
+                    body.filters, member=member, declared=declared,
+                    interface_name=str(interface["api_name"]),
+                )
+            except interface_sets.InterfaceSetError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                ) from exc
+            if translated is None:
+                # This type answers nothing to a filtered property, so no
+                # object of it can match. Skipped rather than read unfiltered,
+                # which would be decision 0002's silent widening.
+                continue
+            property_types = await _declared_types(conn, member.object_type_id)
+            try:
+                definition = object_sets.parse(
+                    {"object_type_id": str(member.object_type_id),
+                     "filters": translated},
+                    property_types=property_types,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                ) from exc
+            # **The whole prefix of the merged order, from every type.** Any of
+            # them could supply the entire page, so each is asked for
+            # `offset + limit` from the top rather than for its own slice —
+            # which is what `check_depth` bounds.
+            rows, count = await store.evaluate_object_set(
+                search_prefix=prefix,
+                object_type_id=definition.object_type_id,
+                filters=definition.filters,
+                limit=body.offset + body.limit,
+                offset=0,
+                sort=object_sets.parse_sorts(sort, property_types=property_types),
+            )
+            total += count
+            read.append(str(raw["display_name"]))
+            pages.append([
+                {
+                    "id": r["id"],
+                    "primary_key": r["primary_key"],
+                    "object_type_id": member.object_type_id,
+                    "object_type_name": raw["display_name"],
+                    "updated_at": r["updated_at"],
+                    "properties": interface_sets.project(
+                        _jsonb(r["properties"]) or {},
+                        member=member, declared=declared,
+                    ),
+                }
+                for r in rows
+            ])
+
+    merged = interface_sets.merge(
+        pages, sort=sort, limit=body.limit, offset=body.offset
+    )
+    return InterfaceSetOut(
+        instances=[InterfaceInstanceOut(**r) for r in merged],
+        total=total,
+        limit=body.limit,
+        offset=body.offset,
+        object_types=read,
+        skipped=[
+            str(r["display_name"]) for r in members_raw
+            if str(r["display_name"]) not in read
+        ],
+    )
 
 
 @router.get("/shared-properties", response_model=list[SharedPropertyOut])

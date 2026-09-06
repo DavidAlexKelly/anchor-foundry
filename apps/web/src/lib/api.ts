@@ -613,6 +613,28 @@ export interface PropertyInput {
   deprecation?: import("./types").Deprecation | null;
 }
 
+/** The whole shape, saved as one document — the server's `InterfaceIn` shape
+ * and its reason: the properties and the extension list constrain each other,
+ * so a save that carried one without the other could not be checked.
+ *
+ * `api_name` is absent on an update: it is the stable machine name consumers
+ * hold, and an interface is a promise other object types are written against. */
+export interface InterfaceInput {
+  api_name?: string;
+  display_name: string;
+  description?: string;
+  properties?: {
+    api_name: string;
+    display_name?: string | null;
+    description?: string;
+    data_type: string;
+    required?: boolean;
+  }[];
+  extends?: string[];
+  status?: string;
+  deprecation?: Record<string, unknown> | null;
+}
+
 export interface ValueTypeInput {
   api_name?: string;
   display_name: string;
@@ -885,11 +907,32 @@ export const objects = {
    * group". `groupId` is the filtering half — server-side, so narrowing to a
    * group of four does not make the client pay for every type in the
    * ontology. */
-  listTypes: (wid: string, groupId?: string | null) =>
-    request<import("./types").ObjectTypeSummary[]>(
-      `/workspaces/${wid}/object-types` +
-        (groupId ? `?group_id=${encodeURIComponent(groupId)}` : ""),
-    ),
+  /** The object types page's table, and every type picker in the product.
+   *
+   * Three filters, all optional and all and-ed: p.262's group and
+   * `ontology-manager` p.29's "visibility, development status, and indexing
+   * issues" — less the third, which is state the sync path does not record.
+   *
+   * Built as a `URLSearchParams` rather than by concatenating, because with
+   * three optional parameters the string-building version has a `?`-versus-`&`
+   * bug in it waiting for whichever one somebody adds next. */
+  listTypes: (
+    wid: string,
+    groupId?: string | null,
+    filters?: {
+      status?: import("./types").OntologyStatus | null;
+      visibility?: import("./types").PropertyVisibility | null;
+    },
+  ) => {
+    const query = new URLSearchParams();
+    if (groupId) query.set("group_id", groupId);
+    if (filters?.status) query.set("status", filters.status);
+    if (filters?.visibility) query.set("visibility", filters.visibility);
+    const search = query.toString();
+    return request<import("./types").ObjectTypeSummary[]>(
+      `/workspaces/${wid}/object-types${search ? `?${search}` : ""}`,
+    );
+  },
   /** p.258's Edit status button, over the types somebody ticked. All or
    * nothing: one refusal fails the request rather than leaving half of them
    * changed. */
@@ -990,6 +1033,60 @@ export const objects = {
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
     ),
+  /** Interfaces (`object-link-types` p.4, p.53; `ontology` p.60–62). */
+  listInterfaces: (wid: string) =>
+    request<import("./types").InterfaceSummary[]>(`/workspaces/${wid}/interfaces`),
+  getInterface: (wid: string, id: string) =>
+    request<import("./types").InterfaceDetail>(`/workspaces/${wid}/interfaces/${id}`),
+  createInterface: (wid: string, input: InterfaceInput) =>
+    request<import("./types").InterfaceDetail>(`/workspaces/${wid}/interfaces`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  /** PUT rather than PATCH: the shape is one document, and a partial save
+   * could drop a property nobody meant to withdraw. */
+  updateInterface: (wid: string, id: string, input: InterfaceInput) =>
+    request<import("./types").InterfaceDetail>(`/workspaces/${wid}/interfaces/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteInterface: (wid: string, id: string) =>
+    request<void>(`/workspaces/${wid}/interfaces/${id}`, { method: "DELETE" }),
+  listImplementations: (wid: string, typeId: string) =>
+    request<import("./types").Implementation[]>(
+      `/workspaces/${wid}/object-types/${typeId}/interfaces`,
+    ),
+  /** The whole list, replacing what was there — its own endpoint rather than a
+   * field on the object type save, so a property edit is never an
+   * implementation write. */
+  setImplementations: (
+    wid: string,
+    typeId: string,
+    body: { interface_id: string; property_mapping: Record<string, string> }[],
+  ) =>
+    request<import("./types").Implementation[]>(
+      `/workspaces/${wid}/object-types/${typeId}/interfaces`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+
+  /** Every object of every type that implements this interface (`ontology`
+   * p.61). Its own endpoint rather than an object set with several types,
+   * because the types are not chosen — they are whoever implements it. */
+  evaluateInterfaceSet: (
+    wid: string,
+    id: string,
+    body: {
+      filters?: { property: string; op?: string; value?: unknown }[];
+      limit?: number;
+      offset?: number;
+      sort?: string;
+    },
+  ) =>
+    request<import("./types").InterfaceSetPage>(
+      `/workspaces/${wid}/interfaces/${id}/evaluate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
   /** Value types (`object-link-types` p.222–234). */
   listValueTypes: (wid: string) =>
     request<import("./types").ValueType[]>(`/workspaces/${wid}/value-types`),

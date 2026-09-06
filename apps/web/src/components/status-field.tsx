@@ -36,7 +36,7 @@ export function StatusField({
   label = "Status",
   canPromote = true,
 }: {
-  kind: "object_type" | "property" | "link_type";
+  kind: "object_type" | "property" | "link_type" | "interface";
   value: OntologyStatus;
   deprecation?: Deprecation | null;
   onChange: (next: OntologyStatus) => void;

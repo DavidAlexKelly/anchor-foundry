@@ -4290,6 +4290,418 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 251. Interfaces, and the decision a row had been asking for since §168 (this session)
+
+`ontology.md` §1.2's Interfaces row has carried `[?]` and a precise request
+since §168: *"needs the missing pages, or an explicit decision to design it
+from the fragments and mark what was guessed."* This is that decision, taken
+and marked.
+
+**The gap is real and it is a missing chapter, not a scheduling problem.**
+`docs/pal/` has no Interfaces section: `object-link-types` p.4 and p.8 define
+one - "an Ontology type that describes the shape of an object type and its
+capabilities … object type polymorphism" - and then say "Learn more about
+interfaces", pointing at a page the export does not carry. Every other mention
+is the Gaia/Gotham integration (p.51-73), which is out of scope.
+
+**What the fragments do settle is the model**, and it is more than enough to
+build from: a shared shape of properties, links and actions (`ontology` p.60);
+many object types implementing one, and interfaces extending "any number" of
+others (p.53); a worked example with three implementing types and the argument
+for it (p.61 - Vehicle, Equipment and Facility, each with its own copy of
+`lastInspectionDate`, `inspectionStatus` and a duplicate Schedule-inspection
+action); and an implementation that **maps** the interface's property onto the
+type's own (p.66) rather than matching names.
+
+That last one is the design decision the rest follows from. p.60's argument is
+that three types satisfy one interface **while differing in everything else** -
+and that has to include what they call things. A Vehicle whose column is
+`last_checked` is still Inspectable.
+
+**Every refusal is a promise that would otherwise be unenforced.** A required
+property with nothing mapped to it. A mapping to a property the type does not
+have, which is the shape of a rename that happened somewhere else. A base type
+that does not match, which is p.181's shared-property rule one resource over,
+refused with *both* types named. A circle of extensions, named in the order it
+was followed. And two ancestors declaring one name with different base types -
+refused where the **hierarchy** is declared rather than when somebody tries to
+implement it, because the person who typed the extension is not the person who
+would otherwise meet the failure.
+
+**What was guessed is on the row, because the row asked.** That an interface
+is named like an object type (inferred from p.60's `Inspectable`,
+`SchedulableResource`). That a property may be *optional* - nothing in the
+source says so, and it is here because p.62's "design interfaces around
+capabilities" needs a capability with one mandatory field and two optional
+ones. That an interface carries a status like every other ontology resource.
+And that deleting one in use is refused, which is deliberately **unlike**
+p.185's shared property reverting its users to ordinary properties: a shared
+property gives a type metadata it can live without, and an interface is a claim
+other resources are written against.
+
+**Properties only**, which is a boundary rather than an omission: p.60 names
+links and actions too, and a link has two ends while an action has parameters
+and rules, so each raises its own question about what "the implementing type
+must supply" means.
+
+**And it is metadata until something reads it**, which p.61 anticipates and
+blesses - *"even where current platform tooling does not fully support
+interface-backed workflows, designing with interfaces establishes a foundation
+that pays off as support expands … scaffold now, consolidate later."* The
+consumer that makes it a feature is an object set **over** an interface, which
+is p.61's "target the interface directly" and is the next unit rather than
+this one.
+
+**19 mutants attacked, 17 caught, 2 withdrawn, 0 survivors** - and the first
+run's five survivors are the useful part of the unit.
+
+**Three were real gaps in the same place**: nothing had ever handed
+`parse_properties` a bad declaration, so an interface property could have had
+any base type at all, two of them could have shared a name, and a name could
+have been shaped like nothing else in the ontology. Three tests now, and the
+tell is worth carrying - a *parser* with no test that gives it something
+invalid is a parser nobody has asked to refuse anything.
+
+**Two were unobservable, and one took a line of code with it.** Moving the
+delete above the validation loop in `set_implementations` survived, because
+the whole request is one transaction and a refusal rolls it back either way -
+so the ordering there is legibility rather than a guarantee, and the docstring
+says which now. And `_write_shape` used to close by re-resolving the graph to
+prove the new shape had no cycle; that survived too, because both callers end
+with `get_interface`, which resolves it to build its answer, and a refusal
+there rolls back the same transaction. A second check behind one that already
+holds, so §213's answer applies: the line is gone rather than covered by a
+test that could not fail.
+
+24 API tests in that file, nine of them without a database - the whole of
+p.53's "any number of other interfaces" is checkable as a pure function, and
+that is where a wrong answer is a line rather than a fixture. **1815 API
+tests, 2 skipped** (was 1810).
+
+One aside worth recording rather than explaining away: a single full API run
+ended `1815 passed, 2 skipped, 1 error`, the error at *setup* of
+`test_full_bootstrap_flow_on_empty_platform`, whose fixture creates and drops
+a real database per test. It did not reproduce in the file alone (6 passed) or
+in a second identical full run. Migration 0065 landing on an empty database
+was the obvious suspect and is not the answer - the second full run migrates
+the same scratch database the same way. §243's lesson is that a plausible
+mechanism is not a diagnosis, so this is logged as one unexplained transient
+rather than fixed.
+
+### 255. The screen that makes p.61's argument (this session)
+
+§254 built the read; this is the one place it is visible, and it is the point of
+the whole arc. p.61's case for modelling `Inspectable` is that Vehicle,
+Equipment and Facility can then be asked one question together — and until
+something *shows* that, an interface is a description of three types you still
+open one at a time.
+
+**One table, and the headings are the argument.** The seeded type's column is
+`checked_on`; the heading says *Last inspection date*, because the columns are
+the interface's effective properties and the rows are keyed by them. The
+browser test asserts both halves — that the interface's name is there and that
+the column name is not — because a table that quietly used each type's own
+names would look identical on a workspace with one implementation.
+
+**A count becomes a button only when there is something behind it.** An
+interface nothing implements keeps its label. §214 applied to the cheapest
+possible control: a button that opens an empty dialog looks like there is
+something in there.
+
+**Paging stops where the server refuses, and says why.** An interface set reads
+`offset + limit` rows from *every* implementing type, and both stores clamp a
+read to their page size — so the set pages exactly one store page deep. The
+Next button knows the same ceiling rather than producing the refusal, and a
+note explains the missing button, because a control that silently stops
+existing is its own kind of confusing. `MAX_DEPTH` is restated in the browser
+because a button cannot wait for a round trip to decide whether to be disabled,
+and an API test reads the number back out of the TypeScript file so the
+restatement cannot drift (§190).
+
+**One function was written, tested, and then withdrawn in the same unit.**
+`notConsulted` subtracted the types a read consulted from the types that
+implement the interface — and the browser does not have the second list: a
+listing row carries an implementation *count* and no names. A function whose
+input its only caller cannot supply is a function that cannot work, so the
+server sends `skipped` instead and the module says where the function went.
+§213's answer, reached before the thing shipped rather than after a mutant
+found it.
+
+**13 mutants attacked, 13 caught, 0 survivors** — after one survivor that was
+the same shape as the withdrawal above. `skipped=[]` survived, because the test
+that *produces* a skipped type checked which types were read and never checked
+which were not. It is the half of the fact only the server can supply, which
+makes it the half most worth asserting and the one easiest to leave out.
+
+**1855 API tests**, 2 skipped (was 1821); **1557 unit tests** (was 1546); **11
+browser tests** in `e2e/test_interfaces.py`.
+
+And the transient §251's entry logged did not come back: three consecutive
+clean full API runs since, including this one. Still unexplained, and still
+recorded as unexplained — a failure that stops happening is not a failure that
+was understood.
+
+**One wasted run, and the guard that made it cheap.** The first full browser
+run after this unit's mutation harness ended `750 errors in 6.81s`, all at
+setup: restoring a mutated `apps/api` file updates its mtime, so §233's
+staleness check correctly refused to test a build the running API had not
+loaded. Seven seconds to be told, rather than an hour and three-quarters of a
+suite exercising the previous build and passing. The rule that follows is
+small enough to keep: **a mutation harness that touches `apps/api` ends with a
+`dev-up.sh`**, whatever it is followed by.
+
+### 254. Targeting the interface directly (this session)
+
+`ontology` p.61 puts it in four words — *"Target the interface directly. A
+single workflow covers all implementing types"* — and p.62 item 3 repeats it as
+a practice: *"Build actions, functions, and applications against interfaces
+where possible."* §251 built the interface, §252 made it findable, §253 gave it
+screens, and all three are **metadata**, which p.61 blesses in as many words and
+which the row's last ○ was about. This is the first thing that reads one.
+
+**A fan-out, not a wider object set.** `object_sets.ObjectSet`'s docstring says
+a set spanning types "has no coherent property vocabulary to filter on" — and
+that was correct when nothing supplied one. An interface *is* that vocabulary,
+so this is not a change to `ObjectSet`: it is one `evaluate_object_set` per
+implementing type, with filters rewritten onto that type's own property names
+and the pages merged on a key each row carries. **No store code at all**, which
+is the point — Postgres and OpenSearch cannot disagree about what an interface
+set means, because there is nothing new evaluating one.
+
+**One vocabulary in, one vocabulary out.** A filter says
+`last_inspection_date` and reaches a Vehicle's `last_checked` and a Facility's
+`surveyed_on`; a row comes back keyed by `last_inspection_date` whatever the
+column was called. Everything the interface does not declare is **dropped** on
+the way out, and that is the feature rather than a limitation: a page whose
+columns depended on which type each row happened to be is exactly what p.61's
+single workflow is defined against.
+
+**Two refusals, each about not offering a wrong answer.** A *property* sort is
+refused, because ordering by one means comparing in its declared type (§221) —
+a rule the stores implement and this would have to re-implement to merge two
+types' pages, which is the drift this area exists to avoid. And paging is
+bounded at one store page and **refused past rather than clamped**: both stores
+clamp a read to `INSTANCE_PAGE_SIZE`, so a merge asking one type for sixty rows
+would get fifty and drop real members off the end of the order without knowing.
+
+**The interesting case is an optional property one type answers nothing to.**
+p.62's capability interfaces make that ordinary — one mandatory field and two
+optional ones — and filtering on the part a type does not answer means *no
+object of that type can match*. Returning an empty filter list instead would
+return **every** object of it, which is decision 0002's silent widening. So the
+type is skipped, and the answer says which types were actually read: "no
+Facility matched" and "Facility was never consulted" are different facts about
+the same empty result.
+
+**And a scope test found a 500 that had been there since §251.**
+`get_interface` raised a bare `LookupError` and nothing caught it, so every read
+of a missing interface — including §253's edit dialog reopening one somebody
+deleted in another tab — was a server error rather than a 404. Every other
+service here raises `NotFoundError` (`actions`, `canvas`); this one did not, and
+no test had ever asked for an interface that was not there. §9's rule is that
+an id outside the workspace is *not found* rather than *forbidden*, so the
+answer does not say whether it exists somewhere else.
+
+**A test that would have passed against no merge at all.** The paging test
+first used primary keys `a1, a3` and `b2, b4` — whose key order is every `a`
+then every `b`, which is exactly what concatenating the two types produces. The
+keys interleave now, and the comment says why. Same family as §106's timezone
+and §246's dropdown: a fixture chosen without thinking about what it would fail
+against is a fixture that cannot fail.
+
+**19 mutants attacked, 19 caught, 0 survivors, 0 no-ops** — including the two
+that only a real page could see: asking each type for its own slice instead of
+the merged prefix, and reporting every implementation as read when one was
+skipped. Both were written *because* the tests above them existed; neither
+would have been attackable a commit earlier.
+
+### 253. The screens for a shape, and a status that was only a label (this session)
+
+§251 built interfaces and §252 put them where the platform already answers
+"what shapes exist here". Neither could be non-empty, because nothing in the
+browser could declare an interface or claim one — including §252's own
+*implements* line on the object type listing, which is the exact shape of a
+column that is always blank. This is the surface, and it is the one the row
+had been marked ○ for since §251.
+
+**A section beside shared properties and value types**, which is the decision
+§165 and §168 already made for the same reason: one ontology per workspace and
+nothing to import across, so Foundry's separate manager application has no
+second thing to be separate from.
+
+**Two dialogs, and the split is p.60's own.** What a shape *is* belongs to
+whoever wrote `Inspectable`; what a type *claims* belongs to whoever owns
+Vehicle. One Save over both would put "add a property to the interface" — a
+change to every implementation — behind the same button as "point this type's
+column at it", a change to one type.
+
+**Three of the server's four refusals are made unreachable rather than
+restated.** `check_implementation` refuses a property the interface never
+declared, a mapping to a property the type lacks, a base type that does not
+match, and a required property answered by nothing. The dialog has a row per
+declared property and no way to add one; its select offers the object type's
+own properties; and it offers only those whose base type matches. So exactly
+one rule is stated on both sides — and it is the one somebody needs answered
+before they click rather than after. The other three are absent for §213's
+reason: a control that cannot produce a bad request does not need to check for
+one.
+
+**The mapping is the thing that needed a browser test.** An API test can post
+`{"last_inspection_date": "checked_on"}`; only a browser test shows that the
+dialog offers `checked_on` and not `name`, that it suggests nothing when the
+names disagree, and that it will not save until the required promise is
+answered. p.66's mapping exists because p.60's argument requires it — types
+satisfy one interface *while differing in everything else*, and what they call
+things is part of everything else.
+
+**A suggestion is withheld where names agree and types do not.** That is the
+case where matching names are a coincidence, and filling it in would turn a
+question into a refusal.
+
+**`struct` is held out of the interface property dropdown**, and the test that
+says why asserts the hole rather than pretending it is closed:
+`check_implementation` compares base types, and a struct's promise is its
+*fields*, so an interface declaring one would be satisfied by any struct at
+all. §214's rule — a control that cannot work is worse than an absent one —
+applied to a base type rather than a button.
+
+**§251 left a status that was only a label, and building the screen found
+it.** p.256 says a resource must be `experimental` or `deprecated` before it
+can be deleted, and every other ontology resource here enforces it.
+`delete_interface` did not, so the panel's Delete tooltip was about to explain
+a rule nobody kept. The refusal is in the service now, checked before the
+usage refusal because it is about this resource rather than about others, and
+the browser disables Delete only for that one — the usage refusal is half
+visible from a listing (the summary carries the implementation count and not
+the extension count), so it arrives as the server's sentence with the names in
+it instead.
+
+**And the suite tidies up after a resource it never created.** §209 and §249
+taught the harness to delete its own object types and canvas apps, and both
+hang off `Api.call` — but a panel declares an interface from a dialog, which
+that funnel never sees. Swept by *time* instead: anything in the workspace
+newer than the run is the run's. After the object types, because an
+implemented interface refuses deletion until nothing claims it.
+
+**A drift guard on the browser's dropdown, against the server's vocabulary
+rather than against a second copy of it** (§191): every base type in
+`ontology.PROPERTY_TYPES` must be offered by the object type editor, listed as
+an editor gap with a reason, or named in `NOT_INTERFACE_TYPES` — with a
+vacuity guard, because an empty exclusion list would satisfy every assertion
+while offering `struct` again.
+
+**26 mutants attacked, 26 caught, 0 survivors** — after a first run with two
+survivors and one mutant that was wrong about itself.
+
+**A claim that could have vanished with nothing on screen.** The implement
+endpoint replaces the whole list, so the dialog sends a type's *other*
+implementations back. No test had ever had one type claim two shapes, so
+dropping that would have silently un-implemented the first — and the only
+symptom is a type quietly no longer appearing under an interface. There is a
+test with two now.
+
+**A button nobody had tested, guarding a rule that had just been written.**
+p.256's gate got an API test in the same commit that added it; the control it
+justified had none.
+
+**And one mutant that did not model the failure it was named after.** Deleting
+`.filter((e) => e.interface_id !== iface.id)` leaves the current interface in
+the list *twice* rather than dropping the others, and the server tolerates the
+duplicate — so it survived correctly. The mutant was replaced with the edit
+that actually withdraws the rest (sending only the claim being edited), which
+the new test catches. Worth recording because it is the failure mode of
+mutation testing itself: a survivor is only evidence about the mutation you
+actually made, and a name is not a check.
+
+**1821 API tests**, 2 skipped (was 1815); **1546 unit tests**; 9 new browser
+tests in `e2e/test_interfaces.py`.
+
+### 252. Two places that already answer "what shapes exist here" (this session)
+
+§251 built the resource; this is the pair of surfaces that would otherwise
+have made it invisible, and both are places the platform *already* answers a
+question interfaces are now part of the answer to.
+
+**Ontology search** (§133, `ontology` p.52's "search across your ontology")
+had six of seven ontology kinds and would have quietly kept saying six. Its
+docstring said "Five of those seven" and had been wrong since a kind was added
+without it; it says six now, and the count is the kind of line that only stays
+true because a test reads it. An interface's `usage_count` is its
+**implementations**, not its properties - the number a searcher is deciding
+with is how much depends on this shape, which is the same reading
+`shared_property`'s count already has.
+
+**The object type listing** now says what each type claims to be, which is
+p.61's argument made visible: the reason to model `Inspectable` at all is that
+you can look at Vehicle, Equipment and Facility and see the shape they share.
+One query for every type's implementations rather than one per row - §248's
+lesson from four units ago, applied before it could become a defect.
+
+Both mutants were caught by tests written with them. The listing one is worth
+naming: `interfaces=[]` is what an un-wired feature looks like from the
+outside, and it is indistinguishable from "this type implements nothing"
+unless a test declares an implementation first.
+
+### 250. p.29's other two home-page filters, and a guard written for one (this session)
+
+`ontology.md`'s build order said "filtering by development status is now
+possible in principle since §170 built statuses, and is not wired to the
+listing yet". Opening the page it cites - §216's rule - says something the
+line did not: `ontology-manager` **p.29** lists **three** filters, not one.
+
+> "These pages allow for filtering object types and link types based on their
+> visibility, development status, and indexing issues." (p.29)
+
+Two of the three are built here, beside p.262's group filter that §172 already
+had. The third is the indexing-issue column, which wants indexing state the
+sync path does not record - so there is nothing to filter on rather than
+nothing built, and the row says which.
+
+**One value per filter, and-ed**, which is the group control's shape rather
+than a new one. p.29 does not say which it is, so the precedent decides: a
+second control with different multiplicity beside the first would be a
+difference nobody could see the reason for. §199 chose the other way for the
+Workshop variables panel and said why - "an object set OR a function is a
+question somebody asks" - and that argument is about a list of *kinds* a
+variable can be, not about a status, which each type has exactly one of.
+
+**Visibility is not the status filter under another name**, and the case that
+proves it is the interesting part of the unit. p.255 makes `promoted` set a
+type's visibility to `prominent`, and `visibility_for` **raises without ever
+lowering** - a type somebody deliberately made prominent should not quietly
+stop being so when its status steps down. So a type promoted and then demoted
+is prominent and *not* promoted: the one type these two controls disagree
+about, and if they never disagreed one of them would be worth deleting. It is
+also why `hidden` matches nothing anywhere - a type's visibility is only ever
+a consequence of promotion, never a setting - which turns out to be the one
+filter value safe to assert an empty state with in a workspace this suite
+shares with hundreds of accumulated fixtures.
+
+**A guard written for one filter, which had to grow.** The page's "an empty
+filter result is not an empty ontology" branch tested `groupFilter` alone.
+That was right when there was one filter and would have quietly regressed the
+moment there were three: filtering to a status nothing matches would have
+fallen through to "The ontology starts here" and offered a Define button as
+the way out of a filter. It is now one `filtered` value, read in one place,
+and the mutant that narrows it back to the group alone is caught.
+
+**And `page.locator("tbody tr")` is every table on that page.** The sources
+table carries the same `seed_<tag>` text as the types table, so an assertion
+that a filtered-out type is *gone* counted rows in a table the filter does not
+touch and could never reach zero. Scoped by the column header, which is the
+one thing only the types table has.
+
+An unknown value is **refused rather than ignored**: a typo in a URL that
+quietly returns everything is a filter nobody can see the effect of, and the
+reader believes they are looking at a narrowed list.
+
+**12 mutants, 12 caught, 0 survivors.** Everything here is a filter, and a
+filter has two ways of being wrong a happy-path test cannot tell apart - it
+can stop narrowing, or narrow by the wrong thing - so there are mutants for
+both, including the two that swap the columns the filters read.
+
+4 new API tests, 3 new browser tests; 1520 unit, `tsc` clean.
+
 ### 249. The suite tidies up its modules too (this session)
 
 §209 taught the browser suite to delete the object types it creates, after

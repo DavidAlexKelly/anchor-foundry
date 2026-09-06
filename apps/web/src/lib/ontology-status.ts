@@ -56,7 +56,12 @@ export const DELETABLE: OntologyStatus[] = ["experimental", "deprecated"];
  * p.255: `promoted` "applies only to object types. It is not available for
  * properties, link types, action types or interfaces." */
 export function statusesFor(
-  kind: "object_type" | "property" | "link_type",
+  /** p.255 names interfaces in that same sentence, and the server agrees
+   * independently: `InterfaceIn.status` matches
+   * `^(active|experimental|deprecated|example)$` with no `promoted` in it. So
+   * the option is absent here because it would be a save that fails, not
+   * because this list decided so. */
+  kind: "object_type" | "property" | "link_type" | "interface",
   /** p.255 also restricts *who* may apply `promoted`: "only users with the
    * `Ontology Owner` role on the ontology level". A workspace is this
    * platform's ontology, so this is workspace admin.
