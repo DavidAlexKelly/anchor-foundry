@@ -4463,6 +4463,32 @@ an editor gap with a reason, or named in `NOT_INTERFACE_TYPES` — with a
 vacuity guard, because an empty exclusion list would satisfy every assertion
 while offering `struct` again.
 
+**26 mutants attacked, 26 caught, 0 survivors** — after a first run with two
+survivors and one mutant that was wrong about itself.
+
+**A claim that could have vanished with nothing on screen.** The implement
+endpoint replaces the whole list, so the dialog sends a type's *other*
+implementations back. No test had ever had one type claim two shapes, so
+dropping that would have silently un-implemented the first — and the only
+symptom is a type quietly no longer appearing under an interface. There is a
+test with two now.
+
+**A button nobody had tested, guarding a rule that had just been written.**
+p.256's gate got an API test in the same commit that added it; the control it
+justified had none.
+
+**And one mutant that did not model the failure it was named after.** Deleting
+`.filter((e) => e.interface_id !== iface.id)` leaves the current interface in
+the list *twice* rather than dropping the others, and the server tolerates the
+duplicate — so it survived correctly. The mutant was replaced with the edit
+that actually withdraws the rest (sending only the claim being edited), which
+the new test catches. Worth recording because it is the failure mode of
+mutation testing itself: a survivor is only evidence about the mutation you
+actually made, and a name is not a check.
+
+**1821 API tests**, 2 skipped (was 1815); **1546 unit tests**; 9 new browser
+tests in `e2e/test_interfaces.py`.
+
 ### 252. Two places that already answer "what shapes exist here" (this session)
 
 §251 built the resource; this is the pair of surfaces that would otherwise
