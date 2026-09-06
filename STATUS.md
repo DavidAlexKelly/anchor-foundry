@@ -4433,8 +4433,13 @@ that *produces* a skipped type checked which types were read and never checked
 which were not. It is the half of the fact only the server can supply, which
 makes it the half most worth asserting and the one easiest to leave out.
 
-**1557 unit tests** (was 1546); **11 browser tests** in
-`e2e/test_interfaces.py`.
+**1855 API tests**, 2 skipped (was 1821); **1557 unit tests** (was 1546); **11
+browser tests** in `e2e/test_interfaces.py`.
+
+And the transient §251's entry logged did not come back: three consecutive
+clean full API runs since, including this one. Still unexplained, and still
+recorded as unexplained — a failure that stops happening is not a failure that
+was understood.
 
 ### 254. Targeting the interface directly (this session)
 
