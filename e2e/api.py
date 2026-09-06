@@ -45,6 +45,13 @@ class Api:
         # funnel every test's writes go through: a per-test list would be
         # correct for the tests that remembered and silently wrong for the rest.
         self.created_object_types: list[str] = []  # delete paths, not bare ids
+        # **Canvas apps outlive a run too, and nothing was removing them.**
+        # §209 taught the suite to tidy up its object types after 1,400 of them
+        # aged a passing test into a failing one; the same argument applies one
+        # table over and nobody made it. Measured in §248: 28,500 modules in
+        # the workspace every browser test uses, which is what
+        # `parameter_usages` was reading on every action-definition save.
+        self.created_canvas_apps: list[str] = []
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -74,16 +81,20 @@ class Api:
         """Note an object type that was just created, for `cleanup` to remove.
 
         Matched on the *path* rather than on the shape of the response, because
-        several endpoints return something with an `id` and only this one
-        creates a row that outlives the run.
+        several endpoints return something with an `id` and only these create a
+        row that outlives the run.
         """
-        if method != "POST" or not path.endswith("/object-types"):
+        if method != "POST" or not isinstance(parsed, dict):
             return
-        if isinstance(parsed, dict) and isinstance(parsed.get("id"), str):
-            # The *delete path*, built from the create path, so this needs no
-            # workspace id of its own - the one that created the type is right
-            # there and cannot disagree with it.
+        if not isinstance(parsed.get("id"), str):
+            return
+        # The *delete path*, built from the create path, so this needs no
+        # workspace id of its own - the one that created the row is right there
+        # and cannot disagree with it.
+        if path.endswith("/object-types"):
             self.created_object_types.append(f"{path}/{parsed['id']}")
+        elif path.endswith("/canvas-apps"):
+            self.created_canvas_apps.append(f"{path}/{parsed['id']}")
 
     def cleanup(self) -> tuple[int, int]:
         """Delete what this run created. Returns (removed, left behind).
@@ -99,14 +110,25 @@ class Api:
         so an exception here would turn a green suite red for tidying up.
         """
         removed = 0
+        # **Apps first, types second**, because an app can reference a type and
+        # a type deleted out from under one is the cascade the API refuses.
+        # Nothing references an app, so it always goes.
+        for delete_path in reversed(self.created_canvas_apps):
+            try:
+                self.call("DELETE", delete_path)
+                removed += 1
+            except Exception:
+                pass
         for delete_path in reversed(self.created_object_types):
             try:
                 self.call("DELETE", delete_path)
                 removed += 1
             except Exception:
                 pass
-        left = len(self.created_object_types) - removed
+        created = len(self.created_object_types) + len(self.created_canvas_apps)
+        left = created - removed
         self.created_object_types.clear()
+        self.created_canvas_apps.clear()
         return removed, left
 
     def upload_file(

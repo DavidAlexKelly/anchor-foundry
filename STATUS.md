@@ -4290,6 +4290,217 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 249. The suite tidies up its modules too (this session)
+
+§209 taught the browser suite to delete the object types it creates, after
+1,400 of them aged a passing test into a failing one - the Ontology Manager's
+listing fetches every type in the workspace, and at 1,400 it took seven
+seconds to open a dialog. That fixture's docstring makes the argument in full.
+
+**Nothing was doing the same for canvas apps**, which is how there came to be
+**28,500 of them in one workspace** (§248). The argument did not need making
+again; it needed applying one table over, and nobody had. Every `Module` in
+every browser test creates one, and every one of them stayed.
+
+Apps are deleted **before** types, because an app can reference a type and a
+type deleted out from under one is the cascade the API refuses - so the other
+order would leave the apps behind on precisely the runs that created the most.
+Best-effort like the rest of that cleanup: it runs after the last assertion,
+and an exception there would turn a green suite red for tidying up.
+
+**The existing backlog is left alone.** It is shared development state, and
+clearing 28,500 rows is a decision to take deliberately rather than in
+passing. What this stops is the growth.
+
+### 248. The action-definition save read every module in the workspace (this session)
+
+Found by asking why the browser suite had slowed to a third of its usual rate -
+9.2 tests a minute across several runs, then 3.4. The answer was not the code
+under test: the development database has accumulated **28,500 modules in the
+one workspace the suite uses**, and 17,500 object types beside them.
+
+That is ordinary test debris and mostly harmless. What it exposed is not:
+`parameter_usages` - the §129 refusal that names a Workshop module using a
+parameter a save would remove - **read every module in the workspace and
+parsed each, on every definition save.** It scales with how many modules a
+workspace has rather than with how many could possibly match, which is a
+property nobody notices until a workspace is large, and then notices as a slow
+save rather than as a bug.
+
+One clause fixes it: `position(<action id> in definition) > 0`. It is a
+**necessary condition, not the check** - a module that never mentions the id
+cannot name one of its parameters - so it is a way of not fetching documents
+the loop would discard, and the loop still decides. Measured on that database:
+**1.44s to ship 26MB into Python against 83ms to let Postgres answer the same
+question.** `substring` rather than `LIKE` so there is no pattern to escape;
+`_` is a wildcard and a document id is not.
+
+The one new risk is the clause quietly becoming the check, so the test is a
+module that **mentions the id and uses nothing** - a text widget with the id
+typed into it. It passes the filter and must still not count, because a rename
+it does not depend on has to stay allowed.
+
+**Whether this explains the intermittent action-editor failure is not
+settled.** The dialog test that has failed in three full runs (§233, §243,
+§244) waits on exactly this save, and the save was measurably slower than
+anybody had assumed - but 1.4s is not 15s, and saying "fixed" on the strength
+of a plausible mechanism is what §243 already did once and was wrong about.
+The probe §245 left in that test is still there and still the thing that will
+answer it.
+
+### 247. The Workshop struct variable, and two lists nothing was comparing (this session)
+
+The last third of `ontology.md` build order item 7, and the two halves of it
+are one unit because p.155 says so: *"widgets and variable transformation
+operations cannot use structs as a whole, so individual struct fields must be
+extracted for use."* A `struct` kind without p.143's **Extract struct field**
+is a value nothing can read, so shipping the kind alone would have been
+shipping a variable with no exit.
+
+**The variable declares no fields**, and that is the decision worth recording,
+because it could easily have gone the other way: an `array` declares an
+`element` (§198), and the ontology already declares a struct *property*'s
+fields (db 0064). Doing both would put one schema in two places - the shape
+§191 has caught going stale five times - and p.155 says how Foundry answers
+"what does this hold" itself: by "referencing it to the struct variable's raw
+Current value". So a field is named by id, and one the value does not hold
+reads as empty rather than as an error.
+
+Three answers, all `object_property`'s and for its reasons. **Nothing picked
+yet is empty** - a struct read before its object has been clicked is a detail
+panel before the first click. **A field the struct lacks is empty** - db 0064
+stores a declared field with no value as null, so refusing would make an empty
+postcode fail the page it appears on. **A value that is not a struct is
+refused**, because that is a document wired wrongly and a blank widget says
+nothing about which variable it is.
+
+Two of p.152's three sources needed nothing new: a static default, and an
+object's struct property through `object_property`, which already read one. The
+third is `[fn]`. Routing and state saving refuse a struct without being asked,
+because both lists were closed before the kind existed - p.199's URL parameters
+are scalars, p.205's "Supported variable types" does not name Struct - which is
+the answer being right for the right reason, and asserted rather than assumed.
+
+**And two mirrored lists nothing was comparing.** §190 wrote a drift guard for
+`EFFECTS` the day a missing entry made `switch_tab` creatable only by
+hand-editing JSON. `KINDS` and `TRANSFORMS` are the same shape - a Python tuple
+and a TypeScript array, neither derived from the other - and had **no check at
+all** until this unit added a kind and went looking for one. Both are now
+compared in both directions, with §190's vacuity guard on the labels: an
+`<option>` with no text is not an offer, so requiring one proves the panel was
+read rather than the server's own list compared with itself.
+
+**A sentence that said something was impossible, re-read.** `ARRAY_ELEMENTS`
+refused `struct` because "a struct element needs a kind with named fields, and
+there is none" - true when it was written, and not the gap any more. Both the
+service and the panel now say what is actually missing: the loop handing each
+*entry* to a child of that kind. §213's rule applied to the sentence rather
+than discovered by somebody trusting it a year later.
+
+**p.152's static source needed a control of its own**, which the page does not
+say and reading it does not suggest: "a struct variable can be initialized
+statically within Workshop", and a struct default is the one default that is
+not a string. The panel's existing box stores what was typed, so a struct
+typed into it would have produced a variable whose first extraction fails at
+view time - §214's control that cannot work, arrived at from the other
+direction. `parseStructDefault` parses the box and the document holds the
+object; the two are kept apart so typing is never interrupted by
+re-serialising a half-written value, and an unparseable box says so and leaves
+the last good value alone.
+
+**17 mutants, 17 caught, 0 survivors**, across three layers - the variable
+service, the browser lib, and the panel and chain through Playwright. Two of
+them are §248's: one makes the narrowing clause *become* the check and one
+makes it drop a real usage, which are the only two ways that optimisation can
+be wrong.
+
+Two test-facing corrections worth carrying. The kind `<select>` needed a test
+id, because its accessible name is not "Type": the `<label>` wraps the
+control, so the name computed for it is the label's whole text content -
+"Type" followed by every option - and a test asking for the exact string waits
+thirty seconds for nothing. And the panel's New button opens the new
+variable's editor itself, so clicking the row afterwards is a *toggle* that
+closes it.
+
+5 new unit tests, 12 new API tests, 3 new browser tests; 1520 unit, 257 in the
+variables service, `tsc` clean.
+
+### 246. The struct field editor, and a button that took the ✕'s place (this session)
+
+The second third of `ontology.md` build order item 7. §245 built the `struct`
+type and deliberately kept it *off* the property-type dropdown, on §214's rule:
+the dropdown is not the whole declaration, so choosing it there would have
+produced a property the server refuses. That comment said the type would
+"arrive on this list the day its editor does", and this is that day - which is
+also the first time in this repo that a §214 deferral has been *closed* rather
+than restated.
+
+**p.152–158's flow, less the mapping half.** Base type → Struct, then a Struct
+fields section with add, edit and remove: a name, a label, a type from p.149's
+narrower list, a description. p.153's *Backing column*, p.155's per-field
+column mapping and p.160's *Automap all* are absent on purpose and they are one
+feature in three places - they say where a field's value comes from, and this
+platform maps a struct the way p.149's own first sentence describes, from one
+"struct type dataset column", which `column_mappings` already expresses.
+
+**p.158's warning, translated rather than copied.** Foundry's is about a RID
+being regenerated when a field's API name changes. There is no RID here, and
+the consequence lands somewhere else: a stored value is a mapping keyed by
+field name, so a rename leaves every existing object holding the old key until
+the next sync. Same warning, different mechanism - and the mechanism is what
+makes it actionable, because the fix is a sync and the dialog says so.
+
+**A struct now renders as its fields rather than as JSON**, which needs the
+declaration for the labels *and* for the order. The order is the half that
+cannot be recovered any other way: `_coerce_struct` hands the store a value in
+the declared order and then `jsonb` reorders its keys by length and bytes, so
+the value itself no longer remembers what p.154's author chose. This is the
+**second per-property declaration threaded by hand** through the same nine call
+sites after `value_format`; the note in `property-value.tsx` says a third
+should collapse them into one prop rather than becoming a third, which is the
+threshold `property_values.py` sets for its own mirrors.
+
+**The finding: a control that removes itself lets the next control take its
+place.** Emptying a three-field struct produced *three removals and one add*
+from three clicks. Removing the last row collapsed the table by one row, which
+slid *Add field* up into the position the ✕ had just occupied, and a click at
+that position landed on it. Four wrong guesses went by first - a stale closure,
+a one-shot `count()`, a remount, a stale bundle - and what settled it was
+counting the handlers: a `data-probe-adds` / `data-probe-removes` pair reported
+`adds: 1, removes: 3`, and `dispatch_event` on the same buttons emptied the
+list cleanly, which located the cause in the pointer rather than in the state.
+*Add field* now sits **above** the list, where nothing a shrinking table does
+can move it, and the table keeps an empty-state row rather than collapsing.
+
+**§240's rule again, and again a guess too late.** The probe that answered it
+took one run; the four hypotheses before it took five. The tell was there from
+the first trace - `['floors'] → ['']`, a *blank* row where a named one had been
+- and a blank row has exactly two producers in that file, which is a question a
+counter answers and an argument does not.
+
+Two corrections to tests that were passing. `test_struct_fields_editor.py`'s
+three cases were **order-dependent**: two of them worked only after the first
+had converted the property, and running either alone found a plain string with
+no Fields button at all. And §245's rendering test resolved
+`get_by_role("heading", name="A1")` against *two* headings once the breadcrumb
+caught up - `get_by_role`'s name match is a substring - so it passed or failed
+on which of them rendered first.
+
+**21 mutants attacked, 20 caught, 1 withdrawn, 0 survivors.** The withdrawn
+one is §213's shape and it is the reason a line of code is gone: removing
+`api_name.trim()` on Apply changed nothing anybody could observe, because
+`toFieldApiName` runs on every keystroke into that box and cannot produce
+whitespace. Ask who else already refuses this, then delete rather than test -
+so the trim went, from the dialog and from `problem`, which had been reading
+the name the same way. Refusing a padded name is also the more honest answer,
+since the server trims nothing. The label beside it *is* free text, so the
+mutant moved to the half that is reachable and a browser test now types a
+padded one; the clean re-run caught all 20.
+
+23 new unit tests, 3 new browser tests, and a drift guard scanning the field
+types the dialog offers against the server's list (§190's shape, demonstrated
+by deleting one and watching it fail). 1515 unit, `tsc` clean.
+
 ### 245. The struct property type, and a list that had already lost a setting (this session)
 
 `ontology.md`'s build order item 7 reads "**Struct property type**, then
@@ -7570,6 +7781,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 ---
 
 ## Known rough edges worth knowing about
+
+- **The development database accumulates, and past a point it stops being harmless.** As of §248 it holds **28,500 canvas apps and 17,500 object types**, and 28,500 of the apps are in the single workspace every browser test uses. Two costs, and only the first is obvious. The suite runs at a third of its usual rate, which reads as "the box is slow today". And it hides *scalability* defects in plain sight by making them ordinary: `parameter_usages` read all 28,500 documents on every action-definition save and had done since §129, at 1.44s a time, and nobody noticed because nobody had a workspace that large — except this one, silently, all along. **The dev database is the only large workspace this build has**, which makes it worth measuring rather than only worth complaining about: `SELECT count(*) FROM canvas_apps ca JOIN projects p … WHERE w.name='Operations'` is thirty seconds and it is how §248 got found. Cleaning it out would speed every future run; it is shared state and destructive, so it is a decision to take deliberately rather than in passing.
+
+- **A control that removes itself lets the next control take its place, and a repeated click at one position walks down the page.** §246's struct dialog put *Add field* under the list; emptying a three-field struct produced **three removals and one add from three clicks**, because removing the last row collapsed the table by exactly one row and slid the button into the position the ✕ had just occupied. The fix is layout, not state: anything above a shrinking list cannot move, so the button went above it and the table keeps an empty-state row rather than collapsing. **The tell is a destructive control with something clickable below it** — a Remove button above an Add, a delete above a Save. It also has a testing corollary: a browser test that removes N rows by pointing at one place is asserting about the layout, and `dispatch_event("click")` is the right tool when the claim under test is the rule rather than the pointer.
+
+- **`get_by_role(name=…)` matches a substring, so a heading can be two headings.** §245's rendering test waited for `get_by_role("heading", name="A1")` and passed for a week; §246 made it fail, because the breadcrumb's own heading reads "Seed <tag> · A1" and *contains* the object's title. Which one resolved first decided whether the test passed — a strict-mode violation hiding behind a race. Two habits, both cheap: scope a role query to the region it is about (`get_by_test_id("standard-object-view").get_by_role(…)`), and pass `exact=True` whenever the name is short enough to be a substring of something else. The same applies to buttons: `name="Save"` matches "Save anyway".
 
 - **A comment that names a risk is not a guard, and this one had been standing next to its own failure.** `object-type-editor` rebuilds a type's whole property list and PATCHes it, mapping each property into a `PropertyInput` by hand. Beside that map, since §157: *"every new property setting has to be added here, and nothing fails if it is not."* §245 went to add `struct_fields` and found `description` **already missing** — so opening the edit dialog and saving, for any reason at all, erased every property description on the type. The comment was written by somebody who saw the failure mode clearly enough to describe it in a sentence, and describing it is all it did. The fix is `{ [K in keyof Required<PropertyInput>]: true }`: adding an optional field to the input type now fails to compile until it is carried. **The tell is a comment containing the words "has to be" or "must remember to"** — those are the sentences where a type or a test belongs instead, and this repo has now written the same guard-as-a-type three times (§200's `PROP_DIRECTION`, §191's wish for `REFERENCE_PROPS`, this).
 

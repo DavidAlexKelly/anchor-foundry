@@ -201,7 +201,14 @@ export type WorkshopVariableKind =
    * p.76). Always derived, by `object_series`: a series is read *through* an
    * object, so there is no static form of one. Resolves to a
    * {@link TimeSeriesSetRef} — a question, never points. */
-  | "time_series_set";
+  | "time_series_set"
+  /** A composite value keyed by field id (`workshop` p.75). **It carries no
+   * field schema**, and that is deliberate: the ontology already declares the
+   * fields of a struct *property* (db 0064), and a second copy on the variable
+   * would be one schema in two places. p.155 says how Foundry answers "what
+   * does this hold" — by reading the variable's own current value — so a field
+   * is named by id and one the value lacks reads as empty. */
+  | "struct";
 
 /** Foundry's transformation vocabulary, less the two that read the ontology
  * (`object_property`, `object_set_aggregation`) — those need the instance
@@ -243,7 +250,13 @@ export type WorkshopTransform =
    * (p.76, p.582). Input is `[objectVariable]`; config carries the property
    * and, optionally, `interval` and `aggregate`. Resolves to a
    * {@link TimeSeriesSetRef}. */
-  | "object_series";
+  | "object_series"
+  /** > "Returns a struct field value given a struct and field ID." (p.143)
+   *
+   * The only way a struct reaches anything: p.155 says "widgets and variable
+   * transformation operations cannot use structs as a whole, so individual
+   * struct fields must be extracted for use". */
+  | "extract_struct_field"
 
 /** What a `time_series_set` variable resolves to: the whole question, and no
  * data. Decision 0009 keeps points in the dataset they arrived in, so a

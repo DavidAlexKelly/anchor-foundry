@@ -144,12 +144,33 @@ def test_a_synced_struct_holds_the_declared_fields_and_nothing_else(
     eventually(lambda: rows.count(), lambda n: n == len(SITES),
                what="this type's sites, and only this type's")
     rows.first.get_by_role("button", name="Explore").click()
-    expect(page.get_by_role("heading", name="A1")).to_be_visible()
+    # **Scoped, and exact.** `get_by_role`'s name match is a substring, and the
+    # page carries two headings containing "A1" once the title resolves — the
+    # breadcrumb's "Seed <tag> · A1" and the view's own. Unscoped, this passed
+    # or failed depending on which had rendered first.
+    expect(
+        page.get_by_test_id("standard-object-view").get_by_role(
+            "heading", name="A1", exact=True
+        )
+    ).to_be_visible()
 
-    shown = page.get_by_text("12 Main St", exact=False).first
+    # **Read as its declared fields, not as JSON** (§246): the declaration is
+    # what supplies the labels *and* the order, and the order cannot be
+    # recovered any other way — `jsonb` reorders an object's keys on the way
+    # into storage, so the value itself no longer remembers what p.154's author
+    # chose.
+    shown = page.get_by_test_id("struct-value").first
     expect(shown).to_be_visible()
-    text = shown.text_content() or ""
-    assert "postal_code" in text and "N1 9GU" in text
-    # The declared type, applied: `floors` was the string "3" in the column.
-    assert '"floors":3' in text.replace(" ", "")
-    assert "county" not in text and "Greater London" not in text
+    labels = shown.locator(".struct-field-label")
+    assert [
+        labels.nth(i).text_content() for i in range(labels.count())
+    ] == ["Street", "Postal code", "Floors"], "the declared order and labels"
+
+    # **Exact, not `in`.** The whole text is the strongest form of "and nothing
+    # else": `county` was in the CSV cell and is absent here because the
+    # declaration does not name it, which is the difference between this type
+    # and `json`. The labels run into their values because the gap between them
+    # is CSS — `text_content` reads the DOM, not the layout (§214).
+    assert " ".join((shown.text_content() or "").split()) == (
+        "Street12 Main StPostal codeN1 9GUFloors3"
+    )

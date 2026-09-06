@@ -1384,6 +1384,170 @@ def test_object_property_needs_one_input_and_a_property() -> None:
                                          "config": {}})})
 
 
+# ---- struct variables (p.75, p.143, p.152-155) -------------------------------
+ADDRESS = {"street": "12 Main St", "postal_code": "N1 9GU", "floors": 3}
+
+CLICKED_WITH_STRUCT = {
+    "object_type_id": TYPE_ID,
+    "primary_key": "S1",
+    "properties": {"name": "Aberdeen Yard", "address": ADDRESS},
+}
+
+
+def test_a_struct_variable_holds_a_composite_value() -> None:
+    """p.75: "Stores a composite type that maps string fieldIDs to values."
+
+    Declared like any other kind, with the value in `default` - p.152's first
+    of three sources ("initialized statically within Workshop").
+    """
+    variables = wv.parse({"v_addr": var("v_addr", kind="struct", label="Address",
+                                        default=ADDRESS)})
+    assert wv.evaluate(variables, {})["v_addr"] == ADDRESS
+
+
+def test_a_field_is_extracted_by_id() -> None:
+    """p.143: "Returns a struct field value given a struct and field ID."
+
+    **This is the only way a struct reaches anything** (p.155: "widgets and
+    variable transformation operations cannot use structs as a whole"), so a
+    module that holds one and never extracts from it holds a value nothing can
+    read.
+    """
+    variables = wv.parse({
+        "v_addr": var("v_addr", kind="struct", label="Address", default=ADDRESS),
+        "v_street": var("v_street", label="Street",
+                        derivation={"transform": "extract_struct_field",
+                                    "inputs": ["v_addr"], "config": {"field": "street"}}),
+    })
+    assert wv.evaluate(variables, {})["v_street"] == "12 Main St"
+
+
+def test_a_struct_property_of_a_picked_object_feeds_the_extract() -> None:
+    """p.152's second source: "using an object's struct property".
+
+    Nothing new was needed for it, which is the point worth asserting - a
+    struct property is a property, so `object_property` already reads one and
+    the two transforms chain like any other pair.
+    """
+    variables = wv.parse({
+        "v_site": var("v_site", kind="single_object", label="Site"),
+        "v_addr": var("v_addr", kind="struct", label="Address",
+                      derivation={"transform": "object_property", "inputs": ["v_site"],
+                                  "config": {"property": "address"}}),
+        "v_code": var("v_code", label="Postcode",
+                      derivation={"transform": "extract_struct_field",
+                                  "inputs": ["v_addr"],
+                                  "config": {"field": "postal_code"}}),
+    })
+    assert wv.evaluate(variables, {"v_site": CLICKED_WITH_STRUCT})["v_code"] == "N1 9GU"
+
+
+def test_an_extracted_field_chains_into_another_transform() -> None:
+    """p.155's Metric Card example, in this module's terms: the extracted field
+    is an ordinary value and feeds the same graph everything else does."""
+    variables = wv.parse({
+        "v_addr": var("v_addr", kind="struct", label="Address", default=ADDRESS),
+        "v_street": var("v_street", label="Street",
+                        derivation={"transform": "extract_struct_field",
+                                    "inputs": ["v_addr"], "config": {"field": "street"}}),
+        "v_code": var("v_code", label="Postcode",
+                      derivation={"transform": "extract_struct_field",
+                                  "inputs": ["v_addr"],
+                                  "config": {"field": "postal_code"}}),
+        "v_line": var("v_line", label="Line",
+                      derivation={"transform": "concat", "inputs": ["v_street", "v_code"],
+                                  "config": {"separator": ", "}}),
+    })
+    assert wv.evaluate(variables, {})["v_line"] == "12 Main St, N1 9GU"
+
+
+def test_nothing_picked_yet_extracts_to_nothing() -> None:
+    """`object_property`'s rule, and for its reason: a struct read before the
+    object it came from has been picked is an ordinary state - a detail panel
+    before the first click - and reads as empty rather than as a fault."""
+    variables = wv.parse({
+        "v_site": var("v_site", kind="single_object", label="Site"),
+        "v_addr": var("v_addr", kind="struct", label="Address",
+                      derivation={"transform": "object_property", "inputs": ["v_site"],
+                                  "config": {"property": "address"}}),
+        "v_street": var("v_street", label="Street",
+                        derivation={"transform": "extract_struct_field",
+                                    "inputs": ["v_addr"], "config": {"field": "street"}}),
+    })
+    assert wv.evaluate(variables, {})["v_street"] is None
+
+
+def test_a_field_the_struct_does_not_hold_is_empty_rather_than_an_error() -> None:
+    """A declared struct field with no value is a real thing - db 0064 stores
+    one as null when the source row left it blank - so refusing here would make
+    an empty postcode fail the page it appears on.
+
+    Which is also why the variable declares no fields: there is nothing to
+    check a field id *against*, and p.155 says Foundry answers "what does this
+    hold" the same way, by reading the current value.
+    """
+    variables = wv.parse({
+        "v_addr": var("v_addr", kind="struct", label="Address", default=ADDRESS),
+        "v_county": var("v_county", label="County",
+                        derivation={"transform": "extract_struct_field",
+                                    "inputs": ["v_addr"], "config": {"field": "county"}}),
+    })
+    assert wv.evaluate(variables, {})["v_county"] is None
+
+
+def test_extracting_from_something_that_is_not_a_struct_is_refused() -> None:
+    """A blank widget says nothing about which variable is wired wrongly, and
+    this is a document fault rather than an empty state."""
+    variables = wv.parse({
+        "v_name": var("v_name", label="Name", default="Aberdeen"),
+        "v_street": var("v_street", label="Street",
+                        derivation={"transform": "extract_struct_field",
+                                    "inputs": ["v_name"], "config": {"field": "street"}}),
+    })
+    with pytest.raises(wv.VariableError, match="not a struct"):
+        wv.evaluate(variables, {})
+
+
+def test_extract_struct_field_needs_one_input_and_a_field() -> None:
+    with pytest.raises(wv.VariableError, match="exactly one input"):
+        wv.parse({"v_a": var("v_a", kind="struct", label="A"),
+                  "v_b": var("v_b", kind="struct", label="B"),
+                  "v_x": var("v_x", label="X",
+                             derivation={"transform": "extract_struct_field",
+                                         "inputs": ["v_a", "v_b"],
+                                         "config": {"field": "street"}})})
+    with pytest.raises(wv.VariableError, match="needs a field to read"):
+        wv.parse({"v_a": var("v_a", kind="struct", label="A"),
+                  "v_x": var("v_x", label="X",
+                             derivation={"transform": "extract_struct_field",
+                                         "inputs": ["v_a"], "config": {}})})
+
+
+def test_a_struct_is_neither_routable_nor_savable() -> None:
+    """Both fall out of lists that were closed before this kind existed, which
+    is the answer being right for the right reason: p.199's URL parameters are
+    scalars, and p.205's "Supported variable types" does not name Struct.
+
+    Asserted rather than assumed, because both lists are the kind of thing a
+    later edit widens without meaning to.
+    """
+    assert "struct" not in wv.ROUTABLE_KINDS
+    assert "struct" not in wv.SAVABLE_KINDS
+    with pytest.raises(wv.VariableError, match="Routable kinds are"):
+        wv.parse({"v_a": var("v_a", kind="struct", label="A", external_id="addr",
+                             interface=True, url_behavior="always")})
+
+
+def test_an_array_of_structs_is_still_refused_and_the_reason_has_moved_on() -> None:
+    """p.132 lists struct arrays among the loopable types and this platform
+    does not loop over them yet - but the refusal used to say the *model* was
+    missing, and as of §247 it is not. §213's rule: when a change makes
+    something newly expressible, the sentences that said it was impossible are
+    the ones to go and read."""
+    with pytest.raises(wv.VariableError, match=r"does not loop over them yet"):
+        wv.parse({"v_a": var("v_a", kind="array", label="A", element="struct")})
+
+
 def test_an_aggregation_over_a_set_is_still_refused_and_says_why() -> None:
     """The other store transform did not move: it needs the instance store,
     which `/object-sets/aggregate` is what answers."""
@@ -2687,6 +2851,86 @@ def test_the_builder_offers_every_effect_the_server_accepts() -> None:
     )
 
 
+def _variables_panel_source() -> str:
+    return open(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "components", "canvas", "VariablesPanel.tsx",
+    )).read()
+
+
+def test_the_builder_offers_every_variable_kind_the_server_accepts() -> None:
+    """§190's guard, for the two lists beside the one it was written for.
+
+    `EFFECTS` had this check from the day a missing entry made `switch_tab`
+    creatable only by hand-editing JSON. `KINDS` and `TRANSFORMS` are the same
+    shape - a Python tuple and a TypeScript array, in different languages,
+    neither derived from the other - and had no check at all until §247 added
+    a kind and went looking for one.
+
+    **Both directions.** A kind the server accepts and the panel does not offer
+    can only be declared by hand; one the panel offers and the server refuses
+    is a dropdown entry whose only outcome is a save that fails.
+    """
+    import re
+
+    block = re.search(
+        r"const KINDS: WorkshopVariableKind\[\] = \[(.*?)\n\];",
+        _variables_panel_source(), re.S,
+    )
+    assert block, "KINDS not found in VariablesPanel.tsx - has it been renamed?"
+    offered = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert offered, "the list parsed as empty - the scan broke, not the panel"
+    assert offered == set(wv.KINDS), (
+        f"the builder offers {sorted(offered)}; the server accepts "
+        f"{sorted(wv.KINDS)}"
+    )
+
+
+def test_the_builder_offers_every_transform_the_server_accepts() -> None:
+    """The transform half, and its exclusions are the interesting part.
+
+    Two are deliberately not offered and each has its own reason, so the test
+    names them rather than comparing against a subset nobody has to justify:
+    `object_set_aggregation` reads the instance store, so it is refused by the
+    API until it is built, and the three set transforms plus `object_series`
+    are offered from *other* lists in the same panel - they belong to one kind
+    of variable each, and folding them into the general catalogue would offer
+    "narrow an object set" on a string.
+
+    **Labels are read as well as values**, which is §190's vacuity guard: an
+    `<option>` with no text is not an offer, so requiring one is both the check
+    and the proof that the panel was read rather than the server's own list
+    compared with itself.
+    """
+    import re
+
+    source = _variables_panel_source()
+    block = re.search(
+        r"const TRANSFORMS: \{ value: WorkshopTransform; label: string; arity: string \}\[\] = \[(.*?)\n\];",
+        source, re.S,
+    )
+    assert block, "TRANSFORMS not found in VariablesPanel.tsx - has it been renamed?"
+    catalogue = dict(re.findall(r'value: "([^"]+)", label: "([^"]+)"', block.group(1)))
+    assert catalogue, "the catalogue parsed as empty - the scan broke, not the panel"
+    assert all(catalogue.values()), catalogue
+    assert catalogue.get("concat") == "Join text", (
+        "the scan is not reading VariablesPanel.tsx - it should have found this "
+        f"entry's label, and found {catalogue.get('concat')!r}"
+    )
+    # Offered from their own lists, one kind of variable each.
+    elsewhere = set(re.findall(r'"(filter_set|narrow_set|traverse_set|object_series)"', source))
+    assert elsewhere == {"filter_set", "narrow_set", "traverse_set", "object_series"}, (
+        "the set and series transforms are no longer offered from their own "
+        f"lists: found {sorted(elsewhere)}"
+    )
+    offered = set(catalogue) | elsewhere
+    assert offered == set(wv.TRANSFORMS), (
+        f"the builder offers {sorted(offered)}; the server accepts "
+        f"{sorted(wv.TRANSFORMS)}. A transform the server takes but the panel "
+        "does not offer can only be created by hand-editing the raw JSON"
+    )
+
+
 # ---- tabs sections and p.84's switch_tab (p.54, p.84) ------------------------
 def tabs_layout(*, tabs: str = "Overview,Details", children: int = 2,
                 direction: str = "tabs", tab_variable=None) -> dict:
@@ -2916,7 +3160,7 @@ def test_a_struct_element_is_refused_with_its_own_reason() -> None:
     """p.132 lists struct arrays, so somebody reading the spec will try it -
     and "expected one of string, number…" would read as the spec being wrong
     rather than as this platform being behind."""
-    with pytest.raises(wv.VariableError, match="named fields"):
+    with pytest.raises(wv.VariableError, match="does not loop over them yet"):
         wv.parse({"v_a": {"id": "v_a", "kind": "array", "label": "A", "element": "struct"}})
 
 

@@ -2655,3 +2655,15 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
 .vars-find-row select { flex: 1; min-width: 0; font-size: 12px; }
 .vars-partition { list-style: none; margin-top: 8px; }
 .vars-partition .field-label { margin: 0; opacity: 0.75; }
+
+/* A struct property's value, drawn as its declared fields rather than as JSON
+   (`object-link-types` p.149; `ontology` p.59's "semantic grouping"). Inline
+   rather than a block, because this renders inside a table cell as often as it
+   does in an object view, and a two-column grid in a cell would set the height
+   of every row beside it. */
+.struct-value { display: inline-flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
+.struct-field { display: inline-flex; gap: 4px; align-items: baseline; min-width: 0; }
+.struct-field-label {
+  font-size: 11px; letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--ink-soft); white-space: nowrap;
+}

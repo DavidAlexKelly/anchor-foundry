@@ -15,8 +15,9 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { ApiError, objects as objApi } from "@/lib/api";
 import { mediaKind } from "@/components/media-kind";
 import type {
-  AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, ValueFormat,
+  AttachmentRef, GeoPoint, PropertyDataType, PropertyStyle, StructField, ValueFormat,
 } from "@/lib/types";
+import { structRows } from "@/lib/struct-fields";
 import { formatValue } from "@/lib/value-format";
 // The Canvas Action Form's rule for which control a type gets, now shared
 // rather than duplicated (§237).
@@ -133,6 +134,7 @@ export function PropertyValue({
   dataType,
   value,
   valueFormat,
+  structFields,
   style: conditional,
   emptyText = "∅",
 }: {
@@ -143,6 +145,20 @@ export function PropertyValue({
    * Optional so a caller that has no property declaration to hand — an action
    * form preview, a value read off an instance — keeps working unchanged. */
   valueFormat?: ValueFormat | null;
+  /** A struct property's declared fields (`object-link-types` p.149; db 0064).
+   *
+   * **Needed for the labels and for the order**, and the order is the part
+   * that cannot be recovered any other way: `_coerce_struct` hands the store a
+   * value in the declared order, and then Postgres `jsonb` reorders its keys
+   * (by length, then bytewise) and OpenSearch promises nothing either. So a
+   * renderer reading the value's own keys would show p.154's hand-ordered
+   * address in an order nobody chose.
+   *
+   * **This is the second per-property declaration threaded by hand**, after
+   * `valueFormat`, through the same nine call sites. A third should collapse
+   * them into one `property` prop rather than becoming a third — the same
+   * threshold `property_values.py`'s docstring sets for its mirrors. */
+  structFields?: StructField[] | null;
   /** What a matching conditional rule asked for (p.102–109). Already
    * evaluated: the rule may read a *different* property, so only a caller
    * holding the whole instance can work it out. */
@@ -227,6 +243,31 @@ export function PropertyValue({
         </span>
       );
     }
+  }
+  // A struct, read against what its property declares (p.149). p.59's whole
+  // argument for the type is "semantic grouping" — an address is one concept,
+  // not five properties — so it is drawn as its fields rather than as the JSON
+  // a `json` property gets. Without the declaration it falls through to that
+  // JSON, which is what an action form preview and any other caller holding a
+  // bare value still see.
+  const rows = dataType === "struct" ? structRows(structFields, value) : null;
+  if (rows) {
+    return (
+      <span className="struct-value" style={paint} data-testid="struct-value">
+        {rows.map(([label, held]) => (
+          <span key={label} className="struct-field">
+            <span className="struct-field-label">{label}</span>
+            {held === null || held === undefined || held === ""
+              ? <span style={{ color: "var(--ink-soft)" }}>∅</span>
+              : <PropertyValue
+                  workspaceId={workspaceId}
+                  dataType={undefined}
+                  value={held}
+                />}
+          </span>
+        ))}
+      </span>
+    );
   }
   if (dataType === "json" || (typeof value === "object" && value !== null)) {
     return <span className="slug" style={paint}>{JSON.stringify(value)}</span>;

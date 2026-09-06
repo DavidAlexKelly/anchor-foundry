@@ -187,6 +187,14 @@ def api(token: str) -> Api:
     Nothing had changed in the product; the suite had aged into failing on its
     own leftovers.
 
+    **§249 added canvas apps, and the argument was already written above.**
+    Nothing was removing those, so they had reached **28,500 in one workspace**
+    by §248 — enough to slow the whole suite to a third of its rate, and enough
+    to hide a defect in plain sight: `parameter_usages` read every one of them
+    on every action-definition save and had since §129, at 1.44s a time, which
+    nobody could notice on a workspace anybody had *meant* to build. The
+    leftovers were the only large workspace this build has.
+
     Teardown runs after the last test, and reports rather than asserts — some
     types cannot be deleted by design (p.256 refuses an `active` one), and
     those are exactly the ones the suite creates to prove the refusal works.
@@ -194,7 +202,7 @@ def api(token: str) -> Api:
     caller = Api(API_BASE, token)
     yield caller
     removed, left = caller.cleanup()
-    print(f"\ncleanup: removed {removed} object types, left {left} that refused deletion")
+    print(f"\ncleanup: removed {removed} rows, left {left} that refused deletion")
 
 
 @pytest.fixture(scope="session")

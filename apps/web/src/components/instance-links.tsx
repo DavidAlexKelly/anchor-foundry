@@ -89,6 +89,7 @@ function LinkedPreview({
                 workspaceId={workspaceId}
                 dataType={property.data_type}
                 valueFormat={property.value_format}
+                structFields={property.struct_fields}
                 style={conditionalStyle(property.conditional_format, instance.properties)}
                 value={instance.properties[property.api_name]}
               />

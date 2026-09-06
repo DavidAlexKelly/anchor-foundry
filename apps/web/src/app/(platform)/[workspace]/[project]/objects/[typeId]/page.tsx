@@ -184,6 +184,7 @@ export default function ObjectInstancesPage() {
                           workspaceId={workspace!.id}
                           dataType={p.data_type}
                           valueFormat={p.value_format}
+                          structFields={p.struct_fields}
                           style={conditionalStyle(p.conditional_format, instance.properties)}
                           value={instance.properties[p.api_name]}
                         />

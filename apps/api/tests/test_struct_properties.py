@@ -14,6 +14,8 @@ that decline to carry a struct saying so rather than half-working.
 from __future__ import annotations
 
 import os
+import pathlib
+import re
 import sys
 import uuid
 
@@ -246,6 +248,37 @@ def test_a_whole_syncs_worth_carries_the_declarations_with_the_types() -> None:
     assert property_values.coerce_rows(
         rows, {"address": "struct"}, {"address": ADDRESS}
     ) == [("A1", {"address": {"street": "Main", "postal_code": None, "floors": 2}})]
+
+
+def test_the_builder_offers_every_field_type_the_server_accepts() -> None:
+    """§190's drift guard, one type over.
+
+    `lib/struct-fields.ts` carries a copy of `FIELD_TYPES` so the dialog can
+    draw a dropdown, and a copy is a thing that goes stale — §191's lesson,
+    which this repo has now paid for five times. The two lists are compared by
+    scanning the file, because there is no import that could do it: one is
+    Python and one is TypeScript, and nothing in either build reads the other.
+
+    **Both directions.** A type the server accepts and the dialog does not
+    offer is a field nobody can declare through the product; one the dialog
+    offers and the server refuses is a dropdown entry whose only outcome is a
+    422 after the form is filled in.
+    """
+    source = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "apps/web/src/lib/struct-fields.ts"
+    ).read_text()
+    match = re.search(
+        r"export const FIELD_TYPES: PropertyDataType\[\] = \[(.*?)\];",
+        source,
+        re.S,
+    )
+    assert match, "FIELD_TYPES is no longer where this scan looks for it"
+    offered = set(re.findall(r'"([a-z_]+)"', match.group(1)))
+    assert offered == set(struct_fields.FIELD_TYPES), (
+        "the struct field types the builder offers and the ones the server "
+        f"accepts have drifted: {sorted(offered ^ set(struct_fields.FIELD_TYPES))}"
+    )
 
 
 # ---- the stores (decision 0006) ----------------------------------------------

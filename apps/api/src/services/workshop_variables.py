@@ -55,6 +55,20 @@ KINDS = (
     # `single_object` value, so a series variable is a *reference* built from
     # it rather than a fan-out over rows.
     "time_series_set",
+    # > "Struct: Stores a composite type that maps string fieldIDs to values.
+    # > Currently, nested structs are not supported but any other Workshop
+    # > variable type for a struct field's value is accepted." (p.75)
+    #
+    # **The variable does not declare its fields**, which is the decision worth
+    # recording. It could - an `array` declares an `element` (§198) - and the
+    # ontology already declares them for a struct *property* (db 0064). Doing
+    # both would put one schema in two places, which is the shape §191 has
+    # caught going stale five times; and p.155 says how Foundry itself answers
+    # "what fields does this hold" - by "referencing it to the struct
+    # variable's raw Current value". So the fields are whatever the value has,
+    # `extract_struct_field` names one by id, and a field the value does not
+    # hold reads as empty rather than as an error.
+    "struct",
 )
 
 # Foundry's transformation vocabulary, less the ones that need a widget or a
@@ -72,6 +86,15 @@ TRANSFORMS = (
     "filter_value",  # one property's chosen value, out of a filter's clauses
     "object_series",  # the time series a property holds, on the object picked
     "traverse_set",   # follow a link from one object set to another
+    # > "Extract struct field: Returns a struct field value given a struct and
+    # > field ID." (p.143)
+    #
+    # **The only way a struct reaches anything**, which is p.155's own
+    # sentence: "widgets and variable transformation operations cannot use
+    # structs as a whole, so individual struct fields must be extracted for
+    # use". So this transform is not a convenience on top of the kind - it is
+    # what makes the kind usable at all, and the two are one unit.
+    "extract_struct_field",
 )
 
 # Still declared and deliberately not evaluated here: an aggregate over a set
@@ -223,12 +246,15 @@ HELD_BEHAVIOURS = ("only_on_event", "on_load_and_event")
 #: > "Loop layouts support looping over various array types, including string,
 #: > Boolean, number, date, timestamp, and struct arrays." (p.132)
 #:
-#: **`struct` is missing on purpose.** A struct element is a record with named
-#: fields, and this system has no kind that carries a field schema - p.134's
-#: "the struct-typed module interface variable will contain a variable
-#: transform, rendering the fields of each struct entry" needs one before it
-#: can mean anything. Refused with that reason rather than accepted and ignored,
-#: which would let somebody configure a loop that renders nothing.
+#: **`struct` is missing, and the reason changed in §247.** It used to be that
+#: no kind carried a struct at all, so p.134's "the struct-typed module
+#: interface variable will contain a variable transform, rendering the fields
+#: of each struct entry" had nothing to name. There is a `struct` kind now, and
+#: `extract_struct_field` is the variable transform p.134 describes - so what
+#: is left is not the model but the loop itself: nothing hands an *entry* to a
+#: child of that kind, and the builder's element picker does not offer it.
+#: Rewritten rather than left standing, because a comment saying a thing is
+#: impossible outlives the impossibility (§213).
 ARRAY_ELEMENTS = ("string", "number", "boolean", "date", "timestamp")
 
 #: p.133's two loop sources. The object-set arm is older than this constant;
@@ -905,9 +931,10 @@ def _parse_element(label: str, raw: Any, kind: str) -> str | None:
     if raw == "struct":
         raise VariableError(
             f"variable {label!r} is an array of structs, which p.132 lists and this "
-            "platform does not carry yet: a struct element needs a kind with named "
-            "fields, and there is none. Use an array of a scalar type, or loop over "
-            "an object set"
+            "platform does not loop over them yet. The `struct` kind and p.143's "
+            "extract_struct_field arrived in §247, so the model is no longer the "
+            "gap - what is missing is the loop handing each entry to a child of "
+            "that kind. Use an array of a scalar type, or loop over an object set"
         )
     if not isinstance(raw, str) or raw not in ARRAY_ELEMENTS:
         raise VariableError(
@@ -1146,6 +1173,17 @@ def _check_arity(vid: str, d: Derivation) -> None:
         prop = d.config.get("property")
         if not prop or not isinstance(prop, str):
             raise VariableError(f"variable {vid!r}: object_property needs a property to read")
+    elif d.transform == "extract_struct_field":
+        if len(d.inputs) != 1:
+            raise VariableError(
+                f"variable {vid!r}: extract_struct_field needs exactly one input "
+                "(the variable holding the struct)"
+            )
+        field_id = d.config.get("field")
+        if not field_id or not isinstance(field_id, str):
+            raise VariableError(
+                f"variable {vid!r}: extract_struct_field needs a field to read"
+            )
     elif d.transform == "filter_value":
         if len(d.inputs) != 1:
             raise VariableError(
@@ -1414,6 +1452,8 @@ def _apply(
         return _narrow_set(variable, inputs[0], inputs[1], property_types)
     if d.transform == "object_property":
         return _object_property(variable, inputs[0], str(d.config["property"]))
+    if d.transform == "extract_struct_field":
+        return _extract_struct_field(variable, inputs[0], str(d.config["field"]))
     if d.transform == "filter_value":
         return _filter_value(variable, inputs[0], str(d.config["property"]))
     if d.transform == "object_series":
@@ -1450,6 +1490,35 @@ def _filter_set(
         {"property": config["property"], "op": config.get("op", "eq"), "value": value}
     )
     return {**base, "filters": filters}
+
+
+def _extract_struct_field(variable: Variable, held: Any, field_id: str) -> Any:
+    """p.143: "Returns a struct field value given a struct and field ID."
+
+    **This is the whole of how a struct is used.** p.155: "widgets and variable
+    transformation operations cannot use structs as a whole, so individual
+    struct fields must be extracted for use" - so a module that holds a struct
+    and never extracts from it is a module holding a value nothing can read,
+    and this function is the one door.
+
+    Three answers, and they are `_object_property`'s three for the same
+    reasons. **Nothing there yet is `None`**: a struct read before the object
+    it came from has been picked is an ordinary state, not a fault. **A field
+    the struct does not hold is `None`** too - a struct property whose source
+    row left a field empty is a real thing (db 0064 stores a declared field
+    with no value as null), and refusing would make an empty postcode fail a
+    page. **A value that is not a struct at all is refused**, because that is a
+    document wired wrongly and a blank widget says nothing about which one.
+    """
+    if held is None or held == "":
+        return None
+    if not isinstance(held, dict):
+        raise VariableError(
+            f"{variable.label!r} extracts a field from something that is not a struct - "
+            "point it at a struct variable, or at a struct property through "
+            "object_property"
+        )
+    return held.get(field_id)
 
 
 def _object_property(variable: Variable, obj: Any, property_name: str) -> Any:
