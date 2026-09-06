@@ -177,6 +177,14 @@ class ObjectTypeGroupRef(BaseModel):
     display_name: str
 
 
+class ObjectTypeInterfaceRef(BaseModel):
+    """An interface a type implements, as a listing needs it (§251)."""
+
+    id: UUID
+    api_name: str
+    display_name: str
+
+
 class ObjectTypeSummary(BaseModel):
     id: UUID
     api_name: str
@@ -203,6 +211,13 @@ class ObjectTypeSummary(BaseModel):
     # displaying and filtering by group." Displaying needs them on the row;
     # filtering is the `group_id` query parameter below.
     groups: list[ObjectTypeGroupRef] = Field(default_factory=list)
+    # What this type claims to be (`object-link-types` p.53; §251). Names only,
+    # not the mapping: a listing answers "what is this" and the mapping is the
+    # answer to "how", which is a question for the type's own page. The same
+    # split `hidden_properties` above makes for the same reason - a list
+    # endpoint that carried every detail would be a detail endpoint that
+    # happens to return several rows.
+    interfaces: list[ObjectTypeInterfaceRef] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -462,8 +477,25 @@ async def list_object_types(
             status=status, visibility=visibility,
         )
         by_type = await groups_service.groups_by_type(conn, access.workspace_id)
+        # One query for the workspace, like the groups above and for the same
+        # reason - §169's N+1 is recent enough to still be the first thing to
+        # check when a loop wants a lookup.
+        implemented = await interfaces_service.implementations_by_type(
+            conn, access.workspace_id
+        )
     return [
-        ObjectTypeSummary(**r, groups=by_type.get(str(r["id"]), []))
+        ObjectTypeSummary(
+            **r,
+            groups=by_type.get(str(r["id"]), []),
+            interfaces=[
+                ObjectTypeInterfaceRef(
+                    id=i["interface_id"],
+                    api_name=i["api_name"],
+                    display_name=i["display_name"],
+                )
+                for i in implemented.get(str(r["id"]), [])
+            ],
+        )
         for r in rows
     ]
 

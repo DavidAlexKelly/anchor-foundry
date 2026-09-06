@@ -449,3 +449,40 @@ def test_an_interface_is_findable_by_name(client: TestClient, fx: Fixture) -> No
     # It belongs to no object type, and a made-up owner would send whoever
     # clicked it somewhere unrelated to what they searched for.
     assert hits[0]["object_type_id"] is None
+
+
+def test_the_object_type_listing_carries_what_each_type_implements(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A listing answers "what is this", and an implements list is part of the
+    answer — the same slot p.262's groups occupy on the same row.
+
+    **Names only, not the mapping.** How a type satisfies an interface is the
+    answer to "how", which belongs on the type's own page; a list endpoint that
+    carried every detail would be a detail endpoint that happens to return
+    several rows, which is the argument `hidden_properties` already makes on
+    this model.
+    """
+    interface = make_interface(client, fx)
+    kind = make_type(client, fx, [
+        {"api_name": "last_checked", "display_name": "Last checked",
+         "data_type": "date"},
+        {"api_name": "state", "display_name": "State", "data_type": "string"},
+    ])
+    other = make_type(client, fx, [])
+    assert implement(client, fx, kind["id"], [{
+        "interface_id": interface["id"],
+        "property_mapping": {"last_inspection_date": "last_checked",
+                             "inspection_status": "state"},
+    }]).status_code == 200
+
+    rows = client.get(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub)
+    ).json()
+    by_id = {t["id"]: t for t in rows}
+    assert [i["api_name"] for i in by_id[kind["id"]]["interfaces"]] == [
+        interface["api_name"]
+    ]
+    # Two-sided: a listing that put every interface on every row would pass a
+    # test that only looked at the implementing type.
+    assert by_id[other["id"]]["interfaces"] == []
