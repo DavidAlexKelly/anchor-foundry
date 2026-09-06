@@ -70,6 +70,25 @@ def test_every_sort_has_a_key_to_merge_on() -> None:
 
 
 # ---- the fan-out ------------------------------------------------------------
+def test_the_browser_knows_the_same_paging_ceiling() -> None:
+    """§190's pattern: a guard on the browser's copy, read from the file.
+
+    A Next button cannot wait for a round trip to decide whether to be
+    disabled, so `lib/interface-set.ts` restates `MAX_DEPTH` - and a
+    restatement that drifted would offer a page whose only outcome is the
+    server's refusal, which is §214's control that cannot work.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "interface-set.ts"), encoding="utf-8"
+    ).read()
+    found = re.search(r"export const MAX_DEPTH = (\d+);", source)
+    assert found, "MAX_DEPTH not found in interface-set.ts - has it been renamed?"
+    assert int(found.group(1)) == interface_sets.MAX_DEPTH
+
+
 def test_an_interface_nothing_implements_has_no_objects() -> None:
     with pytest.raises(interface_sets.InterfaceSetError) as exc:
         interface_sets.check_fan_out([], interface_name="Inspectable")
