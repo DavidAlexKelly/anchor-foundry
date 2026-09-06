@@ -556,6 +556,13 @@ def test_a_type_that_answers_nothing_to_a_filtered_property_is_not_read(
     narrowed = narrowed.json()
     assert narrowed["total"] == 1, narrowed
     assert narrowed["object_types"] == [kinds["full"]["display_name"]], narrowed
+    # **And the other half of the fact, which nothing else can supply.** A
+    # listing row carries an implementation count and no names, so a browser
+    # cannot subtract the types that were read from the types that implement
+    # this interface - which is why the answer names them rather than leaving
+    # "matched nothing" and "never consulted" looking the same.
+    assert narrowed["skipped"] == [kinds["bare"]["display_name"]], narrowed
+    assert everything["skipped"] == [], everything
 
 
 def test_the_second_page_is_the_second_page_of_the_merged_order(
