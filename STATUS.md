@@ -4375,6 +4375,34 @@ service and the panel now say what is actually missing: the loop handing each
 *entry* to a child of that kind. §213's rule applied to the sentence rather
 than discovered by somebody trusting it a year later.
 
+**p.152's static source needed a control of its own**, which the page does not
+say and reading it does not suggest: "a struct variable can be initialized
+statically within Workshop", and a struct default is the one default that is
+not a string. The panel's existing box stores what was typed, so a struct
+typed into it would have produced a variable whose first extraction fails at
+view time - §214's control that cannot work, arrived at from the other
+direction. `parseStructDefault` parses the box and the document holds the
+object; the two are kept apart so typing is never interrupted by
+re-serialising a half-written value, and an unparseable box says so and leaves
+the last good value alone.
+
+**17 mutants, 17 caught, 0 survivors**, across three layers - the variable
+service, the browser lib, and the panel and chain through Playwright. Two of
+them are §248's: one makes the narrowing clause *become* the check and one
+makes it drop a real usage, which are the only two ways that optimisation can
+be wrong.
+
+Two test-facing corrections worth carrying. The kind `<select>` needed a test
+id, because its accessible name is not "Type": the `<label>` wraps the
+control, so the name computed for it is the label's whole text content -
+"Type" followed by every option - and a test asking for the exact string waits
+thirty seconds for nothing. And the panel's New button opens the new
+variable's editor itself, so clicking the row afterwards is a *toggle* that
+closes it.
+
+5 new unit tests, 12 new API tests, 3 new browser tests; 1520 unit, 257 in the
+variables service, `tsc` clean.
+
 ### 246. The struct field editor, and a button that took the ✕'s place (this session)
 
 The second third of `ontology.md` build order item 7. §245 built the `struct`
