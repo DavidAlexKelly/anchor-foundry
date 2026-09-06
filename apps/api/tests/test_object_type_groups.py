@@ -475,6 +475,56 @@ def test_the_listing_is_bounded_and_says_how_many_match(
     assert body["offset"] == 0
 
 
+def test_the_default_is_a_page_and_not_the_ontology(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The unit's central claim, and the first mutation run found nothing
+    asserting it.** Every other test here passes `limit=` explicitly, so
+    changing the default to "everything" survived them all — which is the shape
+    of a defect that ships: the thing everybody relies on and nobody asks for
+    by name.
+
+    Fifty-one types, because fifty is the number and a fixture of fifty would
+    pass against no bound at all.
+    """
+    tag = uuid.uuid4().hex[:6]
+    for i in range(ontology_service.DEFAULT_TYPE_PAGE + 1):
+        make_type(client, fx, api_name=f"many_{tag}_{i:03d}",
+                  display_name=f"Many {tag} {i:03d}")
+
+    r = client.get(f"{wbase(fx)}/object-types?q=many_{tag}", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == ontology_service.DEFAULT_TYPE_PAGE + 1
+    assert len(body["items"]) == ontology_service.DEFAULT_TYPE_PAGE, (
+        "the listing returned more than a page without being asked to"
+    )
+    # And the echo says what it did, so a caller reading a stored response
+    # knows it is holding a page rather than an ontology.
+    assert body["limit"] == ontology_service.DEFAULT_TYPE_PAGE
+
+
+def test_the_service_defaults_to_a_page_for_a_caller_that_forgets(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The same claim one layer down, and it needs its own test because the
+    route always passes a limit — so the service's default is reachable only by
+    a caller that does not.
+
+    The three internal callers that want the whole ontology all say `limit=None`
+    out loud (`ontology_search`, the explorer's id-to-name lookup, the
+    bulk-status echo). This is about the *next* one, which will not.
+    """
+    import inspect
+
+    default = inspect.signature(
+        ontology_service.list_types
+    ).parameters["limit"].default
+    assert default == ontology_service.DEFAULT_TYPE_PAGE, (
+        "a caller that forgets a limit should get a page, not the ontology"
+    )
+
+
 def test_the_second_page_is_the_rest_of_the_same_order(
     client: TestClient, fx: Fixture
 ) -> None:
