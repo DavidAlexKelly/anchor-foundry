@@ -1439,7 +1439,6 @@ export default function ObjectsPage() {
           <InterfacesPanel
             workspaceId={workspace!.id}
             canEdit={canEditOntology}
-            types={types.data.items}
           />
 
           {/* Groups last of the four, because it is the only one that says
