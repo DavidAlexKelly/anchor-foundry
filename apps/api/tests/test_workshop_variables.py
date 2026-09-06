@@ -2851,6 +2851,86 @@ def test_the_builder_offers_every_effect_the_server_accepts() -> None:
     )
 
 
+def _variables_panel_source() -> str:
+    return open(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "web", "src", "components", "canvas", "VariablesPanel.tsx",
+    )).read()
+
+
+def test_the_builder_offers_every_variable_kind_the_server_accepts() -> None:
+    """§190's guard, for the two lists beside the one it was written for.
+
+    `EFFECTS` had this check from the day a missing entry made `switch_tab`
+    creatable only by hand-editing JSON. `KINDS` and `TRANSFORMS` are the same
+    shape - a Python tuple and a TypeScript array, in different languages,
+    neither derived from the other - and had no check at all until §247 added
+    a kind and went looking for one.
+
+    **Both directions.** A kind the server accepts and the panel does not offer
+    can only be declared by hand; one the panel offers and the server refuses
+    is a dropdown entry whose only outcome is a save that fails.
+    """
+    import re
+
+    block = re.search(
+        r"const KINDS: WorkshopVariableKind\[\] = \[(.*?)\n\];",
+        _variables_panel_source(), re.S,
+    )
+    assert block, "KINDS not found in VariablesPanel.tsx - has it been renamed?"
+    offered = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert offered, "the list parsed as empty - the scan broke, not the panel"
+    assert offered == set(wv.KINDS), (
+        f"the builder offers {sorted(offered)}; the server accepts "
+        f"{sorted(wv.KINDS)}"
+    )
+
+
+def test_the_builder_offers_every_transform_the_server_accepts() -> None:
+    """The transform half, and its exclusions are the interesting part.
+
+    Two are deliberately not offered and each has its own reason, so the test
+    names them rather than comparing against a subset nobody has to justify:
+    `object_set_aggregation` reads the instance store, so it is refused by the
+    API until it is built, and the three set transforms plus `object_series`
+    are offered from *other* lists in the same panel - they belong to one kind
+    of variable each, and folding them into the general catalogue would offer
+    "narrow an object set" on a string.
+
+    **Labels are read as well as values**, which is §190's vacuity guard: an
+    `<option>` with no text is not an offer, so requiring one is both the check
+    and the proof that the panel was read rather than the server's own list
+    compared with itself.
+    """
+    import re
+
+    source = _variables_panel_source()
+    block = re.search(
+        r"const TRANSFORMS: \{ value: WorkshopTransform; label: string; arity: string \}\[\] = \[(.*?)\n\];",
+        source, re.S,
+    )
+    assert block, "TRANSFORMS not found in VariablesPanel.tsx - has it been renamed?"
+    catalogue = dict(re.findall(r'value: "([^"]+)", label: "([^"]+)"', block.group(1)))
+    assert catalogue, "the catalogue parsed as empty - the scan broke, not the panel"
+    assert all(catalogue.values()), catalogue
+    assert catalogue.get("concat") == "Join text", (
+        "the scan is not reading VariablesPanel.tsx - it should have found this "
+        f"entry's label, and found {catalogue.get('concat')!r}"
+    )
+    # Offered from their own lists, one kind of variable each.
+    elsewhere = set(re.findall(r'"(filter_set|narrow_set|traverse_set|object_series)"', source))
+    assert elsewhere == {"filter_set", "narrow_set", "traverse_set", "object_series"}, (
+        "the set and series transforms are no longer offered from their own "
+        f"lists: found {sorted(elsewhere)}"
+    )
+    offered = set(catalogue) | elsewhere
+    assert offered == set(wv.TRANSFORMS), (
+        f"the builder offers {sorted(offered)}; the server accepts "
+        f"{sorted(wv.TRANSFORMS)}. A transform the server takes but the panel "
+        "does not offer can only be created by hand-editing the raw JSON"
+    )
+
+
 # ---- tabs sections and p.84's switch_tab (p.54, p.84) ------------------------
 def tabs_layout(*, tabs: str = "Overview,Details", children: int = 2,
                 direction: str = "tabs", tab_variable=None) -> dict:

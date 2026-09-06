@@ -4290,6 +4290,55 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 247. The Workshop struct variable, and two lists nothing was comparing (this session)
+
+The last third of `ontology.md` build order item 7, and the two halves of it
+are one unit because p.155 says so: *"widgets and variable transformation
+operations cannot use structs as a whole, so individual struct fields must be
+extracted for use."* A `struct` kind without p.143's **Extract struct field**
+is a value nothing can read, so shipping the kind alone would have been
+shipping a variable with no exit.
+
+**The variable declares no fields**, and that is the decision worth recording,
+because it could easily have gone the other way: an `array` declares an
+`element` (§198), and the ontology already declares a struct *property*'s
+fields (db 0064). Doing both would put one schema in two places - the shape
+§191 has caught going stale five times - and p.155 says how Foundry answers
+"what does this hold" itself: by "referencing it to the struct variable's raw
+Current value". So a field is named by id, and one the value does not hold
+reads as empty rather than as an error.
+
+Three answers, all `object_property`'s and for its reasons. **Nothing picked
+yet is empty** - a struct read before its object has been clicked is a detail
+panel before the first click. **A field the struct lacks is empty** - db 0064
+stores a declared field with no value as null, so refusing would make an empty
+postcode fail the page it appears on. **A value that is not a struct is
+refused**, because that is a document wired wrongly and a blank widget says
+nothing about which variable it is.
+
+Two of p.152's three sources needed nothing new: a static default, and an
+object's struct property through `object_property`, which already read one. The
+third is `[fn]`. Routing and state saving refuse a struct without being asked,
+because both lists were closed before the kind existed - p.199's URL parameters
+are scalars, p.205's "Supported variable types" does not name Struct - which is
+the answer being right for the right reason, and asserted rather than assumed.
+
+**And two mirrored lists nothing was comparing.** §190 wrote a drift guard for
+`EFFECTS` the day a missing entry made `switch_tab` creatable only by
+hand-editing JSON. `KINDS` and `TRANSFORMS` are the same shape - a Python tuple
+and a TypeScript array, neither derived from the other - and had **no check at
+all** until this unit added a kind and went looking for one. Both are now
+compared in both directions, with §190's vacuity guard on the labels: an
+`<option>` with no text is not an offer, so requiring one proves the panel was
+read rather than the server's own list compared with itself.
+
+**A sentence that said something was impossible, re-read.** `ARRAY_ELEMENTS`
+refused `struct` because "a struct element needs a kind with named fields, and
+there is none" - true when it was written, and not the gap any more. Both the
+service and the panel now say what is actually missing: the loop handing each
+*entry* to a child of that kind. §213's rule applied to the sentence rather
+than discovered by somebody trusting it a year later.
+
 ### 246. The struct field editor, and a button that took the ✕'s place (this session)
 
 The second third of `ontology.md` build order item 7. §245 built the `struct`
