@@ -922,14 +922,34 @@ export const objects = {
     filters?: {
       status?: import("./types").OntologyStatus | null;
       visibility?: import("./types").PropertyVisibility | null;
+      /** Matched against the display name and the api name. The reason this
+       * endpoint has a search at all is that it also has a `limit`: a picker
+       * that can only show fifty types has to be able to find the fifty-first.
+       */
+      q?: string | null;
+      /** Exactly these types. For a screen that has already chosen some and
+       * has to read them back now that the listing is a page. */
+      ids?: readonly string[];
+      limit?: number;
+      offset?: number;
     },
   ) => {
     const query = new URLSearchParams();
     if (groupId) query.set("group_id", groupId);
     if (filters?.status) query.set("status", filters.status);
     if (filters?.visibility) query.set("visibility", filters.visibility);
+    if (filters?.q) query.set("q", filters.q);
+    for (const id of filters?.ids ?? []) query.append("ids", id);
+    if (filters?.limit !== undefined) query.set("limit", String(filters.limit));
+    if (filters?.offset) query.set("offset", String(filters.offset));
     const search = query.toString();
-    return request<import("./types").ObjectTypeSummary[]>(
+    // **A page, not a list, and every caller sees the total.** The endpoint
+    // was unbounded until §256 — every type in the workspace, on every read,
+    // from eight call sites — and a bounded list on its own truncates
+    // silently, which is worse than the slow version it replaces. The shape
+    // change is the point: nothing can now read this without being handed the
+    // number it would need to notice it is showing a page.
+    return request<import("./types").ObjectTypePage>(
       `/workspaces/${wid}/object-types${search ? `?${search}` : ""}`,
     );
   },

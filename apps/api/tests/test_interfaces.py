@@ -700,10 +700,15 @@ def test_the_object_type_listing_carries_what_each_type_implements(
                              "inspection_status": "state"},
     }]).status_code == 200
 
-    rows = client.get(
-        f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub)
-    ).json()
-    by_id = {t["id"]: t for t in rows}
+    # Two requests, because the listing is a page since §256 and these two
+    # types share no name fragment - each fixture tags itself.
+    by_id = {}
+    for one in (kind, other):
+        page = client.get(
+            f"{wbase(fx)}/object-types?q={one['api_name']}",
+            headers=hdr(fx.viewer_sub),
+        ).json()
+        by_id.update({t["id"]: t for t in page["items"]})
     assert [i["api_name"] for i in by_id[kind["id"]]["interfaces"]] == [
         interface["api_name"]
     ]

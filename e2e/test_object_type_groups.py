@@ -26,6 +26,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import WEB_BASE
+from ontology_page import find_type_row
 
 ROWS = [
     {"id": "R1", "name": "Ada", "code": "A"},
@@ -87,8 +88,7 @@ def types_table(page):
 
 
 def type_row(page, module):
-    row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
-    expect(row).to_be_visible(timeout=30000)
+    row = find_type_row(page, f"seed_{module.tag}")
     return row
 
 
@@ -136,6 +136,12 @@ def test_a_group_can_take_object_types_and_says_how_many(page, module, group) ->
         "button", name=f"Object types in {group['api_name']}"
     ).click()
     expect(page.get_by_test_id("group-member-picker")).to_be_visible(timeout=15000)
+    # §256: the editor draws a page of the ontology, so the type is searched
+    # for rather than assumed present. On a workspace of eight it would be on
+    # screen already and the search box would not be drawn at all.
+    search = page.get_by_test_id("group-member-search")
+    if search.count():
+        search.fill(f"seed_{module.tag}")
     page.get_by_test_id(f"group-member-seed_{module.tag}").check()
     page.get_by_test_id("group-members-save").click()
 
@@ -174,7 +180,11 @@ def test_the_filter_narrows_the_table(page, module, group, api) -> None:
     other = api.call(
         "POST", f"/workspaces/{module.workspace_id}/object-types",
         {
-            "api_name": f"unfiled_{uuid.uuid4().hex[:6]}",
+            # **Tagged like the fixture's own type**, so one search shows both
+            # and the group filter is the only thing that can separate them.
+            # An independently tagged name would make the "not here" half pass
+            # for the wrong reason now that the table is a page (§256).
+            "api_name": f"unfiled_{module.tag}",
             "display_name": "Unfiled thing",
             "properties": [
                 {"api_name": "id", "display_name": "Id", "data_type": "string"}
@@ -189,13 +199,17 @@ def test_the_filter_narrows_the_table(page, module, group, api) -> None:
     )
 
     open_objects(page, module)
-    expect(page.locator("tbody tr").filter(has_text=other["api_name"]).first).to_be_visible()
+    # One search, both types — so the group filter is the only thing that can
+    # tell them apart, and a filter that quietly returned everything fails.
+    page.get_by_test_id("type-search").fill(module.tag)
+    member = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}")
+    unfiled = page.locator("tbody tr").filter(has_text=other["api_name"])
+    expect(member.first).to_be_visible(timeout=30000)
+    expect(unfiled.first).to_be_visible(timeout=30000)
 
     page.get_by_test_id("group-filter").select_option(group["id"])
-    expect(type_row(page, module)).to_be_visible(timeout=15000)
-    expect(
-        page.locator("tbody tr").filter(has_text=other["api_name"])
-    ).to_have_count(0)
+    expect(member.first).to_be_visible(timeout=15000)
+    expect(unfiled).to_have_count(0, timeout=15000)
 
 
 def test_an_empty_filter_result_does_not_claim_an_empty_ontology(
@@ -351,10 +365,14 @@ def test_the_status_filter_narrows_the_table(page, api, module) -> None:
     own type is `experimental` (p.256's default) and the other is `active`, so
     the two differ in the one thing being filtered on.
     """
-    tag = uuid.uuid4().hex[:6]
+    # **Tagged like the fixture's own type** (§256): the table is a page, so
+    # one search has to be able to show both — otherwise the "not here" half
+    # would pass because the row was on another page rather than because the
+    # filter worked.
     other = api.call(
         "POST", f"/workspaces/{module.workspace_id}/object-types",
-        {"api_name": f"active_{tag}", "display_name": f"Active {tag}",
+        {"api_name": f"active_{module.tag}",
+         "display_name": f"Active {module.tag}",
          "properties": [{"api_name": "id", "display_name": "Id",
                          "data_type": "string"}],
          "title_property": "id"},
@@ -365,10 +383,14 @@ def test_the_status_filter_narrows_the_table(page, api, module) -> None:
     )
 
     open_objects(page, module)
-    expect(type_row(page, module)).to_be_visible()
+    page.get_by_test_id("type-search").fill(module.tag)
+    rows = types_table(page).locator("tbody tr")
+    expect(rows.filter(has_text=f"seed_{module.tag}").first).to_be_visible(
+        timeout=30000
+    )
+    expect(rows.filter(has_text=other["api_name"]).first).to_be_visible()
 
     page.get_by_test_id("status-filter").select_option("active")
-    rows = types_table(page).locator("tbody tr")
     expect(rows.filter(has_text=other["api_name"]).first).to_be_visible(timeout=15000)
     expect(rows.filter(has_text=f"seed_{module.tag}")).to_have_count(0)
 

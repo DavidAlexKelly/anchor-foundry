@@ -1415,6 +1415,23 @@ export interface ObjectTypeSummary {
   updated_at: string;
 }
 
+/** One page of the workspace's object types, and how many match.
+ *
+ * **The total is why this is an object and not an array.** `GET /object-types`
+ * was unbounded until §256 — §209 measured a development workspace of ~1,400
+ * types taking seven seconds to open a dialog — and bounding it alone would
+ * only move the failure: a picker showing fifty of six hundred types looks
+ * exactly like a workspace with fifty types. Every reader is handed the count
+ * whether it draws it or not. */
+export interface ObjectTypePage {
+  items: ObjectTypeSummary[];
+  /** How many match the filters, not how many are on this page. */
+  total: number;
+  /** Echoed, so a caller reading a stored response knows what it asked for. */
+  limit: number | null;
+  offset: number;
+}
+
 /** A classification of object types, for search and exploration (Foundry
  * `object-link-types` p.261-263).
  *

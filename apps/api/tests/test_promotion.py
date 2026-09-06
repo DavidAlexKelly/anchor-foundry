@@ -245,7 +245,8 @@ def test_the_listing_reports_visibility_too(client: TestClient, fx: Fixture) -> 
     assert save(client, fx, read_type(client, fx, created["id"]),
                 sub=fx.admin_sub, status="promoted").status_code == 200
 
-    r = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub))
+    r = client.get(f"{wbase(fx)}/object-types?q={created['api_name']}",
+                   headers=hdr(fx.viewer_sub))
     assert r.status_code == 200, r.text
-    row = next(t for t in r.json() if t["id"] == created["id"])
+    row = next(t for t in r.json()["items"] if t["id"] == created["id"])
     assert row["visibility"] == "prominent"

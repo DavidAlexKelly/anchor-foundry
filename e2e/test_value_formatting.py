@@ -24,6 +24,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import FIRST_RENDER_MS, WEB_BASE, eventually
+from ontology_page import find_type_row
 
 ROWS = [
     {"id": "S1", "name": "Alpha", "value": "100000", "weight": "72.5"},
@@ -63,8 +64,7 @@ def open_type_editor(page, module):
     different fixture's type entirely the first time this was written.
     """
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
-    expect(row).to_be_visible(timeout=30000)
+    row = find_type_row(page, f"seed_{module.tag}")
     row.get_by_role("button", name="Edit").click()
     # **And wait for the editor to have drawn its rows.** The click was waited
     # for; what comes after it was not, so every assertion in this file about

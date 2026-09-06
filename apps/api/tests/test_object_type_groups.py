@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from test_api import ADMIN_DSN, Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
+from src.services import ontology as ontology_service  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -296,9 +297,10 @@ def test_the_object_type_listing_carries_its_groups(
     kind = make_type(client, fx)
     assert set_members(client, fx, group["id"], [kind["id"]]).status_code == 200
 
-    r = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub))
+    r = client.get(f"{wbase(fx)}/object-types?q={kind['api_name']}",
+                   headers=hdr(fx.viewer_sub))
     assert r.status_code == 200, r.text
-    row = next(t for t in r.json() if t["id"] == kind["id"])
+    row = next(t for t in r.json()["items"] if t["id"] == kind["id"])
     assert [g["display_name"] for g in row["groups"]] == [group["display_name"]]
 
 
@@ -317,7 +319,7 @@ def test_the_object_type_listing_filters_by_group(
         f"{wbase(fx)}/object-types?group_id={group['id']}", headers=hdr(fx.viewer_sub)
     )
     assert r.status_code == 200, r.text
-    ids = {t["id"] for t in r.json()}
+    ids = {t["id"] for t in r.json()["items"]}
     assert inside["id"] in ids
     assert outside["id"] not in ids
 
@@ -370,7 +372,7 @@ def test_the_listing_filters_by_development_status(
         f"{wbase(fx)}/object-types?status=active", headers=hdr(fx.viewer_sub)
     )
     assert r.status_code == 200, r.text
-    ids = {t["id"] for t in r.json()}
+    ids = {t["id"] for t in r.json()["items"]}
     assert active["id"] in ids
     assert experimental["id"] not in ids
 
@@ -402,14 +404,14 @@ def test_the_listing_filters_by_visibility_and_it_is_not_the_status_filter(
         f"{wbase(fx)}/object-types?visibility=prominent", headers=hdr(fx.viewer_sub)
     )
     assert r.status_code == 200, r.text
-    assert demoted["id"] in {t["id"] for t in r.json()}
-    assert plain["id"] not in {t["id"] for t in r.json()}
+    assert demoted["id"] in {t["id"] for t in r.json()["items"]}
+    assert plain["id"] not in {t["id"] for t in r.json()["items"]}
 
     # And the status filter does not find it, which is the whole point.
     r = client.get(
         f"{wbase(fx)}/object-types?status=promoted", headers=hdr(fx.viewer_sub)
     )
-    assert demoted["id"] not in {t["id"] for t in r.json()}
+    assert demoted["id"] not in {t["id"] for t in r.json()["items"]}
 
 
 def test_the_three_filters_narrow_together(client: TestClient, fx: Fixture) -> None:
@@ -440,10 +442,188 @@ def test_the_three_filters_narrow_together(client: TestClient, fx: Fixture) -> N
         headers=hdr(fx.viewer_sub),
     )
     assert r.status_code == 200, r.text
-    assert {t["id"] for t in r.json()} == {wanted["id"]}, (
+    assert {t["id"] for t in r.json()["items"]} == {wanted["id"]}, (
         "each of the other two fails exactly one condition, so whichever "
         "appears names the filter that stopped working"
     )
+
+
+# ---- §256: the listing is a page ------------------------------------------------
+def test_the_listing_is_bounded_and_says_how_many_match(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A bounded list on its own would be worse than the slow one.**
+
+    `ontology.list_types` had no `LIMIT` until §256 — §209 measured a
+    development workspace of ~1,400 types taking seven seconds to open a dialog
+    — and truncating without saying so turns a slow picker into a lying one:
+    fifty of six hundred looks exactly like a workspace with fifty.
+    """
+    tag = uuid.uuid4().hex[:6]
+    for i in range(3):
+        make_type(client, fx, api_name=f"page_{tag}_{i}",
+                  display_name=f"Page {tag} {i}")
+
+    r = client.get(
+        f"{wbase(fx)}/object-types?q=page_{tag}&limit=2", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["items"]) == 2, body
+    assert body["total"] == 3, "the total is what stops the truncation being silent"
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+
+
+def test_the_second_page_is_the_rest_of_the_same_order(
+    client: TestClient, fx: Fixture
+) -> None:
+    tag = uuid.uuid4().hex[:6]
+    for i in range(3):
+        make_type(client, fx, api_name=f"page_{tag}_{i}",
+                  display_name=f"Page {tag} {i}")
+
+    def page(offset: int) -> list[str]:
+        r = client.get(
+            f"{wbase(fx)}/object-types?q=page_{tag}&limit=2&offset={offset}",
+            headers=hdr(fx.viewer_sub),
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["total"] == 3
+        return [t["api_name"] for t in r.json()["items"]]
+
+    assert page(0) == [f"page_{tag}_0", f"page_{tag}_1"]
+    assert page(2) == [f"page_{tag}_2"]
+
+
+def test_a_page_past_the_end_still_says_how_many_match(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The one case the window function cannot answer.** The total rides on
+    the rows, and an empty page has no row to carry it — so "nothing matches"
+    and "you asked past the end" would be the same answer. They are not the
+    same answer, and a client paging on the total would be told the set had
+    emptied under it."""
+    tag = uuid.uuid4().hex[:6]
+    make_type(client, fx, api_name=f"past_{tag}", display_name=f"Past {tag}")
+    r = client.get(
+        f"{wbase(fx)}/object-types?q=past_{tag}&limit=5&offset=50",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["items"] == []
+    assert r.json()["total"] == 1, r.json()
+
+
+def test_the_search_matches_the_display_name_and_the_api_name(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A person looking for a type knows one or the other and not reliably
+    which — the same rule `ontology_search` uses one module over."""
+    tag = uuid.uuid4().hex[:6]
+    made = make_type(client, fx, api_name=f"vessel_{tag}",
+                     display_name=f"Cargo ship {tag}")
+    for needle in (f"vessel_{tag}", f"Cargo ship {tag}", f"CARGO SHIP {tag}"):
+        r = client.get(
+            f"{wbase(fx)}/object-types?q={needle}", headers=hdr(fx.viewer_sub)
+        )
+        assert r.status_code == 200, r.text
+        assert made["id"] in {t["id"] for t in r.json()["items"]}, needle
+
+
+def test_the_search_is_not_a_pattern(client: TestClient, fx: Fixture) -> None:
+    """`position` rather than `LIKE`, so nothing somebody typed is a wildcard.
+
+    A search for `%` finding every object type would be a listing pretending to
+    be a search, and the person reading it would believe they had narrowed it.
+    """
+    tag = uuid.uuid4().hex[:6]
+    make_type(client, fx, api_name=f"pat_{tag}", display_name=f"Pat {tag}")
+    r = client.get(f"{wbase(fx)}/object-types?q=%25", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 0, r.json()
+
+
+def test_the_search_and_the_other_filters_narrow_together(
+    client: TestClient, fx: Fixture
+) -> None:
+    """And-ed like the three before it, which is what a fourth control on the
+    same row has to be for the row to mean anything."""
+    tag = uuid.uuid4().hex[:6]
+    wanted = make_type(client, fx, api_name=f"both_{tag}",
+                       display_name=f"Both {tag}")
+    other = make_type(client, fx, api_name=f"both_{tag}_x",
+                      display_name=f"Both {tag} x")
+    assert set_status(client, fx, wanted, "active").status_code == 200
+
+    r = client.get(
+        f"{wbase(fx)}/object-types?q=both_{tag}&status=active",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    ids = {t["id"] for t in r.json()["items"]}
+    assert wanted["id"] in ids
+    assert other["id"] not in ids
+
+
+def test_exactly_these_ids_can_be_read_back(client: TestClient, fx: Fixture) -> None:
+    """**A screen that has already chosen some types has to be able to read
+    them.** The Object Explorer needs each selected type's hidden-property list
+    to know which columns not to draw (p.111), and a selected type that fell
+    off the page would have its hidden properties drawn."""
+    tag = uuid.uuid4().hex[:6]
+    a = make_type(client, fx, api_name=f"ids_{tag}_a", display_name=f"Ids {tag} a")
+    b = make_type(client, fx, api_name=f"ids_{tag}_b", display_name=f"Ids {tag} b")
+    make_type(client, fx, api_name=f"ids_{tag}_c", display_name=f"Ids {tag} c")
+
+    r = client.get(
+        f"{wbase(fx)}/object-types?ids={a['id']}&ids={b['id']}",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    assert {t["id"] for t in r.json()["items"]} == {a["id"], b["id"]}
+    assert r.json()["total"] == 2
+
+
+def test_ids_narrow_rather_than_widen(client: TestClient, fx: Fixture) -> None:
+    """And-ed with the rest, so `ids` can never reach a type the other
+    predicates excluded — a caller that could name its way past a filter would
+    make every filter on this endpoint advisory."""
+    tag = uuid.uuid4().hex[:6]
+    experimental = make_type(client, fx, api_name=f"narrow_{tag}",
+                             display_name=f"Narrow {tag}")
+    r = client.get(
+        f"{wbase(fx)}/object-types?ids={experimental['id']}&status=active",
+        headers=hdr(fx.viewer_sub),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["items"] == []
+
+
+def test_a_search_longer_than_the_ceiling_is_refused(
+    client: TestClient, fx: Fixture
+) -> None:
+    r = client.get(
+        f"{wbase(fx)}/object-types?q={'x' * 500}", headers=hdr(fx.viewer_sub)
+    )
+    assert r.status_code == 422, r.text
+    assert "at most" in r.text
+
+
+def test_the_browser_pages_by_the_same_number() -> None:
+    """§190's pattern. A picker cannot wait for a round trip to decide whether
+    to draw a search box, so `lib/type-picker.ts` restates the page size — and
+    a restatement that drifted would draw a search on a workspace that fits, or
+    fail to draw one on a workspace that does not."""
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "type-picker.ts"), encoding="utf-8"
+    ).read()
+    found = re.search(r"export const TYPE_PAGE = (\d+);", source)
+    assert found, "TYPE_PAGE not found in type-picker.ts - has it been renamed?"
+    assert int(found.group(1)) == ontology_service.DEFAULT_TYPE_PAGE
 
 
 def test_a_filter_value_outside_the_vocabulary_is_refused(

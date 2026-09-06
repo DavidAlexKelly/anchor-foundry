@@ -102,6 +102,27 @@ def to_api_name(display: str, *, type_case: bool) -> str:
 
 
 # ---- object types -----------------------------------------------------------
+#: How many object types one listing read returns when the caller does not say.
+#:
+#: **A number this platform chose, because there is no page to copy one from.**
+#: `ontology-manager` p.262 says only that the table of object types "supports
+#: displaying and filtering by group"; nothing in `docs/pal/` states a page
+#: size. So the shape is ours, and the argument is §209's measurement: a
+#: development workspace holding ~1,400 types made the Ontology Manager listing
+#: take seven seconds to open a dialog, because this endpoint has no `LIMIT`
+#: and every type *picker* in the product reads it.
+#:
+#: Fifty rather than twenty: a real ontology is tens of types, and a default
+#: that made the common case page would be a control nobody needed. Fifty shows
+#: most ontologies whole and bounds the one that is not.
+DEFAULT_TYPE_PAGE = 50
+
+#: The longest search a listing accepts. Not a security bound - the value is a
+#: bind parameter - but a refusal is a better answer than a scan of a megabyte
+#: of text somebody pasted by accident.
+MAX_TYPE_QUERY = 200
+
+
 async def list_types(
     conn: AsyncConnection,
     workspace_id: UUID,
@@ -109,8 +130,30 @@ async def list_types(
     group_id: UUID | None = None,
     status: str | None = None,
     visibility: str | None = None,
-) -> list[dict[str, Any]]:
-    """Every object type in the workspace, narrowed by any of three filters.
+    q: str | None = None,
+    #: Exactly these types, whatever else is set. The listing is a page since
+    #: this unit, and a screen that has *already chosen* some types has to be
+    #: able to read them back - the Object Explorer needs each selected type's
+    #: hidden-property list to know which columns not to draw (p.111), and a
+    #: selected type that fell off the page would have its hidden properties
+    #: drawn. Narrowing rather than widening: `ids` is and-ed with the filters,
+    #: so it can never reach a type the other predicates excluded.
+    ids: "list[str] | None" = None,
+    #: `None` is **every** matching type, and it is deliberately not the
+    #: default anywhere a browser can reach. Three callers here genuinely want
+    #: the whole ontology - the search index, the explorer's id-to-name lookup,
+    #: and the bulk-status echo - and each of them is answering a question about
+    #: the ontology rather than drawing a page of it.
+    limit: int | None = DEFAULT_TYPE_PAGE,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """A page of the workspace's object types, and how many match.
+
+    **The total is the point of the tuple.** A bounded list on its own is a
+    listing that truncates silently, which is worse than the slow one it
+    replaces: a picker showing fifty of six hundred types looks exactly like a
+    workspace with fifty types. Every caller gets the number whether it draws it
+    or not, so "there are more" is never something a screen can fail to know.
 
     `group_id` is p.262's "The table of object types in Ontology Manager
     supports displaying and filtering by group". `status` and `visibility` are
@@ -125,6 +168,12 @@ async def list_types(
     would still pay for every type's hidden-property scan to show a group of
     four. At 760 types in this build's development workspace that response is
     352KB and half a second, and every type *picker* in the product asks for it.
+
+    `q` is that argument taken one step further: a picker that has to find one
+    type among six hundred cannot do it by scrolling, and it cannot do it by
+    fetching all six hundred either. Matched against the display name **and**
+    the api name, because a person looking for a type knows one or the other and
+    not reliably which - the same rule `ontology_search` uses one module over.
 
     **One value per filter, and-ed**, which is the group filter's shape rather
     than a new one. p.29 does not say which it is, so the precedent decides:
@@ -147,10 +196,16 @@ async def list_types(
             f"unknown visibility {visibility!r}; expected one of "
             + ", ".join(PROPERTY_VISIBILITIES)
         )
+    if q is not None and len(q) > MAX_TYPE_QUERY:
+        raise ValueError(
+            f"a search is at most {MAX_TYPE_QUERY} characters (given {len(q)})"
+        )
+    needle = q.strip() if q else ""
     rows = await fetch_all(
         conn,
         """
-        SELECT ot.id, ot.api_name, ot.display_name, ot.description, ot.icon,
+        SELECT count(*) OVER () AS match_count,
+               ot.id, ot.api_name, ot.display_name, ot.description, ot.icon,
                ot.colour, ot.title_property_id, ot.resource_id,
                ot.status, ot.visibility, ot.deprecation,
                ot.created_at, ot.updated_at,
@@ -180,16 +235,52 @@ async def list_types(
            -- ever stopped making it.
            AND (CAST(:status AS text) IS NULL OR ot.status::text = :status)
            AND (CAST(:vis AS text) IS NULL OR ot.visibility::text = :vis)
+           -- `position` rather than `LIKE`, so nothing in what somebody typed
+           -- is a pattern: a search for `order_%` is a search for `order_%`.
+           -- Lowercased on both sides for the same reason `ontology_search`
+           -- casefolds - somebody looking for `Vehicle` types `vehicle`.
+           AND (:needle = '' OR position(lower(:needle) in lower(ot.display_name)) > 0
+                             OR position(lower(:needle) in lower(ot.api_name)) > 0)
+           AND (CAST(:ids AS uuid[]) IS NULL OR ot.id = ANY(CAST(:ids AS uuid[])))
          ORDER BY ot.display_name
+         LIMIT CAST(:limit AS integer) OFFSET :offset
         """,
         {
             "wid": str(workspace_id),
             "gid": str(group_id) if group_id else None,
             "status": status,
             "vis": visibility,
+            "needle": needle,
+            "ids": ids,
+            # `LIMIT NULL` is every row in Postgres, which is exactly what
+            # `limit=None` means here - so the unbounded case needs no second
+            # query and no string-built SQL.
+            "limit": limit,
+            "offset": max(0, offset),
         },
     )
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    # **The total rides on every row**, from the same scan and the same WHERE,
+    # so a page and its count cannot disagree about what they were counting -
+    # a second `SELECT count(*)` would be a second copy of five predicates.
+    total = int(out[0]["match_count"]) if out else 0
+    for row in out:
+        row.pop("match_count", None)
+    if not out and offset > 0:
+        # **The one case the window function cannot answer**: no rows means no
+        # row to carry the count, and "nothing matches" is a different
+        # statement from "you asked past the end".
+        #
+        # Answered by asking *this* function for the first row rather than by a
+        # second `SELECT count(*)`, which would be a second copy of five
+        # predicates - and one exercised only on the request nobody makes by
+        # hand, so a drift in it would sit there unnoticed (§191). Recursion
+        # bottoms out immediately: the inner call has `offset=0`.
+        _, total = await list_types(
+            conn, workspace_id, group_id=group_id, status=status,
+            visibility=visibility, q=q, ids=ids, limit=1, offset=0,
+        )
+    return out, total
 
 
 async def get_type(conn: AsyncConnection, workspace_id: UUID, type_id: UUID) -> dict[str, Any]:

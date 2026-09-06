@@ -140,14 +140,24 @@ async def groups_for_type(
 
 
 async def groups_by_type(
-    conn: AsyncConnection, workspace_id: UUID
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    type_ids: "list[str] | None" = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Every membership in the workspace, keyed by object type id.
+    """Memberships keyed by object type id, for the types a page is drawing.
 
     **One query for the whole listing**, because p.262's table shows a group
     column on every row and the per-type version of this call inside that loop
     is §169's N+1 in its next costume - the one that took ontology search from
     2 seconds to over 120.
+
+    **And narrowed to the page**, because one query for the workspace is still
+    O(the ontology) once the listing above it is not (§256). A bounded page
+    joined against every membership in the workspace is the same defect moved
+    one query down: the row count fell and the work did not. `None` is still
+    every type, for the callers that are answering a question about the
+    workspace rather than drawing fifty rows of it.
     """
     rows = await fetch_all(
         conn,
@@ -156,9 +166,14 @@ async def groups_by_type(
           FROM object_type_group_members m
           JOIN object_type_groups g ON g.id = m.group_id
          WHERE m.workspace_id = :wid
+           -- An empty list is not "no filter": `:ids IS NULL` is the caller
+           -- asking for everything, and `= ANY('{}')` is the caller asking for
+           -- a page with no rows on it, which is a real answer.
+           AND (CAST(:ids AS uuid[]) IS NULL
+                OR m.object_type_id = ANY(CAST(:ids AS uuid[])))
          ORDER BY g.display_name
         """,
-        {"wid": str(workspace_id)},
+        {"wid": str(workspace_id), "ids": type_ids},
     )
     out: dict[str, list[dict[str, Any]]] = {}
     for row in rows:

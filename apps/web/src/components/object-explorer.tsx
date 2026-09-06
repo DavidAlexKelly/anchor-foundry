@@ -40,6 +40,8 @@ import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { displayValue } from "@/components/object-value";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
+import { memberFirst } from "@/lib/object-type-groups";
+import { truncationNote } from "@/lib/type-picker";
 import type { ObjectTypeSummary, SavedSearch } from "@/lib/types";
 
 /** The explorer's whole state, and the whole of what a saved search stores.
@@ -166,12 +168,33 @@ export function ObjectExplorer({
   const [saving, setSaving] = useState<Criteria | null>(null);
   const [exploring, setExploring] = useState<LinkStop | null>(null);
 
+  // **A page, searched on the server** (§256). This used to fetch every object
+  // type in the workspace and filter the result in the browser, which was
+  // correct only for as long as "the result" was the whole ontology - §209
+  // measured ~1,400 types taking seven seconds. The filter box below is the
+  // same control; what changed is that it now narrows the ontology rather than
+  // the copy of it this component happened to hold.
   const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objApi.listTypes(workspaceId),
+    queryKey: ["object-types", workspaceId, typeFilter],
+    queryFn: () =>
+      objApi.listTypes(workspaceId, undefined, { q: typeFilter.trim() || null }),
     enabled: !!workspaceId,
   });
-  const byId = new Map((types.data ?? []).map((t) => [t.id, t]));
+  // **The types this search already names, read back explicitly.** A selected
+  // type that fell off the page would take its `hidden_properties` with it,
+  // and the column list below would then draw a property p.111 says to hide.
+  // Its own query rather than a wider page: the answer is exactly these ids.
+  const chosen = useQuery({
+    queryKey: ["object-types-by-id", workspaceId, [...criteria.typeIds].sort()],
+    queryFn: () =>
+      objApi.listTypes(workspaceId, undefined, {
+        ids: criteria.typeIds, limit: 200,
+      }),
+    enabled: !!workspaceId && criteria.typeIds.length > 0,
+  });
+  const byId = new Map(
+    [...(chosen.data?.items ?? []), ...(types.data?.items ?? [])].map((t) => [t.id, t]),
+  );
 
   const page = useQuery({
     queryKey: ["object-explorer", workspaceId, applied, offset],
@@ -261,7 +284,12 @@ export function ObjectExplorer({
 
   const selected = criteria.typeIds;
   const onlyType = selected.length === 1 ? byId.get(selected[0]!) : undefined;
-  const missing = selected.filter((id) => types.data && !byId.has(id));
+  // Answered from the by-id read rather than from the page: a type absent from
+  // *this page* is not a type that no longer exists, and saying so would be a
+  // scary note about an ontology that is fine.
+  const missing = selected.filter(
+    (id) => criteria.typeIds.length > 0 && chosen.data && !byId.has(id),
+  );
 
   // Every property name present in the current page, so a cross-type result
   // set still shows values rather than just ids. Union rather than
@@ -276,7 +304,7 @@ export function ObjectExplorer({
   // shares one set of columns, so a property one type hides and another does
   // not has no honest single answer, and hiding is the safer of the two.
   const hiddenProperties = new Set(
-    (types.data ?? [])
+    (selected.length === 0 ? types.data?.items ?? [] : chosen.data?.items ?? [])
       .filter((t) => selected.length === 0 || selected.includes(t.id))
       .flatMap((t) => t.hidden_properties ?? []),
   );
@@ -333,7 +361,7 @@ export function ObjectExplorer({
           <fieldset className="ox-types">
             <legend>Object types</legend>
             {types.isPending && <span className="slug">Loading types…</span>}
-            {types.data?.length === 0 && (
+            {types.data?.total === 0 && !typeFilter.trim() && (
               <span className="slug">No object types in this workspace yet.</span>
             )}
             {/* A workspace-wide surface sees the whole ontology, and a mature
@@ -341,34 +369,39 @@ export function ObjectExplorer({
                 a filter and becomes something to scan. Selected types stay
                 visible whatever is typed here, so narrowing the list can never
                 hide part of the question being asked. */}
-            {(types.data?.length ?? 0) > TYPE_FILTER_FROM && (
+            {(types.data?.total ?? 0) > TYPE_FILTER_FROM && (
               <input
                 type="search"
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value)}
-                placeholder={`Filter ${types.data?.length} types…`}
+                placeholder={`Search ${types.data?.total} types…`}
                 aria-label="Filter the object type list"
                 style={{ flex: "1 1 100%", marginBottom: 2 }}
               />
             )}
             <div className="ox-type-list">
-              {types.data
-                ?.filter(
-                  (t) =>
-                    selected.includes(t.id) ||
-                    t.display_name.toLowerCase().includes(typeFilter.trim().toLowerCase()),
-                )
-                .map((t) => (
-                  <label key={t.id} className="ox-type">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(t.id)}
-                      onChange={(e) => toggleType(t.id, e.target.checked)}
-                    />
-                    <span>{t.display_name}</span>
-                  </label>
-                ))}
+              {memberFirst(
+                types.data?.items ?? [], chosen.data?.items ?? [], selected,
+              ).map((t) => (
+                <label key={t.id} className="ox-type">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(t.id)}
+                    onChange={(e) => toggleType(t.id, e.target.checked)}
+                  />
+                  <span>{t.display_name}</span>
+                </label>
+              ))}
             </div>
+            {truncationNote(
+              types.data?.items.length ?? 0, types.data?.total ?? 0,
+            ) && (
+              <p className="ox-note" data-testid="ox-type-truncation">
+                {truncationNote(
+                  types.data?.items.length ?? 0, types.data?.total ?? 0,
+                )}
+              </p>
+            )}
             {missing.length > 0 && (
               <p className="ox-note">
                 This search also names {missing.length}{" "}
@@ -539,7 +572,7 @@ export function ObjectExplorer({
         <SaveSearchDialog
           workspaceId={workspaceId}
           criteria={saving}
-          types={types.data ?? []}
+          types={types.data?.items ?? []}
           onClose={() => setSaving(null)}
           // Nothing to select afterwards: the new search matches what is on
           // screen by construction, so the rail marks it without being told.

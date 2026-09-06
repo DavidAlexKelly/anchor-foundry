@@ -221,9 +221,14 @@ def test_a_type_in_the_list_says_where_it_opens(
     own application instead (item 4.2), which needs the resource id on the type
     it already has - and the id has to *resolve*, since a plausible-looking
     uuid that 404s is worse than no link at all."""
-    listed = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub))
+    # The listing is a page since §256, so this asks for the one type it is
+    # about rather than scanning a workspace it shares with every other test.
+    name = client.get(f"{wbase(fx)}/object-types/{a_type}",
+                      headers=hdr(fx.viewer_sub)).json()["api_name"]
+    listed = client.get(f"{wbase(fx)}/object-types?q={name}",
+                        headers=hdr(fx.viewer_sub))
     assert listed.status_code == 200, listed.text
-    row = next(t for t in listed.json() if t["id"] == a_type)
+    row = next(t for t in listed.json()["items"] if t["id"] == a_type)
 
     resolved = client.get(f"/api/resources/{row['resource_id']}", headers=hdr(fx.viewer_sub))
     assert resolved.status_code == 200, resolved.text

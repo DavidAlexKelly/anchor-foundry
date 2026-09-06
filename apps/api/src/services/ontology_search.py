@@ -92,7 +92,10 @@ async def search(
         return []
 
     results: list[dict[str, Any]] = []
-    types = await ontology_service.list_types(conn, workspace_id)
+    # **`limit=None`**: a search that only looked at the first fifty types
+    # would answer "no such type" about a type that exists, which is the one
+    # answer a search must never give wrongly (§256).
+    types, _ = await ontology_service.list_types(conn, workspace_id, limit=None)
     by_id = {str(t["id"]): t for t in types}
 
     for row in types:

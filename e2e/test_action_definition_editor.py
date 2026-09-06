@@ -17,8 +17,16 @@ import uuid
 import pytest
 from playwright.sync_api import expect
 
+# **Addressed by test id rather than by label** for the two object-type
+# dropdowns. They are `TypePicker`s since §256, and a picker that needs a
+# search draws an input labelled "Search Rule 1 object type" beside the select
+# - which `get_by_label` matches too, because an accessible name matches by
+# substring. The id is the unambiguous handle and the one this suite already
+# uses for exactly this reason.
+
 from api import Module
 from conftest import WEB_BASE
+from ontology_page import pick_type
 
 
 def build(api, name: str) -> Module:
@@ -263,7 +271,7 @@ def test_a_rule_can_be_pointed_at_an_object_a_parameter_names(page, api):
     page.get_by_label("Parameter 2 label").fill("Team")
     page.get_by_label("Parameter 2 type").select_option("object")
 
-    page.get_by_label("Rule 1 object type").select_option(team["id"])
+    pick_type(page, "rule-1-object-type", team)
     page.get_by_label("Rule 1 which object").select_option("team")
     # `code` belongs to the Team type. Offering it at all is the point: before
     # this the dropdown could only ever list the action's own type's.
@@ -295,7 +303,7 @@ def test_only_object_parameters_are_offered_as_the_object_to_change(page, api):
     page.get_by_label("Parameter 2 label").fill("Team")
     page.get_by_label("Parameter 2 type").select_option("object")
 
-    page.get_by_label("Rule 1 object type").select_option(team["id"])
+    pick_type(page, "rule-1-object-type", team)
     options = page.get_by_label("Rule 1 which object").locator("option").all_inner_texts()
     # `status`, the string parameter this action was created with, is not here.
     assert options == ["Choose…", "team"]
@@ -314,9 +322,9 @@ def test_pointing_a_rule_back_at_this_object_forgets_what_it_named(page, api):
     page.get_by_label("Parameter 2 label").fill("Team")
     page.get_by_label("Parameter 2 type").select_option("object")
 
-    page.get_by_label("Rule 1 object type").select_option(team["id"])
+    pick_type(page, "rule-1-object-type", team)
     page.get_by_label("Rule 1 which object").select_option("team")
-    page.get_by_label("Rule 1 object type").select_option("")
+    page.get_by_test_id("rule-1-object-type").select_option("")
     # The "which one" picker goes with it - there is nothing left to ask.
     expect(page.get_by_label("Rule 1 which object")).to_have_count(0)
 
@@ -344,7 +352,7 @@ def test_a_delete_rule_can_name_an_object_too(page, api):
 
     page.get_by_label("Rule 1 kind").select_option("delete_object")
     expect(page.get_by_text("Deletes the object the action was run against")).to_be_visible()
-    page.get_by_label("Rule 1 object type").select_option(team["id"])
+    pick_type(page, "rule-1-object-type", team)
     page.get_by_label("Rule 1 which object").select_option("team")
     expect(page.get_by_text("Deletes the object the action was run against")).to_have_count(0)
     page.get_by_role("button", name="Save", exact=True).click()

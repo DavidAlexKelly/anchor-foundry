@@ -27,6 +27,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
+import { TypePicker } from "@/components/type-picker";
 import { actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
 import type { ActionType } from "@/lib/types";
 
@@ -136,10 +137,10 @@ export function ActionDefinitionEditor({
   // a given rule names are fetched by `PropertySelect`, because carrying every
   // property of every type here to answer one dropdown would be the list
   // endpoint doing a detail endpoint's job.
-  const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objApi.listTypes(workspaceId),
-  });
+  // The type list used to be fetched here for two `<select>`s of every type in
+  // the workspace. `TypePicker` owns that read now (§256): the listing is a
+  // page, so a control over it has to search the ontology rather than the rows
+  // it happened to receive.
 
   const links = useQuery({
     queryKey: ["link-types", workspaceId],
@@ -362,16 +363,14 @@ export function ActionDefinitionEditor({
                 {(r.kind === "modify_object" || r.kind === "delete_object") && (
                   <>
                     <Field label="On">
-                      <select
+                      <TypePicker
+                        workspaceId={workspaceId}
                         value={config.object_type ? ruleTypeId : ""}
-                        aria-label={`Rule ${i + 1} object type`}
-                        onChange={(e) => retarget(e.target.value)}
-                      >
-                        <option value="">This object</option>
-                        {(types.data ?? []).map((t) => (
-                          <option key={t.id} value={t.id}>{t.display_name}</option>
-                        ))}
-                      </select>
+                        label={`Rule ${i + 1} object type`}
+                        testId={`rule-${i + 1}-object-type`}
+                        placeholder="This object"
+                        onChange={retarget}
+                      />
                     </Field>
                     {!!config.object_type && (
                       <Field label="Which one">
@@ -428,19 +427,17 @@ export function ActionDefinitionEditor({
                         project (§139); the properties below then come from
                         *that* type, which is what the server checks against. */}
                     <Field label="Of type">
-                      <select
+                      <TypePicker
+                        workspaceId={workspaceId}
                         value={config.object_type ? ruleTypeId : ""}
-                        aria-label={`Rule ${i + 1} creates type`}
-                        onChange={(e) => {
+                        label={`Rule ${i + 1} creates type`}
+                        testId={`rule-${i + 1}-creates-type`}
+                        placeholder="This object type"
+                        onChange={(id) => {
                           const { object_type: _t, properties: _p, ...rest } = config;
-                          patch(e.target.value ? { ...rest, object_type: e.target.value } : rest);
+                          patch(id ? { ...rest, object_type: id } : rest);
                         }}
-                      >
-                        <option value="">This object type</option>
-                        {(types.data ?? []).map((t) => (
-                          <option key={t.id} value={t.id}>{t.display_name}</option>
-                        ))}
-                      </select>
+                      />
                     </Field>
                     {/* The primary key is separate because it is not a
                         property - an object's identity lives in a dataset

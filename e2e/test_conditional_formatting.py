@@ -22,6 +22,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import WEB_BASE, eventually
+from ontology_page import find_type_row
 
 GREEN = "rgb(26, 127, 55)"    # #1a7f37
 RED = "rgb(185, 28, 28)"      # #b91c1c
@@ -89,8 +90,7 @@ def open_type_editor(page, module):
     """This fixture's own type, filtered by api_name - the objects page lists
     every type in the workspace."""
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
-    expect(row).to_be_visible(timeout=30000)
+    row = find_type_row(page, f"seed_{module.tag}")
     row.get_by_role("button", name="Edit").click()
 
 

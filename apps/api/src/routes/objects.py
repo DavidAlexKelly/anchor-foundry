@@ -27,6 +27,11 @@ from uuid import UUID, uuid4
 
 import anyio
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+# An alias, because `list_object_types` has a query parameter called
+# `status` - p.253's developmental state - which shadows the module
+# inside that one function. Renaming the parameter would rename a
+# documented query string to work around a local name clash.
+from fastapi import status as status_codes
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -452,13 +457,41 @@ async def search_ontology(
 
 
 # ---- object types (workspace-scoped) ----------------------------------------
-@router.get("/object-types", response_model=list[ObjectTypeSummary])
+class ObjectTypePage(BaseModel):
+    """A page of the ontology, and how much of it there is.
+
+    **The total is why this is an object and not a list.** The listing was
+    unbounded until §256 — every type in the workspace, on every read, from
+    eight call sites — and the fix for that is only half a fix: a bounded list
+    on its own truncates silently, and a picker showing fifty of six hundred
+    types looks exactly like a workspace with fifty types. Sending the number
+    means no screen can fail to know there is more.
+    """
+
+    items: list[ObjectTypeSummary]
+    #: How many match the filters, not how many are on this page.
+    total: int
+    #: Echoed so a caller reading a stored response knows what it asked for.
+    #: `None` is "every match", which only an internal caller can ask for.
+    limit: int | None
+    offset: int
+
+
+@router.get("/object-types", response_model=ObjectTypePage)
 async def list_object_types(
     group_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None),
     visibility: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    #: Exactly these types. A screen that has already chosen some has to be
+    #: able to read them back now that the listing is a page - see the service.
+    #: Capped at the page ceiling, because a caller asking for three hundred
+    #: ids is asking for a listing again by another name.
+    ids: list[UUID] | None = Query(default=None, max_length=200),
+    limit: int = Query(default=ontology_service.DEFAULT_TYPE_PAGE, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
-) -> list[ObjectTypeSummary]:
+) -> ObjectTypePage:
     """p.262's table, which "supports displaying and filtering by group", and
     `ontology-manager` p.29's other two: "filtering object types and link types
     based on their visibility, development status, and indexing issues".
@@ -468,37 +501,56 @@ async def list_object_types(
     `ontology_status.STATUSES` and `PROPERTY_VISIBILITIES` - and a pattern
     built here would be a second copy of a list that already refuses.
 
-    The memberships come back in **one** query for the whole list rather than
-    one per row - §169's N+1 is recent enough to still be the first thing to
-    check when a loop wants a lookup.
+    **`limit` has no `None`.** The service accepts one, for the three internal
+    callers answering a question about the whole ontology; this route does not
+    offer it, because an endpoint that can be asked for everything is an
+    endpoint something will ask for everything, which is where §209 found seven
+    seconds.
+
+    The memberships come back in **one** query for the page rather than one per
+    row - §169's N+1 is recent enough to still be the first thing to check when
+    a loop wants a lookup - and narrowed to the page's ids, because one query
+    for the workspace under a bounded listing is the same defect one layer down.
     """
     async with user_connection(access.auth.user_id) as conn:
-        rows = await ontology_service.list_types(
-            conn, access.workspace_id, group_id=group_id,
-            status=status, visibility=visibility,
+        try:
+            rows, total = await ontology_service.list_types(
+                conn, access.workspace_id, group_id=group_id,
+                status=status, visibility=visibility, q=q,
+                ids=[str(i) for i in ids] if ids else None,
+                limit=limit, offset=offset,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status_codes.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        ids = [str(r["id"]) for r in rows]
+        by_type = await groups_service.groups_by_type(
+            conn, access.workspace_id, type_ids=ids
         )
-        by_type = await groups_service.groups_by_type(conn, access.workspace_id)
-        # One query for the workspace, like the groups above and for the same
-        # reason - §169's N+1 is recent enough to still be the first thing to
-        # check when a loop wants a lookup.
         implemented = await interfaces_service.implementations_by_type(
-            conn, access.workspace_id
+            conn, access.workspace_id, type_ids=ids
         )
-    return [
-        ObjectTypeSummary(
-            **r,
-            groups=by_type.get(str(r["id"]), []),
-            interfaces=[
-                ObjectTypeInterfaceRef(
-                    id=i["interface_id"],
-                    api_name=i["api_name"],
-                    display_name=i["display_name"],
-                )
-                for i in implemented.get(str(r["id"]), [])
-            ],
-        )
-        for r in rows
-    ]
+    return ObjectTypePage(
+        total=total,
+        limit=limit,
+        offset=offset,
+        items=[
+            ObjectTypeSummary(
+                **r,
+                groups=by_type.get(str(r["id"]), []),
+                interfaces=[
+                    ObjectTypeInterfaceRef(
+                        id=i["interface_id"],
+                        api_name=i["api_name"],
+                        display_name=i["display_name"],
+                    )
+                    for i in implemented.get(str(r["id"]), [])
+                ],
+            )
+            for r in rows
+        ],
+    )
 
 
 @router.post(
@@ -1102,10 +1154,13 @@ async def explore_instances(
             )
         # Type names come from Postgres whichever store held the instances -
         # the ontology definition never moved.
-        types = {
-            str(t["id"]): t
-            for t in await ontology_service.list_types(conn, access.workspace_id)
-        }
+        # **`limit=None` on purpose**: this is a lookup from the instance rows'
+        # type ids to their names, not a page of the ontology, and a bounded
+        # read here would leave rows on screen labelled with nothing (§256).
+        all_types, _ = await ontology_service.list_types(
+            conn, access.workspace_id, limit=None
+        )
+        types = {str(t["id"]): t for t in all_types}
     items = []
     for row in rows:
         meta = types.get(str(row["object_type_id"]))
@@ -2355,7 +2410,11 @@ async def bulk_set_object_type_status(
             workspace_role=access.role,
             apply_to_properties=body.apply_to_properties,
         )
-        rows = await ontology_service.list_types(conn, access.workspace_id)
+        # The bulk-status echo answers "what does the whole ontology look like
+        # now", which is the workspace rather than a page of it (§256).
+        rows, _ = await ontology_service.list_types(
+            conn, access.workspace_id, limit=None
+        )
         by_type = await groups_service.groups_by_type(conn, access.workspace_id)
         await audit.record(
             conn,

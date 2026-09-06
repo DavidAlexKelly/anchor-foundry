@@ -173,9 +173,13 @@ def test_get_type_visible_to_viewer(
 def test_type_list_shows_source_count(
     client: TestClient, fx: Fixture, customer_type_id: str
 ) -> None:
-    r = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub))
+    # **Searched rather than scanned.** The listing is a page since §256, so a
+    # test that scanned it for one type would pass on an empty workspace and
+    # fail on a full one - and this suite shares a database with every other.
+    r = client.get(f"{wbase(fx)}/object-types?q=Customer{fx.tag}",
+                   headers=hdr(fx.viewer_sub))
     assert r.status_code == 200
-    row = next(t for t in r.json() if t["id"] == customer_type_id)
+    row = next(t for t in r.json()["items"] if t["id"] == customer_type_id)
     assert row["source_count"] == 0
 
 
@@ -344,8 +348,9 @@ def test_create_source_and_list(
     assert body["column_mappings"] == {"name": "name", "email": "email"}
 
     # source_count on the type now reflects this mapping
-    r = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub))
-    row = next(t for t in r.json() if t["id"] == customer_type_id)
+    r = client.get(f"{wbase(fx)}/object-types?q=Customer{fx.tag}",
+                   headers=hdr(fx.viewer_sub))
+    row = next(t for t in r.json()["items"] if t["id"] == customer_type_id)
     assert row["source_count"] == 1
 
     r = client.get(sbase(fx), headers=hdr(fx.viewer_sub))
@@ -699,7 +704,8 @@ def test_the_type_list_reports_which_properties_are_hidden(client: TestClient, f
             "title_property": "id",
         },
     )
-    listed = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub)).json()
+    listed = client.get(f"{wbase(fx)}/object-types?q=vis_list_{fx.tag}",
+                        headers=hdr(fx.editor_sub)).json()["items"]
     [mine] = [t for t in listed if t["api_name"] == f"vis_list_{fx.tag}"]
     assert mine["hidden_properties"] == ["internal_note"], mine["hidden_properties"]
 
@@ -716,7 +722,8 @@ def test_a_type_with_nothing_hidden_reports_an_empty_list(client: TestClient, fx
             "title_property": "id",
         },
     )
-    listed = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub)).json()
+    listed = client.get(f"{wbase(fx)}/object-types?q=vis_none_{fx.tag}",
+                        headers=hdr(fx.editor_sub)).json()["items"]
     [mine] = [t for t in listed if t["api_name"] == f"vis_none_{fx.tag}"]
     assert mine["hidden_properties"] == []
 
