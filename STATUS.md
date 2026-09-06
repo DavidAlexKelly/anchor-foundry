@@ -4388,6 +4388,87 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 257. Notifications, and the rule that a side effect is a rule (this session)
+
+Build order item 10's first half, and the first thing in this build that sends
+data *out* of an action rather than writing it back. Foundry `action-types`
+p.87-101.
+
+**A rule, not a resource**, because p.89 says so in as many words: "Notifications
+can be added to an action through the **Add new rule** dropdown menu." So
+`notify` is a sixth `action_rule_kind` rather than a table hanging off the
+action type — a rule is a thing an action does when it runs, and one that sends
+a message is not a different category from one that sets a property. What db
+0066 adds is the *delivered* notification, which is a different thing entirely:
+the rule is a template, and a row is what somebody was actually sent. One row
+per recipient, which is p.90's "notifications will be sent to each recipient
+individually" and also what makes the content correct — `{{{recipient}}}` says
+a different name for each of them.
+
+**Three rules from the source that are easy to get subtly wrong**, and each
+has a test named after the failure rather than after the function.
+
+*The content is the world **before** the edits* (p.92). So it is rendered in
+the pre-write block; after the write that state is gone, and the same code
+would produce a different, wrong answer with nothing on screen to show it.
+
+*Content is truncated, not refused* (p.95) — "indicated by trailing `...`". A
+refusal would be the wrong answer, because the length depends on the *data*: a
+template that fits one object would fail the action for another, and the person
+who typed the template is not the person who would meet that failure.
+
+*p.96's default permission mode refuses the whole action.* "If any recipients
+do not have the required access … no data will be edited and no notifications
+will be sent." The second half is why the permission check runs before the
+write: it is not something a caller can honour once it has edited the data.
+
+**Two things are absent rather than half-built.** `From a function` recipients
+and content (p.90, p.92) need Functions, which §1.3 marks ○ — a dropdown entry
+whose only outcome is a save that fails is worse than an absent one (§214).
+And email delivery, with p.92's Advanced Email Configuration and p.95's
+redaction: there is no mail gateway here, and p.91 makes in-platform delivery a
+whole feature on its own — "they may still view their notifications when logged
+into Foundry".
+
+**The RLS policy had the fail-closed shape this schema has hit three times.**
+A single `USING (user_id = rls_current_user_id())` reads exactly right and makes
+the feature impossible: the person who *sends* a notification is never the
+person who receives it, so every insert was refused by the policy protecting the
+recipient. Reading, marking read and sending are three policies now, and the
+migration says what the first attempt was.
+
+**An `object` parameter carries no object type** (db 0044) — the rule that
+consumes one says which type it means. A parameter referenced only in
+notification *content* is typed by no rule, so `{{{alert.priority}}}` rendered a
+gap indistinguishable from an empty value. It defaults to the action's own
+subject type, written down as the guess it is and with the column that would
+replace it named.
+
+**35 mutants attacked, 35 caught** — after two rounds of survivors, and all
+four findings were about fixtures rather than assertions.
+
+*A mutant that was wrong about itself.* Modelling p.92 by mutating the
+`subject=` argument survived correctly: that argument is only the fallback for
+an object parameter the store could not resolve, and the read that actually
+feeds `{{{alert.priority}}}` is `get_instance`. The mutant moves *that* past
+the write now.
+
+*A guard hidden by another guard.* The workspace filter on the permission query
+survived because `workspace_members` is itself under RLS: a membership in a
+workspace the **actor** cannot see is invisible whether or not the query filters
+on the workspace. It only does observable work when the actor can see both
+memberships and one is still the wrong workspace. Found by instrumenting — the
+first fix added a second workspace and the mutant walked through it anyway.
+
+*A test passing for the wrong reason.* "A failed action sends nothing" used a
+bad instance id, which is refused *before* the notifications are resolved — so
+`notices` was empty and delivering unconditionally changed nothing. The failure
+has to land in the write, past the point where the recipients were already
+permitted; a source file whose columns are wrong is the cheapest one.
+
+**1924 API tests**, 2 skipped (was 1867): 45 without a database and 14 through
+it.
+
 ### 256. The ontology listing is a page, and it says so (this session)
 
 Build order item 11, which had been sitting there since §209 with its own
