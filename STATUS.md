@@ -4290,6 +4290,42 @@ A third survivor is **withdrawn as equivalent**, with the reasoning recorded in 
 
 `workshop.md` §10 goes from 15 of ~52 widgets to 16, and only the Date and Time Picker is left before the generic control's palette entry can go.
 
+### 248. The action-definition save read every module in the workspace (this session)
+
+Found by asking why the browser suite had slowed to a third of its usual rate -
+9.2 tests a minute across several runs, then 3.4. The answer was not the code
+under test: the development database has accumulated **28,500 modules in the
+one workspace the suite uses**, and 17,500 object types beside them.
+
+That is ordinary test debris and mostly harmless. What it exposed is not:
+`parameter_usages` - the §129 refusal that names a Workshop module using a
+parameter a save would remove - **read every module in the workspace and
+parsed each, on every definition save.** It scales with how many modules a
+workspace has rather than with how many could possibly match, which is a
+property nobody notices until a workspace is large, and then notices as a slow
+save rather than as a bug.
+
+One clause fixes it: `position(<action id> in definition) > 0`. It is a
+**necessary condition, not the check** - a module that never mentions the id
+cannot name one of its parameters - so it is a way of not fetching documents
+the loop would discard, and the loop still decides. Measured on that database:
+**1.44s to ship 26MB into Python against 83ms to let Postgres answer the same
+question.** `substring` rather than `LIKE` so there is no pattern to escape;
+`_` is a wildcard and a document id is not.
+
+The one new risk is the clause quietly becoming the check, so the test is a
+module that **mentions the id and uses nothing** - a text widget with the id
+typed into it. It passes the filter and must still not count, because a rename
+it does not depend on has to stay allowed.
+
+**Whether this explains the intermittent action-editor failure is not
+settled.** The dialog test that has failed in three full runs (§233, §243,
+§244) waits on exactly this save, and the save was measurably slower than
+anybody had assumed - but 1.4s is not 15s, and saying "fixed" on the strength
+of a plausible mechanism is what §243 already did once and was wrong about.
+The probe §245 left in that test is still there and still the thing that will
+answer it.
+
 ### 247. The Workshop struct variable, and two lists nothing was comparing (this session)
 
 The last third of `ontology.md` build order item 7, and the two halves of it
@@ -7695,6 +7731,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 ---
 
 ## Known rough edges worth knowing about
+
+- **The development database accumulates, and past a point it stops being harmless.** As of §248 it holds **28,500 canvas apps and 17,500 object types**, and 28,500 of the apps are in the single workspace every browser test uses. Two costs, and only the first is obvious. The suite runs at a third of its usual rate, which reads as "the box is slow today". And it hides *scalability* defects in plain sight by making them ordinary: `parameter_usages` read all 28,500 documents on every action-definition save and had done since §129, at 1.44s a time, and nobody noticed because nobody had a workspace that large — except this one, silently, all along. **The dev database is the only large workspace this build has**, which makes it worth measuring rather than only worth complaining about: `SELECT count(*) FROM canvas_apps ca JOIN projects p … WHERE w.name='Operations'` is thirty seconds and it is how §248 got found. Cleaning it out would speed every future run; it is shared state and destructive, so it is a decision to take deliberately rather than in passing.
 
 - **A control that removes itself lets the next control take its place, and a repeated click at one position walks down the page.** §246's struct dialog put *Add field* under the list; emptying a three-field struct produced **three removals and one add from three clicks**, because removing the last row collapsed the table by exactly one row and slid the button into the position the ✕ had just occupied. The fix is layout, not state: anything above a shrinking list cannot move, so the button went above it and the table keeps an empty-state row rather than collapsing. **The tell is a destructive control with something clickable below it** — a Remove button above an Add, a delete above a Save. It also has a testing corollary: a browser test that removes N rows by pointing at one place is asserting about the layout, and `dispatch_event("click")` is the right tool when the claim under test is the rule rather than the pointer.
 
