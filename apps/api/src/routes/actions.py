@@ -27,7 +27,7 @@ import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
-from ..lib.db import user_connection
+from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import actions as actions_service
 from ..services import audit
@@ -35,6 +35,8 @@ from ..services import dataset_engine as engine
 from ..services import datasets as dataset_service
 from ..lib.errors import NotFoundError
 from ..services import instance_store
+from ..services import notification_store
+from ..services import notifications as notifications_service
 from ..services import instances as instances_service
 from ..services import ontology as ontology_service
 from ..services.dataset_engine import DatasetEngineError
@@ -492,6 +494,107 @@ async def check_action(
     return CheckResult(ok=True, error=None)
 
 
+async def _pending_notifications(
+    conn,
+    *,
+    action_type: dict,
+    values: dict,
+    bound: dict,
+    subject: dict,
+    object_type_id: UUID,
+    workspace_id: UUID,
+    actor_id: UUID,
+    prefix: str,
+) -> list[dict]:
+    """Every notification this action would send, rendered and permitted.
+
+    Called **before** the write, twice over:
+
+    * p.96's default mode refuses the whole action when a recipient cannot see
+      the data — "no data will be edited and no notifications will be sent" —
+      which is only expressible while nothing has been edited;
+    * p.92 fixes the content to "the state of the Ontology **before** edits of
+      the current Action are applied", and after the write that state is gone.
+
+    Returns `[{user_id, content}]`, one entry per recipient (p.90: "sent to
+    each recipient individually"), with the content rendered for *that* person
+    because `{{{recipient}}}` says their name.
+
+    Raises `NotificationError`, which the caller turns into a refusal.
+    """
+    rules = [
+        r for r in action_type["rules"] if str(r.get("kind")) == "notify"
+    ]
+    if not rules:
+        return []
+
+    # The pre-edit state of every object parameter this action names, read
+    # once each rather than once per rule or once per recipient.
+    types = actions_service.object_parameter_types(
+        action_type["rules"], default_object_type_id=object_type_id,
+        parameters=action_type["parameters"],
+    )
+    store = instance_store.store_for(conn)
+    objects: dict[str, dict] = {}
+    for name, type_id in types.items():
+        held = bound.get(name)
+        if not held:
+            continue
+        try:
+            row = await store.get_instance(
+                search_prefix=prefix, object_type_id=UUID(str(type_id)),
+                instance_id=str(held),
+            )
+        except (LookupError, ValueError):
+            # **Narrow on purpose.** A parameter naming an instance that is not
+            # there renders as a gap, which is the same answer as an unset one;
+            # anything else is a real failure and belongs in the response
+            # rather than in an empty notification body. `ValueError` is the
+            # id that is not a uuid, which is the same case one layer down.
+            row = None
+        if row:
+            objects[name] = _parse_json(row["properties"])
+    # The action's own subject, under the parameter name any rule uses for it.
+    for name, type_id in types.items():
+        if name not in objects and str(type_id) == str(object_type_id):
+            objects.setdefault(name, subject)
+
+    actor = await _user_card(conn, actor_id)
+    out: list[dict] = []
+    for rule in rules:
+        config = _parse_json(rule.get("config")) or {}
+        requested = notifications_service.recipient_ids(
+            config, values=values, objects=objects
+        )
+        allowed = notifications_service.deliverable(
+            str(config.get("permissions") or "all"),
+            requested=requested,
+            permitted=await notification_store.permitted(
+                conn, workspace_id=workspace_id, user_ids=requested
+            ),
+        )
+        for user_id in allowed:
+            out.append({
+                "user_id": user_id,
+                "content": notifications_service.rendered(
+                    config, values=values, objects=objects,
+                    recipient=await _user_card(conn, user_id), actor=actor,
+                ),
+            })
+    return out
+
+
+async def _user_card(conn, user_id) -> dict:
+    """A person as a notification refers to them (p.101's `Recipient` and
+    `Current User`). Name and email, which is what a sentence can use."""
+    row = await fetch_one(
+        conn,
+        "SELECT display_name, email FROM users WHERE id = CAST(:uid AS uuid)",
+        {"uid": str(user_id)},
+    )
+    return dict(row) if row else {}
+
+
 @project_router.post("/{action_type_id}/execute", response_model=ExecuteResult)
 async def execute_action(
     action_type_id: UUID,
@@ -763,6 +866,32 @@ async def execute_action(
                 modification["properties"],
                 required=await _required_for(modification["object_type_id"]),
             )
+        # ---- p.89's side effect, decided before anything is written --------
+        #
+        # **The permission check has to happen here**, and p.96 is explicit
+        # about why: in the default mode, a recipient who cannot see the data
+        # means "no data will be edited and no notifications will be sent".
+        # That is not something a caller can honour once it has edited the
+        # data, so the whole of who-gets-what is resolved while the action can
+        # still be refused, and only the insert is left for afterwards.
+        #
+        # The content is rendered here too, for p.92's reason: "Any Ontology
+        # data used for generating notification content will reflect the state
+        # of the Ontology **before** edits of the current Action are applied."
+        # Rendering after the write would be the same code producing a
+        # different, wrong answer - the kind of difference nothing on screen
+        # would show.
+        notices = await _pending_notifications(
+            conn,
+            action_type=action_type,
+            values=values,
+            bound=bound,
+            subject=_parse_json(instance["properties"]),
+            object_type_id=object_type_id,
+            workspace_id=access.workspace_id,
+            actor_id=access.auth.user_id,
+            prefix=prefix,
+        )
         run_id = await actions_service.open_run(
             conn,
             action_type_id=action_type_id,
@@ -964,6 +1093,19 @@ async def execute_action(
         await actions_service.close_run(
             conn, run_id, ok=ok, dataset_version=dataset_version, error=error
         )
+        # **Only when the write succeeded.** A notification saying an object
+        # changed, sent after the change failed, is the one outcome worse than
+        # no notification: the recipient acts on it and finds nothing.
+        if ok:
+            for notice in notices:
+                await notification_store.deliver(
+                    conn,
+                    workspace_id=access.workspace_id,
+                    user_id=notice["user_id"],
+                    actor_id=access.auth.user_id,
+                    action_run_id=run_id,
+                    content=notice["content"],
+                )
         updated_instance = await instance_store.store_for(conn).get_instance(
             search_prefix=prefix, object_type_id=object_type_id,
             instance_id=str(body.instance_id),
