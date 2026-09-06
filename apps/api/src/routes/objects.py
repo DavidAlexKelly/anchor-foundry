@@ -47,6 +47,7 @@ from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
 from ..services import ontology_search
 from ..services import interfaces as interfaces_service
+from ..services import interface_sets
 from ..services import shared_properties as shared_properties_service
 from ..services import value_types as value_types_service
 from ..services.dataset_engine import DatasetEngineError
@@ -1772,6 +1773,187 @@ async def set_implementations(
             [e.model_dump() for e in body], created_by=access.auth.user_id,
         )
     return [ImplementationOut(**r) for r in rows]
+
+
+class InterfaceSetIn(BaseModel):
+    """What to read from an interface's objects.
+
+    No `definition`, unlike `ObjectSetIn`: the object types are not chosen,
+    they are *whoever implements this interface*, which is the whole of p.61's
+    "a single workflow covers all implementing types". Naming them would make
+    this a list of one-type sets somebody has to keep in step with the
+    implementations, which is the duplication the interface removes.
+    """
+
+    filters: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
+    # `le` is one store page rather than `ObjectSetIn`'s 200, because that is
+    # what an interface set can actually serve: the merge needs `offset + limit`
+    # rows from every type, and both stores clamp a read to `INSTANCE_PAGE_SIZE`.
+    # `check_depth` refuses the combination; this refuses the obvious half of it
+    # where Pydantic can say so first.
+    limit: int = Field(default=25, ge=1, le=interface_sets.MAX_DEPTH)
+    offset: int = Field(default=0, ge=0)
+    # Validated in the service, so an unsupported sort gets the sentence
+    # saying what a property sort would need rather than a list of literals.
+    sort: str | None = None
+
+
+class InterfaceInstanceOut(BaseModel):
+    """One object, seen as the interface sees it.
+
+    `object_type_id` and `object_type_name` are here and not on `InstanceOut`
+    because this is the one read where the answer is heterogeneous: a page of
+    `Inspectable` holds Vehicles and Facilities, and "which is this" is the
+    question a consumer has that a single-type page never does.
+
+    `properties` is keyed by the **interface's** names, whatever the type calls
+    them (p.66's mapping, read backwards).
+    """
+
+    id: UUID
+    primary_key: str
+    object_type_id: UUID
+    object_type_name: str
+    properties: dict[str, Any]
+    updated_at: datetime
+
+
+class InterfaceSetOut(BaseModel):
+    instances: list[InterfaceInstanceOut]
+    #: Across every implementing type, not this page's.
+    total: int
+    limit: int
+    offset: int
+    #: Which types were actually read, in the order they were read.
+    #:
+    #: A page of twelve rows that all happen to be Vehicles is a different
+    #: thing depending on whether Facility was searched and empty or never
+    #: searched at all — and it is the second whenever a filter names an
+    #: optional property Facility answers nothing to, which is a shape p.62's
+    #: capability interfaces make ordinary. Reporting the implementations
+    #: instead would say a type was consulted when it was skipped.
+    object_types: list[str]
+
+
+@router.post(
+    "/interfaces/{interface_id}/evaluate", response_model=InterfaceSetOut
+)
+async def evaluate_interface_set(
+    interface_id: UUID,
+    body: InterfaceSetIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> InterfaceSetOut:
+    """Every object of every type that implements this interface (p.61).
+
+    **A fan-out over the existing evaluator, not a new one.** One
+    `evaluate_object_set` per implementing type, with the filters rewritten
+    onto that type's own property names, and the pages merged on a key each row
+    carries. No store code, so Postgres and OpenSearch cannot disagree about
+    what an interface set means - there is only one thing evaluating it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        interface = await interfaces_service.get_interface(
+            conn, access.workspace_id, interface_id
+        )
+        members_raw = await interfaces_service.implementations_of(
+            conn, access.workspace_id, interface_id
+        )
+        declared = {
+            str(p["api_name"]): str(p["data_type"])
+            for p in interface["effective_properties"]
+        }
+        members = [
+            interface_sets.Member(
+                object_type_id=UUID(r["object_type_id"]),
+                property_mapping=r["property_mapping"],
+            )
+            for r in members_raw
+        ]
+        try:
+            # **The request before the resource.** Depth and sort are wrong
+            # about what was asked for whatever this interface looks like, and
+            # answering "nothing implements it" to somebody who asked for page
+            # nine sends them to fix the wrong thing.
+            interface_sets.check_depth(limit=body.limit, offset=body.offset)
+            sort = interface_sets.parse_sort(body.sort)
+            interface_sets.check_fan_out(
+                members, interface_name=str(interface["api_name"])
+            )
+        except interface_sets.InterfaceSetError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        store = instance_store.store_for(conn)
+        pages: list[list[dict[str, Any]]] = []
+        read: list[str] = []
+        total = 0
+        for member, raw in zip(members, members_raw):
+            try:
+                translated = interface_sets.filters_for(
+                    body.filters, member=member, declared=declared,
+                    interface_name=str(interface["api_name"]),
+                )
+            except interface_sets.InterfaceSetError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                ) from exc
+            if translated is None:
+                # This type answers nothing to a filtered property, so no
+                # object of it can match. Skipped rather than read unfiltered,
+                # which would be decision 0002's silent widening.
+                continue
+            property_types = await _declared_types(conn, member.object_type_id)
+            try:
+                definition = object_sets.parse(
+                    {"object_type_id": str(member.object_type_id),
+                     "filters": translated},
+                    property_types=property_types,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                ) from exc
+            # **The whole prefix of the merged order, from every type.** Any of
+            # them could supply the entire page, so each is asked for
+            # `offset + limit` from the top rather than for its own slice —
+            # which is what `check_depth` bounds.
+            rows, count = await store.evaluate_object_set(
+                search_prefix=prefix,
+                object_type_id=definition.object_type_id,
+                filters=definition.filters,
+                limit=body.offset + body.limit,
+                offset=0,
+                sort=object_sets.parse_sorts(sort, property_types=property_types),
+            )
+            total += count
+            read.append(str(raw["display_name"]))
+            pages.append([
+                {
+                    "id": r["id"],
+                    "primary_key": r["primary_key"],
+                    "object_type_id": member.object_type_id,
+                    "object_type_name": raw["display_name"],
+                    "updated_at": r["updated_at"],
+                    "properties": interface_sets.project(
+                        _jsonb(r["properties"]) or {},
+                        member=member, declared=declared,
+                    ),
+                }
+                for r in rows
+            ])
+
+    merged = interface_sets.merge(
+        pages, sort=sort, limit=body.limit, offset=body.offset
+    )
+    return InterfaceSetOut(
+        instances=[InterfaceInstanceOut(**r) for r in merged],
+        total=total,
+        limit=body.limit,
+        offset=body.offset,
+        object_types=read,
+    )
 
 
 @router.get("/shared-properties", response_model=list[SharedPropertyOut])

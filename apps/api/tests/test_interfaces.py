@@ -602,6 +602,25 @@ def test_a_struct_interface_property_would_promise_nothing(
     )  # no refusal, whatever fields either side declares
 
 
+def test_an_interface_that_is_not_here_is_404_rather_than_500(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§9's rule - an id not in this workspace is *not found*, so the answer
+    does not say whether it exists somewhere else.
+
+    §251 raised a bare `LookupError` and nothing caught it, so every read of a
+    missing interface was a 500 - including the edit dialog reopening one
+    somebody deleted in another tab. Nothing had ever asked for one until §254
+    wrote a scope test.
+    """
+    for path in (
+        f"{wbase(fx)}/interfaces/{uuid.uuid4()}",
+        f"{wbase(fx)}/object-types/{uuid.uuid4()}/interfaces",
+    ):
+        r = client.get(path, headers=hdr(fx.viewer_sub))
+        assert r.status_code == 404, f"{path} -> {r.status_code} {r.text}"
+
+
 def test_a_viewer_cannot_declare_an_interface(client: TestClient, fx: Fixture) -> None:
     r = client.post(
         f"{wbase(fx)}/interfaces", headers=hdr(fx.viewer_sub),

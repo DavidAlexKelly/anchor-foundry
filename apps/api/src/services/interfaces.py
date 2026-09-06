@@ -51,6 +51,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
+from ..lib.errors import NotFoundError
 from . import ontology_status
 
 #: An interface is "an Ontology type" (p.4), so it is named like one - the same
@@ -328,7 +329,14 @@ async def get_interface(
         {"iid": str(interface_id), "wid": str(workspace_id)},
     )
     if row is None:
-        raise LookupError("interface not found")
+        # **`NotFoundError`, which is what every other service here raises**
+        # (`actions`, `canvas`), and what §9 asks for: an id that is not in this
+        # workspace is 404 rather than 403, so the answer does not say whether
+        # it exists somewhere else. §251 raised a bare `LookupError` and nothing
+        # caught it, which made every read of a missing interface a 500 - found
+        # by §254's first scope test, because that is the first test that ever
+        # asked for one.
+        raise NotFoundError("interface")
     own, extends = await _graph(conn, workspace_id)
     out = dict(row)
     out["properties"] = own.get(str(interface_id), [])
@@ -336,6 +344,52 @@ async def get_interface(
     out["effective_properties"] = effective_properties(
         str(interface_id), own=own, extends=extends
     )
+    return out
+
+
+async def implementations_of(
+    conn: AsyncConnection, workspace_id: UUID, interface_id: UUID
+) -> list[dict[str, Any]]:
+    """`[{object_type_id, api_name, display_name, property_mapping}]` for one
+    interface - the other direction from `implementations_by_type`.
+
+    Its own query rather than a filter over that one, because the two answer
+    different questions at different scales: that one draws a column on a
+    listing of every type, this one is the membership of an interface set
+    (§254) and reads one interface's rows. Filtering the workspace-wide answer
+    would read every implementation in the workspace to find a handful, which
+    is §248's defect written on purpose.
+
+    Ordered by the object type's name so a set's fan-out is the same shape on
+    every read - the merge below it is stable, and a caller enumerating the
+    members should see them in an order that does not move.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT oti.object_type_id, oti.property_mapping,
+               ot.api_name, ot.display_name
+          FROM object_type_interfaces oti
+          JOIN object_types ot ON ot.id = oti.object_type_id
+          JOIN interfaces i ON i.id = oti.interface_id
+         WHERE oti.interface_id = :iid AND i.workspace_id = :wid
+         ORDER BY ot.display_name, ot.id
+        """,
+        {"iid": str(interface_id), "wid": str(workspace_id)},
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        mapping = row["property_mapping"]
+        out.append(
+            {
+                "object_type_id": str(row["object_type_id"]),
+                "api_name": row["api_name"],
+                "display_name": row["display_name"],
+                "property_mapping": (
+                    json.loads(mapping) if isinstance(mapping, str) else mapping
+                ) or {},
+            }
+        )
     return out
 
 

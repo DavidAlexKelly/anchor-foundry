@@ -4388,6 +4388,65 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 254. Targeting the interface directly (this session)
+
+`ontology` p.61 puts it in four words — *"Target the interface directly. A
+single workflow covers all implementing types"* — and p.62 item 3 repeats it as
+a practice: *"Build actions, functions, and applications against interfaces
+where possible."* §251 built the interface, §252 made it findable, §253 gave it
+screens, and all three are **metadata**, which p.61 blesses in as many words and
+which the row's last ○ was about. This is the first thing that reads one.
+
+**A fan-out, not a wider object set.** `object_sets.ObjectSet`'s docstring says
+a set spanning types "has no coherent property vocabulary to filter on" — and
+that was correct when nothing supplied one. An interface *is* that vocabulary,
+so this is not a change to `ObjectSet`: it is one `evaluate_object_set` per
+implementing type, with filters rewritten onto that type's own property names
+and the pages merged on a key each row carries. **No store code at all**, which
+is the point — Postgres and OpenSearch cannot disagree about what an interface
+set means, because there is nothing new evaluating one.
+
+**One vocabulary in, one vocabulary out.** A filter says
+`last_inspection_date` and reaches a Vehicle's `last_checked` and a Facility's
+`surveyed_on`; a row comes back keyed by `last_inspection_date` whatever the
+column was called. Everything the interface does not declare is **dropped** on
+the way out, and that is the feature rather than a limitation: a page whose
+columns depended on which type each row happened to be is exactly what p.61's
+single workflow is defined against.
+
+**Two refusals, each about not offering a wrong answer.** A *property* sort is
+refused, because ordering by one means comparing in its declared type (§221) —
+a rule the stores implement and this would have to re-implement to merge two
+types' pages, which is the drift this area exists to avoid. And paging is
+bounded at one store page and **refused past rather than clamped**: both stores
+clamp a read to `INSTANCE_PAGE_SIZE`, so a merge asking one type for sixty rows
+would get fifty and drop real members off the end of the order without knowing.
+
+**The interesting case is an optional property one type answers nothing to.**
+p.62's capability interfaces make that ordinary — one mandatory field and two
+optional ones — and filtering on the part a type does not answer means *no
+object of that type can match*. Returning an empty filter list instead would
+return **every** object of it, which is decision 0002's silent widening. So the
+type is skipped, and the answer says which types were actually read: "no
+Facility matched" and "Facility was never consulted" are different facts about
+the same empty result.
+
+**And a scope test found a 500 that had been there since §251.**
+`get_interface` raised a bare `LookupError` and nothing caught it, so every read
+of a missing interface — including §253's edit dialog reopening one somebody
+deleted in another tab — was a server error rather than a 404. Every other
+service here raises `NotFoundError` (`actions`, `canvas`); this one did not, and
+no test had ever asked for an interface that was not there. §9's rule is that
+an id outside the workspace is *not found* rather than *forbidden*, so the
+answer does not say whether it exists somewhere else.
+
+**A test that would have passed against no merge at all.** The paging test
+first used primary keys `a1, a3` and `b2, b4` — whose key order is every `a`
+then every `b`, which is exactly what concatenating the two types produces. The
+keys interleave now, and the comment says why. Same family as §106's timezone
+and §246's dropdown: a fixture chosen without thinking about what it would fail
+against is a fixture that cannot fail.
+
 ### 253. The screens for a shape, and a status that was only a label (this session)
 
 §251 built interfaces and §252 put them where the platform already answers
