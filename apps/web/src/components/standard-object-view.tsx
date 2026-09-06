@@ -149,6 +149,7 @@ function ProminentCard({
             workspaceId={workspaceId}
             dataType={property.data_type}
             valueFormat={property.value_format}
+            structFields={property.struct_fields}
             style={style}
             value={value}
           />
@@ -253,6 +254,7 @@ export function StandardObjectView({
                     workspaceId={workspaceId}
                     dataType={p.data_type}
                     valueFormat={p.value_format}
+                    structFields={p.struct_fields}
                     style={conditionalStyle(p.conditional_format, instance.properties)}
                     value={instance.properties[p.api_name]}
                   />

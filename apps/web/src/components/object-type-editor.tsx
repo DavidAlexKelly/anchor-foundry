@@ -26,6 +26,7 @@ import { ConditionalFormatEditor } from "@/components/conditional-format-editor"
 import { DerivedPropertyEditor } from "@/components/derived-property-editor";
 import { SharedPropertyPicker } from "@/components/shared-property-picker";
 import { StatusField } from "@/components/status-field";
+import { StructFieldsEditor } from "@/components/struct-fields-editor";
 import { ValueTypePicker } from "@/components/value-type-picker";
 import { ApiError, objects as objApi, type PropertyInput } from "@/lib/api";
 import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
@@ -43,15 +44,21 @@ import type {
 // from `ontology.PROPERTY_TYPES` rather than typing it out again.
 //
 // **It is deliberately narrower than the server's list, and the rule is one
-// sentence**: a type is offered here when this dropdown is the whole
-// declaration. Three are not, and each needs a second thing the dropdown has
-// no way to ask for — `attachment` needs an upload (§39), `time_series` needs
-// `object_type_series` to say where the points are (db 0047), and `struct`
-// needs its fields (db 0064, `object-link-types` p.149). Declaring one here
-// would produce a property the server refuses, which is §214's rule about a
-// control that cannot work. Each arrives on this list the day its editor does.
+// sentence**: a type is offered here when the *editor* can complete the
+// declaration. The dropdown alone never could for `struct` — p.149 needs its
+// fields — which is why §245 held it back and §246 adds it in the same commit
+// as the Fields dialog, exactly as that comment said it would ("each arrives
+// on this list the day its editor does").
+//
+// Two are still absent, and each needs a second thing this dialog has no way
+// to ask for: `attachment` needs an upload (§39), and `time_series` needs
+// `object_type_series` on the *source* to say where the points are (db 0047),
+// which is a different screen about a different resource. Offering either
+// would produce a property the server refuses — §214's rule about a control
+// that cannot work.
 export const PROPERTY_TYPES: PropertyDataType[] = [
   "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
+  "struct",
 ];
 
 export const PROPERTY_VISIBILITIES: PropertyVisibility[] = ["normal", "prominent", "hidden"];
@@ -142,6 +149,8 @@ export function PropertyRows({
   const [constraining, setConstraining] = useState<number | null>(null);
   const constrainingRow =
     constraining === null ? null : properties[constraining];
+  const [structuring, setStructuring] = useState<number | null>(null);
+  const structuringRow = structuring === null ? null : properties[structuring];
 
   return (
     <div>
@@ -201,6 +210,19 @@ export function PropertyRows({
           onSave={(next) => {
             const rows = [...properties];
             rows[constraining!] = next;
+            onChange(rows);
+          }}
+        />
+      )}
+      {structuringRow && (
+        <StructFieldsEditor
+          open
+          onClose={() => setStructuring(null)}
+          propertyName={structuringRow.api_name || `property ${structuring! + 1}`}
+          value={structuringRow.struct_fields}
+          onSave={(next) => {
+            const rows = [...properties];
+            rows[structuring!] = { ...structuringRow, struct_fields: next };
             onChange(rows);
           }}
         />
@@ -338,6 +360,23 @@ export function PropertyRows({
               onClick={() => setFormatting(index)}
             >
               Format{prop.value_format ? " •" : ""}
+            </button>
+          )}
+          {/* Struct fields (`object-link-types` p.149, p.152–158). Gated on
+              the base type for `Format`'s reason and a stronger one: a struct
+              is the only type whose declaration is *incomplete* without this
+              dialog, so the count is not decoration — a struct showing no
+              number is a property the server will refuse. */}
+          {prop.data_type === "struct" && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "3px 9px", fontSize: 12 }}
+              aria-label={`Property ${index + 1} fields`}
+              disabled={!!prop.shared_property_id}
+              onClick={() => setStructuring(index)}
+            >
+              Fields{prop.struct_fields?.length ? ` (${prop.struct_fields.length})` : ""}
             </button>
           )}
           {/* Shared property (`object-link-types` p.187). Only on the edit

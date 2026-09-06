@@ -4184,6 +4184,7 @@ export function CanvasObjectTable({
                                 workspaceId={workspaceId}
                                 dataType={p.data_type}
                                 valueFormat={p.value_format}
+                                structFields={p.struct_fields}
                                 style={paint}
                                 value={instance.properties[p.api_name]}
                                 emptyText={emptyText}
@@ -5448,6 +5449,7 @@ export function CanvasPropertyList({
                   workspaceId={workspaceId}
                   dataType={p.data_type}
                   valueFormat={p.value_format}
+                  structFields={p.struct_fields}
                   style={conditionalStyle(p.conditional_format, instance.properties)}
                   value={instance.properties[p.api_name]}
                 />
@@ -7772,6 +7774,7 @@ export function CanvasObjectDropdown({
                           workspaceId={workspaceId}
                           dataType={p.data_type}
                           valueFormat={p.value_format}
+                          structFields={p.struct_fields}
                           style={conditionalStyle(p.conditional_format, row.properties)}
                           value={row.properties[p.api_name]}
                         />
@@ -8151,6 +8154,7 @@ export function CanvasObjectSelector({
                             workspaceId={workspaceId}
                             dataType={p.data_type}
                             valueFormat={p.value_format}
+                            structFields={p.struct_fields}
                             style={conditionalStyle(p.conditional_format, row.properties)}
                             value={row.properties[p.api_name]}
                           />
@@ -8658,6 +8662,7 @@ export function CanvasObjectCards({
                             workspaceId={workspaceId}
                             dataType={p.data_type}
                             valueFormat={p.value_format}
+                            structFields={p.struct_fields}
                             style={conditionalStyle(p.conditional_format, instance.properties)}
                             value={instance.properties[p.api_name]}
                           />
