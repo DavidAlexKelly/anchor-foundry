@@ -3,8 +3,15 @@
  *
  * §254 built the read: `POST /interfaces/{id}/evaluate` returns every object of
  * every implementing type, filtered in the interface's vocabulary and keyed by
- * it. This is what a screen has to say about the answer, and it is three
- * things the raw response does not say in words.
+ * it. This is what a screen has to say about the answer in words the response
+ * does not carry.
+ *
+ * **Which types a filter skipped is not here, and that is deliberate.** It was,
+ * briefly — as a subtraction of the types that were read from the types that
+ * implement the interface — and the browser does not have the second list: a
+ * listing row carries an implementation *count* and no names. A function whose
+ * input its only caller cannot supply is a function that cannot work, so the
+ * server sends `skipped` and this does not compute it (§213).
  *
  * The division is the usual one — the server owns what is **legal**, this owns
  * what is **offered and said** — and it matters most for paging. An interface
@@ -37,20 +44,6 @@ export function readSummary(total: number, objectTypes: string[]): string {
   if (objectTypes.length === 1) return `${objects} in ${objectTypes[0]}`;
   const last = objectTypes[objectTypes.length - 1];
   return `${objects} across ${objectTypes.slice(0, -1).join(", ")} and ${last}`;
-}
-
-/** The implementing types this read did not consult, in the listing's order.
- *
- * **A different fact from "matched nothing", and worth its own sentence.** A
- * filter on an optional property a type answers nothing to means no object of
- * that type can match, so §254 skips it — and an empty result then has two
- * possible readings that a person acting on it needs told apart. Reporting
- * only the count would leave "Facility has no inspections due" and "Facility
- * does not record inspection status" looking identical.
- */
-export function notConsulted(all: string[], read: string[]): string[] {
-  const seen = new Set(read);
-  return all.filter((name) => !seen.has(name));
 }
 
 /** Whether a previous and a next page exist *and* can be served.

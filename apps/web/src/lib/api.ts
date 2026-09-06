@@ -1069,6 +1069,24 @@ export const objects = {
       { method: "PUT", body: JSON.stringify(body) },
     ),
 
+  /** Every object of every type that implements this interface (`ontology`
+   * p.61). Its own endpoint rather than an object set with several types,
+   * because the types are not chosen — they are whoever implements it. */
+  evaluateInterfaceSet: (
+    wid: string,
+    id: string,
+    body: {
+      filters?: { property: string; op?: string; value?: unknown }[];
+      limit?: number;
+      offset?: number;
+      sort?: string;
+    },
+  ) =>
+    request<import("./types").InterfaceSetPage>(
+      `/workspaces/${wid}/interfaces/${id}/evaluate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
   /** Value types (`object-link-types` p.222–234). */
   listValueTypes: (wid: string) =>
     request<import("./types").ValueType[]>(`/workspaces/${wid}/value-types`),

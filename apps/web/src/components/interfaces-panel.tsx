@@ -35,6 +35,9 @@ import {
   implementationLabel, interfacePropertyTypes, suggestMapping,
   toInterfaceApiName, toPropertyApiName, unmappedRequired,
 } from "@/lib/interfaces";
+import {
+  canPage, depthNote, readSummary,
+} from "@/lib/interface-set";
 import { canDelete, deleteBlockedReason } from "@/lib/ontology-status";
 import type {
   Deprecation, InterfaceSummary, ObjectTypeSummary, OntologyStatus,
@@ -546,6 +549,141 @@ function ImplementDialog({
   );
 }
 
+/** Every object of every implementing type, seen through the interface
+ * (`ontology` p.61 — "target the interface directly. A single workflow covers
+ * all implementing types").
+ *
+ * **The dialog is the argument.** p.61's case for modelling `Inspectable` is
+ * that you can then ask one question of Vehicle, Equipment and Facility at
+ * once; until something *shows* that, an interface is a description of three
+ * types that still have to be opened one at a time. One table, one set of
+ * column headings — the interface's, not any type's — and a line saying which
+ * types answered.
+ *
+ * Reached from the implementation count, because that number is the thing
+ * somebody is already looking at when they wonder what is in there.
+ */
+function ObjectsDialog({
+  workspaceId,
+  iface,
+  onClose,
+}: {
+  workspaceId: string;
+  iface: InterfaceSummary;
+  onClose: () => void;
+}) {
+  const [offset, setOffset] = useState(0);
+  const limit = 25;
+
+  const detail = useQuery({
+    queryKey: ["interface", workspaceId, iface.id],
+    queryFn: () => objApi.getInterface(workspaceId, iface.id),
+  });
+  const page = useQuery({
+    queryKey: ["interface-set", workspaceId, iface.id, offset],
+    queryFn: () =>
+      objApi.evaluateInterfaceSet(workspaceId, iface.id, { limit, offset }),
+    // The set is a read of live data, so an old page is worse than a spinner.
+    placeholderData: undefined,
+  });
+
+  // **The interface's effective properties are the columns**, resolved by the
+  // server, because an inherited property is part of the shape an
+  // implementation answers and the rows are keyed by it either way.
+  const columns = detail.data?.effective_properties ?? [];
+  const answer = page.data;
+  const paging = answer
+    ? canPage(answer.offset, answer.limit, answer.total)
+    : { previous: false, next: false };
+  const note = answer
+    ? depthNote(answer.offset, answer.limit, answer.total)
+    : null;
+
+  return (
+    <Dialog open title={`${iface.api_name} objects`} onClose={onClose}>
+      {page.isError && (
+        <p className="field-hint" data-testid="objects-error">
+          {page.error instanceof ApiError
+            ? page.error.message
+            : "Could not read them."}
+        </p>
+      )}
+      {answer && (
+        <p className="field-hint" data-testid="objects-summary">
+          {readSummary(answer.total, answer.object_types)}
+        </p>
+      )}
+      {answer && answer.skipped.length > 0 && (
+        <p className="field-hint" data-testid="objects-skipped">
+          Not read: {answer.skipped.join(", ")} — nothing of{" "}
+          {answer.skipped.length === 1 ? "that type" : "those types"} can match
+          a filter on a property it answers nothing to.
+        </p>
+      )}
+      {answer && answer.instances.length > 0 && (
+        <table className="table" data-testid="objects-rows">
+          <thead>
+            <tr>
+              {/* First, because on this one read it is the answer to a
+                  question every other listing already knows. */}
+              <th>Object type</th>
+              <th>Key</th>
+              {columns.map((c) => (
+                <th key={c.api_name}>{c.display_name}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {answer.instances.map((row) => (
+              <tr key={row.id}>
+                <td>{row.object_type_name}</td>
+                <td className="slug">{row.primary_key}</td>
+                {columns.map((c) => (
+                  <td key={c.api_name}>
+                    {row.properties[c.api_name] === undefined
+                      ? ""
+                      : String(row.properties[c.api_name])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {answer && answer.instances.length === 0 && (
+        <p className="login-note" data-testid="objects-empty">
+          Nothing yet — the types that implement {iface.api_name} have no
+          objects, or their sources have not been synced.
+        </p>
+      )}
+      {note && (
+        <p className="field-hint" data-testid="objects-depth">{note}</p>
+      )}
+      <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="objects-previous"
+          disabled={!paging.previous}
+          onClick={() => setOffset(Math.max(0, offset - limit))}
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="objects-next"
+          disabled={!paging.next}
+          onClick={() => setOffset(offset + limit)}
+        >
+          Next
+        </button>
+        <button type="button" className="btn" onClick={onClose}>Close</button>
+      </div>
+    </Dialog>
+  );
+}
+
 export function InterfacesPanel({
   workspaceId,
   canEdit,
@@ -561,6 +699,7 @@ export function InterfacesPanel({
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [implementing, setImplementing] = useState<InterfaceSummary | null>(null);
+  const [browsing, setBrowsing] = useState<InterfaceSummary | null>(null);
   const queryClient = useQueryClient();
 
   const interfaces = useQuery({
@@ -601,6 +740,13 @@ export function InterfacesPanel({
           iface={implementing}
           types={types}
           onClose={() => setImplementing(null)}
+        />
+      )}
+      {browsing && (
+        <ObjectsDialog
+          workspaceId={workspaceId}
+          iface={browsing}
+          onClose={() => setBrowsing(null)}
         />
       )}
 
@@ -649,7 +795,24 @@ export function InterfacesPanel({
                   {i.property_count}
                 </td>
                 <td data-testid={`iface-impls-${i.api_name}`}>
-                  {implementationLabel(i.implementation_count)}
+                  {/* A button once there is something behind it. p.61's whole
+                      argument is that you can look at the implementing types
+                      *together*, and this is the way in — but an interface
+                      nothing implements has nothing to open, so the label
+                      stays a label rather than becoming a control that opens
+                      an empty dialog (§214). */}
+                  {i.implementation_count > 0 ? (
+                    <button
+                      className="btn quiet"
+                      style={{ padding: "3px 9px", fontSize: 12 }}
+                      aria-label={`Objects of ${i.api_name}`}
+                      onClick={() => setBrowsing(i)}
+                    >
+                      {implementationLabel(i.implementation_count)}
+                    </button>
+                  ) : (
+                    implementationLabel(i.implementation_count)
+                  )}
                 </td>
                 <td>
                   <div className="row-actions">

@@ -1507,6 +1507,40 @@ export interface Implementation {
   property_mapping: Record<string, string>;
 }
 
+/** One object of an interface set (Foundry `ontology` p.61 — "target the
+ * interface directly").
+ *
+ * `object_type_name` is here and not on {@link Instance} because this is the
+ * one read whose answer is heterogeneous: a page of `Inspectable` holds
+ * Vehicles and Facilities, and "which is this" is a question a single-type
+ * page never has.
+ *
+ * `properties` is keyed by the **interface's** names, whatever each type calls
+ * them, and carries nothing the interface does not declare — a page whose
+ * columns depended on which type each row happened to be is exactly what
+ * p.61's single workflow is defined against. */
+export interface InterfaceInstance {
+  id: string;
+  primary_key: string;
+  object_type_id: string;
+  object_type_name: string;
+  properties: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface InterfaceSetPage {
+  instances: InterfaceInstance[];
+  /** Across every implementing type, not this page's. */
+  total: number;
+  limit: number;
+  offset: number;
+  /** Which types were actually read, in the order they were read. */
+  object_types: string[];
+  /** And the ones a filter excluded before they were read — a different fact
+   * from "matched nothing", and one only the server can name. */
+  skipped: string[];
+}
+
 /** A group as it appears on an object type: enough to draw a label, not the
  * whole group. */
 export interface ObjectTypeGroupRef {

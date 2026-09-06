@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  MAX_DEPTH, canPage, depthNote, notConsulted, readSummary,
-} from "./interface-set";
+import { MAX_DEPTH, canPage, depthNote, readSummary } from "./interface-set";
 
 describe("readSummary", () => {
   it("names the types, because that is what an interface did", () => {
@@ -22,20 +20,6 @@ describe("readSummary", () => {
 
   it("says the count when nothing was read", () => {
     expect(readSummary(0, [])).toBe("0 objects");
-  });
-});
-
-describe("notConsulted", () => {
-  it("names the types a filter excluded before they were read", () => {
-    // "Facility has no inspections due" and "Facility does not record
-    // inspection status" are different facts about the same empty result.
-    expect(notConsulted(["Vehicle", "Facility"], ["Vehicle"])).toEqual([
-      "Facility",
-    ]);
-  });
-
-  it("is empty when every implementation was read", () => {
-    expect(notConsulted(["Vehicle", "Facility"], ["Facility", "Vehicle"])).toEqual([]);
   });
 });
 

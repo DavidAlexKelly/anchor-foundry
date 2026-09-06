@@ -1833,6 +1833,13 @@ class InterfaceSetOut(BaseModel):
     #: capability interfaces make ordinary. Reporting the implementations
     #: instead would say a type was consulted when it was skipped.
     object_types: list[str]
+    #: And the ones that were not, which is the other half of that fact.
+    #:
+    #: **Sent rather than left for the caller to subtract**, because the caller
+    #: does not have the list to subtract from: a listing row carries an
+    #: implementation *count* and no names. A browser computing this would need
+    #: a second request to answer a question the server had already answered.
+    skipped: list[str] = Field(default_factory=list)
 
 
 @router.post(
@@ -1953,6 +1960,10 @@ async def evaluate_interface_set(
         limit=body.limit,
         offset=body.offset,
         object_types=read,
+        skipped=[
+            str(r["display_name"]) for r in members_raw
+            if str(r["display_name"]) not in read
+        ],
     )
 
 

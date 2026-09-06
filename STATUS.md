@@ -4388,6 +4388,48 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 255. The screen that makes p.61's argument (this session)
+
+§254 built the read; this is the one place it is visible, and it is the point of
+the whole arc. p.61's case for modelling `Inspectable` is that Vehicle,
+Equipment and Facility can then be asked one question together — and until
+something *shows* that, an interface is a description of three types you still
+open one at a time.
+
+**One table, and the headings are the argument.** The seeded type's column is
+`checked_on`; the heading says *Last inspection date*, because the columns are
+the interface's effective properties and the rows are keyed by them. The
+browser test asserts both halves — that the interface's name is there and that
+the column name is not — because a table that quietly used each type's own
+names would look identical on a workspace with one implementation.
+
+**A count becomes a button only when there is something behind it.** An
+interface nothing implements keeps its label. §214 applied to the cheapest
+possible control: a button that opens an empty dialog looks like there is
+something in there.
+
+**Paging stops where the server refuses, and says why.** An interface set reads
+`offset + limit` rows from *every* implementing type, and both stores clamp a
+read to their page size — so the set pages exactly one store page deep. The
+Next button knows the same ceiling rather than producing the refusal, and a
+note explains the missing button, because a control that silently stops
+existing is its own kind of confusing. `MAX_DEPTH` is restated in the browser
+because a button cannot wait for a round trip to decide whether to be disabled,
+and an API test reads the number back out of the TypeScript file so the
+restatement cannot drift (§190).
+
+**One function was written, tested, and then withdrawn in the same unit.**
+`notConsulted` subtracted the types a read consulted from the types that
+implement the interface — and the browser does not have the second list: a
+listing row carries an implementation *count* and no names. A function whose
+input its only caller cannot supply is a function that cannot work, so the
+server sends `skipped` instead and the module says where the function went.
+§213's answer, reached before the thing shipped rather than after a mutant
+found it.
+
+**1557 unit tests** (was 1546); **11 browser tests** in
+`e2e/test_interfaces.py`.
+
 ### 254. Targeting the interface directly (this session)
 
 `ontology` p.61 puts it in four words — *"Target the interface directly. A

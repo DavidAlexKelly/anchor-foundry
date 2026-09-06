@@ -260,6 +260,66 @@ def test_an_active_interface_offers_no_delete_button(page, module):
     )
 
 
+def test_the_implementing_types_answer_one_question_together(page, module):
+    """**p.61's argument, on screen.** "Target the interface directly. A single
+    workflow covers all implementing types."
+
+    Two object types, two differently named date columns, one heading. The
+    assertion that matters is that neither column name appears: the table is
+    keyed by what the *interface* calls the property, which is what makes it
+    one question rather than two.
+    """
+    name = f"Inspectable {uuid.uuid4().hex[:4]}"
+    api_name = declare(page, module, name=name, properties=[
+        ("Last inspection date", "date", True),
+    ])
+    page.get_by_role("button", name=f"Implement {api_name}").click()
+    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    page.get_by_role(
+        "combobox", name="Answered by for last_inspection_date"
+    ).select_option("checked_on")
+    page.get_by_test_id("impl-save").click()
+    expect(page.get_by_test_id(f"iface-impls-{api_name}")).to_contain_text(
+        "1 object type", timeout=15000
+    )
+
+    page.get_by_role("button", name=f"Objects of {api_name}").click()
+    rows = page.get_by_test_id("objects-rows")
+    expect(rows).to_be_visible(timeout=20000)
+
+    # The seeded type's column is `checked_on`; the heading is the interface's.
+    #
+    # **Lowercased before comparing**, because `.table th` is
+    # `text-transform: uppercase` and `inner_text` returns what is rendered.
+    # Asserting the display name verbatim compares against the stylesheet.
+    headings = rows.locator("thead th")
+    labels = [
+        headings.nth(i).inner_text().lower() for i in range(headings.count())
+    ]
+    assert "last inspection date" in labels, labels
+    assert "checked_on" not in labels, labels
+
+    # Both seeded rows, with the date under the interface's column.
+    expect(rows.locator("tbody tr")).to_have_count(len(VEHICLES))
+    expect(rows).to_contain_text("2026-01-04")
+    # And the summary names the type that answered, which is the half of
+    # "2 objects" that says an interface did something.
+    expect(page.get_by_test_id("objects-summary")).to_contain_text(
+        f"Seed {module.tag}"
+    )
+
+
+def test_an_interface_nothing_implements_offers_nothing_to_open(page, module):
+    """§214 on the count itself: a button that opened an empty dialog is worse
+    than a label, because it looks like there is something behind it."""
+    name = f"Trackable {uuid.uuid4().hex[:4]}"
+    api_name = declare(page, module, name=name, properties=[("Tag", "string", True)])
+    expect(page.get_by_test_id(f"iface-impls-{api_name}")).to_have_text("Nothing yet")
+    expect(
+        page.get_by_role("button", name=f"Objects of {api_name}")
+    ).to_have_count(0)
+
+
 def test_an_interface_cannot_be_offered_as_its_own_parent(page, module):
     """p.53 allows any number of parents; a circle is refused by the server,
     which names the path it followed. The one cycle a list of summaries can
