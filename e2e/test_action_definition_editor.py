@@ -123,11 +123,49 @@ def test_a_rename_a_module_depends_on_is_refused_in_the_dialog(page, api):
     })
 
     open_editor(page, mod)
-    page.get_by_label("Parameter 1 name").fill("new_status")
+    name = page.get_by_label("Parameter 1 name")
+    name.fill("new_status")
+
+    # **This assertion has failed three times in full runs (§233, §243, §244)
+    # and never once in isolation, and the first diagnosis was wrong.** §243
+    # read it as a save round trip exceeding Playwright's old 5s `expect`
+    # default and widened the budget suite-wide; §244's call log shows the new
+    # 15s budget applied and the element still absent, so that was not it.
+    #
+    # What the §244 snapshot did say is that **no dialog was open** — and this
+    # dialog closes on success only. A closed dialog means the save was
+    # *accepted*, which is a different failure from a slow one and has two
+    # causes the snapshot cannot tell apart: the rename never reached the PUT,
+    # or it did and the server found no module using the parameter. So the
+    # test records what it sent, what came back, and what the server ended up
+    # holding, and the next occurrence answers that question instead of costing
+    # a fourth investigation. §240's rule — instrument rather than guess —
+    # applied one guess later than that entry says it should have been.
+    saves: list[str] = []
+
+    def _record(response) -> None:
+        if response.request.method == "PUT" and "/action-types/" in response.url:
+            saves.append(
+                f"{response.status} sent={response.request.post_data!r} "
+                f"back={response.text()[:300]!r}"
+            )
+
+    page.on("response", _record)
+    typed = name.input_value()
     page.get_by_role("button", name="Save", exact=True).click()
 
     error = page.get_by_test_id("definition-error")
-    expect(error).to_contain_text("'status'")
+    try:
+        expect(error).to_contain_text("'status'")
+    except AssertionError:
+        raise AssertionError(
+            "the refusal never appeared. "
+            f"in the box before Save: {typed!r}; "
+            f"dialogs open now: {page.get_by_role('dialog').count()}; "
+            f"parameters the server now holds: "
+            f"{[p['api_name'] for p in definition(api, mod)['parameters']]}; "
+            f"the save round trips: {saves}"
+        ) from None
     expect(error).to_contain_text(f"App {mod.tag}")   # the module by name
     # The dialog stays open, holding the edit, so it can be undone rather than
     # retyped.

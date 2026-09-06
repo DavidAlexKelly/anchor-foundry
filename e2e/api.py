@@ -218,6 +218,8 @@ class Module:
         types: dict[str, str] | None = None,
         formats: dict[str, dict | None] | None = None,
         rules: dict[str, list[dict]] | None = None,
+        descriptions: dict[str, str] | None = None,
+        struct_fields: dict[str, list[dict]] | None = None,
     ) -> str:
         """Upload, declare, map and sync - the whole way an object type gets
         instances."""
@@ -260,6 +262,17 @@ class Module:
                         # wins (`object-link-types` p.102-109).
                         **({"conditional_format": (rules or {})[c]}
                            if c in (rules or {}) else {}),
+                        # A property's own description (`object-link-types`
+                        # p.111's neighbour). Absent on every other fixture,
+                        # because until §245 nothing read one back.
+                        **({"description": (descriptions or {})[c]}
+                           if c in (descriptions or {}) else {}),
+                        # The declared fields of a struct property (p.149;
+                        # db 0064). The CSV cell holds the struct as JSON text,
+                        # which is the form `column_value` writes and
+                        # `_coerce_struct` reads back.
+                        **({"struct_fields": (struct_fields or {})[c]}
+                           if c in (struct_fields or {}) else {}),
                     }
                     for c in columns
                 ],

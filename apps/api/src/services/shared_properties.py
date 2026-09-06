@@ -402,6 +402,21 @@ def _check_definition(*, api_name: str, data_type: str, visibility: str) -> None
         raise SharedPropertyError(f"invalid shared property api_name {api_name!r}")
     if data_type not in ontology.PROPERTY_TYPES:
         raise SharedPropertyError(f"invalid property type {data_type!r}")
+    if data_type == "struct":
+        # **A boundary, stated, rather than a shared name over two schemas.**
+        # p.178's whole point is that a shared property is one *definition*
+        # edited in one place and shown everywhere it is attached; the
+        # definition of a struct is its fields (db 0064), and
+        # `shared_properties` has no column to keep them in. So a shared struct
+        # today would be two object types declaring their own fields under one
+        # borrowed name - the opposite of the feature. Reversing this is a
+        # column on this table, `struct_fields` added to `INHERITED`, and the
+        # attach-time check `check_base_type` already makes for the base type.
+        raise SharedPropertyError(
+            "a struct cannot be a shared property yet: a shared property is one "
+            "definition (object-link-types p.178) and a struct's definition is "
+            "its fields, which this table does not carry"
+        )
     if visibility not in ontology.PROPERTY_VISIBILITIES:
         raise SharedPropertyError(
             f"invalid visibility {visibility!r}; expected one of "

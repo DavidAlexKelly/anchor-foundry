@@ -14,6 +14,7 @@ import sys, os  # noqa: E401
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.services import instance_mapping as im  # noqa: E402
+from src.services import ontology as ontology_service  # noqa: E402
 
 
 def props(*pairs: tuple[str, str]) -> list[dict]:
@@ -25,15 +26,40 @@ def fields(properties: list[dict]) -> dict:
 
 
 # ---- the type table ----------------------------------------------------------
-def test_every_declared_type_has_a_field() -> None:
-    """The enum is `property_data_type` (db 0003, widened by db 0029), and a
-    type missing from the table maps as a string - findable but never
-    orderable, silently. Listed here rather than derived from the module, so
-    the two disagree loudly."""
-    assert sorted(im.FIELD_TYPES) == sorted([
-        "string", "integer", "float", "boolean",
-        "date", "timestamp", "geopoint", "json", "attachment",
-    ])
+#: Declared types that map as `string` **on purpose**, with the reason.
+#:
+#: `FALLBACK_TYPE` exists so an unknown label cannot make a whole index
+#: uncreatable, and that safety net is also a place for a type to hide: a
+#: mapping nobody wrote is indistinguishable from a mapping nobody needed.
+#: Naming them turns the second into a decision.
+DELIBERATE_FALLBACKS = {
+    # A **series id**, not a history (decision 0009, db 0047): the value on the
+    # instance is a small scalar, usually its own primary key, so `string` is
+    # what it is. The points live in a dataset and are never in this index.
+    "time_series",
+}
+
+
+def test_every_declared_type_is_mapped_or_deliberately_falls_back() -> None:
+    """A type missing from the table maps as a string - findable but never
+    orderable, **silently**. This used to be a hand-written copy of
+    `FIELD_TYPES`, which is §191's blind spot exactly: two lists agreeing tell
+    you nothing about what is absent from both, and `time_series` had been
+    absent from both since db 0047 with nothing saying whether that was a
+    decision.
+
+    So it is checked against **the thing it describes** - the property types
+    the ontology declares - and anything not mapped has to be named above with
+    a reason. Adding a property type then fails here until somebody says which
+    it is.
+    """
+    unmapped = set(ontology_service.PROPERTY_TYPES) - set(im.FIELD_TYPES)
+    assert unmapped == DELIBERATE_FALLBACKS, (
+        "a declared property type with no mapping is indexed as a string, "
+        "silently - map it or name it in DELIBERATE_FALLBACKS"
+    )
+    stray = set(im.FIELD_TYPES) - set(ontology_service.PROPERTY_TYPES)
+    assert not stray, f"mappings for types no property can have: {sorted(stray)}"
 
 
 def test_a_string_keeps_both_readers() -> None:

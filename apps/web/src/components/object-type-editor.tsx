@@ -32,6 +32,7 @@ import { sameSelection, toggleSelection } from "@/lib/object-type-groups";
 import type {
   ObjectTypeDetail,
   ObjectTypeImpact,
+  ObjectTypeProperty,
   PropertyDataType,
   PropertyVisibility,
 } from "@/lib/types";
@@ -40,11 +41,63 @@ import type {
 // would be a base type this editor knows about and that one does not, which is
 // exactly the drift `routes/objects.py` stopped making by building its pattern
 // from `ontology.PROPERTY_TYPES` rather than typing it out again.
+//
+// **It is deliberately narrower than the server's list, and the rule is one
+// sentence**: a type is offered here when this dropdown is the whole
+// declaration. Three are not, and each needs a second thing the dropdown has
+// no way to ask for — `attachment` needs an upload (§39), `time_series` needs
+// `object_type_series` to say where the points are (db 0047), and `struct`
+// needs its fields (db 0064, `object-link-types` p.149). Declaring one here
+// would produce a property the server refuses, which is §214's rule about a
+// control that cannot work. Each arrives on this list the day its editor does.
 export const PROPERTY_TYPES: PropertyDataType[] = [
   "string", "integer", "float", "boolean", "date", "timestamp", "geopoint", "json",
 ];
 
 export const PROPERTY_VISIBILITIES: PropertyVisibility[] = ["normal", "prominent", "hidden"];
+
+/** Every field of `PropertyInput` a save has to carry forward, **as a type**.
+ *
+ * This dialog rebuilds the whole property list and PATCHes it, so anything the
+ * list does not carry is written back as the server's default. The comment
+ * that used to stand here said the risk out loud - *"every new property
+ * setting has to be added here, and nothing fails if it is not"* - and it had
+ * already happened: `description` was missing, so opening this dialog and
+ * saving, for any reason, erased every property description on the type.
+ *
+ * `Required<PropertyInput>` is what makes the next omission a compile error
+ * instead of a silent one. Adding an optional field to `PropertyInput` breaks
+ * this object until it is listed, which is the same guard-as-a-type §200 put
+ * on `PROP_DIRECTION` and §191 wanted for `REFERENCE_PROPS`.
+ *
+ * The values are `true` only so the keys have somewhere to live; `carry` below
+ * reads them off the property.
+ */
+const CARRIED: { [K in keyof Required<PropertyInput>]: true } = {
+  api_name: true,
+  display_name: true,
+  data_type: true,
+  required: true,
+  description: true,
+  visibility: true,
+  value_format: true,
+  conditional_format: true,
+  edit_only: true,
+  derivation: true,
+  struct_fields: true,
+  shared_property_id: true,
+  value_type_id: true,
+  status: true,
+  deprecation: true,
+};
+
+/** One saved property, as the shape a save sends back. */
+export function carry(p: ObjectTypeProperty): PropertyInput {
+  const source = p as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(CARRIED)) out[key] = source[key];
+  return out as unknown as PropertyInput;
+}
 
 export function toPropertyApiName(display: string): string {
   const words = display.match(/[A-Za-z0-9]+/g) ?? [];
@@ -553,27 +606,7 @@ export function EditObjectTypeDialog({
   const [status, setStatus] = useState(type.status);
   const [deprecation, setDeprecation] = useState(type.deprecation);
   const [properties, setProperties] = useState<PropertyInput[]>(
-    type.properties.map((p) => ({
-      api_name: p.api_name,
-      display_name: p.display_name,
-      data_type: p.data_type,
-      required: p.required,
-      // Carried through, or opening this dialog and saving would silently
-      // reset every property to `normal` - a setting lost by editing something
-      // else, which is the worst way to lose one. Value formatting joined this
-      // list for exactly the same reason, and that is why the list is worth a
-      // comment: every new property setting has to be added here, and nothing
-      // fails if it is not.
-      visibility: p.visibility,
-      value_format: p.value_format,
-      conditional_format: p.conditional_format,
-      edit_only: p.edit_only,
-      derivation: p.derivation,
-      shared_property_id: p.shared_property_id,
-      value_type_id: p.value_type_id,
-      status: p.status,
-      deprecation: p.deprecation,
-    })),
+    type.properties.map(carry),
   );
   const [titleProperty, setTitleProperty] = useState(
     type.properties.find((p) => p.id === type.title_property_id)?.api_name ?? "",

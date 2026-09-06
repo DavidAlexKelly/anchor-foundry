@@ -1047,7 +1047,26 @@ export type PropertyDataType =
    * instance is a small scalar — usually its own primary key — and
    * `object_type_series` on the object type source says which dataset, key,
    * timestamp and value columns hold the points behind it. */
-  | "time_series";
+  | "time_series"
+  /** A **schema**, not just a shape (Foundry `object-link-types` p.149; db
+   * 0064). `json` already accepted the same values; what a struct adds is the
+   * property declaring which fields it holds and what each one is, in
+   * `struct_fields` below. Depth of one — p.149 refuses nesting. */
+  | "struct";
+
+/** One declared field of a struct property (Foundry `object-link-types`
+ * p.149). The order is the author's: p.154 builds a struct one *Add field* at
+ * a time, and a stored value is rebuilt in it. */
+export interface StructField {
+  api_name: string;
+  display_name: string;
+  description: string;
+  /** p.149's list, which is **narrower** than `PropertyDataType` — no nested
+   * struct, no `json`, no `attachment`, no `time_series`. The server owns the
+   * list (`services/struct_fields.py`), which is why this is not a union
+   * here: a second copy would be free to disagree with the one that refuses. */
+  data_type: PropertyDataType;
+}
 
 /** A geopoint property's stored value (db 0029). Always lat,lon - see
  * property_values.py for why that order and not GeoJSON's lon,lat. */
@@ -1096,6 +1115,11 @@ export interface ObjectTypeProperty {
    * (Foundry `object-link-types` p.143–148). Null for an ordinary property.
    * Evaluated on the single-object read and never stored. */
   derivation: Derivation | null;
+  /** The declared fields of a `struct` property (Foundry `object-link-types`
+   * p.149; db 0064). Null for every other data type — "has no fields" and "is
+   * not a struct" are different states, and an empty array would collapse
+   * them. p.149 requires at least one field, so a struct never has none. */
+  struct_fields: StructField[] | null;
   /** The shared property this one inherits its metadata from (Foundry
    * `object-link-types` p.187–188), or null for an ordinary property.
    *

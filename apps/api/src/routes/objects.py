@@ -102,6 +102,13 @@ class PropertyIn(BaseModel):
     # because whether a chain is legal is a fact about the workspace's link
     # types rather than about this request.
     derivation: dict[str, Any] | None = None
+    # The fields of a struct property (Foundry `object-link-types` p.149; db
+    # 0064). Free-form here and checked in `services/struct_fields` for
+    # `value_format`'s reason exactly: what may be in it depends on the
+    # property's own base type, and p.149's field types are a *narrower* list
+    # than this model's `data_type` pattern - a per-field pydantic model would
+    # have to restate one of the two.
+    struct_fields: list[dict[str, Any]] | None = None
     # The shared property this one inherits its metadata from (Foundry
     # `object-link-types` p.187). Null detaches it (p.188), which is why this
     # is an explicit field rather than something only ever added: an omitted
@@ -136,6 +143,7 @@ class PropertyOut(BaseModel):
     conditional_format: list[dict[str, Any]] | None = None
     edit_only: bool = False
     derivation: dict[str, Any] | None = None
+    struct_fields: list[dict[str, Any]] | None = None
     shared_property_id: UUID | None = None
     # p.178: "Shared properties on objects are denoted with a globe icon next
     # to their name." The name comes back with the id so an application can
@@ -2395,13 +2403,20 @@ async def sync_source(
         # cannot be coerced fails the sync loudly rather than arriving as a
         # silently missing field.
         async with user_connection(access.auth.user_id) as conn:
+            declared = await ontology_service.list_properties(
+                conn, UUID(str(source["object_type_id"]))
+            )
             property_types = {
-                str(p["api_name"]): str(p["data_type"])
-                for p in await ontology_service.list_properties(
-                    conn, UUID(str(source["object_type_id"]))
-                )
+                str(p["api_name"]): str(p["data_type"]) for p in declared
             }
-        rows = ontology_service.coerce_rows(rows, property_types)
+            # A struct is the one type whose name does not carry its meaning
+            # (db 0064), so its declaration travels beside the label.
+            struct_by_property = {
+                str(p["api_name"]): p["struct_fields"]
+                for p in declared
+                if p.get("struct_fields") is not None
+            }
+        rows = ontology_service.coerce_rows(rows, property_types, struct_by_property)
     except (DatasetEngineError, ontology_service.PropertyValueError) as exc:
         ok, error = False, str(exc)
 
