@@ -27,7 +27,12 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
-from ..middleware.permissions import ProjectAccess, require_project_role
+from ..middleware.permissions import (
+    ProjectAccess,
+    WorkspaceAccess,
+    require_project_role,
+    require_workspace_role,
+)
 from ..services import audit
 from ..services import connections as conn_service
 from ..services import webhook_calls, webhook_store
@@ -38,6 +43,16 @@ router = APIRouter(
     prefix="/workspaces/{workspace_id}/projects/{project_id}/webhooks",
     tags=["webhooks"],
 )
+
+#: The workspace-wide listing, for the one caller that needs it: the action
+#: definition editor's picker. An action type is a workspace resource, so a
+#: rule may name any webhook the caller can see — and a picker fed by the
+#: project listing would offer a narrower set than the server accepts, which is
+#: §258's defect exactly.
+workspace_router = APIRouter(
+    prefix="/workspaces/{workspace_id}/webhooks", tags=["webhooks"]
+)
+
 
 # **No gateway of its own**, and that is the point. The secret a webhook sends
 # is the *connection's*, so it comes from the one place connections keep it.
@@ -133,6 +148,22 @@ class RunPage(BaseModel):
 
 def _out(row: dict[str, Any]) -> WebhookOut:
     return WebhookOut(**{k: v for k, v in row.items() if k in WebhookOut.model_fields})
+
+
+@workspace_router.get("", response_model=list[WebhookOut])
+async def list_workspace_webhooks(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[WebhookOut]:
+    """Every webhook this workspace has, for the action definition editor.
+
+    **Below `WebhookOut` rather than beside `workspace_router`**, which is not
+    style: a `response_model` is evaluated when the decorator runs, so a
+    forward reference there is a pydantic error at import time rather than a
+    type-checker's complaint.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await webhook_store.list_for_workspace(conn, access.workspace_id)
+    return [_out(row) for row in rows]
 
 
 # ---- CRUD -----------------------------------------------------------------------

@@ -705,3 +705,117 @@ def test_a_webhook_whose_inputs_changed_after_the_rule_was_written(
     failed = runs_for(client, fx, hook)[0]
     assert failed["ok"] is False
     assert "missing required input" in failed["error"]
+
+
+# ---- what §260 could not see, because its fixtures were all in one project ------
+def other_project(client: TestClient, fx: Fixture) -> str:
+    r = client.post(
+        f"{wbase(fx)}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:6]}"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_a_webhook_from_another_project_runs(
+    client: TestClient, fx: Fixture, target: str, ticket_type: str, tickets: list[str]
+) -> None:
+    """**A rule that saved and then failed on the first click.**
+
+    `_validate_definition` resolves a rule's webhook from every webhook in the
+    *workspace*; execution resolved its connection against the **executing**
+    project, which accepts one only when it is workspace-scoped or in that
+    project. So a webhook built in another project saved fine and 404'd when
+    somebody pressed the button — §129's and §214's shape, and the one this
+    repo refuses on principle.
+
+    The executing project is irrelevant to whether a webhook can reach its own
+    source: the webhook was configured against that connection, in that
+    project, and its own row says which. So the lookup uses the *webhook's*
+    project now, and offer equals accept again.
+    """
+    elsewhere = other_project(client, fx)
+    far = client.post(
+        f"{wbase(fx)}/projects/{elsewhere}/connections", headers=hdr(fx.owner_sub),
+        json={"name": f"Far {uuid.uuid4().hex[:6]}", "source_type": "rest",
+              "scope": "project",
+              "config": {"base_url": target, "allow_insecure_http": True},
+              "secret": {}},
+    )
+    assert far.status_code == 201, far.text
+    hook = client.post(
+        f"{wbase(fx)}/projects/{elsewhere}/webhooks", headers=hdr(fx.owner_sub),
+        json={"connection_id": far.json()["id"],
+              "api_name": f"hook_{uuid.uuid4().hex[:8]}",
+              "display_name": "Across projects", "method": "POST", "path": "echo",
+              "inputs": [{"api_name": "priority"}],
+              "body": {"priority": "{{{priority}}}"}},
+    )
+    assert hook.status_code == 201, hook.text
+
+    action = make_action(client, fx, ticket_type)
+    assert define(client, fx, action, [
+        modify_rule(), hook_rule(hook.json(), "side_effect"),
+    ]).status_code == 200
+
+    r = run(client, fx, action, tickets[0], "crossed")
+    assert r.status_code == 200 and r.json()["ok"], r.text
+    sent = client.get(
+        f"{wbase(fx)}/projects/{elsewhere}/webhooks/{hook.json()['id']}/runs",
+        headers=hdr(fx.editor_sub),
+    ).json()["items"]
+    assert sent and sent[0]["request_body"]["body"] == {"priority": "crossed"}
+
+
+def test_a_side_effect_whose_webhook_was_deleted_does_not_fail_the_action(
+    client: TestClient, fx: Fixture, connection: str, ticket_type: str, tickets: list[str]
+) -> None:
+    """**p.106's guarantee, against a failure that is not the far end's.**
+
+    `_run_webhooks` caught only `WebhookError`. `webhook_store.get` raises
+    `NotFoundError`, which is an `HTTPException` — so a webhook deleted after
+    the rule was written returned **404 for an action that had already
+    committed its write**. The object changed, the caller was told it had not,
+    and p.106's "the failure is not shown to the end user" became "the failure
+    is the entire response".
+
+    A resolution failure is a failure of the call like any other: recorded, and
+    invisible to the caller in this mode.
+    """
+    hook = make_webhook(client, fx, connection)
+    action = make_action(client, fx, ticket_type)
+    assert define(client, fx, action, [
+        modify_rule(), hook_rule(hook, "side_effect"),
+    ]).status_code == 200
+    assert client.delete(
+        f"{pbase(fx)}/webhooks/{hook['id']}", headers=hdr(fx.editor_sub)
+    ).status_code == 204
+
+    r = run(client, fx, action, tickets[1], "written-anyway")
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"], r.json()
+    assert priority_of(client, fx, ticket_type, tickets[1]) == "written-anyway"
+
+
+def test_a_writeback_whose_webhook_was_deleted_refuses_the_action(
+    client: TestClient, fx: Fixture, connection: str, ticket_type: str, tickets: list[str]
+) -> None:
+    """The other mode, and the pair is what says the fix respects both.
+
+    Swallowing a resolution failure everywhere would be the mirror mistake: a
+    writeback exists to be able to refuse, and one that cannot find its webhook
+    has not run — which under p.106 means no other changes may be made.
+    """
+    hook = make_webhook(client, fx, connection)
+    action = make_action(client, fx, ticket_type)
+    assert define(client, fx, action, [
+        hook_rule(hook, "writeback"), modify_rule(),
+    ]).status_code == 200
+    assert client.delete(
+        f"{pbase(fx)}/webhooks/{hook['id']}", headers=hdr(fx.editor_sub)
+    ).status_code == 204
+    before = priority_of(client, fx, ticket_type, tickets[0])
+
+    r = run(client, fx, action, tickets[0], "never-written")
+    assert r.status_code == 422, r.text
+    assert priority_of(client, fx, ticket_type, tickets[0]) == before

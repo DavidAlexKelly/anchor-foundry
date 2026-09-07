@@ -195,6 +195,7 @@ def create_app() -> FastAPI:
     app.include_router(code_routes.router, prefix=prefix)
     app.include_router(notification_routes.router, prefix=prefix)
     app.include_router(webhook_routes.router, prefix=prefix)
+    app.include_router(webhook_routes.workspace_router, prefix=prefix)
     app.include_router(bootstrap_routes.router, prefix=prefix)
 
     _wire_production_gateways()
