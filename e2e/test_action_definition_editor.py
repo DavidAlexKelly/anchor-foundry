@@ -556,3 +556,87 @@ def test_a_reference_to_a_parameter_that_is_gone_is_named_in_the_form(page, api)
     said = page.get_by_test_id("rule-2-problem")
     expect(said).to_contain_text("status", timeout=15000)
     expect(said).to_contain_text("not a parameter")
+
+
+def test_unchecking_somebody_takes_them_off_the_list(page, api):
+    """**Both directions, because only one of them is the default.**
+
+    A checkbox list built by appending on change looks right the whole time
+    somebody is adding people and silently keeps everybody they take off. The
+    rule would still save, and would notify somebody who was explicitly
+    removed - which is the one mistake a recipient list must not make.
+    """
+    mod = build(api, "Action editor notify uncheck")
+    me = api.call("GET", "/auth/me")
+    others = [
+        r for r in api.call(
+            "GET", f"/workspaces/{mod.workspace_id}/notification-recipients")
+        if r["id"] != me["user_id"]
+    ]
+    assert others, "this test needs a second person in the workspace"
+    other = others[0]
+
+    open_editor(page, mod)
+    add_notify_rule(page)
+    page.get_by_label(f"Notify {me['email']}").check()
+    page.get_by_label(f"Notify {other['email']}").check()
+    page.get_by_label(f"Notify {other['email']}").uncheck()
+    page.get_by_test_id("rule-2-subject").fill("Only one of them")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    stored = definition(api, mod)
+    assert stored["rules"][1]["config"]["recipients"]["user_ids"] == [me["user_id"]]
+
+
+def test_an_insert_button_writes_the_reference_name_not_its_label(page, api):
+    """p.101's two user references are the only place the two differ.
+
+    A parameter's button is labelled with the parameter's own name, so a form
+    that inserted the *label* would be right about every parameter and wrong
+    about `Current user` - which renders as nothing and would look like a
+    template that simply did not substitute.
+    """
+    mod = build(api, "Action editor notify user ref")
+    me = api.call("GET", "/auth/me")
+    open_editor(page, mod)
+    add_notify_rule(page)
+
+    page.get_by_label(f"Notify {me['email']}").check()
+    page.get_by_test_id("rule-2-subject").fill("For ")
+    page.get_by_test_id("rule-2-subject-insert-recipient").click()
+    page.get_by_test_id("rule-2-body").fill("By ")
+    page.get_by_test_id("rule-2-body-insert-current_user").click()
+    expect(page.get_by_test_id("rule-2-subject")).to_have_value("For {{{recipient}}}")
+    expect(page.get_by_test_id("rule-2-body")).to_have_value("By {{{current_user}}}")
+    # And the form is happy with them, because p.101's two are references
+    # without being parameters.
+    expect(page.get_by_test_id("rule-2-problem")).to_have_count(0)
+
+
+def test_changing_the_recipient_kind_forgets_the_old_ones_fields(page, api):
+    """The three recipient shapes have nothing in common.
+
+    A `parameter` left behind on a static list is a field the server refuses,
+    and the refusal names something that is no longer on screen - the same
+    argument the rule-kind select makes one file over. Asserted as the *whole*
+    config rather than as an absent key, so a third field arriving later is
+    checked by this too.
+    """
+    mod = build(api, "Action editor notify kind switch")
+    me = api.call("GET", "/auth/me")
+    open_editor(page, mod)
+    add_notify_rule(page)
+
+    page.get_by_label("Rule 2 recipient kind").select_option("parameter")
+    page.get_by_label("Rule 2 recipient parameter").select_option("status")
+    page.get_by_label("Rule 2 recipient kind").select_option("static")
+    page.get_by_label(f"Notify {me['email']}").check()
+    page.get_by_test_id("rule-2-subject").fill("Nothing left behind")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    stored = definition(api, mod)
+    assert stored["rules"][1]["config"]["recipients"] == {
+        "kind": "static", "user_ids": [me["user_id"]]
+    }
