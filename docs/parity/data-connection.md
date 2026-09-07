@@ -36,7 +36,7 @@ Foundry separates **worker** (where compute runs) from **networking** (how the t
 | Streaming syncs | TOC §19 | ○ — out of scope |
 | Media set syncs | TOC §21 | ○ — tracks the media reference property type in `ontology.md` |
 | **Exports** — push data out | TOC §24–25 | ○ |
-| **Webhooks** — outbound calls to a source | TOC §26–29 | ◔ §259 — the resource is built (decision 0012): a request shape on a REST source, p.228's inputs and p.229's outputs, p.222's test call and p.242's per-caller history. What is left is the action rule in p.106's two modes, which is where `ontology.md` §5.2 picks it up |
+| **Webhooks** — outbound calls to a source | TOC §26–29 | ◑ §259, §260 — built (decision 0012): a request shape on a REST source, p.228's inputs and p.229's outputs, p.222's test call, p.242's per-caller history, and the action rule in `action-types` p.106's two modes. What is absent is named on `ontology.md` §5.2's row: function-mapped inputs, chained multi-call webhooks, the OAuth authorization-code grant, and the privileged history read |
 | **Listeners** — inbound events | TOC §30–39 | ○ |
 | Source exploration — browse a source before syncing | TOC §17 | ◑ |
 
@@ -73,7 +73,7 @@ Foundry's own fallback is worth copying: "For systems without a dedicated connec
 ## 5. Build order
 
 1. **Egress policies** — an explicit per-source destination allowlist. A security control, and the only piece of Foundry's networking model worth taking.
-2. ~~**Webhooks**, shared with action side effects.~~ — **the resource is done (`STATUS.md` §259)**; the action rule is the half that is left. Struck in halves per §216: a line goes stale in the commit that finishes part of it. Decision 0012 records the design, including the two constraints that no test here can see — no external call inside the transaction, and none on the event loop.
+2. ~~**Webhooks**, shared with action side effects.~~ — **done (`STATUS.md` §259, §260)**: the resource, then the action rule in both of p.106's modes. Struck in halves per §216: a line goes stale in the commit that finishes part of it. Decision 0012 records the design, including the two constraints that no test here can see — no external call inside the transaction, and none on the event loop.
 3. **Exports** — the reverse direction; currently data only flows in.
 4. **Source exploration** — browse tables and files before configuring a sync.
 5. **Connectors on demand.**

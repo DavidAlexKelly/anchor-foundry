@@ -211,11 +211,18 @@ def test_a_missing_required_input_stops_the_request() -> None:
         wh.render(wh.parse(definition(path="items/{{{name}}}")), {})
 
 
-def test_a_missing_optional_input_is_json_null_in_a_body() -> None:
-    # Not "" — a body field declared optional and absent should be absent to
-    # the far end, and `null` is how JSON says that.
+def test_a_missing_optional_input_leaves_its_field_out_of_the_body() -> None:
+    """Not `""`, and — since the mutation round that produced
+    `test_an_unsupplied_optional_input_drops_its_key` — not `null` either.
+
+    This test asserted `{"text": None}` when it was written, on the reasoning
+    that "null is how JSON says absent". It is not: `{"text": null}` is how
+    JSON says *explicitly cleared*, and an API that tells the two apart reads
+    it as an instruction to erase. The assertion is the corrected one and the
+    docstring is the record of why it moved.
+    """
     parsed = wh.parse(definition(inputs=[{"api_name": "name", "required": False}]))
-    assert wh.render(parsed, {})["body"] == {"text": None}
+    assert wh.render(parsed, {})["body"] == {}
 
 
 def test_a_whole_reference_in_a_body_keeps_its_type() -> None:
@@ -390,3 +397,48 @@ def test_a_dotted_path_missing_a_middle_key_is_null() -> None:
     """
     outputs = wh.parse(definition(outputs=[{"api_name": "x", "path": "a.b"}]))["outputs"]
     assert wh.extract(outputs, {"a": {"c": 1}}) == {"x": None}
+
+
+def test_an_unsupplied_optional_input_drops_its_key() -> None:
+    """d-p.229: optional inputs "may or may not be present".
+
+    **`{"note": null}` is not the same request as `{}`.** Any API that tells
+    "not provided" from "explicitly cleared" — most that accept PATCH-shaped
+    bodies — reads the first as an instruction to erase the value. So an input
+    that was never supplied drops its key.
+
+    This was an *equivalent* mutant before the distinction existed: mapping an
+    unsupplied parameter to `None` and not mapping it at all produced the same
+    body, because everything downstream treated absent and null alike. The
+    mutant could not be killed by a test; it was killed by making the code do
+    what its own comment claimed.
+    """
+    parsed = wh.parse(definition(
+        inputs=[{"api_name": "name"}, {"api_name": "note", "required": False}],
+        body={"text": "{{{name}}}", "note": "{{{note}}}"},
+    ))
+    assert wh.render(parsed, {"name": "Ada"})["body"] == {"text": "Ada"}
+
+
+def test_an_input_supplied_as_null_is_sent_as_null() -> None:
+    """The other side, and what makes the sentinel necessary rather than a
+    `None` check: `None` is a value a caller can supply, and clearing a field
+    on purpose has to remain expressible."""
+    parsed = wh.parse(definition(
+        inputs=[{"api_name": "name"}, {"api_name": "note", "required": False}],
+        body={"text": "{{{name}}}", "note": "{{{note}}}"},
+    ))
+    assert wh.render(parsed, {"name": "Ada", "note": None})["body"] == {
+        "text": "Ada", "note": None
+    }
+
+
+def test_an_absent_input_in_a_list_stays_a_hole() -> None:
+    """A list is positional, so dropping an element would shift every element
+    after it — the absent value would change what the *others* mean. Null is
+    the only answer that leaves the rest alone."""
+    parsed = wh.parse(definition(
+        inputs=[{"api_name": "note", "required": False}],
+        body={"items": ["{{{note}}}", "fixed"]},
+    ))
+    assert wh.render(parsed, {})["body"] == {"items": [None, "fixed"]}

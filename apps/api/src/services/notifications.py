@@ -249,6 +249,15 @@ def parse(
 
     def check(field: str, template: str) -> None:
         for ref in references(template):
+            # **A name that is in `parameters` whole is a name**, whatever it
+            # contains. §260 puts a writeback webhook's outputs into the same
+            # namespace under `webhook.<output>` (p.110: "use in a subsequent
+            # notification"), and splitting *that* at the dot asks whether the
+            # action has a parameter called `webhook`, which is a question
+            # about the wrong thing. Checked before the split rather than
+            # after, because after it the head is already the wrong string.
+            if ref in parameters:
+                continue
             # A dotted reference is an object parameter's property -
             # `{{{alert.priority}}}` - which p.101 generates when "your
             # selection is an object parameter".
@@ -337,6 +346,13 @@ def render(
     """
     def one(match: "re.Match[str]") -> str:
         ref = match.group(1)
+        # The same rule `parse` applies, and it has to be the same or the two
+        # disagree about what a name is: a reference that is a key of `values`
+        # whole is that value, dots and all. §260's `webhook.<output>` is the
+        # case — splitting it would look for an *object parameter* called
+        # `webhook` and render the gap that means "unset".
+        if ref in values:
+            return _text(values[ref])
         head, _, tail = ref.partition(".")
         if head in ("recipient", "current_user"):
             who = recipient if head == "recipient" else actor

@@ -137,6 +137,14 @@ def apply_rules(
             # to say so. The delivery is in the route, because it has to
             # happen after the write and be decided before it (p.92, p.96).
             continue
+        if kind == "webhook":
+            # **Not a write here either**, for the same reason and with one
+            # extra: a webhook writes to somebody *else's* system, so it
+            # contributes nothing to this action's rows and does not make the
+            # action non-empty. Both calls are in the route, because p.106 puts
+            # one before the write and one after it and neither can be made
+            # from a function that only knows about rows.
+            continue
         if kind in ("create_link", "delete_link"):
             # **A link here is a property value, not a row** (migration 0027):
             # "which instances of the far type have `to_property` equal to this
@@ -1580,8 +1588,85 @@ _UNSUPPORTED_PARAMETER_TYPES = {
 #: checked here.
 _RULE_KINDS = frozenset(
     {"modify_object", "create_object", "delete_object", "create_link",
-     "delete_link", "notify"}
+     "delete_link", "notify", "webhook"}
 )
+
+#: `action-types` p.105-107's two ways to configure a webhook in an action. The
+#: difference is the whole feature: a writeback runs **before** the object
+#: changes and refuses the action when it fails; a side effect runs after and
+#: cannot fail it.
+WEBHOOK_MODES = ("writeback", "side_effect")
+
+#: p.114: "By default, the newly added webhook is configured as a side effect."
+#: Copied because the default is the *safe* one — a rule somebody added without
+#: reading the mode selector cannot take an action down.
+DEFAULT_WEBHOOK_MODE = "side_effect"
+
+#: Where a writeback's outputs live in the value namespace every rule reads
+#: from (p.110-111's "Writeback response").
+#:
+#: **A reserved name rather than a new value-source shape**, and two properties
+#: make that safe rather than a shortcut. It cannot *collide*: `_API_NAME_RE`
+#: has no dot, so `webhook.unique_id` is not a name any parameter can have. And
+#: it cannot be *forged*: `bind_parameters` refuses every key the caller
+#: supplies that is not a declared parameter, so the executor is the only thing
+#: that can write into this namespace.
+#:
+#: What it buys is that every rule kind reads `bound[config["parameter"]]` and
+#: none of them needed changing.
+WEBHOOK_OUTPUT_PREFIX = "webhook."
+
+
+def webhook_output_name(output: str) -> str:
+    return f"{WEBHOOK_OUTPUT_PREFIX}{output}"
+
+
+def webhook_rules(rules: list[dict[str, Any]], *, mode: str) -> list[dict[str, Any]]:
+    """This action's webhook rules in one mode, in the order they were saved.
+
+    Order matters for a writeback and does not for a side effect — p.107: "you
+    can configure multiple side effect webhooks in a single action, and they
+    will be executed in no particular order." The list is still returned in
+    order, because *arbitrary* is not the same as *shuffled* and a stable order
+    is what makes a failure reproducible.
+    """
+    return [
+        rule for rule in rules
+        if str(rule.get("kind", "")) == "webhook"
+        and str((rule.get("config") or {}).get("mode") or DEFAULT_WEBHOOK_MODE) == mode
+    ]
+
+
+def webhook_inputs(
+    config: dict[str, Any], bound: dict[str, Any]
+) -> dict[str, Any]:
+    """The values to send, mapped from this action's parameters (p.107).
+
+    > "each required Webhook input must be set to either an Action parameter of
+    > the same type, a static value, or a property of an object parameter."
+    > (p.107)
+
+    The first two are here; the third needs the object the rule names, which is
+    the caller's to resolve, and the function-mapped form (p.107-110) needs
+    Functions. `{"input": {"parameter": "x"}}` and `{"input": {"value": 1}}`.
+
+    **An unsupplied parameter maps to nothing rather than to null**, which is
+    what makes p.229's optional webhook inputs work: the key is absent, so
+    `webhooks.render` treats it as not provided rather than as an explicit
+    null. A rule that mapped it to `None` would send `null` to an API that
+    distinguishes the two, and most do.
+    """
+    out: dict[str, Any] = {}
+    for name, spec in (config.get("inputs") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        if "value" in spec:
+            out[str(name)] = spec["value"]
+            continue
+        parameter = str(spec.get("parameter", ""))
+        if parameter in bound:
+            out[str(name)] = bound[parameter]
+    return out
 _USER_ATTRIBUTES = frozenset({"id", "group_ids"})
 
 
@@ -1610,6 +1695,37 @@ async def properties_by_type(
         if row["api_name"]:
             entry[str(row["api_name"])] = str(row["data_type"])
     return grouped
+
+
+async def webhooks_by_id(
+    conn: AsyncConnection, workspace_id: UUID
+) -> dict[str, dict[str, Any]]:
+    """Every webhook this workspace has, keyed by id, for the definition check.
+
+    One query rather than one per rule, for `properties_by_type`'s reason: an
+    action may carry several webhook rules and each needs the same two facts —
+    which inputs are required, and what outputs it declares.
+
+    Only `inputs` and `outputs` are read. The rest of a webhook is the request
+    it makes, which is `webhook_calls`' business at run time and not something
+    a definition can be wrong about.
+    """
+    rows = await fetch_all(
+        conn,
+        "SELECT id, display_name, inputs, outputs FROM webhooks"
+        " WHERE workspace_id = :wid",
+        {"wid": str(workspace_id)},
+    )
+    return {
+        str(row["id"]): {
+            "display_name": row["display_name"],
+            # `_json` already handles both shapes a jsonb column arrives in, so
+            # an `isinstance` here would be the same check written twice.
+            "inputs": _json(row["inputs"]),
+            "outputs": _json(row["outputs"]),
+        }
+        for row in rows
+    }
 
 
 async def link_types_for(
@@ -1711,6 +1827,7 @@ def _validate_definition(
     object_type_id: UUID,
     link_types: dict[str, dict[str, Any]],
     workspace_properties: dict[str, dict[str, str]],
+    webhooks: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Refuse a definition that could not be executed, at save time.
 
@@ -1737,6 +1854,13 @@ def _validate_definition(
         if not str(parameter.get("display_name") or "").strip():
             raise ValueError(f"parameter {name!r} needs a display name")
 
+    # p.106's "only a single webhook as a writeback", tracked across the loop
+    # because the rule that breaks it is the *second* one.
+    writeback_seen = False
+    # The writeback outputs seen so far, with the types `notifications.parse`
+    # needs to check a reference. Kept beside `seen` rather than derived from
+    # it, because `seen` is a set of names and that function asks for types.
+    webhook_output_types: dict[str, str] = {}
     for rule in rules:
         kind = str(rule.get("kind", ""))
         if kind not in _RULE_KINDS:
@@ -1772,6 +1896,67 @@ def _validate_definition(
                         "the object type it creates"
                     )
             continue
+        if kind == "webhook":
+            # p.106: "you can only configure a single webhook as a writeback".
+            # Refused at save rather than at run, because at run time the
+            # second one is discovered *after* the first has already called
+            # somebody's production system.
+            mode = str(config.get("mode") or DEFAULT_WEBHOOK_MODE)
+            if mode not in WEBHOOK_MODES:
+                raise ValueError(
+                    f"a webhook rule's mode must be one of {', '.join(WEBHOOK_MODES)}"
+                )
+            if mode == "writeback":
+                if writeback_seen:
+                    raise ValueError(
+                        "an action can have only one writeback webhook - the action "
+                        "stops being applied when one fails, so a second would have "
+                        "nothing defined to happen after the first"
+                    )
+                writeback_seen = True
+            declared = (webhooks or {}).get(str(config.get("webhook", "")))
+            if declared is None:
+                raise ValueError(
+                    "a webhook rule names a webhook this project does not have"
+                )
+            for name, spec in (config.get("inputs") or {}).items():
+                if not isinstance(spec, dict) or ("value" in spec) == ("parameter" in spec):
+                    raise ValueError(
+                        f"webhook input {name!r} needs exactly one of a parameter "
+                        "or a static value"
+                    )
+                if "parameter" in spec and str(spec["parameter"]) not in seen:
+                    raise ValueError(
+                        f"a webhook rule reads {spec['parameter']!r}, which is not "
+                        "a parameter"
+                    )
+            required = {
+                str(i["api_name"]) for i in declared.get("inputs") or []
+                if i.get("required", True)
+            }
+            supplied = set(map(str, (config.get("inputs") or {})))
+            if required - supplied:
+                # p.107: "you must populate all of its required input
+                # parameters". At save time, because the alternative is a rule
+                # that saves and then fails on the first click.
+                raise ValueError(
+                    "this webhook needs "
+                    + ", ".join(repr(n) for n in sorted(required - supplied))
+                    + ", which the rule does not supply"
+                )
+            if mode == "writeback":
+                # **Added to `seen` only now**, which is how p.110's word
+                # *subsequent* becomes checkable: the loop runs in order, so a
+                # rule above this one that reads `webhook.x` has not seen it
+                # yet and is refused. A side effect adds nothing, because there
+                # is no rule after it for an output to reach.
+                for output in declared.get("outputs") or []:
+                    name = webhook_output_name(str(output["api_name"]))
+                    seen.add(name)
+                    webhook_output_types[name] = str(
+                        output.get("data_type") or "string"
+                    )
+            continue
         if kind == "notify":
             # The whole of the shape is `services/notifications`, which is a
             # pure module with its own tests - this is the two facts it needs
@@ -1780,8 +1965,18 @@ def _validate_definition(
                 notifications_service.parse(
                     config,
                     parameters={
-                        str(p.get("api_name", "")): str(p.get("data_type", ""))
-                        for p in parameters
+                        **{
+                            str(p.get("api_name", "")): str(p.get("data_type", ""))
+                            for p in parameters
+                        },
+                        # p.110 names three consumers of a writeback's outputs
+                        # and this is the second: "use in a subsequent
+                        # notification". They are references like any other, so
+                        # they belong in the namespace `parse` checks against —
+                        # and because this dict is built as the loop reaches
+                        # each rule, a notification *above* the webhook still
+                        # cannot see them.
+                        **webhook_output_types,
                     },
                     workspace_properties=workspace_properties,
                     object_parameter_types=object_parameter_types(
@@ -1995,6 +2190,11 @@ async def set_definition(
         property_types=property_types, object_type_id=object_type_id,
         link_types=await link_types_for(conn, workspace_id),
         workspace_properties=await properties_by_type(conn, workspace_id),
+        # Keyed by id, so a rule's `webhook` field resolves without a second
+        # round trip per rule. Workspace-wide rather than project-scoped
+        # because an action type is a workspace resource and RLS already
+        # narrows this to what the caller can see.
+        webhooks=await webhooks_by_id(conn, workspace_id),
     )
 
     # **The refusal decision 0007 names.** Checked against what is *going*, not
