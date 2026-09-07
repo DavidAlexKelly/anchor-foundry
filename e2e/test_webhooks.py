@@ -153,6 +153,12 @@ def test_a_webhook_typed_in_the_form_reaches_the_far_end(page, api, target):
         "modify_ticket_priority"
     )
     page.get_by_test_id("webhook-api-name").fill(f"hook_{uuid.uuid4().hex[:8]}")
+    # **Not the default.** POST is what a blank form starts on, so a form that
+    # ignored this select entirely and always sent POST would pass every
+    # assertion below — which is what happened: a mutant hardcoding the method
+    # survived until this line chose a different one. §190's rule, that
+    # fixtures must collide on everything except the thing under test.
+    page.get_by_test_id("webhook-method").select_option("PUT")
     page.get_by_test_id("webhook-path").fill("echo")
 
     page.get_by_test_id("webhook-inputs-add").click()
@@ -172,7 +178,7 @@ def test_a_webhook_typed_in_the_form_reaches_the_far_end(page, api, target):
     # What the far end *received*: the reference resolved, and the method and
     # path are the ones the form typed.
     expect(result).to_contain_text('"priority": "urgent"')
-    expect(result).to_contain_text('"method": "POST"')
+    expect(result).to_contain_text('"method": "PUT"')
 
 
 def test_the_body_says_it_is_not_json_before_a_save(page, api, target):
