@@ -4388,6 +4388,86 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 260. A webhook as an action rule, in both modes (this session)
+
+Decision 0012's second unit, and the one that makes a webhook reachable from
+something a person clicks. Build order item 10 is now finished on both halves.
+`action-types` p.105-114.
+
+**The two modes landed on placements the executor already had**, which is the
+evidence the reading was right rather than convenient. A writeback goes in the
+pre-write block; a side effect after `close_run` under the same `if ok:` as the
+notifications. Neither is inside the transaction `commit_versions` opens.
+
+One ordering detail is worth more than it looks: **the writeback runs before
+the notifications are rendered, not after.** p.110 gives its outputs to "a
+subsequent logic rule … or use in a subsequent notification or side effect
+Webhook", and a notification rendered first would substitute an empty string
+for every one of them. The sentence names three consumers and the order of two
+regions of code falls out of it.
+
+**p.111's "Writeback response" is a reserved name, and no rule kind changed.**
+Every rule reads `bound[config["parameter"]]` — all four places, grepped — so a
+writeback's outputs go into that namespace as `webhook.<output>`. Two properties
+make it a namespace rather than a hole: it cannot **collide**, because an
+`api_name` has no dot; and it cannot be **forged**, because `bind_parameters`
+refuses every key a caller supplies that is not a declared parameter. The second
+has its own test, since without it anybody who could run the action could write
+any value into any property a rule points at. And p.110's word *subsequent* is
+checkable rather than aspirational: the validation loop adds a writeback's
+outputs to the known names when it *reaches* that rule, so a rule above it is
+refused.
+
+**27 mutants attacked, 27 caught** (and §259's 51 re-run clean after the change
+below), after three survivors and one mutant withdrawn.
+
+**The survivor that could not be killed by a test.** Sending `None` for an
+unsupplied webhook input and not sending the key at all produced the same
+request: `render`'s missing check, `_fill` and `_fill_json` all treated absent
+and null alike, so the guard that distinguished them did nothing. That is an
+*equivalent mutant* — no test could kill it, and the honest responses are to
+delete the guard or to make the distinction real.
+
+Making it real was right, because the code's own comment already claimed it:
+d-p.229's optional inputs "may or may not be present", and `{"note": null}` is
+not the same request as `{}` to any API that tells "not provided" from
+"explicitly cleared" — most that accept PATCH-shaped bodies do, and they read
+the first as an instruction to *erase*. **The general shape is worth keeping:
+an equivalent mutant is a question about whether a line does anything, and when
+the line's comment describes behaviour the code does not have, the comment is
+the specification and the code is the bug.** §213 asked the same question of a
+duplicated guard and answered "delete"; this is the other answer.
+
+A sentinel rather than a `None` check, because `None` is a value a caller can
+supply and clearing a field on purpose has to stay expressible. In a *list* an
+absent value stays null, because a list is positional and dropping an element
+changes what every element after it means.
+
+Two tests moved rather than being added, and both had said nothing. One
+asserted `{"text": None}` on the reasoning that "null is how JSON says absent";
+it is not. The other said `body["note"] is None or "note" not in body`, which
+is true either way — **an assertion whose two branches are the two possible
+answers is not an assertion**, and it was written in the same round as the
+mutant it failed to catch.
+
+The other two survivors were ordinary gaps: an optional input mapped to a
+parameter the caller never supplies (the existing check left the input out of
+the *rule*, which never runs the mapping at all), and a webhook whose inputs
+changed after the rule was written — the one path save-time validation cannot
+close, because the webhook and the rule are edited on different screens by
+different people.
+
+**And a limitation recorded rather than left to be found.** An action whose
+only rule sends data out is refused as empty, which is the same answer §257
+settled for a notification-only action. It is not the ideal answer —
+`action-types` p.107's "write back to multiple external systems" is a good
+reason for an action that writes nothing locally — but what stands in the way
+is the write path appending a dataset version per execution, which is decision
+0008's shape rather than a rule kind's. Named in the test that asserts the
+refusal, so the next person reads a decision instead of finding a wall.
+
+**2037 API tests**, 2 skipped (was 2012); 22 new, over a real socket.
+
 ### 259. The webhook resource, and a guard that had to justify itself (this session)
 
 Build order item 10's second half, and `data-connection.md`'s item 2 — one
