@@ -79,12 +79,19 @@ def pick_type(page, test_id: str, kind: dict) -> None:
     test written with it does not encode which of those it is running against.
     """
     picker = page.get_by_test_id(test_id)
-    # **The select first, before anything is typed.** A picker in a dialog
-    # mounts and then fetches, and `search.count()` on a dialog that has not
-    # rendered yet returns zero - which reads as "this workspace is small
-    # enough not to need a search" and skips straight to a select with nothing
-    # in it. Found as an intermittent failure in `test_type_paging`.
+    # **The select's first page, before anything is typed.** A picker in a
+    # dialog mounts and *then* fetches, and until the fetch lands its total is
+    # zero - which reads as "this workspace is small enough not to need a
+    # search", so `search.count()` returns zero, the search is skipped, and the
+    # option never arrives.
+    #
+    # Waiting for the select to be visible is not enough: it is visible from
+    # the first render, holding only its placeholder. Two options is the
+    # cheapest evidence that a page of types actually came back. It cost two
+    # full browser runs to find, because the fetch is fast enough to win the
+    # race whenever this file is run on its own.
     expect(picker).to_be_visible(timeout=20000)
+    expect(picker.locator("option").nth(1)).to_be_attached(timeout=20000)
     search = page.get_by_test_id(f"{test_id}-search")
     if search.count():
         search.fill(str(kind["api_name"]))

@@ -258,7 +258,15 @@ def test_an_active_interface_offers_no_delete_button(page, module):
     page.get_by_test_id("status-select").select_option("active")
     page.get_by_test_id("iface-save").click()
 
-    expect(page.get_by_test_id("iface-table")).to_contain_text("active", timeout=15000)
+    # **This interface's own badge, not the word anywhere in the table.**
+    # `to_contain_text("active")` passed against a *different* interface's row
+    # left behind by an earlier run - so the wait finished before this row had
+    # refreshed, and the Delete assertion below then read the old status. A
+    # full browser run found it; the file on its own never did.
+    row = page.get_by_test_id("iface-table").locator("tbody tr").filter(
+        has_text=api_name
+    )
+    expect(row.get_by_test_id("status-badge-active")).to_be_visible(timeout=15000)
     expect(page.get_by_role("button", name=f"Delete {api_name}")).to_be_disabled()
 
     # Back to experimental, so the run's sweep can take it: a cleanup that
