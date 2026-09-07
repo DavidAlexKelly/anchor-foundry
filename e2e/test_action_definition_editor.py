@@ -890,10 +890,15 @@ def test_switching_an_inputs_source_forgets_the_other_one(page, api, webhook_tar
     page.get_by_test_id("rule-2-webhook").select_option(hook["id"])
     page.get_by_label("Rule 2 priority parameter").select_option("status")
     page.get_by_label("Rule 2 priority source").select_option("value")
-    page.get_by_label("Rule 2 priority value").fill("fixed")
+
+    # **Saved without typing into the new box**, and that is the whole test.
+    # The first version filled it in, and `setInput` *replaces* the source — so
+    # the leftover `parameter` was overwritten a moment later and the mutant
+    # survived a check that walked the exact path it breaks. The state right
+    # after the switch is the only place the difference exists.
     page.get_by_role("button", name="Save", exact=True).click()
     expect(page.get_by_role("dialog")).to_have_count(0)
 
     assert definition(api, mod)["rules"][1]["config"]["inputs"] == {
-        "priority": {"value": "fixed"}
+        "priority": {"value": ""}
     }
