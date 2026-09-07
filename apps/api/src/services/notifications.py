@@ -54,8 +54,10 @@ whole, rather than both halves partly.
 """
 from __future__ import annotations
 
-import re
+import re  # for the `re.Match` annotation in `render`; the pattern lives in `templates`
 from typing import Any
+
+from . import templates
 
 #: p.94: "There is a maximum of 500 recipients for a single Action notification
 #: when the content is configured directly in the configuration dialog using
@@ -93,7 +95,13 @@ PERMISSION_MODES = ("all", "any")
 #: that has both, and three does not. Copying the syntax without the semantics
 #: would produce a template that looked like every other one and quietly
 #: HTML-escaped a person's name.
-_REFERENCE = re.compile(r"\{\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}\}")
+#:
+#: **Moved to `services/templates` in §259**, which is when webhooks gained
+#: templates of their own and a second `re.compile` of this expression would
+#: have become §191's mirror: two copies free to be identically wrong, with a
+#: drift guard comparing them only to each other. The name stays here because
+#: it is what this module's own code and its tests call it.
+_REFERENCE = templates.REFERENCE
 
 #: The two references that are not parameters. p.101: "you can select the
 #: `Recipient`, `Current User`, and any parameter options from the dropdown

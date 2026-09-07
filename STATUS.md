@@ -4388,6 +4388,94 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 259. The webhook resource, and a guard that had to justify itself (this session)
+
+Build order item 10's second half, and `data-connection.md`'s item 2 — one
+feature, load-bearing twice. Decision 0012 is the design; this is its first
+unit, the resource itself. The action rule is next. `data-connection`
+p.216-242.
+
+**The decision worth reading is where an external call may sit**, and it is
+recorded in 0012 rather than here because it is a rule about the platform
+rather than about this code. A writeback fires before the action's write and a
+side effect after it (`action-types` p.105-107), and **neither may sit inside
+the transaction `commit_versions` opens**. The tempting alternative reads
+better — roll back if the webhook fails — and buys transactionality p.106 says
+plainly is not on offer, at the price of holding dataset row locks across a
+network call to a system that is already having a bad day.
+
+**And the call goes through `anyio.to_thread.run_sync`**, which is a second
+constraint with a different shape: blocking `urllib` inside `async def
+execute_action` does not slow *that* request, it stops the event loop, so every
+other request the process is serving stops with it. One unreachable host would
+look like the API going down. It is written down twice because **no test in
+this repo could see it** — they all run one request at a time.
+
+**The fixture server echoes what it received**, and that is the difference from
+the connector's. A connector test asks what came back; a webhook test has to
+ask what went out. A webhook that sent `{"count": "3"}` where `{"count": 3}` was
+configured is wrong in a way no assertion about a response can see, and a far
+end that answers 200 to both is the normal case rather than the unlucky one.
+That is also why the body substitutes **by value**: a string that is exactly
+one reference becomes the input with its own type, and one that merely contains
+references is interpolated as text.
+
+**p.237's question is three-valued and the third value is the point.** "When a
+Webhook is executed and fails, the indication of whether the external system
+may have been changed is captured to enable debugging of write failures." A
+request that never got a status changed nothing; a refusal in the default
+400-431 range changed nothing; a 500 after a POST **may well have written**, and
+`unknown` is the honest answer where a `false` would be believed.
+
+**51 mutants attacked, 51 caught**, after four survivors and one no-op — and
+one of the four is the entry worth keeping.
+
+*A guard that had to justify itself.* The send-time destination check survived
+its mutant, and §213's question is not "which test is missing" but "who else
+already refuses this". Somebody does: `RestConnector.validate_config` calls
+`_check_url` on create and on update, and `_join_url` concatenates rather than
+resolving, so a rendered path cannot change the host. By §213 that is a
+duplicated guard and should be deleted.
+
+It is kept, because there is one case the other layer cannot cover *by
+construction*: `_check_url` resolves the hostname **when it runs**. A name that
+answers with a public address at configure time and 169.254.169.254 at send
+time is the classic DNS-rebinding bypass, and a check that ran an hour earlier
+cannot see it. **The general shape is the useful half**: §213's rule is to
+delete a guard another layer already makes, and the exception is a guard whose
+answer can change between the two layers — time-of-check to time-of-use, which
+is what makes a duplicate not a duplicate. The test now exercises it where it
+acts, on a connection row rather than through an endpoint that would have
+refused the row first, with that reasoning beside it.
+
+The other three were fixtures, and all three the same shape as §212's: *a
+fixture that never crosses the boundary cannot see it.* A dotted path checked
+against `{"a": 1}` stops at "not a container" and never reaches the
+missing-key branch. A 204 checked with no outputs declared never reaches the
+code that reads a response. A history with one run in it is the same list in
+either order — the boundary there being **two**.
+
+Two defects the tests found before the harness did. `uses_connection` was
+written so a connection delete could name the webhooks in the way, and the
+delete route never called it, so db 0067's `ON DELETE RESTRICT` surfaced as a
+500 quoting a constraint name — §252's shape, something that exists and is
+never reached. And the first draft gave the webhook routes their own secrets
+gateway with their own `configure_`, which is exactly the trap §17 records:
+nothing had ever called those with a real gateway, so credentials only lived in
+process memory on every deployed stack. There is one gateway now, behind an
+accessor.
+
+**The reference syntax moved to `services/templates`.** §257 compiled
+`{{{name}}}` inside `notifications.py`, which was right while notifications
+were the only thing with templates; a webhook has four of them, and a second
+`re.compile` of the same expression is §191's mirror exactly. Substitution
+stayed with each caller, because resolving a name means different things to a
+notification and to a webhook and one function with a mode argument is two
+functions wearing a hat.
+
+**2012 API tests**, 2 skipped (was 1932): 45 without a database, 13 through
+one, 22 over a socket.
+
 ### 258. The notify rule, in the editor, offered to the right people (this session)
 
 §257 built the rule, the delivery and the inbox, and left `notify` reachable
