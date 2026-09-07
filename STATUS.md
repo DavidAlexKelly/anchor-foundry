@@ -4466,8 +4466,37 @@ bad instance id, which is refused *before* the notifications are resolved — so
 has to land in the write, past the point where the recipients were already
 permitted; a source file whose columns are wrong is the cheapest one.
 
-**1924 API tests**, 2 skipped (was 1867): 45 without a database and 14 through
-it.
+**And a permission rule the API tests could not see.** `permitted` read
+`workspace_members` directly, which is narrower than the platform's own rule:
+db 0005 grants workspace access three ways — direct membership, membership
+through a *group*, and being an owner or admin of the organisation. An
+organisation owner is a member of nothing and can see everything, so a
+notification naming them failed p.96's check and took the whole action down
+with it. It asks `effective_workspace_role` now, which is the function RLS
+itself asks.
+
+Every account in the API fixture except the owner and the admin is an ordinary
+org member, which is exactly why that suite could not tell the two rules
+apart — and why the browser suite could, since the account it signs in as is
+the org owner. **The general shape is worth keeping**: a suite whose fixtures
+all sit on one side of a rule cannot see the rule at all, and the tell is that
+a *different* suite, built for a different reason, walks straight into it.
+
+**36 mutants attacked, 36 caught**, including one that puts the membership
+table back.
+
+**The inbox is in the platform bar**, not on a workspace page — p.91's
+Workspace is the app shell, and somebody who works in three workspaces has one
+inbox. Opening the panel marks nothing read: a badge that cleared itself
+because a panel was opened would answer "have you seen this" with "did you
+glance at the bar". And a notification's link is checked against
+`safeReturnPath` before it is drawn as a button, because p.92's handlebars make
+the URL a template and part of a template comes from a property value — a
+notification is the one surface here where somebody else's data becomes a
+control the recipient is invited to click.
+
+**1925 API tests**, 2 skipped (was 1867): 45 without a database and 15 through
+it; **1580 unit tests**; 3 browser tests in `e2e/test_notifications.py`.
 
 ### 256. The ontology listing is a page, and it says so (this session)
 
