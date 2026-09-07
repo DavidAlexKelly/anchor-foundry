@@ -4388,6 +4388,81 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 258. The notify rule, in the editor, offered to the right people (this session)
+
+§257 built the rule, the delivery and the inbox, and left `notify` reachable
+only by posting JSON: the action definition editor offered five rule kinds and
+the executor ran six. A feature the product cannot express is the same shape as
+§252's *implements* column that could never be non-empty. Foundry
+`action-types` p.89-101.
+
+**The reference inserter is why p.94 has a button rather than a hint.**
+"Click on a parameter to generate the `{{{}}}` syntax" — somebody typing three
+braces by hand types two, and two braces are not a reference: the template
+renders literally and nothing on screen says so. The syntax is generated, the
+caret lands after what was inserted so the sentence can continue, and a
+selection is replaced, which is what makes "select the wrong word, click the
+right parameter" work.
+
+**The picker asked a narrower question than the server answers, and that is
+§257's finding read backwards.** Its first version listed
+`/workspaces/{id}/members` — and `workspaces.create` writes no
+`workspace_members` row, so the member list is empty in a workspace somebody
+has just made. The one account certain to be a valid recipient there, the
+person who created it, was the one account the form would not offer. §257's
+bug was the server refusing people it should have taken; this is the form
+refusing to offer them. Same table, same wrong question, opposite side of the
+wire.
+
+`notification_store.notifiable` answers with the same
+`effective_workspace_role` predicate `permitted` filters by, behind
+`GET /workspaces/{id}/notification-recipients`. **The equality is what is
+asserted, not the endpoint**: the offered set, that the membership table is a
+strict *subset* of it, and that every id offered survives p.96's strict mode
+end to end — the mode that refuses the whole action if one recipient cannot
+see the data, so an endpoint offering one person too many fails in a test
+rather than in front of somebody who filled the form in.
+
+**Offering the wrong set is wrong in both directions, and only one of them
+looks like a bug.** Too wide is §214's control that cannot work: a save that
+fails. Too narrow is invisible — the form is simply missing people, and
+nothing anywhere says a name is absent. That asymmetry is why the guard is an
+assertion that the two lists *differ in a specific way* rather than a check
+that the picker is non-empty.
+
+**28 mutants attacked, 28 caught**, after four findings and one withdrawal.
+
+*A clamp with no check that could fail.* `insertReference` clamps its caret
+into the string; the test for a caret past the end asserted only the resulting
+**text**, and appending at 99 and appending at 2 produce the same string. An
+unclamped version passed while reporting a caret of 108 in an eleven-character
+field — and `setSelectionRange` clamps that back, which is exactly why nothing
+downstream would ever have said so. The general shape: when a guard's effect is
+absorbed by something downstream that is also forgiving, the test has to read
+the guard's own output rather than the end of the pipeline.
+
+*Three checks the form did not have*, each named by a survivor. Unchecking
+somebody left them on the list, because a checkbox list that appends on change
+looks right the whole time somebody is adding people. The insert buttons could
+have written the label instead of the reference name — for a parameter the two
+are the same string, so that mutation is invisible on every parameter and
+wrong only on p.101's `Current user`. And switching recipient kind kept the
+previous kind's fields, which the server refuses while naming something no
+longer on screen.
+
+*And one mutant withdrawn as junk* (§193). Modelling "no gate on the endpoint"
+by adding an unused `None`-typed argument models nothing of the sort: the
+dependency stayed, every delivery test passed, and it was killed by an
+unrelated schema check reacting to `None` as a parameter type. **A "caught"
+that is caught for the wrong reason is worth as little as a survivor that
+survives for the wrong one.** The honest weakening of a role gate is a
+different role, and the one that matters is too tight rather than too loose:
+the person writing a notification rule holds `editor`, so an `admin` gate would
+empty the picker for exactly them.
+
+**1932 API tests**, 2 skipped; **1604 unit tests**; 17 browser tests in
+`e2e/test_action_definition_editor.py`.
+
 ### 257. Notifications, and the rule that a side effect is a rule (this session)
 
 Build order item 10's first half, and the first thing in this build that sends
