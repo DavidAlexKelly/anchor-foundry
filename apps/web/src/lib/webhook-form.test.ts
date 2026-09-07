@@ -160,6 +160,22 @@ describe("problem", () => {
     ).toContain("both called");
   });
 
+  it("refuses two outputs with one name", () => {
+    // **The inputs check does not cover this**, and a mutant deleting it
+    // survived until this existed: the two lists are separate loops over
+    // separate sets, and one of them having a guard says nothing about the
+    // other. Any pair of near-identical validations needs both halves checked
+    // for the same reason.
+    expect(
+      problem(draft({
+        outputs: [
+          { api_name: "id", data_type: "string", path: "id" },
+          { api_name: "id", data_type: "string", path: "other" },
+        ],
+      })),
+    ).toContain("both called");
+  });
+
   it("refuses outputs on a HEAD request", () => {
     expect(
       problem(draft({
