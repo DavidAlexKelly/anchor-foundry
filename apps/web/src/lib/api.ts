@@ -508,6 +508,12 @@ export const webhooks = {
       `/workspaces/${wid}/projects/${pid}/webhooks/${id}/test`,
       { method: "POST", body: JSON.stringify({ values }) },
     ),
+  /** Every webhook in the workspace, for the action definition editor's picker
+   * (§262). **Not the project listing**: an action type is a workspace
+   * resource and the server resolves a rule's webhook workspace-wide, so a
+   * picker fed by the narrower one would refuse what the save accepts. */
+  listForWorkspace: (wid: string) =>
+    request<import("./types").Webhook[]>(`/workspaces/${wid}/webhooks`),
   runs: (wid: string, pid: string, id: string) =>
     request<{
       items: import("./types").WebhookRun[];

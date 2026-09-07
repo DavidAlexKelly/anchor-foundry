@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import connections as conn_routes  # noqa: E402
 from src.routes import datasets as ds_routes  # noqa: E402
+from src.services import actions as actions_service  # noqa: E402
 from src.services.secrets import InMemorySecretsGateway  # noqa: E402
 from src.services.storage import LocalStorageGateway  # noqa: E402
 
@@ -819,3 +821,39 @@ def test_a_writeback_whose_webhook_was_deleted_refuses_the_action(
     r = run(client, fx, action, tickets[0], "never-written")
     assert r.status_code == 422, r.text
     assert priority_of(client, fx, ticket_type, tickets[0]) == before
+
+
+def test_the_browser_names_the_output_namespace_the_same_way() -> None:
+    """`lib/webhook-rule.ts` has its own copy of the reserved prefix, and it
+    has to: the editor builds `webhook.<output>` for a rule's parameter field,
+    and a form that guessed would produce a rule the server refuses.
+
+    **Compared against the server's constant rather than against a literal**,
+    so this test cannot drift with the thing it is guarding (§191). What makes
+    the prefix safe is the dot — an api_name has none on either side of the
+    wire — so that is asserted too, on the server's value, which is the one
+    that decides.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "webhook-rule.ts"), encoding="utf-8"
+    ).read()
+    found = re.search(r'OUTPUT_PREFIX = "([^"]+)"', source)
+    assert found, "the reserved prefix is not where this test expects it"
+    assert found.group(1) == actions_service.WEBHOOK_OUTPUT_PREFIX
+    assert "." in actions_service.WEBHOOK_OUTPUT_PREFIX
+
+
+def test_the_browser_offers_the_same_two_modes() -> None:
+    """The other constant the editor decides with. A browser offering a third
+    would offer a save that fails; one offering fewer would hide a mode the
+    executor runs."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "webhook-rule.ts"), encoding="utf-8"
+    ).read()
+    block = re.search(r"export const MODES = \[(.*?)\] as const;", source, re.S)
+    assert block, "MODES is not where this test expects it"
+    assert set(re.findall(r'\["([a-z_]+)",', block.group(1))) == set(
+        actions_service.WEBHOOK_MODES
+    )

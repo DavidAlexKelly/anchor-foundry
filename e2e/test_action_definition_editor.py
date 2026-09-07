@@ -12,6 +12,7 @@ the person editing** rather than disappearing into a rejected promise.
 """
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -182,7 +183,7 @@ def test_a_rename_a_module_depends_on_is_refused_in_the_dialog(page, api):
 
 
 def test_the_editor_offers_the_rule_kinds_that_execute(page, api):
-    """All six, now that all six run (§138, §258).
+    """All seven, now that all seven run (§138, §258, §262).
 
     `delete_object` was held out of this list while the executor refused it -
     an editor must not let somebody save an action that fails the first time it
@@ -200,7 +201,7 @@ def test_the_editor_offers_the_rule_kinds_that_execute(page, api):
     options = kinds.locator("option").all_inner_texts()
     assert options == [
         "Set a property", "Create an object", "Link to an object", "Remove a link",
-        "Delete an object", "Send a notification",
+        "Delete an object", "Send a notification", "Call a webhook",
     ]
 
 
@@ -640,3 +641,203 @@ def test_changing_the_recipient_kind_forgets_the_old_ones_fields(page, api):
     assert stored["rules"][1]["config"]["recipients"] == {
         "kind": "static", "user_ids": [me["user_id"]]
     }
+
+
+# ---- the webhook rule (`action-types` p.105-116; §262) --------------------------
+WEBHOOK_SERVER = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "apps", "api", "tests", "webhook_fixture_server.py",
+)
+
+
+@pytest.fixture(scope="module")
+def webhook_target():
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+    proc = subprocess.Popen(
+        [sys.executable, WEBHOOK_SERVER, str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    for _ in range(60):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.25)
+    else:  # pragma: no cover - environment guard
+        proc.terminate()
+        pytest.skip("fixture server did not start")
+    yield f"http://127.0.0.1:{port}"
+    proc.terminate()
+    proc.wait(timeout=10)
+
+
+def make_webhook(api, mod: Module, target: str, **over) -> dict:
+    connection = api.call(
+        "POST", f"{mod.base}/connections",
+        {"name": f"Target {uuid.uuid4().hex[:6]}", "source_type": "rest",
+         "scope": "project",
+         "config": {"base_url": target, "allow_insecure_http": True},
+         "secret": {}},
+    )
+    payload = {
+        "connection_id": connection["id"],
+        "api_name": f"hook_{uuid.uuid4().hex[:8]}",
+        "display_name": f"Modify ticket {mod.tag}",
+        "method": "POST", "path": "echo",
+        "inputs": [{"api_name": "priority"}],
+        "body": {"priority": "{{{priority}}}"},
+    }
+    payload.update(over)
+    return api.call("POST", f"{mod.base}/webhooks", payload)
+
+
+def add_webhook_rule(page) -> None:
+    page.get_by_role("button", name="Add a rule").click()
+    page.get_by_label("Rule 2 kind").select_option("webhook")
+
+
+def test_the_editor_offers_the_webhook_rule(page, api):
+    """p.113: "select Add new rule, then select Webhook". The sixth kind, and
+    the last one the executor ran without the editor offering it."""
+    mod = build(api, "Action editor webhook kind")
+    open_editor(page, mod)
+    options = page.get_by_label("Rule 1 kind").locator("option").all_inner_texts()
+    assert options[-1] == "Call a webhook"
+
+
+def test_a_webhook_rule_typed_in_the_dialog_saves_and_runs(page, api, webhook_target):
+    """The round trip §262 exists for, checked at the far end of the wire.
+
+    The fixture's `/echo` answers with what it received, so this asserts the
+    *request* the executor made — a rule that saved correctly and mapped its
+    input wrongly would pass a check that only read the definition back.
+    """
+    mod = build(api, "Action editor webhook runs")
+    hook = make_webhook(api, mod, webhook_target)
+    open_editor(page, mod)
+    add_webhook_rule(page)
+
+    page.get_by_test_id("rule-2-webhook").select_option(hook["id"])
+    # The default mode is p.114's, and it is the one that cannot break an
+    # action — so it is asserted rather than chosen.
+    expect(page.get_by_test_id("rule-2-webhook-mode")).to_have_value("side_effect")
+    page.get_by_label("Rule 2 priority parameter").select_option("status")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    stored = definition(api, mod)
+    assert [r["kind"] for r in stored["rules"]] == ["modify_object", "webhook"]
+    assert stored["rules"][1]["config"] == {
+        "webhook": hook["id"], "mode": "side_effect",
+        "inputs": {"priority": {"parameter": "status"}},
+    }
+
+    instance = api.call(
+        "GET",
+        f"/workspaces/{mod.workspace_id}/object-types/{mod.type_id}/instances",
+    )["items"][0]
+    result = api.call(
+        "POST", f"{mod.base}/actions/{mod.action['id']}/execute",
+        {"instance_id": instance["id"], "values": {"status": "closed"}},
+    )
+    assert result["ok"], result
+    runs = api.call("GET", f"{mod.base}/webhooks/{hook['id']}/runs")["items"]
+    assert runs and runs[0]["request_body"]["body"] == {"priority": "closed"}
+
+
+def test_a_required_input_with_no_source_is_named_before_a_save(page, api, webhook_target):
+    """p.107: "you must populate all of its required input parameters."
+
+    Said where the form still is, and the message names the *input* — the
+    server's refusal names it too, but arrives about a form somebody has left.
+    """
+    mod = build(api, "Action editor webhook input")
+    hook = make_webhook(api, mod, webhook_target)
+    open_editor(page, mod)
+    add_webhook_rule(page)
+
+    page.get_by_test_id("rule-2-webhook").select_option(hook["id"])
+    said = page.get_by_test_id("rule-2-webhook-problem")
+    expect(said).to_contain_text("priority")
+    page.get_by_label("Rule 2 priority parameter").select_option("status")
+    expect(said).to_have_count(0)
+
+
+def test_a_static_value_is_offered_beside_a_parameter(page, api, webhook_target):
+    """p.107's other source: "a static value". Its own check because a form
+    that only offered parameters would look complete."""
+    mod = build(api, "Action editor webhook static")
+    hook = make_webhook(api, mod, webhook_target)
+    open_editor(page, mod)
+    add_webhook_rule(page)
+
+    page.get_by_test_id("rule-2-webhook").select_option(hook["id"])
+    page.get_by_label("Rule 2 priority source").select_option("value")
+    page.get_by_label("Rule 2 priority value").fill("fixed")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    assert definition(api, mod)["rules"][1]["config"]["inputs"] == {
+        "priority": {"value": "fixed"}
+    }
+
+
+def test_a_second_writeback_is_refused_beside_the_save_button(page, api, webhook_target):
+    """p.106: "you can only configure a single webhook as a writeback".
+
+    **Beside Save rather than on a rule**, because the rule that breaks it is
+    the second one and neither is wrong on its own. Both halves: the message
+    appears, and Save stops working — a refusal beside a button that still
+    works is a refusal about nothing.
+    """
+    mod = build(api, "Action editor two writebacks")
+    first = make_webhook(api, mod, webhook_target)
+    second = make_webhook(api, mod, webhook_target)
+    open_editor(page, mod)
+
+    add_webhook_rule(page)
+    page.get_by_test_id("rule-2-webhook").select_option(first["id"])
+    page.get_by_test_id("rule-2-webhook-mode").select_option("writeback")
+    page.get_by_role("button", name="Add a rule").click()
+    page.get_by_label("Rule 3 kind").select_option("webhook")
+    page.get_by_test_id("rule-3-webhook").select_option(second["id"])
+    page.get_by_test_id("rule-3-webhook-mode").select_option("writeback")
+
+    expect(page.get_by_test_id("definition-rules-problem")).to_contain_text(
+        "only one writeback"
+    )
+    expect(page.get_by_role("button", name="Save", exact=True)).to_be_disabled()
+
+
+def test_a_writebacks_outputs_are_offered_only_to_rules_below_it(page, api, webhook_target):
+    """p.110's word is **subsequent**, and the dropdown is where that becomes
+    visible rather than a refusal.
+
+    Both directions in one test, because either alone passes against an
+    implementation that offers the outputs everywhere or nowhere.
+    """
+    mod = build(api, "Action editor webhook outputs")
+    hook = make_webhook(
+        api, mod, webhook_target, method="GET", path="created", body=None,
+        inputs=[], outputs=[{"api_name": "unique_id", "path": "results.unique_id"}],
+    )
+    open_editor(page, mod)
+    add_webhook_rule(page)
+    page.get_by_test_id("rule-2-webhook").select_option(hook["id"])
+    page.get_by_test_id("rule-2-webhook-mode").select_option("writeback")
+
+    # Rule 1 is above it, so its parameter picker must not offer the output.
+    above = page.get_by_label("Rule 1 parameter").locator("option").all_inner_texts()
+    assert "webhook.unique_id" not in above
+
+    # A third rule below it must.
+    page.get_by_role("button", name="Add a rule").click()
+    below = page.get_by_label("Rule 3 parameter").locator("option").all_inner_texts()
+    assert "webhook.unique_id" in below
