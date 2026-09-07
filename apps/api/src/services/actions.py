@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
+from . import notifications as notifications_service
 from . import ontology_status
 
 _API_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
@@ -127,6 +128,14 @@ def apply_rules(
             # A different shape of write: `object_creations` adds a row and
             # `deletes_the_subject` removes one, and neither is a property
             # value this function can put in `writes`.
+            continue
+        if kind == "notify":
+            # **Not a write at all** (p.87: "send data out of Foundry"), so it
+            # contributes nothing to `writes` and does not count as writing
+            # elsewhere either - an action whose only rule is a notification
+            # has changed no object, and the emptiness refusal below is right
+            # to say so. The delivery is in the route, because it has to
+            # happen after the write and be decided before it (p.92, p.96).
             continue
         if kind in ("create_link", "delete_link"):
             # **A link here is a property value, not a row** (migration 0027):
@@ -507,6 +516,79 @@ def changes_the_subject(rules: list[dict[str, Any]]) -> bool:
         if kind in ("create_link", "delete_link", "modify_object"):
             return True
     return False
+
+
+def object_parameter_types(
+    rules: list[dict[str, Any]],
+    *,
+    default_object_type_id: Any,
+    parameters: "list[dict[str, Any]] | None" = None,
+) -> dict[str, str]:
+    """`{object parameter api_name: the object type id it holds}`.
+
+    **Read off the rules, because that is the only place it is written.** A
+    parameter of type `object` carries no object type of its own (db 0044);
+    every rule that consumes one says which type it means, in
+    `{"object_type": <id>, "object": <parameter>}`. So the answer to "what
+    shape is this parameter" is the union of what the action's own rules say
+    about it, and there is nothing to keep in step because there is no second
+    copy.
+
+    Needed by notifications (§257): a template saying `{{{alert.priority}}}`
+    has to be checked against a property list, and a recipient read off an
+    object's property has to be read from *some* object type.
+
+    A parameter two rules disagree about takes the **first** rule's answer, in
+    sort order. That is not a resolution of the disagreement - it is a
+    statement that this function does not have one to make: an action whose
+    rules point one parameter at two object types is already refused by those
+    rules' own checks, so the case does not survive a save.
+
+    **An `object` parameter no rule types holds the action's own subject
+    type**, when `parameters` is given. That default is a guess, and it is
+    written down here rather than left implicit because the alternative is
+    worse: a notification saying `{{{alert.priority}}}` about a parameter
+    nothing types renders a gap, and a gap is indistinguishable from a value
+    that happens to be empty. p.99-101's tutorial is exactly this case - the
+    object parameter *is* the object being edited - and the action's own object
+    type is the only type an action definitely has.
+
+    It is a default rather than a fact, so the day `action_parameters` grows an
+    `object_type` column this reads it instead and the guess goes.
+    """
+    out: dict[str, str] = {}
+    for rule in sorted(rules, key=lambda r: (r.get("sort_order") or 0)):
+        config = _json(rule.get("config")) or {}
+        # **Two shapes, because two kinds of rule name an object parameter.**
+        # Five of them put it at `config.object`; a `notify` rule reading a
+        # recipient off an object's property puts it inside `recipients`
+        # (p.100). Both are the same statement - "this parameter holds an
+        # object of that type" - so both belong in the same answer, and a
+        # notify rule whose recipient the renderer could not resolve would
+        # reach nobody at all.
+        # Five kinds put it at `config.object`, where the type is optional and
+        # defaults to the action's own subject type.
+        named = str(config.get("object") or "")
+        if named and named not in out:
+            out[named] = str(config.get("object_type") or default_object_type_id)
+        # A `notify` rule reading a recipient off an object's property (p.100)
+        # puts it inside `recipients`, where the type is **required** - there is
+        # no "the subject" to fall back to, because the whole point of that
+        # recipient kind is that it names an object parameter. A `recipients`
+        # block with a `parameter` and no `object_type` is one of the other two
+        # kinds, whose parameter holds a user id rather than an object.
+        recipients = config.get("recipients")
+        if isinstance(recipients, dict) and recipients.get("object_type"):
+            held = str(recipients.get("parameter") or "")
+            if held and held not in out:
+                out[held] = str(recipients["object_type"])
+    for parameter in parameters or []:
+        if str(parameter.get("data_type")) != "object":
+            continue
+        name = str(parameter.get("api_name") or "")
+        if name and name not in out:
+            out[name] = str(default_object_type_id)
+    return out
 
 
 def deletes_the_subject(rules: list[dict[str, Any]]) -> bool:
@@ -1487,8 +1569,18 @@ _UNSUPPORTED_PARAMETER_TYPES = {
         "(object-link-types p.149-150)"
     ),
 }
+#: p.75's five, plus p.89's side effect.
+#:
+#: **`notify` is a rule and not a resource of its own**, because p.89 puts it
+#: in the same *Add new rule* dropdown as the other five: "Notifications can be
+#: added to an action through the Add new rule dropdown menu." A rule is a
+#: thing an action does when it runs, and one that sends a message is not a
+#: different category from one that sets a property. Its config's shape is
+#: checked by `services/notifications.parse`, like every other kind's is
+#: checked here.
 _RULE_KINDS = frozenset(
-    {"modify_object", "create_object", "delete_object", "create_link", "delete_link"}
+    {"modify_object", "create_object", "delete_object", "create_link",
+     "delete_link", "notify"}
 )
 _USER_ATTRIBUTES = frozenset({"id", "group_ids"})
 
@@ -1679,6 +1771,26 @@ def _validate_definition(
                         f"a create_object rule sets {prop!r}, which is not a property of "
                         "the object type it creates"
                     )
+            continue
+        if kind == "notify":
+            # The whole of the shape is `services/notifications`, which is a
+            # pure module with its own tests - this is the two facts it needs
+            # about *this* action that it cannot know for itself.
+            try:
+                notifications_service.parse(
+                    config,
+                    parameters={
+                        str(p.get("api_name", "")): str(p.get("data_type", ""))
+                        for p in parameters
+                    },
+                    workspace_properties=workspace_properties,
+                    object_parameter_types=object_parameter_types(
+                        rules, default_object_type_id=object_type_id,
+                        parameters=parameters,
+                    ),
+                )
+            except notifications_service.NotificationError as exc:
+                raise ValueError(str(exc)) from exc
             continue
         if kind in ("create_link", "delete_link"):
             link = (link_types or {}).get(str(config.get("link_type", "")))

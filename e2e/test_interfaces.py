@@ -23,6 +23,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import WEB_BASE
+from ontology_page import find_type_row, pick_type
 
 VEHICLES = [
     {"id": "V1", "name": "Truck", "checked_on": "2026-01-04"},
@@ -125,7 +126,9 @@ def test_a_type_implements_a_shape_through_a_column_of_another_name(page, module
     ])
 
     page.get_by_role("button", name=f"Implement {api_name}").click()
-    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    pick_type(page, "impl-type", {
+        "id": module.object_type_id, "api_name": f"seed_{module.tag}",
+    })
 
     rows = page.get_by_test_id("impl-rows")
     expect(rows).to_be_visible(timeout=15000)
@@ -154,7 +157,9 @@ def test_a_type_implements_a_shape_through_a_column_of_another_name(page, module
     expect(page.get_by_test_id(f"iface-impls-{api_name}")).to_have_text(
         "1 object type", timeout=15000
     )
-    # §252's column, on the row it describes.
+    # §252's column, on the row it describes — found by searching, because the
+    # table is a page since §256.
+    find_type_row(page, f"seed_{module.tag}")
     expect(page.get_by_test_id(f"type-interfaces-seed_{module.tag}")).to_contain_text(
         name
     )
@@ -171,7 +176,9 @@ def test_an_implemented_interface_cannot_be_deleted_out_from_under_the_type(
         ("Last inspection date", "date", True),
     ])
     page.get_by_role("button", name=f"Implement {api_name}").click()
-    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    pick_type(page, "impl-type", {
+        "id": module.object_type_id, "api_name": f"seed_{module.tag}",
+    })
     page.get_by_role(
         "combobox", name="Answered by for last_inspection_date"
     ).select_option("checked_on")
@@ -203,7 +210,9 @@ def test_claiming_a_second_shape_does_not_withdraw_the_first(page, module):
                      properties=[("Tracking tag", "string", True)])
 
     page.get_by_role("button", name=f"Implement {first}").click()
-    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    pick_type(page, "impl-type", {
+        "id": module.object_type_id, "api_name": f"seed_{module.tag}",
+    })
     page.get_by_role(
         "combobox", name="Answered by for last_inspection_date"
     ).select_option("checked_on")
@@ -213,7 +222,9 @@ def test_claiming_a_second_shape_does_not_withdraw_the_first(page, module):
     )
 
     page.get_by_role("button", name=f"Implement {second}").click()
-    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    pick_type(page, "impl-type", {
+        "id": module.object_type_id, "api_name": f"seed_{module.tag}",
+    })
     page.get_by_role(
         "combobox", name="Answered by for tracking_tag"
     ).select_option("name")
@@ -224,6 +235,7 @@ def test_claiming_a_second_shape_does_not_withdraw_the_first(page, module):
     )
     # The claim that would have gone silently.
     expect(page.get_by_test_id(f"iface-impls-{first}")).to_have_text("1 object type")
+    find_type_row(page, f"seed_{module.tag}")
     expect(
         page.get_by_test_id(f"type-interfaces-seed_{module.tag}")
     ).to_contain_text(first_name)
@@ -246,7 +258,15 @@ def test_an_active_interface_offers_no_delete_button(page, module):
     page.get_by_test_id("status-select").select_option("active")
     page.get_by_test_id("iface-save").click()
 
-    expect(page.get_by_test_id("iface-table")).to_contain_text("active", timeout=15000)
+    # **This interface's own badge, not the word anywhere in the table.**
+    # `to_contain_text("active")` passed against a *different* interface's row
+    # left behind by an earlier run - so the wait finished before this row had
+    # refreshed, and the Delete assertion below then read the old status. A
+    # full browser run found it; the file on its own never did.
+    row = page.get_by_test_id("iface-table").locator("tbody tr").filter(
+        has_text=api_name
+    )
+    expect(row.get_by_test_id("status-badge-active")).to_be_visible(timeout=15000)
     expect(page.get_by_role("button", name=f"Delete {api_name}")).to_be_disabled()
 
     # Back to experimental, so the run's sweep can take it: a cleanup that
@@ -274,7 +294,9 @@ def test_the_implementing_types_answer_one_question_together(page, module):
         ("Last inspection date", "date", True),
     ])
     page.get_by_role("button", name=f"Implement {api_name}").click()
-    page.get_by_test_id("impl-type").select_option(label=f"Seed {module.tag}")
+    pick_type(page, "impl-type", {
+        "id": module.object_type_id, "api_name": f"seed_{module.tag}",
+    })
     page.get_by_role(
         "combobox", name="Answered by for last_inspection_date"
     ).select_option("checked_on")

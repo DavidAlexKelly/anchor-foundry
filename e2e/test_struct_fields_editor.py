@@ -27,6 +27,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import WEB_BASE, eventually
+from ontology_page import find_type_row
 
 ADDRESS = json.dumps({"street": "12 Main St", "postal_code": "N1 9GU", "floors": "3"})
 CONTACT = json.dumps({"name": "A. Nother", "phone": "020 7946 0000"})
@@ -74,8 +75,7 @@ def properties(api, module) -> dict[str, dict]:
 
 def open_type_editor(page, module) -> None:
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
-    expect(row).to_be_visible(timeout=30000)
+    row = find_type_row(page, f"seed_{module.tag}")
     row.get_by_role("button", name="Edit").click()
     expect(page.get_by_role("textbox", name="Property 1 name")).to_be_visible()
 

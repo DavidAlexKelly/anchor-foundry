@@ -17,7 +17,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  groupSummary, memberSummary, sameSelection, toGroupApiName, toggleSelection,
+  groupSummary, memberFirst, memberSummary, sameSelection, toGroupApiName,
+  toggleSelection,
 } from "./object-type-groups";
 
 function refs(...names: string[]) {
@@ -119,5 +120,37 @@ describe("toGroupApiName", () => {
 
   it("survives a name with nothing usable in it", () => {
     expect(toGroupApiName("!!!")).toBe("");
+  });
+});
+
+
+describe("memberFirst", () => {
+  const page = [{ id: "a" }, { id: "b" }];
+
+  it("draws a member the page did not reach", () => {
+    // **The invariant §256 needs.** The type listing is bounded, so a group's
+    // member may not be on the editor's page — and a ticked box that is not
+    // drawn is a membership nobody can remove and a group that reads as
+    // smaller than it is.
+    const out = memberFirst(page, [{ id: "z" }], ["z"]);
+    expect(out.map((t) => t.id)).toEqual(["z", "a", "b"]);
+  });
+
+  it("does not draw a member twice when the page already holds it", () => {
+    expect(memberFirst(page, [{ id: "a" }], ["a"]).map((t) => t.id)).toEqual([
+      "a", "b",
+    ]);
+  });
+
+  it("pins only what is currently ticked, not every saved member", () => {
+    // A member unticked this session is on its way out; pinning it would keep
+    // it at the top of the list after somebody has said to remove it.
+    expect(memberFirst(page, [{ id: "z" }], []).map((t) => t.id)).toEqual([
+      "a", "b",
+    ]);
+  });
+
+  it("is the page itself when nothing is a member", () => {
+    expect(memberFirst(page, [], [])).toEqual(page);
   });
 });

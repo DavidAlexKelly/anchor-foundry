@@ -26,6 +26,7 @@ from playwright.sync_api import expect
 
 from api import Api
 from conftest import API_BASE, FIRST_RENDER_MS, TOKENS_FILE, WEB_BASE
+from ontology_page import find_type_row
 
 ROWS = [{"id": "R1", "name": "Ada"}, {"id": "R2", "name": "Grace"}]
 
@@ -66,8 +67,7 @@ def editor_page(browser, editor_token: str):
 
 def open_editor(page, module) -> None:
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
-    expect(row).to_be_visible(timeout=30000)
+    row = find_type_row(page, f"seed_{module.tag}")
     row.get_by_role("button", name="Edit").click()
     expect(page.get_by_test_id("status-select")).to_be_visible(timeout=15000)
 

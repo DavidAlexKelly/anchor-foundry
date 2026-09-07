@@ -22,6 +22,7 @@ from ..middleware.permissions import (
     require_workspace_role,
 )
 from ..services import audit
+from ..services import notification_store
 from ..services import workspaces as ws_service
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -67,6 +68,19 @@ class MemberOut(BaseModel):
     group_id: UUID | None
     group_name: str | None
     created_at: datetime
+
+
+class RecipientOut(BaseModel):
+    """One person a notification rule may name (`action-types` p.95, §258).
+
+    Deliberately not a `MemberOut`: there is no membership row behind this and
+    so no `id`, `role` or `added_at` to report. Reusing the member shape would
+    have meant inventing those three, and an invented role is a field somebody
+    would eventually read.
+    """
+    id: UUID
+    email: str | None
+    display_name: str | None
 
 
 class MemberAdd(BaseModel):
@@ -188,6 +202,28 @@ async def list_members(
     async with user_connection(access.auth.user_id) as conn:
         rows = await ws_service.list_members(conn, access.workspace_id)
     return [MemberOut(**row) for row in rows]
+
+
+@router.get(
+    "/{workspace_id}/notification-recipients", response_model=list[RecipientOut]
+)
+async def list_notification_recipients(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[RecipientOut]:
+    """Who a notification rule in this workspace may name (`action-types` p.95).
+
+    **Not `/members`, and the difference is the point.** The membership table
+    is one of db 0005's three routes to access; a workspace's creator uses
+    none of them and can still see everything, so the members list is empty in
+    a workspace somebody has just made. A recipient picker fed by it would
+    offer nobody in exactly the workspace where a rule is being written.
+
+    Viewer, because seeing who else can see a workspace is not more than
+    seeing the workspace.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await notification_store.notifiable(conn, workspace_id=access.workspace_id)
+    return [RecipientOut(**row) for row in rows]
 
 
 @router.post(

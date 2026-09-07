@@ -29,7 +29,10 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, Field } from "@/components/dialog";
 import { ApiError, objects as objApi, type ObjectTypeGroupInput } from "@/lib/api";
-import { memberSummary, toGroupApiName, toggleSelection } from "@/lib/object-type-groups";
+import {
+  memberFirst, memberSummary, toGroupApiName, toggleSelection,
+} from "@/lib/object-type-groups";
+import { needsSearch, truncationNote } from "@/lib/type-picker";
 import type { ObjectTypeGroup } from "@/lib/types";
 
 /** p.261's create, and the rename beside it. One dialog, because the fields
@@ -139,9 +142,14 @@ function MembersDialog({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
+  // **Searched rather than listed** (§256). This used to draw a checkbox for
+  // every object type in the workspace; the listing is a page now, and a
+  // membership editor that silently stopped at fifty would show a group of
+  // sixty as a group of fifty with no way to tell.
+  const [query, setQuery] = useState("");
   const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objApi.listTypes(workspaceId),
+    queryKey: ["object-types", workspaceId, query],
+    queryFn: () => objApi.listTypes(workspaceId, undefined, { q: query || null }),
   });
   const members = useQuery({
     queryKey: ["object-type-group-members", workspaceId, group.id],
@@ -171,15 +179,31 @@ function MembersDialog({
 
   return (
     <Dialog open title={`Object types in ${group.display_name}`} onClose={onClose}>
-      {types.data && types.data.length === 0 && (
+      {needsSearch(types.data?.total ?? 0, query) && (
+        <input
+          type="search"
+          data-testid="group-member-search"
+          aria-label="Search object types"
+          placeholder="Search object types…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ width: "100%", marginBottom: 8 }}
+        />
+      )}
+      {types.data && types.data.total === 0 && !query.trim() && (
         <p className="field-hint">
           There are no object types yet — a group is somewhere to put them once
           there are.
         </p>
       )}
-      {types.data && types.data.length > 0 && current && (
+      {types.data && current && (
         <div data-testid="group-member-picker">
-          {types.data.map((t) => (
+          {/* **Current members first, and always drawn**, whatever the search
+              or the page says. A member the page did not reach is a tick
+              somebody cannot untick, and a group that reads as smaller than it
+              is — the same invariant `withSelected` keeps for the single
+              picker one file over. */}
+          {memberFirst(types.data.items, members.data ?? [], current).map((t) => (
             <label key={t.id} style={{ display: "block", padding: "3px 0" }}>
               <input
                 type="checkbox"
@@ -191,6 +215,11 @@ function MembersDialog({
             </label>
           ))}
         </div>
+      )}
+      {types.data && types.data.total > types.data.items.length && (
+        <p className="field-hint" data-testid="group-member-note">
+          {truncationNote(types.data.items.length, types.data.total)}
+        </p>
       )}
       {save.isError && (
         <p className="field-hint" data-testid="group-members-error">

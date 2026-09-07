@@ -42,6 +42,7 @@ import {
   apply, DEFINITION_TYPES, partition,
   SETTINGS, type DefinitionType, type SettingName,
 } from "./variable-finder";
+import { TypePicker } from "@/components/type-picker";
 
 /** Mirrors `SAVABLE_KINDS` in `services/workshop_variables.py` (p.205). */
 const SAVABLE_KINDS = [
@@ -1210,10 +1211,9 @@ function ObjectSetEditor({
   readOnly: boolean;
   onChange: (next: WorkshopVariable) => void;
 }) {
-  const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objectsApi.listTypes(workspaceId),
-  });
+  // The type list used to be fetched here for a `<select>` of every type in
+  // the workspace. `TypePicker` owns that read now (§256), because the read is
+  // a page and a picker has to be able to search past it.
   const base = (variable.object_set ?? null) as
     | { object_type_id?: string; filters?: unknown[] }
     | null;
@@ -1308,23 +1308,18 @@ function ObjectSetEditor({
       {!derived ? (
         <label>
           Object type
-          <select
+          <TypePicker
+            workspaceId={workspaceId}
             value={base?.object_type_id ?? ""}
             disabled={readOnly}
-            onChange={(e) =>
+            placeholder="Choose…"
+            onChange={(id) =>
               onChange({
                 ...variable,
-                object_set: { object_type_id: e.target.value, filters: [] },
+                object_set: { object_type_id: id, filters: [] },
               })
             }
-          >
-            <option value="">Choose…</option>
-            {types.data?.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.display_name}
-              </option>
-            ))}
-          </select>
+          />
         </label>
       ) : traversing ? (
         <>

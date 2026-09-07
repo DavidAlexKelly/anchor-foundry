@@ -16,6 +16,7 @@ import {
   objects as objApi,
 } from "@/lib/api";
 import { eventsOf, layoutOf, variablesOf } from "@/lib/workshop-module";
+import { TypePicker } from "@/components/type-picker";
 import { VariableBridge } from "./VariableBridge";
 import { WidgetSetup } from "./WidgetSetup";
 import { StyleFields } from "./StyleFields";
@@ -4700,10 +4701,9 @@ function ObjectTableSettings() {
   // in the middle. Offering object-set variables would invite binding the
   // derived one and overwriting the thing that derives it.
   const clauseVariables = Object.values(declared).filter((v) => v.kind === "array");
-  const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objApi.listTypes(workspaceId),
-  });
+  // `TypePicker` owns the object type read now (§256): the listing is a page,
+  // so a control over it has to be able to search the ontology rather than the
+  // rows it happened to receive.
   // **Either half of p.65's choice**, because p.223's sort picker needs the
   // declared properties whichever way this widget was populated: a directly
   // picked object type, or the one behind a bound object set. Before §231 the
@@ -4775,21 +4775,20 @@ function ObjectTableSettings() {
       </label>
       <label className="field">
         <span className="field-label">Object type</span>
-        <select
-          disabled={!!objectSetVariable}
+        {/* §256: the listing behind this is a page, so the control searches
+            the ontology rather than the fifty rows it happened to receive. */}
+        <TypePicker
+          workspaceId={workspaceId}
           value={objectTypeId || ""}
-          onChange={(e) =>
+          disabled={!!objectSetVariable}
+          placeholder="Choose…"
+          onChange={(id) =>
             setProp((p: Record<string, unknown>) => {
-              p.objectTypeId = e.target.value || null;
+              p.objectTypeId = id || null;
               p.filterProperty = null;  // property names are per-type
             })
           }
-        >
-          <option value="">Choose…</option>
-          {types.data?.map((t) => (
-            <option key={t.id} value={t.id}>{t.display_name}</option>
-          ))}
-        </select>
+        />
       </label>
       <label className="field">
         <span className="field-label">Filter property</span>
@@ -5256,10 +5255,9 @@ function ObjectSetTitleSettings() {
   }));
   const { declared } = useCanvasVariables();
   const setVariables = Object.values(declared).filter((v) => v.kind === "object_set");
-  const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objApi.listTypes(workspaceId),
-  });
+  // `TypePicker` owns the object type read now (§256): the listing is a page,
+  // so a control over it has to be able to search the ontology rather than the
+  // rows it happened to receive.
 
   return (
     <WidgetSetup
@@ -5333,18 +5331,15 @@ function ObjectSetTitleSettings() {
       {renderWhenEmptyOf(renderWhenEmpty) && (
         <label className="field">
           <span className="field-label">Placeholder object type</span>
-          <select
+          <TypePicker
+            workspaceId={workspaceId}
+            testId="set-title-placeholder"
             value={placeholderTypeId || ""}
-            data-testid="set-title-placeholder"
-            onChange={(e) =>
+            placeholder="None"
+            onChange={(id) =>
               setProp((p: { placeholderTypeId: string | null }) =>
-                (p.placeholderTypeId = e.target.value || null))}
-          >
-            <option value="">None</option>
-            {(types.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>{t.display_name}</option>
-            ))}
-          </select>
+                (p.placeholderTypeId = id || null))}
+          />
           <span className="field-hint">
             Named so an empty widget still says what it would have shown
           </span>
@@ -10549,11 +10544,9 @@ function MapSettings() {
     (declared[objectSetVariable ?? ""]?.object_set as { object_type_id?: string } | undefined)
       ?.object_type_id ?? null;
   const effectiveTypeId = objectSetVariable ? setTypeId : objectTypeId;
-  const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objApi.listTypes(workspaceId),
-    enabled: source === "objects",
-  });
+  // `TypePicker` owns the object type read now (§256): the listing is a page,
+  // so a control over it has to be able to search the ontology rather than the
+  // rows it happened to receive.
   const detail = useQuery({
     queryKey: ["object-type", effectiveTypeId],
     queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
@@ -10629,22 +10622,19 @@ function MapSettings() {
           </label>
           <label className="field" hidden={!!objectSetVariable}>
             <span className="field-label">Object type</span>
-            <select
+            <TypePicker
+              workspaceId={workspaceId}
               value={objectTypeId || ""}
-              onChange={(e) =>
+              placeholder="Choose…"
+              onChange={(id) =>
                 setProp((p: Record<string, unknown>) => {
-                  p.objectTypeId = e.target.value || null;
+                  p.objectTypeId = id || null;
                   p.locationProperty = null;
                   p.labelProperty = null;
                   p.filterProperty = null;
                 })
               }
-            >
-              <option value="">Choose…</option>
-              {types.data?.map((t) => (
-                <option key={t.id} value={t.id}>{t.display_name}</option>
-              ))}
-            </select>
+            />
           </label>
         </>
       ) : (

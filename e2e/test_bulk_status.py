@@ -22,6 +22,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import WEB_BASE
+from ontology_page import find_type_row
 
 ROWS = [{"id": "R1", "name": "Ada"}, {"id": "R2", "name": "Grace"}]
 
@@ -56,6 +57,14 @@ def open_objects(page, module) -> None:
 
 
 def select(page, api_name: str) -> None:
+    """Tick one type's checkbox, searching for its row first (§256).
+
+    The table is a page of the ontology now, and this suite's workspace holds
+    hundreds of types — so a checkbox is only on screen if its row was asked
+    for. Ticks survive the search being changed, because the selection is a
+    `Set` of ids on the page rather than a property of the rendered rows.
+    """
+    find_type_row(page, api_name)
     page.get_by_test_id(f"select-{api_name}").check()
 
 

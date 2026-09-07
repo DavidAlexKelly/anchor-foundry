@@ -16,6 +16,7 @@ from playwright.sync_api import expect
 
 from api import ApiError, Module
 from conftest import WEB_BASE, eventually
+from ontology_page import find_type_row
 
 # One row complies, two do not - so a count of 2 cannot come from an off-by-one
 # and cannot come from "all of them".
@@ -161,8 +162,7 @@ def test_the_ontology_manager_can_turn_it_on(page, module):
     """The flag has been displayed since the Ontology Manager was built and was
     not settable. A rule nobody can configure is a rule nobody has."""
     page.goto(f"{WEB_BASE}/{module.workspace_slug}/{module.project_slug}/objects")
-    row = page.locator("tbody tr").filter(has_text=f"site_{module.tag}").first
-    expect(row).to_be_visible(timeout=30000)
+    row = find_type_row(page, f"site_{module.tag}")
     row.get_by_role("button", name="Edit").click()
     checkbox = page.get_by_label("Property 1 required", exact=True)
     expect(checkbox).to_be_visible()

@@ -27,6 +27,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
+import { NotifyRuleFields } from "@/components/notify-rule-fields";
+import { TypePicker } from "@/components/type-picker";
+import { NotifyConfig, blankNotifyConfig, problem as notifyProblem } from "@/lib/notify-rule";
 import { actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
 import type { ActionType } from "@/lib/types";
 
@@ -42,6 +45,11 @@ const PARAMETER_TYPES = [
  * All five now (§138). `delete_object` was held back while the executor
  * refused it, on the rule that an editor must not let somebody save an action
  * which fails the first time it is clicked; it arrived here the day it ran.
+ *
+ * **And p.89's sixth** (§258). "Notifications can be added to an action
+ * through the Add new rule dropdown menu" — so a notification is a rule here
+ * for the same reason it is one in the database. It arrived a unit after the
+ * executor could run it, which is the same rule `delete_object` waited on.
  */
 const RULE_KINDS = [
   ["modify_object", "Set a property"],
@@ -49,6 +57,7 @@ const RULE_KINDS = [
   ["create_link", "Link to an object"],
   ["delete_link", "Remove a link"],
   ["delete_object", "Delete an object"],
+  ["notify", "Send a notification"],
 ];
 
 /** p.54–55's operators, named as Foundry names them. */
@@ -136,10 +145,10 @@ export function ActionDefinitionEditor({
   // a given rule names are fetched by `PropertySelect`, because carrying every
   // property of every type here to answer one dropdown would be the list
   // endpoint doing a detail endpoint's job.
-  const types = useQuery({
-    queryKey: ["object-types", workspaceId],
-    queryFn: () => objApi.listTypes(workspaceId),
-  });
+  // The type list used to be fetched here for two `<select>`s of every type in
+  // the workspace. `TypePicker` owns that read now (§256): the listing is a
+  // page, so a control over it has to search the ontology rather than the rows
+  // it happened to receive.
 
   const links = useQuery({
     queryKey: ["link-types", workspaceId],
@@ -350,7 +359,24 @@ export function ActionDefinitionEditor({
                       // `property` on a link rule is a field the server would
                       // refuse for a reason nobody could see on screen.
                       setRules(rules.map((rule, j) =>
-                        j === i ? { kind: e.target.value, config: {} } : rule))
+                        j === i
+                          ? {
+                              kind: e.target.value,
+                              // A notify rule's empty config is not `{}`, and
+                              // not because `{}` would fail `problem` — a blank
+                              // one fails it too, on purpose, because p.89
+                              // requires recipients and content and neither has
+                              // been chosen yet. It is because the fields below
+                              // are *selects*, and a select whose value is
+                              // `undefined` is an uncontrolled one that shows
+                              // its first option while holding nothing. The
+                              // blank config is what makes the form agree with
+                              // itself on the first render.
+                              config: e.target.value === "notify"
+                                ? (blankNotifyConfig() as unknown as Record<string, unknown>)
+                                : {},
+                            }
+                          : rule))
                     }
                   >
                     {RULE_KINDS.map(([value, label]) => (
@@ -362,16 +388,14 @@ export function ActionDefinitionEditor({
                 {(r.kind === "modify_object" || r.kind === "delete_object") && (
                   <>
                     <Field label="On">
-                      <select
+                      <TypePicker
+                        workspaceId={workspaceId}
                         value={config.object_type ? ruleTypeId : ""}
-                        aria-label={`Rule ${i + 1} object type`}
-                        onChange={(e) => retarget(e.target.value)}
-                      >
-                        <option value="">This object</option>
-                        {(types.data ?? []).map((t) => (
-                          <option key={t.id} value={t.id}>{t.display_name}</option>
-                        ))}
-                      </select>
+                        label={`Rule ${i + 1} object type`}
+                        testId={`rule-${i + 1}-object-type`}
+                        placeholder="This object"
+                        onChange={retarget}
+                      />
                     </Field>
                     {!!config.object_type && (
                       <Field label="Which one">
@@ -428,19 +452,17 @@ export function ActionDefinitionEditor({
                         project (§139); the properties below then come from
                         *that* type, which is what the server checks against. */}
                     <Field label="Of type">
-                      <select
+                      <TypePicker
+                        workspaceId={workspaceId}
                         value={config.object_type ? ruleTypeId : ""}
-                        aria-label={`Rule ${i + 1} creates type`}
-                        onChange={(e) => {
+                        label={`Rule ${i + 1} creates type`}
+                        testId={`rule-${i + 1}-creates-type`}
+                        placeholder="This object type"
+                        onChange={(id) => {
                           const { object_type: _t, properties: _p, ...rest } = config;
-                          patch(e.target.value ? { ...rest, object_type: e.target.value } : rest);
+                          patch(id ? { ...rest, object_type: id } : rest);
                         }}
-                      >
-                        <option value="">This object type</option>
-                        {(types.data ?? []).map((t) => (
-                          <option key={t.id} value={t.id}>{t.display_name}</option>
-                        ))}
-                      </select>
+                      />
                     </Field>
                     {/* The primary key is separate because it is not a
                         property - an object's identity lives in a dataset
@@ -576,6 +598,39 @@ export function ActionDefinitionEditor({
                   Remove
                 </button>
               </div>
+              {r.kind === "notify" && (
+                <>
+                  <NotifyRuleFields
+                    workspaceId={workspaceId}
+                    index={i + 1}
+                    parameters={parameters}
+                    config={config as unknown as NotifyConfig}
+                    onChange={(next) =>
+                      patch(next as unknown as Record<string, unknown>)
+                    }
+                  />
+                  {/* Said here rather than on Save, because a refusal that
+                      arrives on Save is a refusal about a form somebody has
+                      already left. The server refuses the same cases and
+                      several this cannot see — this is the subset a form can
+                      answer without the ontology. */}
+                  {(() => {
+                    const said = notifyProblem(
+                      config as unknown as NotifyConfig,
+                      parameters.map((p) => p.api_name),
+                    );
+                    return said ? (
+                      <p
+                        className="field-hint"
+                        data-testid={`rule-${i + 1}-problem`}
+                        style={{ color: "var(--danger)" }}
+                      >
+                        {said}
+                      </p>
+                    ) : null;
+                  })()}
+                </>
+              )}
               {(r.kind === "create_link" || r.kind === "delete_link") &&
                 settableLinks.length === 0 && (
                   <p className="field-hint">

@@ -103,6 +103,19 @@ export const api = {
   orgGroups: () => request<import("./types").Group[]>("/org/groups"),
   workspaces: () => request<WorkspaceSummary[]>("/workspaces"),
   workspace: (id: string) => request<WorkspaceDetail>(`/workspaces/${id}`),
+  /** Who a notification rule in this workspace may name (`action-types` p.95,
+   * §258).
+   *
+   * **Not `/members`.** The membership table is one of db 0005's three routes
+   * to a workspace and a creator uses none of them, so the member list is
+   * empty in a workspace somebody has just made — a picker fed by it offered
+   * nobody in exactly the workspace where a rule gets written. This endpoint
+   * answers with the same predicate p.96's check applies at send time, so what
+   * the form offers is what the server will take. */
+  notificationRecipients: (wid: string) =>
+    request<import("./types").NotificationRecipient[]>(
+      `/workspaces/${wid}/notification-recipients`,
+    ),
   projects: (workspaceId: string) =>
     request<ProjectSummary[]>(`/workspaces/${workspaceId}/projects`),
   project: (workspaceId: string, projectId: string) =>
@@ -922,14 +935,34 @@ export const objects = {
     filters?: {
       status?: import("./types").OntologyStatus | null;
       visibility?: import("./types").PropertyVisibility | null;
+      /** Matched against the display name and the api name. The reason this
+       * endpoint has a search at all is that it also has a `limit`: a picker
+       * that can only show fifty types has to be able to find the fifty-first.
+       */
+      q?: string | null;
+      /** Exactly these types. For a screen that has already chosen some and
+       * has to read them back now that the listing is a page. */
+      ids?: readonly string[];
+      limit?: number;
+      offset?: number;
     },
   ) => {
     const query = new URLSearchParams();
     if (groupId) query.set("group_id", groupId);
     if (filters?.status) query.set("status", filters.status);
     if (filters?.visibility) query.set("visibility", filters.visibility);
+    if (filters?.q) query.set("q", filters.q);
+    for (const id of filters?.ids ?? []) query.append("ids", id);
+    if (filters?.limit !== undefined) query.set("limit", String(filters.limit));
+    if (filters?.offset) query.set("offset", String(filters.offset));
     const search = query.toString();
-    return request<import("./types").ObjectTypeSummary[]>(
+    // **A page, not a list, and every caller sees the total.** The endpoint
+    // was unbounded until §256 — every type in the workspace, on every read,
+    // from eight call sites — and a bounded list on its own truncates
+    // silently, which is worse than the slow version it replaces. The shape
+    // change is the point: nothing can now read this without being handed the
+    // number it would need to notice it is showing a page.
+    return request<import("./types").ObjectTypePage>(
       `/workspaces/${wid}/object-types${search ? `?${search}` : ""}`,
     );
   },
@@ -1311,6 +1344,32 @@ export interface ActionDefinitionInput {
   rules: { kind: string; config: Record<string, unknown> }[];
   criteria: { message: string; config: Record<string, unknown> }[];
 }
+
+/** Somebody's notifications (Foundry `action-types` p.91; §257).
+ *
+ * **No workspace in the path**, which is p.91's shape rather than a shortcut:
+ * a notification is addressed to a person, and somebody who works in three
+ * workspaces has one inbox. Access is RLS on the connection, so there is no id
+ * to pass and no id that could be passed wrongly. */
+export const notifications = {
+  list: (opts: { limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (opts.limit !== undefined) query.set("limit", String(opts.limit));
+    if (opts.offset) query.set("offset", String(opts.offset));
+    const search = query.toString();
+    return request<import("./types").NotificationPage>(
+      `/notifications${search ? `?${search}` : ""}`,
+    );
+  },
+  /** The badge. Its own endpoint because it is asked on every page load and
+   * the listing is asked on one. */
+  unread: () => request<{ unread: number }>("/notifications/unread"),
+  markRead: (id: string) =>
+    request<{ unread: number }>(`/notifications/${id}/read`, { method: "POST" }),
+  /** p.91's "See All", which is where somebody clears the badge. */
+  markAllRead: () =>
+    request<{ unread: number }>("/notifications/read", { method: "POST" }),
+};
 
 export const actions = {
   listTypes: (wid: string, objectTypeId?: string) =>

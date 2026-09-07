@@ -29,6 +29,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, Field } from "@/components/dialog";
 import { PROPERTY_TYPES } from "@/components/object-type-editor";
 import { StatusBadge, StatusField } from "@/components/status-field";
+import { TypePicker } from "@/components/type-picker";
 import { ApiError, objects as objApi } from "@/lib/api";
 import {
   DraftProperty, blankProperty, candidates, draftProblem, extendable,
@@ -375,12 +376,10 @@ function InterfaceDialog({
 function ImplementDialog({
   workspaceId,
   iface,
-  types,
   onClose,
 }: {
   workspaceId: string;
   iface: InterfaceSummary;
-  types: ObjectTypeSummary[];
   onClose: () => void;
 }) {
   const [typeId, setTypeId] = useState("");
@@ -450,16 +449,18 @@ function ImplementDialog({
         match — that is the point (p.66).
       </p>
       <Field label="Object type">
-        <select
-          data-testid="impl-type"
+        {/* §256: the page above is a page of the ontology, so this reads for
+            itself. Taking the list as a prop made this dialog able to offer
+            only whatever fifty types the table happened to be drawing — and a
+            different fifty once a filter was on, which is worse than a fixed
+            fifty because it moves. */}
+        <TypePicker
+          workspaceId={workspaceId}
+          testId="impl-type"
           value={typeId}
-          onChange={(e) => setTypeId(e.target.value)}
-        >
-          <option value="">Choose one…</option>
-          {types.map((t) => (
-            <option key={t.id} value={t.id}>{t.display_name}</option>
-          ))}
-        </select>
+          placeholder="Choose one…"
+          onChange={setTypeId}
+        />
       </Field>
 
       {typeId && effective.length === 0 && (
@@ -687,14 +688,9 @@ function ObjectsDialog({
 export function InterfacesPanel({
   workspaceId,
   canEdit,
-  types,
 }: {
   workspaceId: string;
   canEdit: boolean;
-  /** The workspace's object types, for the implement dialog. Passed in rather
-   * than fetched again: the page above already has them, and a second copy
-   * would be a second answer to "which types exist" on one screen. */
-  types: ObjectTypeSummary[];
 }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -738,7 +734,6 @@ export function InterfacesPanel({
         <ImplementDialog
           workspaceId={workspaceId}
           iface={implementing}
-          types={types}
           onClose={() => setImplementing(null)}
         />
       )}

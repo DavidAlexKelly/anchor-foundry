@@ -25,6 +25,8 @@ import {
 } from "@/lib/ontology-status";
 import { ValueTypesPanel } from "@/components/value-types-panel";
 import { Dialog, Field } from "@/components/dialog";
+import { TypePicker } from "@/components/type-picker";
+import { TYPE_PAGE } from "@/lib/type-picker";
 import {
   EditObjectTypeDialog,
   PROPERTY_VISIBILITIES,
@@ -331,11 +333,9 @@ const JOIN_HINT =
 
 function LinkTypeDialog({
   workspaceId,
-  types,
   onClose,
 }: {
   workspaceId: string;
-  types: ObjectTypeSummary[];
   onClose: () => void;
 }) {
   const [displayName, setDisplayName] = useState("");
@@ -373,25 +373,27 @@ function LinkTypeDialog({
         <Field label="Name" hint="e.g. Placed, Owns, Reports to">
           <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={200} autoFocus />
         </Field>
+        {/* §256: each end reads the ontology for itself now. The page's own
+            list is a page, so passing it down would have made these two
+            dropdowns show whatever fifty types the table happened to be
+            drawing - which is a different set once a filter is on. */}
         <Field label="From">
-          <select
+          <TypePicker
+            workspaceId={workspaceId}
+            testId="link-from-type"
             value={fromId}
-            onChange={(e) => { setFromId(e.target.value); setFromProperty(""); }}
-            required
-          >
-            <option value="">Choose a type…</option>
-            {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
-          </select>
+            placeholder="Choose a type…"
+            onChange={(id) => { setFromId(id); setFromProperty(""); }}
+          />
         </Field>
         <Field label="To">
-          <select
+          <TypePicker
+            workspaceId={workspaceId}
+            testId="link-to-type"
             value={toId}
-            onChange={(e) => { setToId(e.target.value); setToProperty(""); }}
-            required
-          >
-            <option value="">Choose a type…</option>
-            {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
-          </select>
+            placeholder="Choose a type…"
+            onChange={(id) => { setToId(id); setToProperty(""); }}
+          />
         </Field>
         <Field label="Cardinality">
           <select value={cardinality} onChange={(e) => setCardinality(e.target.value as LinkCardinality)}>
@@ -504,11 +506,9 @@ function LinkJoinDialog({
 // ---- action types (write-back) ---------------------------------------------
 function ActionTypeDialog({
   workspaceId,
-  types,
   onClose,
 }: {
   workspaceId: string;
-  types: ObjectTypeSummary[];
   onClose: () => void;
 }) {
   const [objectTypeId, setObjectTypeId] = useState("");
@@ -544,14 +544,13 @@ function ActionTypeDialog({
     <Dialog open title="New action" onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         <Field label="Object type">
-          <select
+          <TypePicker
+            workspaceId={workspaceId}
+            testId="action-object-type"
             value={objectTypeId}
-            onChange={(e) => { setObjectTypeId(e.target.value); setEditable({}); }}
-            required
-          >
-            <option value="">Choose a type…</option>
-            {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
-          </select>
+            placeholder="Choose a type…"
+            onChange={(id) => { setObjectTypeId(id); setEditable({}); }}
+          />
         </Field>
         <Field label="Name" hint="e.g. Update contact, Approve, Close case">
           <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={200} autoFocus />
@@ -596,12 +595,10 @@ function ActionTypeDialog({
 function SourceDialog({
   workspaceId,
   projectId,
-  types,
   onClose,
 }: {
   workspaceId: string;
   projectId: string;
-  types: ObjectTypeSummary[];
   onClose: () => void;
 }) {
   const [typeId, setTypeId] = useState("");
@@ -639,10 +636,13 @@ function SourceDialog({
   return (
     <Dialog open wide title="Map a dataset to an object type" onClose={onClose}>
       <Field label="Object type">
-        <select value={typeId} onChange={(e) => { setTypeId(e.target.value); setMappings({}); }} required>
-          <option value="">Choose a type…</option>
-          {types.map((t) => <option key={t.id} value={t.id}>{t.display_name}</option>)}
-        </select>
+        <TypePicker
+          workspaceId={workspaceId}
+          testId="source-object-type"
+          value={typeId}
+          placeholder="Choose a type…"
+          onChange={(id) => { setTypeId(id); setMappings({}); }}
+        />
       </Field>
       <Field label="Dataset">
         <select
@@ -934,11 +934,21 @@ export default function ObjectsPage() {
    * have quietly regressed the moment there were three: filtering to a status
    * nothing matches would have fallen through to "The ontology starts here"
    * and offered a Define button as the way out of a filter. */
-  const filtered = Boolean(groupFilter || statusFilter || visibilityFilter);
+  // §256: the listing is a page, so this table has a search of its own and a
+  // place in the ontology. `search` is what has been typed; `offset` is where
+  // the page starts, and it goes back to zero whenever the question changes -
+  // page three of one filter is not page three of another.
+  const [search, setSearch] = useState("");
+  const [offset, setOffset] = useState(0);
+  const filtered = Boolean(
+    groupFilter || statusFilter || visibilityFilter || search.trim(),
+  );
   const clearFilters = () => {
     setGroupFilter(null);
     setStatusFilter(null);
     setVisibilityFilter(null);
+    setSearch("");
+    setOffset(0);
   };
   // p.258's checkboxes. A Set rather than a per-row flag, because the thing
   // the Edit status button needs is the selection, not the rows.
@@ -960,11 +970,16 @@ export default function ObjectsPage() {
   // filtered to could never move a type out of it. React Query matches keys by
   // prefix, so invalidating the shorter key still refreshes this one.
   const types = useQuery({
-    queryKey: ["object-types", workspace?.id, groupFilter, statusFilter, visibilityFilter],
+    queryKey: [
+      "object-types", workspace?.id, groupFilter, statusFilter,
+      visibilityFilter, search, offset,
+    ],
     queryFn: () =>
       objApi.listTypes(workspace!.id, groupFilter, {
         status: statusFilter,
         visibility: visibilityFilter,
+        q: search.trim() || null,
+        offset,
       }),
     enabled: !!workspace,
   });
@@ -1081,7 +1096,7 @@ export default function ObjectsPage() {
           to "The ontology starts here" because a group happens to hold nothing
           would tell somebody with two hundred object types that they have
           none - and offer them a Define button as the way out of a filter. */}
-      {types.data && types.data.length === 0 && filtered && (
+      {types.data && types.data.total === 0 && filtered && (
         <div className="empty" data-testid="empty-group-filter">
           <h2>Nothing matches these filters</h2>
           <p>
@@ -1100,7 +1115,7 @@ export default function ObjectsPage() {
         </div>
       )}
 
-      {types.data && types.data.length === 0 && !filtered && (
+      {types.data && types.data.total === 0 && !filtered && (
         <div className="empty">
           <h2>The ontology starts here</h2>
           <p>Object types give your data business meaning: a Customer, an Order, a Shipment - typed properties, typed relationships, shared across the workspace.</p>
@@ -1173,10 +1188,21 @@ export default function ObjectsPage() {
           it changes what the table *is* rather than how one column sorts. */}
       {workspace && (
         <div className="row-actions" style={{ marginBottom: 10 }}>
+          {/* §256's search. Beside the filters because it is one: it narrows
+              what the table *is*, and the empty state has to treat it the same
+              way, or a fruitless search would read as an empty ontology. */}
+          <input
+            type="search"
+            data-testid="type-search"
+            aria-label="Search object types"
+            placeholder="Search object types…"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setOffset(0); }}
+          />
           <GroupFilter
             workspaceId={workspace.id}
             value={groupFilter}
-            onChange={setGroupFilter}
+            onChange={(id) => { setGroupFilter(id); setOffset(0); }}
           />
           {/* p.29's development status. Every value is offered, including the
               ones this workspace happens to have none of: a filter that hid
@@ -1186,9 +1212,10 @@ export default function ObjectsPage() {
             data-testid="status-filter"
             aria-label="Filter object types by development status"
             value={statusFilter ?? ""}
-            onChange={(e) =>
-              setStatusFilter((e.target.value || null) as OntologyStatus | null)
-            }
+            onChange={(e) => {
+              setStatusFilter((e.target.value || null) as OntologyStatus | null);
+              setOffset(0);
+            }}
           >
             <option value="">Any status</option>
             {(Object.keys(STATUS_LABELS) as OntologyStatus[]).map((s) => (
@@ -1204,11 +1231,12 @@ export default function ObjectsPage() {
             data-testid="visibility-filter"
             aria-label="Filter object types by visibility"
             value={visibilityFilter ?? ""}
-            onChange={(e) =>
+            onChange={(e) => {
               setVisibilityFilter(
                 (e.target.value || null) as PropertyVisibility | null,
-              )
-            }
+              );
+              setOffset(0);
+            }}
           >
             <option value="">Any visibility</option>
             {PROPERTY_VISIBILITIES.map((v) => (
@@ -1218,7 +1246,7 @@ export default function ObjectsPage() {
         </div>
       )}
 
-      {types.data && types.data.length > 0 && (
+      {types.data && types.data.total > 0 && (
         <>
           <table className="table" style={{ marginBottom: 28 }}>
             <thead>
@@ -1228,7 +1256,7 @@ export default function ObjectsPage() {
               </tr>
             </thead>
             <tbody>
-              {types.data.map((t) => (
+              {types.data.items.map((t) => (
                 <tr key={t.id}>
                   <td>
                     {canEditOntology && (
@@ -1333,6 +1361,46 @@ export default function ObjectsPage() {
             </tbody>
           </table>
 
+          {/* §256's paging. Drawn only when the ontology outgrew a page, so a
+              workspace with eight object types is the page it always was — and
+              always saying which slice this is, because a table that stops at
+              fifty without saying so is a workspace that looks smaller than it
+              is. */}
+          {types.data.total > types.data.items.length + types.data.offset ||
+           types.data.offset > 0 ? (
+            <div
+              className="row-actions"
+              style={{ marginTop: -18, marginBottom: 28 }}
+              data-testid="type-paging"
+            >
+              <span className="slug">
+                {types.data.offset + 1}–
+                {types.data.offset + types.data.items.length} of{" "}
+                {types.data.total}
+              </span>
+              <button
+                className="btn quiet"
+                data-testid="types-previous"
+                disabled={types.data.offset === 0}
+                onClick={() =>
+                  setOffset(Math.max(0, offset - (types.data?.limit ?? TYPE_PAGE)))
+                }
+              >
+                Previous
+              </button>
+              <button
+                className="btn quiet"
+                data-testid="types-next"
+                disabled={
+                  types.data.offset + types.data.items.length >= types.data.total
+                }
+                onClick={() => setOffset(offset + (types.data?.limit ?? TYPE_PAGE))}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
+
           {/* The explorer used to be a panel here, which had it searching the
               whole workspace from inside one project. It is its own
               destination now (roadmap item 4.1); this is the way to it, not a
@@ -1371,7 +1439,6 @@ export default function ObjectsPage() {
           <InterfacesPanel
             workspaceId={workspace!.id}
             canEdit={canEditOntology}
-            types={types.data}
           />
 
           {/* Groups last of the four, because it is the only one that says
@@ -1386,7 +1453,7 @@ export default function ObjectsPage() {
 
           <div className="page-head" style={{ marginTop: 32 }}>
             <div><h2 style={{ fontSize: 15, margin: 0 }}>Link types</h2></div>
-            {canEditOntology && types.data.length >= 2 && (
+            {canEditOntology && types.data.total >= 2 && (
               <button className="btn quiet" onClick={() => setCreatingLink(true)}>New link type</button>
             )}
           </div>
@@ -1549,8 +1616,8 @@ export default function ObjectsPage() {
       {suggesting && workspace && project && (
         <SuggestDialog workspaceId={workspace.id} projectId={project.id} onClose={() => setSuggesting(false)} />
       )}
-      {creatingLink && workspace && types.data && (
-        <LinkTypeDialog workspaceId={workspace.id} types={types.data} onClose={() => setCreatingLink(false)} />
+      {creatingLink && workspace && (
+        <LinkTypeDialog workspaceId={workspace.id} onClose={() => setCreatingLink(false)} />
       )}
       {joining && workspace && (
         <LinkJoinDialog workspaceId={workspace.id} link={joining} onClose={() => setJoining(null)} />
@@ -1565,11 +1632,10 @@ export default function ObjectsPage() {
           canPromote={workspace.effective_role === "admin"}
         />
       )}
-      {creatingSource && workspace && project && types.data && (
+      {creatingSource && workspace && project && (
         <SourceDialog
           workspaceId={workspace.id}
           projectId={project.id}
-          types={types.data}
           onClose={() => setCreatingSource(false)}
         />
       )}
@@ -1588,10 +1654,9 @@ export default function ObjectsPage() {
           onClose={() => setDefiningAction(null)}
         />
       )}
-      {creatingAction && workspace && types.data && (
+      {creatingAction && workspace && (
         <ActionTypeDialog
           workspaceId={workspace.id}
-          types={types.data}
           onClose={() => setCreatingAction(false)}
         />
       )}

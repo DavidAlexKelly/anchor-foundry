@@ -18,6 +18,7 @@ from playwright.sync_api import expect
 
 from api import Module
 from conftest import WEB_BASE
+from ontology_page import find_type_row
 
 ROWS = [
     {"id": "R1", "name": "Ada", "code": "A"},
@@ -40,8 +41,7 @@ def open_objects(page, module) -> None:
 
 
 def type_row(page, module):
-    row = page.locator("tbody tr").filter(has_text=f"seed_{module.tag}").first
-    expect(row).to_be_visible(timeout=30000)
+    row = find_type_row(page, f"seed_{module.tag}")
     return row
 
 

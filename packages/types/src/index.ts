@@ -47,6 +47,14 @@ export interface WorkspaceDetail {
   updated_at: string;
 }
 
+/** One entry in a workspace's member list.
+ *
+ * A member is a **user or a group** (db 0005 resolves both), so the user
+ * fields are nullable and a group entry carries a name instead.
+ *
+ * **Not the same set as {@link NotificationRecipient}**, which is why that one
+ * exists: membership is one of db 0005's three routes to a workspace, and a
+ * workspace's creator uses none of them. */
 export interface WorkspaceMember {
   id: string;
   role: WorkspaceRole;
@@ -56,6 +64,20 @@ export interface WorkspaceMember {
   group_id: string | null;
   group_name: string | null;
   created_at: string;
+}
+
+/** One person a notification rule in a workspace may name
+ * (`action-types` p.95, §258).
+ *
+ * Everybody `effective_workspace_role` grants access to, which is the same
+ * predicate `notification_store.permitted` applies at send time — so what the
+ * form offers is exactly what the server will take. No membership row stands
+ * behind these, so there is no `id` of one and no role to report; the `id` is
+ * the *user's*, which is what a recipient list holds. */
+export interface NotificationRecipient {
+  id: string;
+  email: string | null;
+  display_name: string | null;
 }
 
 export interface ProjectSummary {
@@ -1413,6 +1435,55 @@ export interface ObjectTypeSummary {
   interfaces: InterfaceRef[];
   created_at: string;
   updated_at: string;
+}
+
+/** One page of the workspace's object types, and how many match.
+ *
+ * **The total is why this is an object and not an array.** `GET /object-types`
+ * was unbounded until §256 — §209 measured a development workspace of ~1,400
+ * types taking seven seconds to open a dialog — and bounding it alone would
+ * only move the failure: a picker showing fifty of six hundred types looks
+ * exactly like a workspace with fifty types. Every reader is handed the count
+ * whether it draws it or not. */
+export interface ObjectTypePage {
+  items: ObjectTypeSummary[];
+  /** How many match the filters, not how many are on this page. */
+  total: number;
+  /** Echoed, so a caller reading a stored response knows what it asked for. */
+  limit: number | null;
+  offset: number;
+}
+
+/** One notification, as somebody's inbox holds it (Foundry `action-types`
+ * p.91; db 0066).
+ *
+ * **Rendered at send time, not at read time.** p.92 fixes the content to "the
+ * state of the Ontology before edits of the current Action are applied", and
+ * that state is gone by the time anybody opens it — a notification that
+ * re-rendered on read would show a different world each time. */
+export interface Notification {
+  id: string;
+  subject: string;
+  body: string;
+  /** p.91's optional link and its button text. Both or neither. */
+  link_url: string | null;
+  link_text: string | null;
+  /** Who ran the action. Named rather than identified, because a notification
+   * is read by a person and "Grace changed it" is the useful half. */
+  actor_name: string | null;
+  action_run_id: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationPage {
+  items: Notification[];
+  total: number;
+  /** The badge's number, on the listing too — cheaper than a second round
+   * trip from the screen that has just made most of them read. */
+  unread: number;
+  limit: number;
+  offset: number;
 }
 
 /** A classification of object types, for search and exploration (Foundry

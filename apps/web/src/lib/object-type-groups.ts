@@ -55,6 +55,35 @@ export function toggleSelection(
     : [...selection, groupId];
 }
 
+/** The object types a membership editor draws: this group's members first,
+ * then whatever else the current page holds.
+ *
+ * **The invariant is that a member is always on screen.** §256 bounded the
+ * type listing, so the editor's page may not reach a member — and a ticked box
+ * that is not drawn is a membership somebody cannot remove and a group that
+ * reads as smaller than it is. The same rule `type-picker.withSelected` keeps
+ * for a single choice, applied to a set of them.
+ *
+ * Members come from the group's own read rather than from the page, because
+ * that is the read that knows all of them. `current` is the *unsaved*
+ * selection, so a type ticked and then searched away stays visible too — the
+ * alternative is a tick that disappears while somebody is still deciding.
+ */
+export function memberFirst<T extends { id: string }>(
+  page: readonly T[],
+  members: readonly T[],
+  current: readonly string[],
+): T[] {
+  const pinned = members.filter((m) => current.includes(m.id));
+  const seen = new Set(pinned.map((m) => m.id));
+  const rest = page.filter((t) => !seen.has(t.id));
+  // Anything ticked this session that is neither a saved member nor on the
+  // page has to come from the page it was ticked on, which is gone. Nothing
+  // can draw it, so it is not drawn - and it is still saved, because `current`
+  // is what the save writes.
+  return [...pinned, ...rest];
+}
+
 /** What a row says about the groups a type is in, when there is no room to
  * draw them all.
  *

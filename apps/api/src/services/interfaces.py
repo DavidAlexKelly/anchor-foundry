@@ -394,12 +394,21 @@ async def implementations_of(
 
 
 async def implementations_by_type(
-    conn: AsyncConnection, workspace_id: UUID
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    *,
+    type_ids: "list[str] | None" = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """`{object type id: [{interface_id, api_name, display_name, mapping}]}`.
 
-    One query for the whole workspace, for `list_interfaces`' reason: the
-    object types listing draws this per row.
+    One query rather than one per row, for `list_interfaces`' reason: the object
+    types listing draws this on every row.
+
+    **Narrowed to the page when the caller gives ids** (§256), for
+    `groups_by_type`'s reason one table over: a bounded listing joined against
+    every implementation in the workspace has fewer rows and the same amount of
+    work. `None` is still the whole workspace, which is what
+    `/object-types/{id}/interfaces` wants.
     """
     rows = await fetch_all(
         conn,
@@ -409,9 +418,11 @@ async def implementations_by_type(
           FROM object_type_interfaces oti
           JOIN interfaces i ON i.id = oti.interface_id
          WHERE i.workspace_id = :wid
+           AND (CAST(:ids AS uuid[]) IS NULL
+                OR oti.object_type_id = ANY(CAST(:ids AS uuid[])))
          ORDER BY i.display_name
         """,
-        {"wid": str(workspace_id)},
+        {"wid": str(workspace_id), "ids": type_ids},
     )
     out: dict[str, list[dict[str, Any]]] = {}
     for row in rows:

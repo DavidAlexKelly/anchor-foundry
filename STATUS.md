@@ -4388,6 +4388,287 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 258. The notify rule, in the editor, offered to the right people (this session)
+
+§257 built the rule, the delivery and the inbox, and left `notify` reachable
+only by posting JSON: the action definition editor offered five rule kinds and
+the executor ran six. A feature the product cannot express is the same shape as
+§252's *implements* column that could never be non-empty. Foundry
+`action-types` p.89-101.
+
+**The reference inserter is why p.94 has a button rather than a hint.**
+"Click on a parameter to generate the `{{{}}}` syntax" — somebody typing three
+braces by hand types two, and two braces are not a reference: the template
+renders literally and nothing on screen says so. The syntax is generated, the
+caret lands after what was inserted so the sentence can continue, and a
+selection is replaced, which is what makes "select the wrong word, click the
+right parameter" work.
+
+**The picker asked a narrower question than the server answers, and that is
+§257's finding read backwards.** Its first version listed
+`/workspaces/{id}/members` — and `workspaces.create` writes no
+`workspace_members` row, so the member list is empty in a workspace somebody
+has just made. The one account certain to be a valid recipient there, the
+person who created it, was the one account the form would not offer. §257's
+bug was the server refusing people it should have taken; this is the form
+refusing to offer them. Same table, same wrong question, opposite side of the
+wire.
+
+`notification_store.notifiable` answers with the same
+`effective_workspace_role` predicate `permitted` filters by, behind
+`GET /workspaces/{id}/notification-recipients`. **The equality is what is
+asserted, not the endpoint**: the offered set, that the membership table is a
+strict *subset* of it, and that every id offered survives p.96's strict mode
+end to end — the mode that refuses the whole action if one recipient cannot
+see the data, so an endpoint offering one person too many fails in a test
+rather than in front of somebody who filled the form in.
+
+**Offering the wrong set is wrong in both directions, and only one of them
+looks like a bug.** Too wide is §214's control that cannot work: a save that
+fails. Too narrow is invisible — the form is simply missing people, and
+nothing anywhere says a name is absent. That asymmetry is why the guard is an
+assertion that the two lists *differ in a specific way* rather than a check
+that the picker is non-empty.
+
+**28 mutants attacked, 28 caught**, after four findings and one withdrawal.
+
+*A clamp with no check that could fail.* `insertReference` clamps its caret
+into the string; the test for a caret past the end asserted only the resulting
+**text**, and appending at 99 and appending at 2 produce the same string. An
+unclamped version passed while reporting a caret of 108 in an eleven-character
+field — and `setSelectionRange` clamps that back, which is exactly why nothing
+downstream would ever have said so. The general shape: when a guard's effect is
+absorbed by something downstream that is also forgiving, the test has to read
+the guard's own output rather than the end of the pipeline.
+
+*Three checks the form did not have*, each named by a survivor. Unchecking
+somebody left them on the list, because a checkbox list that appends on change
+looks right the whole time somebody is adding people. The insert buttons could
+have written the label instead of the reference name — for a parameter the two
+are the same string, so that mutation is invisible on every parameter and
+wrong only on p.101's `Current user`. And switching recipient kind kept the
+previous kind's fields, which the server refuses while naming something no
+longer on screen.
+
+*And one mutant withdrawn as junk* (§193). Modelling "no gate on the endpoint"
+by adding an unused `None`-typed argument models nothing of the sort: the
+dependency stayed, every delivery test passed, and it was killed by an
+unrelated schema check reacting to `None` as a parameter type. **A "caught"
+that is caught for the wrong reason is worth as little as a survivor that
+survives for the wrong one.** The honest weakening of a role gate is a
+different role, and the one that matters is too tight rather than too loose:
+the person writing a notification rule holds `editor`, so an `admin` gate would
+empty the picker for exactly them.
+
+**1932 API tests**, 2 skipped; **1604 unit tests**; 17 browser tests in
+`e2e/test_action_definition_editor.py`.
+
+### 257. Notifications, and the rule that a side effect is a rule (this session)
+
+Build order item 10's first half, and the first thing in this build that sends
+data *out* of an action rather than writing it back. Foundry `action-types`
+p.87-101.
+
+**A rule, not a resource**, because p.89 says so in as many words: "Notifications
+can be added to an action through the **Add new rule** dropdown menu." So
+`notify` is a sixth `action_rule_kind` rather than a table hanging off the
+action type — a rule is a thing an action does when it runs, and one that sends
+a message is not a different category from one that sets a property. What db
+0066 adds is the *delivered* notification, which is a different thing entirely:
+the rule is a template, and a row is what somebody was actually sent. One row
+per recipient, which is p.90's "notifications will be sent to each recipient
+individually" and also what makes the content correct — `{{{recipient}}}` says
+a different name for each of them.
+
+**Three rules from the source that are easy to get subtly wrong**, and each
+has a test named after the failure rather than after the function.
+
+*The content is the world **before** the edits* (p.92). So it is rendered in
+the pre-write block; after the write that state is gone, and the same code
+would produce a different, wrong answer with nothing on screen to show it.
+
+*Content is truncated, not refused* (p.95) — "indicated by trailing `...`". A
+refusal would be the wrong answer, because the length depends on the *data*: a
+template that fits one object would fail the action for another, and the person
+who typed the template is not the person who would meet that failure.
+
+*p.96's default permission mode refuses the whole action.* "If any recipients
+do not have the required access … no data will be edited and no notifications
+will be sent." The second half is why the permission check runs before the
+write: it is not something a caller can honour once it has edited the data.
+
+**Two things are absent rather than half-built.** `From a function` recipients
+and content (p.90, p.92) need Functions, which §1.3 marks ○ — a dropdown entry
+whose only outcome is a save that fails is worse than an absent one (§214).
+And email delivery, with p.92's Advanced Email Configuration and p.95's
+redaction: there is no mail gateway here, and p.91 makes in-platform delivery a
+whole feature on its own — "they may still view their notifications when logged
+into Foundry".
+
+**The RLS policy had the fail-closed shape this schema has hit three times.**
+A single `USING (user_id = rls_current_user_id())` reads exactly right and makes
+the feature impossible: the person who *sends* a notification is never the
+person who receives it, so every insert was refused by the policy protecting the
+recipient. Reading, marking read and sending are three policies now, and the
+migration says what the first attempt was.
+
+**An `object` parameter carries no object type** (db 0044) — the rule that
+consumes one says which type it means. A parameter referenced only in
+notification *content* is typed by no rule, so `{{{alert.priority}}}` rendered a
+gap indistinguishable from an empty value. It defaults to the action's own
+subject type, written down as the guess it is and with the column that would
+replace it named.
+
+**35 mutants attacked, 35 caught** — after two rounds of survivors, and all
+four findings were about fixtures rather than assertions.
+
+*A mutant that was wrong about itself.* Modelling p.92 by mutating the
+`subject=` argument survived correctly: that argument is only the fallback for
+an object parameter the store could not resolve, and the read that actually
+feeds `{{{alert.priority}}}` is `get_instance`. The mutant moves *that* past
+the write now.
+
+*A guard hidden by another guard.* The workspace filter on the permission query
+survived because `workspace_members` is itself under RLS: a membership in a
+workspace the **actor** cannot see is invisible whether or not the query filters
+on the workspace. It only does observable work when the actor can see both
+memberships and one is still the wrong workspace. Found by instrumenting — the
+first fix added a second workspace and the mutant walked through it anyway.
+
+*A test passing for the wrong reason.* "A failed action sends nothing" used a
+bad instance id, which is refused *before* the notifications are resolved — so
+`notices` was empty and delivering unconditionally changed nothing. The failure
+has to land in the write, past the point where the recipients were already
+permitted; a source file whose columns are wrong is the cheapest one.
+
+**And a permission rule the API tests could not see.** `permitted` read
+`workspace_members` directly, which is narrower than the platform's own rule:
+db 0005 grants workspace access three ways — direct membership, membership
+through a *group*, and being an owner or admin of the organisation. An
+organisation owner is a member of nothing and can see everything, so a
+notification naming them failed p.96's check and took the whole action down
+with it. It asks `effective_workspace_role` now, which is the function RLS
+itself asks.
+
+Every account in the API fixture except the owner and the admin is an ordinary
+org member, which is exactly why that suite could not tell the two rules
+apart — and why the browser suite could, since the account it signs in as is
+the org owner. **The general shape is worth keeping**: a suite whose fixtures
+all sit on one side of a rule cannot see the rule at all, and the tell is that
+a *different* suite, built for a different reason, walks straight into it.
+
+**36 mutants attacked, 36 caught**, including one that puts the membership
+table back.
+
+**The inbox is in the platform bar**, not on a workspace page — p.91's
+Workspace is the app shell, and somebody who works in three workspaces has one
+inbox. Opening the panel marks nothing read: a badge that cleared itself
+because a panel was opened would answer "have you seen this" with "did you
+glance at the bar". And a notification's link is checked against
+`safeReturnPath` before it is drawn as a button, because p.92's handlebars make
+the URL a template and part of a template comes from a property value — a
+notification is the one surface here where somebody else's data becomes a
+control the recipient is invited to click.
+
+**1927 API tests**, 2 skipped (was 1867): 45 without a database and 15 through
+it; **1580 unit tests**; 3 browser tests in `e2e/test_notifications.py`.
+
+### 256. The ontology listing is a page, and it says so (this session)
+
+Build order item 11, which had been sitting there since §209 with its own
+reason for not being a one-line `LIMIT` written into it: *"the pickers are what
+make it a unit … a dropdown that silently truncates is worse than a slow one."*
+
+**Measured before and after, on the only ontology large enough to measure.**
+`GET /object-types` had no bound and eight call sites read it. This build's
+development workspace holds **791 object types**:
+
+| | rows | time | payload |
+| --- | --- | --- | --- |
+| unbounded | 791 | 253.8 ms | 379.5 KB |
+| one page | 50 | 17.4 ms | 23.9 KB |
+
+Fifteen times faster and sixteen times smaller, per read, on an endpoint every
+type picker in the product opens with.
+
+**The total is the whole difference between a fix and a regression.** A
+bounded list on its own truncates silently, and fifty of six hundred types
+looks exactly like a workspace with fifty — which is worse than the slow
+version, because the slow version was at least right. So the response is a
+page object and every caller is handed the count whether it draws it or not,
+and the endpoint gained a **search** so a picker can reach the fifty-first
+type. `position` rather than `LIKE`, so nothing somebody typed is a wildcard:
+a search for `%` finding everything would be a listing pretending to be a
+search.
+
+**The same defect, one query down.** `groups_by_type` and
+`implementations_by_type` read every membership in the workspace to draw a
+column on every row — which was one query rather than N and therefore right,
+until the listing above them became fifty rows. A bounded page joined against
+the whole workspace has fewer rows and the same work. Both take the page's ids
+now.
+
+**`ids` exists because of p.111.** The Object Explorer needs each *selected*
+type's hidden-property list to know which columns not to draw, and a selected
+type that fell off the page would have had its hidden properties drawn — a
+page-size change quietly becoming a visibility change. It reads exactly those
+types, and-ed with the filters so it can never name its way past one.
+
+**Seven dropdowns became one component**, and the rule it exists to keep is
+that a select's value is always among its options: a type chosen and then
+searched away would render blank and be written as blank on the next save.
+§175 found that in a status dropdown; this is the same fix before it could
+happen again.
+
+**A control that removed itself, found by a browser test.** `needsSearch`
+read the total *matching the current search*, so narrowing 791 types to one
+took the search box off the screen mid-word with the query still applied.
+§246's shape exactly — a control that disappears as a consequence of being
+used — and it took a browser to see it, because every unit test that could
+have caught it would have been written by the same reasoning that produced
+the bug.
+
+**And the suite had been leaning on the bound not existing.** Ten browser
+tests across five files failed the moment it landed, all the same way: each
+file had grown its own four-line `open_type_editor` that scanned `tbody tr`
+for its seeded type. That worked for as long as the page was the whole
+ontology. They share `e2e/ontology_page.py` now — the duplication was
+invisible while the assumption held, which is the general shape of this kind
+of finding.
+
+Two fixture tests had to change more than mechanically. Both compared a type
+that matched a filter against one that did not, and both gave the second type
+an *independent* random tag — so once the table was a page, "the other one is
+not here" would have passed because it was on another page rather than because
+the filter worked. They share the module's tag now, so one search shows both
+and the filter is the only thing that can separate them.
+
+**25 mutants attacked, 25 caught** — after a first run with four survivors,
+and two of those were the unit's own central claim.
+
+`memberFirst` had no unit tests at all; it was written, used in two components
+and never asked a question. Two mutants walked straight through it.
+
+And **nothing asserted that the default is a page.** Every listing test passed
+`limit=` explicitly, so changing the default back to "the whole ontology"
+survived the entire suite — at both layers. That is the shape of a defect that
+ships: the behaviour everybody relies on and nobody asks for by name. The test
+seeds fifty-*one* types, because a fixture of fifty would pass against no bound
+at all. The service's default needed its own test for a smaller reason worth
+recording: the route always passes a limit, so that default is reachable only
+by a caller that does not — and the three that want the whole ontology all say
+`limit=None` out loud. The test is about the next one.
+
+**One survivor was withdrawn rather than covered.** Narrowing `groups_by_type`
+to the page's ids has no observable effect: the result is a lookup by id, so a
+wider read returns more entries nobody asks for and the rendered answer is
+identical. It is a performance property, not a check, and there is nothing for
+a test to catch — recorded here rather than covered by an assertion that could
+not fail (§213).
+
+**1867 API tests**, 2 skipped (was 1855); **1571 unit tests** (was 1557); 7
+new browser tests in `e2e/test_type_paging.py`.
+
 ### 255. The screen that makes p.61's argument (this session)
 
 §254 built the read; this is the one place it is visible, and it is the point of

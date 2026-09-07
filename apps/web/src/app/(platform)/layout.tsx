@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { api } from "@/lib/api";
 import { clearSignedIn, isSignedIn, loginHrefFor } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
+import { NotificationBell } from "@/components/notification-bell";
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -47,6 +48,10 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
         </nav>
         <div className="spacer" />
         <div className="identity">
+          {/* p.91 puts notifications in the Workspace bar rather than on a
+              page: a notification is addressed to a person, and somebody who
+              works in three workspaces has one inbox. */}
+          <NotificationBell />
           {me.data && <span>{me.data.display_name}</span>}
           <button onClick={signOut}>Sign out</button>
         </div>

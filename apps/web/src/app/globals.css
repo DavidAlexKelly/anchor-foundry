@@ -2667,3 +2667,57 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
   font-size: 11px; letter-spacing: 0.02em; text-transform: uppercase;
   color: var(--ink-soft); white-space: nowrap;
 }
+
+/* ---- the notification bell (§257; `action-types` p.91) --------------------
+   Anchored to the app bar rather than to the page, because p.91 puts
+   notifications in the Workspace: a person has one inbox across every
+   workspace they work in. */
+.bell { position: relative; }
+.bell > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.bell > button:hover { background: rgba(255, 255, 255, 0.08); }
+/* The count, capped at 9+ by `badgeLabel` so this never grows past two
+   characters and the bar never reflows because somebody was away. */
+.bell-badge {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.bell-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  width: 360px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.bell-item {
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+/* Unread is a mark on the row rather than a colour on the text: the text is
+   the notification, and dimming a read one would make yesterday's harder to
+   read than today's for no reason. */
+.bell-item.unread { border-left: 3px solid var(--accent); padding-left: 8px; }
