@@ -411,6 +411,37 @@ def test_the_lenient_mode_sends_to_whoever_can_see_it(
     assert inbox(client, fx.outsider_sub)["total"] == 0
 
 
+def test_an_organisation_admin_is_a_recipient_without_being_a_member(
+    client: TestClient, fx: Fixture, alert_type: str, alert: str
+) -> None:
+    """**The rule is `effective_workspace_role`, not `workspace_members`.**
+
+    db 0005 gives workspace access three ways: direct membership, membership
+    through a group, and being an owner or admin of the organisation. An
+    organisation admin is a member of nothing and can see everything — so a
+    notification naming them failed p.96's check and took the whole action down
+    with it.
+
+    Every account in this fixture except the admin and the owner is an ordinary
+    org member, which is why the first version of this suite could not see the
+    difference; a browser test found it, because the account that suite signs
+    in as is exactly this person.
+    """
+    action = make_action(client, fx, alert_type)
+    assert define(client, fx, action, {
+        "recipients": {"kind": "static", "user_ids": [str(fx.admin)]},
+        "subject": "For the admin", "body": "b",
+    }).status_code == 200
+
+    before = inbox(client, fx.admin_sub)["total"]
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": alert, "values": {"priority": "admin-visible"}},
+    )
+    assert r.status_code == 200, r.text
+    assert inbox(client, fx.admin_sub)["total"] == before + 1
+
+
 # ---- the inbox ------------------------------------------------------------------
 def test_an_inbox_is_yours(client: TestClient, fx: Fixture) -> None:
     """db 0066's policy is `user_id = rls_current_user_id()`, so this is RLS

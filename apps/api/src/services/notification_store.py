@@ -83,10 +83,19 @@ async def permitted(
     > "Users may only receive notifications containing data which they are
     > allowed to view." (p.96)
 
-    Membership *is* the answer here: this platform's read model is that a
-    workspace member can see the workspace's ontology and a non-member cannot
-    (db 0003, 0006). There is no per-object grant to consult, so checking one
-    would be inventing a rule to enforce.
+    **`effective_workspace_role`, not `workspace_members`.** The first version
+    of this read the membership table directly, which is a narrower rule than
+    the platform's own and refused the wrong people: db 0005 gives access three
+    ways — direct membership, membership through a group, and being an owner or
+    admin of the organisation the workspace belongs to. An organisation owner
+    is a member of nothing and can see everything, so a notification naming
+    them failed p.96's check and took the whole action down with it. Found by a
+    browser test, because the account this suite signs in as is exactly that
+    person.
+
+    Asking the same function RLS asks is the point: "may they see it" has one
+    answer here, and a second implementation of it would be free to disagree
+    with the one that actually gates the read.
 
     An id that is not a uuid at all is not in the answer, which is p.100's
     "if this property contains something else such as string email addresses,
@@ -98,13 +107,13 @@ async def permitted(
     rows = await fetch_all(
         conn,
         """
-        SELECT m.user_id FROM workspace_members m
-         WHERE m.workspace_id = :wid
-           AND m.user_id::text = ANY(CAST(:ids AS text[]))
+        SELECT u.id FROM users u
+         WHERE u.id::text = ANY(CAST(:ids AS text[]))
+           AND effective_workspace_role(u.id, CAST(:wid AS uuid)) IS NOT NULL
         """,
         {"wid": str(workspace_id), "ids": user_ids},
     )
-    return {str(r["user_id"]) for r in rows}
+    return {str(r["id"]) for r in rows}
 
 
 async def list_for_user(

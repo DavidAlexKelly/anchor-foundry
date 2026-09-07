@@ -1332,6 +1332,32 @@ export interface ActionDefinitionInput {
   criteria: { message: string; config: Record<string, unknown> }[];
 }
 
+/** Somebody's notifications (Foundry `action-types` p.91; §257).
+ *
+ * **No workspace in the path**, which is p.91's shape rather than a shortcut:
+ * a notification is addressed to a person, and somebody who works in three
+ * workspaces has one inbox. Access is RLS on the connection, so there is no id
+ * to pass and no id that could be passed wrongly. */
+export const notifications = {
+  list: (opts: { limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (opts.limit !== undefined) query.set("limit", String(opts.limit));
+    if (opts.offset) query.set("offset", String(opts.offset));
+    const search = query.toString();
+    return request<import("./types").NotificationPage>(
+      `/notifications${search ? `?${search}` : ""}`,
+    );
+  },
+  /** The badge. Its own endpoint because it is asked on every page load and
+   * the listing is asked on one. */
+  unread: () => request<{ unread: number }>("/notifications/unread"),
+  markRead: (id: string) =>
+    request<{ unread: number }>(`/notifications/${id}/read`, { method: "POST" }),
+  /** p.91's "See All", which is where somebody clears the badge. */
+  markAllRead: () =>
+    request<{ unread: number }>("/notifications/read", { method: "POST" }),
+};
+
 export const actions = {
   listTypes: (wid: string, objectTypeId?: string) =>
     request<import("./types").ActionType[]>(
