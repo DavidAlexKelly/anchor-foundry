@@ -442,6 +442,107 @@ def test_an_organisation_admin_is_a_recipient_without_being_a_member(
     assert inbox(client, fx.admin_sub)["total"] == before + 1
 
 
+# ---- who a rule may name (p.95; §258) -------------------------------------------
+def recipients(client: TestClient, fx: Fixture) -> dict[str, str]:
+    r = client.get(f"{wbase(fx)}/notification-recipients", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    return {row["email"]: row["id"] for row in r.json()}
+
+
+def test_the_picker_offers_everybody_the_send_check_would_accept(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.95's selector, answering with p.96's rule rather than a narrower one.
+
+    All four routes to this workspace are here: the org owner and the org
+    admin, who are members of nothing, and the two accounts with membership
+    rows. The two who cannot see it are absent — an org member with no
+    membership, and somebody in another organisation entirely.
+    """
+    offered = recipients(client, fx)
+    assert set(offered) == {
+        f"owner-{fx.tag}@example.com", f"admin-{fx.tag}@example.com",
+        f"editor-{fx.tag}@example.com", f"viewer-{fx.tag}@example.com",
+    }
+
+
+def test_the_membership_table_is_not_that_set(client: TestClient, fx: Fixture) -> None:
+    """**The guard against this endpoint quietly becoming `/members` again.**
+
+    §258's picker read the membership table first, and the bug it caused is
+    invisible unless something asserts the two answers differ: `workspaces.create`
+    writes no `workspace_members` row, so the creator of a workspace is in the
+    member list exactly never and can still see everything in it.
+
+    Both halves are asserted. That membership is *narrower* is what makes the
+    other endpoint necessary; that it is a strict *subset* is what says the two
+    disagree by omission rather than by naming different people — if they ever
+    crossed, one of them would be wrong about access rather than about which
+    question it answers.
+    """
+    r = client.get(f"{wbase(fx)}/members", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    members = {row["email"] for row in r.json() if row["email"]}
+    offered = set(recipients(client, fx))
+
+    assert members == {f"editor-{fx.tag}@example.com", f"viewer-{fx.tag}@example.com"}
+    assert members < offered
+    # And the two the member list loses are the two with no membership row.
+    assert offered - members == {
+        f"owner-{fx.tag}@example.com", f"admin-{fx.tag}@example.com",
+    }
+
+
+def test_everybody_offered_can_actually_be_notified(
+    client: TestClient, fx: Fixture, alert_type: str, alert: str
+) -> None:
+    """The offer equals the accept, end to end and in p.96's strict mode.
+
+    A picker is a promise about a save. This names every id the endpoint
+    returned in the mode that **refuses the whole action** if one of them
+    cannot see the data — so an endpoint that offered one person too many
+    fails here rather than in front of somebody who filled the form in.
+    """
+    offered = recipients(client, fx)
+    action = make_action(client, fx, alert_type)
+    assert define(client, fx, action, {
+        "recipients": {"kind": "static", "user_ids": sorted(offered.values())},
+        "subject": "Everybody offered", "body": "b",
+        "permissions": "all",
+    }).status_code == 200
+
+    subs = {
+        f"owner-{fx.tag}@example.com": fx.owner_sub,
+        f"admin-{fx.tag}@example.com": fx.admin_sub,
+        f"editor-{fx.tag}@example.com": fx.editor_sub,
+        f"viewer-{fx.tag}@example.com": fx.viewer_sub,
+    }
+    before = {email: inbox(client, sub)["total"] for email, sub in subs.items()}
+    r = client.post(
+        f"{abase(fx)}/{action['id']}/execute", headers=hdr(fx.editor_sub),
+        json={"instance_id": alert, "values": {"priority": "all-offered"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"], r.json()
+    # Each of them, not "somebody": p.90 sends to each recipient individually,
+    # and a count over the whole set would pass on one delivery four times.
+    for email, sub in subs.items():
+        assert inbox(client, sub)["total"] == before[email] + 1, email
+
+
+def test_a_stranger_cannot_read_who_can_be_notified(
+    client: TestClient, fx: Fixture
+) -> None:
+    """It names people, so it is gated by seeing the workspace at all.
+
+    The outsider is an ordinary member of the same organisation with no route
+    to this workspace — db 0005's answer for them is that it does not exist,
+    which is a 404 rather than a 403.
+    """
+    r = client.get(f"{wbase(fx)}/notification-recipients", headers=hdr(fx.outsider_sub))
+    assert r.status_code == 404, r.text
+
+
 # ---- the inbox ------------------------------------------------------------------
 def test_an_inbox_is_yours(client: TestClient, fx: Fixture) -> None:
     """db 0066's policy is `user_id = rls_current_user_id()`, so this is RLS

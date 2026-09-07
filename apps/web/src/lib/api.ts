@@ -103,6 +103,19 @@ export const api = {
   orgGroups: () => request<import("./types").Group[]>("/org/groups"),
   workspaces: () => request<WorkspaceSummary[]>("/workspaces"),
   workspace: (id: string) => request<WorkspaceDetail>(`/workspaces/${id}`),
+  /** Who a notification rule in this workspace may name (`action-types` p.95,
+   * §258).
+   *
+   * **Not `/members`.** The membership table is one of db 0005's three routes
+   * to a workspace and a creator uses none of them, so the member list is
+   * empty in a workspace somebody has just made — a picker fed by it offered
+   * nobody in exactly the workspace where a rule gets written. This endpoint
+   * answers with the same predicate p.96's check applies at send time, so what
+   * the form offers is what the server will take. */
+  notificationRecipients: (wid: string) =>
+    request<import("./types").NotificationRecipient[]>(
+      `/workspaces/${wid}/notification-recipients`,
+    ),
   projects: (workspaceId: string) =>
     request<ProjectSummary[]>(`/workspaces/${workspaceId}/projects`),
   project: (workspaceId: string, projectId: string) =>

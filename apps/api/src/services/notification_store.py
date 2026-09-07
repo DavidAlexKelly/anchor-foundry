@@ -116,6 +116,45 @@ async def permitted(
     return {str(r["id"]) for r in rows}
 
 
+async def notifiable(
+    conn: AsyncConnection, *, workspace_id: UUID
+) -> list[dict[str, Any]]:
+    """Everybody a notification in this workspace could reach (p.95).
+
+    > "The configuration interface for notifications provides selectors for
+    > users and groups when choosing a static set of recipients." (p.95)
+
+    **The same predicate as {@link permitted}, and that equality is the whole
+    reason this is not `workspaces.list_members`.** §258's first version
+    offered the membership table, and a workspace's creator is in it exactly
+    never — `workspaces.create` writes no `workspace_members` row, so the
+    picker was empty for the one person certain to be able to receive there.
+    That is §257's bug read backwards: the server accepts three routes to
+    access and the form offered one of them, so the form refused people the
+    server would have taken.
+
+    Offering a set that is not what the server accepts is wrong in either
+    direction. Narrower hides recipients who would work; wider offers a save
+    that fails (§214). So the answer here is `effective_workspace_role(...) IS
+    NOT NULL` and nothing else — the same expression `permitted` filters by,
+    with an API test asserting the two agree on the same person.
+
+    Groups are not in the answer, though p.95 names them: a group id delivered
+    as a recipient reaches `deliver`, which looks it up in `users` and finds
+    nobody. Absent until group recipients exist, rather than offered broken.
+    """
+    return await fetch_all(
+        conn,
+        """
+        SELECT u.id, u.email, u.display_name
+          FROM users u
+         WHERE effective_workspace_role(u.id, CAST(:wid AS uuid)) IS NOT NULL
+         ORDER BY u.display_name, u.email
+        """,
+        {"wid": str(workspace_id)},
+    )
+
+
 async def list_for_user(
     conn: AsyncConnection, *, limit: int = PAGE, offset: int = 0
 ) -> tuple[list[dict[str, Any]], int]:

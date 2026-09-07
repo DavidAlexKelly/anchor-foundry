@@ -460,3 +460,43 @@ def test_the_refusal_names_who_and_what_to_do() -> None:
     message = str(exc.value)
     assert "ada" in message
     assert "`any`" in message
+
+
+# ---- the one copy the browser keeps (§190's pattern) -----------------------------
+def test_the_browser_matches_references_the_same_way() -> None:
+    """`lib/notify-rule.ts` has its own copy of the reference pattern, and it is
+    the only thing in that file the server also decides.
+
+    It is there because the alternative is worse: a form that could not see its
+    own references would report nothing until Save, which is a refusal about a
+    form somebody has already left. So the copy exists on purpose and this is
+    what stops it drifting — **the braces especially**. Two braces are not a
+    reference, a form that generated two would produce templates that render
+    literally, and nothing on screen would say so.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "notify-rule.ts"), encoding="utf-8"
+    ).read()
+    found = re.search(r"matchAll\(/(.+?)/g\)", source)
+    assert found, "the reference pattern is not where this test expects it"
+    browser = found.group(1)
+
+    # The two are written in different flavours - Python names its group, and
+    # JavaScript escapes the braces the same way - so this compares what they
+    # *match* rather than their text: the same handful of templates, and the
+    # same answers.
+    for template, expected in (
+        ("{{{a}}}", ["a"]),
+        ("{{a}}", []),
+        ("{{{alert.priority}}}", ["alert.priority"]),
+        ("{{{ spaced }}}", ["spaced"]),
+        ("{{{1bad}}}", []),
+        ("plain", []),
+    ):
+        assert notifications.references(template) == expected, template
+        assert re.findall(browser.replace("\\", "\\"), template) == expected, (
+            f"the browser's pattern disagrees about {template!r}"
+        )

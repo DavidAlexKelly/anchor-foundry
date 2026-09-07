@@ -47,6 +47,14 @@ export interface WorkspaceDetail {
   updated_at: string;
 }
 
+/** One entry in a workspace's member list.
+ *
+ * A member is a **user or a group** (db 0005 resolves both), so the user
+ * fields are nullable and a group entry carries a name instead.
+ *
+ * **Not the same set as {@link NotificationRecipient}**, which is why that one
+ * exists: membership is one of db 0005's three routes to a workspace, and a
+ * workspace's creator uses none of them. */
 export interface WorkspaceMember {
   id: string;
   role: WorkspaceRole;
@@ -56,6 +64,20 @@ export interface WorkspaceMember {
   group_id: string | null;
   group_name: string | null;
   created_at: string;
+}
+
+/** One person a notification rule in a workspace may name
+ * (`action-types` p.95, §258).
+ *
+ * Everybody `effective_workspace_role` grants access to, which is the same
+ * predicate `notification_store.permitted` applies at send time — so what the
+ * form offers is exactly what the server will take. No membership row stands
+ * behind these, so there is no `id` of one and no role to report; the `id` is
+ * the *user's*, which is what a recipient list holds. */
+export interface NotificationRecipient {
+  id: string;
+  email: string | null;
+  display_name: string | null;
 }
 
 export interface ProjectSummary {

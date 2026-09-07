@@ -182,12 +182,16 @@ def test_a_rename_a_module_depends_on_is_refused_in_the_dialog(page, api):
 
 
 def test_the_editor_offers_the_rule_kinds_that_execute(page, api):
-    """All five, now that all five run (§138).
+    """All six, now that all six run (§138, §258).
 
     `delete_object` was held out of this list while the executor refused it -
     an editor must not let somebody save an action that fails the first time it
-    is clicked - and arrived the day it ran. The list is asserted rather than
-    its length, so a kind added here without an executor turns this red.
+    is clicked - and arrived the day it ran. `notify` is the same story one
+    unit later: §257 built the rule and the delivery and left it reachable only
+    by posting JSON, so the list said five while the executor ran six. The list
+    is asserted rather than its length, so a kind added here without an
+    executor turns this red - and one the executor gained without the editor
+    stays visible as the gap it is.
     """
     mod = build(api, "Action editor kinds")
     open_editor(page, mod)
@@ -196,7 +200,7 @@ def test_the_editor_offers_the_rule_kinds_that_execute(page, api):
     options = kinds.locator("option").all_inner_texts()
     assert options == [
         "Set a property", "Create an object", "Link to an object", "Remove a link",
-        "Delete an object",
+        "Delete an object", "Send a notification",
     ]
 
 
@@ -408,3 +412,147 @@ def test_a_link_rule_from_the_far_side_asks_which_object_to_link(page, api):
     assert stored["rules"][0]["kind"] == "create_link"
     assert set(stored["rules"][0]["config"]) == {"link_type", "object"}
     assert stored["rules"][0]["config"]["object"] == "team"
+
+
+# ---- the notification rule (`action-types` p.89-101; §258) ---------------------
+def add_notify_rule(page) -> None:
+    """A second rule, switched to `notify`. The first stays the property setter
+    the action was created with, so what this file saves is still a definition
+    that runs."""
+    page.get_by_role("button", name="Add a rule").click()
+    page.get_by_label("Rule 2 kind").select_option("notify")
+
+
+def test_the_people_offered_are_not_the_membership_table(page, api):
+    """**The picker's set is `effective_workspace_role`, not `workspace_members`.**
+
+    §258's first version read the member list, and this browser is signed in as
+    the organisation's owner - who is a member of nothing and can see
+    everything. So the one account certain to be a valid recipient here was the
+    one account the form would not offer, and a rule written through it could
+    never notify the person writing it.
+
+    Asserted against the member list rather than as a bare presence check: that
+    the person *is* offered says little on its own, and that they are offered
+    **while absent from the members** is the whole claim.
+    """
+    mod = build(api, "Action editor notify people")
+    me = api.call("GET", "/auth/me")
+    members = api.call("GET", f"/workspaces/{mod.workspace_id}/members")
+    assert me["email"] not in {m["email"] for m in members}, (
+        "this test is vacuous unless the signed-in account is a non-member; "
+        f"members are {[m['email'] for m in members]}"
+    )
+
+    open_editor(page, mod)
+    add_notify_rule(page)
+    expect(page.get_by_label(f"Notify {me['email']}")).to_be_visible(timeout=15000)
+
+
+def test_a_notification_typed_in_the_dialog_saves_and_is_delivered(page, api):
+    """The round trip §258 exists for: a rule written entirely through the form
+    reaches the executor and puts something in the recipient's bar.
+
+    The recipient is the account this browser is signed in as, which is also
+    the one the API call runs as - so what the form saved is checked at the far
+    end of the wire rather than in the row it was written to.
+    """
+    mod = build(api, "Action editor notify saves")
+    me = api.call("GET", "/auth/me")
+    open_editor(page, mod)
+    add_notify_rule(page)
+
+    page.get_by_label(f"Notify {me['email']}").check()
+    page.get_by_test_id("rule-2-subject").fill(f"Ticket touched {mod.tag}")
+    # p.94's button rather than typed braces, because two braces are not a
+    # reference and typing three is the mistake it exists to prevent.
+    page.get_by_test_id("rule-2-body").fill("It is now ")
+    page.get_by_test_id("rule-2-body-insert-status").click()
+    expect(page.get_by_test_id("rule-2-body")).to_have_value("It is now {{{status}}}")
+
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    stored = definition(api, mod)
+    assert [r["kind"] for r in stored["rules"]] == ["modify_object", "notify"]
+    assert stored["rules"][1]["config"]["recipients"] == {
+        "kind": "static", "user_ids": [me["user_id"]]
+    }
+    # p.96's default came from the form without anybody choosing it, and it is
+    # the strict one - a blank here would be a rule that quietly sends data to
+    # somebody who may not read it.
+    assert stored["rules"][1]["config"]["permissions"] == "all"
+
+    instance = api.call(
+        "GET",
+        f"/workspaces/{mod.workspace_id}/object-types/{mod.type_id}/instances",
+    )["items"][0]
+    result = api.call(
+        "POST", f"{mod.base}/actions/{mod.action['id']}/execute",
+        {"instance_id": instance["id"], "values": {"status": "closed"}},
+    )
+    assert result["ok"], result
+
+    page.goto(f"{WEB_BASE}/home")
+    page.get_by_test_id("notification-bell").click()
+    panel = page.get_by_test_id("notification-panel")
+    expect(panel).to_be_visible(timeout=15000)
+    # **Scoped to this run's notification**, not read off the whole panel: the
+    # bar shows everything the account has ever been sent, and every other test
+    # in the suite that runs a notifying action leaves one there. A body
+    # assertion against the panel would eventually match a stranger's.
+    # `.first` is the *outermost* div holding the subject — the notification's
+    # own block. `.last` is the innermost, which is the header row carrying the
+    # subject and nothing else.
+    mine = panel.locator("div").filter(has_text=f"Ticket touched {mod.tag}").first
+    expect(mine).to_be_visible(timeout=15000)
+    # The reference the button generated, substituted with what was submitted.
+    expect(mine).to_contain_text("It is now closed")
+
+
+def test_the_form_names_what_is_missing_before_a_save(page, api):
+    """The refusal, said where the form still is.
+
+    The server refuses this too - a notify rule with no recipients never
+    saves - but that refusal arrives about a form somebody has already left.
+    Both halves are checked: that it is said, and that filling the thing in
+    takes it away, because a message that never clears is a message nobody
+    reads.
+    """
+    mod = build(api, "Action editor notify problem")
+    me = api.call("GET", "/auth/me")
+    open_editor(page, mod)
+    add_notify_rule(page)
+
+    said = page.get_by_test_id("rule-2-problem")
+    expect(said).to_contain_text("at least one person", timeout=15000)
+    page.get_by_label(f"Notify {me['email']}").check()
+    # Now the subject is what is missing, and the message moved on rather than
+    # going away - p.89 needs recipients *and* content.
+    expect(said).to_contain_text("subject")
+    page.get_by_test_id("rule-2-subject").fill("Anything")
+    expect(said).to_have_count(0)
+
+
+def test_a_reference_to_a_parameter_that_is_gone_is_named_in_the_form(page, api):
+    """The case a reference inserter makes easy to reach: insert
+    `{{{status}}}`, then rename the parameter it points at.
+
+    The template still holds the old name, and nothing about the text says so -
+    which is why this check reads the template against the parameter list
+    rather than trusting that a generated reference stays correct.
+    """
+    mod = build(api, "Action editor notify stale ref")
+    me = api.call("GET", "/auth/me")
+    open_editor(page, mod)
+    add_notify_rule(page)
+
+    page.get_by_label(f"Notify {me['email']}").check()
+    page.get_by_test_id("rule-2-subject").fill("About ")
+    page.get_by_test_id("rule-2-subject-insert-status").click()
+    expect(page.get_by_test_id("rule-2-problem")).to_have_count(0)
+
+    page.get_by_label("Parameter 1 name").fill("state")
+    said = page.get_by_test_id("rule-2-problem")
+    expect(said).to_contain_text("status", timeout=15000)
+    expect(said).to_contain_text("not a parameter")
