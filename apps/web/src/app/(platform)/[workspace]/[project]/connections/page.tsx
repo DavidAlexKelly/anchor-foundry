@@ -10,6 +10,7 @@ import {
   sync as syncApi,
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
+import { EgressDialog } from "@/components/egress-panel";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { WebhooksPanel } from "@/components/webhooks-panel";
 import type {
@@ -949,9 +950,22 @@ function ConnectionRow({
   const [showHistory, setShowHistory] = useState(false);
   const [showSync, setShowSync] = useState(false);
   const [showScheduledSync, setShowScheduledSync] = useState(false);
-  const refresh = () =>
+  const [showNetworking, setShowNetworking] = useState(false);
+  // **This was two statements and one of them ran on every render** (§264): a
+  // concise-body arrow ends at the first semicolon, so the sync-health line was
+  // never part of `refresh` and was instead a query invalidation fired from
+  // inside the component body — a side effect during render, once per
+  // connection row, feeding a refetch that re-rendered and fired it again. And
+  // the half that was supposed to run after a Test or a Remove never did, so
+  // the Sync health column kept showing the state from before.
+  //
+  // Nothing failed. The braces are the whole fix, and the reason it survived is
+  // that both symptoms are invisible in a screenshot: a column that is stale
+  // looks like a column, and a refetch loop looks like a fast network tab.
+  const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
     queryClient.invalidateQueries({ queryKey: ["sync-health", projectId] });
+  };
 
   const test = useMutation({
     mutationFn: () => connApi.test(workspaceId, projectId, connection.id),
@@ -985,6 +999,21 @@ function ConnectionRow({
         <HealthCell health={health} />
       </td>
       <td>
+        <div className="row-actions">
+          {/* **Outside `canEdit`, deliberately** (§264). p.37's debugging
+              procedure starts "confirm that the correct egress policies are
+              attached to the source", and the person doing that after a
+              refused sync is often the one who cannot change anything. The
+              panel itself is what hides the editing controls; the way in is
+              not privileged, because reading the list is not. */}
+          <button
+            className="btn quiet"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            onClick={() => setShowNetworking(true)}
+          >
+            Networking
+          </button>
+        </div>
         {canEdit && (
           <div className="row-actions">
             <button
@@ -1067,6 +1096,15 @@ function ConnectionRow({
             projectId={projectId}
             connection={connection}
             onClose={() => setShowScheduledSync(false)}
+          />
+        )}
+        {showNetworking && (
+          <EgressDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            connection={connection}
+            canEdit={canEdit}
+            onClose={() => setShowNetworking(false)}
           />
         )}
       </td>

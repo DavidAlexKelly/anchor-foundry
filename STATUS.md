@@ -4388,6 +4388,94 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 264. The egress panel, and p.37's step 1 as a screen (this session)
+
+§263 built the rule and enforced it at all four outbound paths, and left it
+reachable only by posting JSON. That is §252's shape, closed for the notify
+rule in §258 and for webhooks in §261 — but **for a security control it is
+worse than usual: an allowlist nobody can see is one nobody is checking**, and
+p.37's own debugging procedure opens by asking somebody to go and look at it.
+
+**The screen's job is written out in the source.** p.37 step 1: "confirm that
+the correct egress policies are attached to the source, and that the host,
+port, and protocol they allow match the system you are connecting to." That is
+a comparison between two lists, and only one of them existed anywhere in the
+product. So the panel shows both — what the source is *allowed* to reach, and
+what it is *configured* to reach, the second read out of a config whose four
+relevant fields live on a different form.
+
+**It does not decide whether a call would be permitted.** That is the mirror
+worth refusing: a browser that answered "allowed" where the server refuses
+would be worse than one that says nothing. `destinationsFor` reports facts, the
+person compares them, and Test — one button away, running the server's own
+check — is the answer that is true. The suggestion button fills the form rather
+than saving, for the same reason p.37 says *confirm*: a one-click write lets
+somebody agree with a suggestion they have not read.
+
+**The AWS gap is on the screen, not only in a comment.** With no custom
+endpoint, boto3 derives an S3 host from the bucket and region at request time,
+so no policy can refuse the call — §263 holds that with a test asserting the
+absence, and here it is a sentence in the panel. A form that accepted a policy
+for an AWS bucket and said nothing would be §214's control that cannot work,
+wearing the interface of one that can.
+
+**And planning it found a defect on the page it was going on.**
+
+```js
+const refresh = () =>
+  queryClient.invalidateQueries({ queryKey: ["connections", projectId] });
+  queryClient.invalidateQueries({ queryKey: ["sync-health", projectId] });
+```
+
+A concise-body arrow ends at the first semicolon. So the second line was never
+part of `refresh` — it was a query invalidation fired from the component body
+on **every render, once per connection row**, feeding a refetch that
+re-rendered and fired it again; and the half meant to run after a Test or a
+Remove never ran at all, leaving the Sync health column showing the state from
+before. **Neither symptom is visible.** A stale column looks like a column, and
+a refetch loop looks like a busy network tab. Nothing failed, `tsc` was happy —
+the code is valid, it just means something else — and it had been there since
+the page was written. The fix is a pair of braces.
+
+Worth generalising: **the bugs on this page were both invisible-by-construction
+rather than hard.** §263's two unguarded paths were found by a table with a
+column for the answer; this one by reading a function whose *shape* did not
+match its name. Neither is the kind of thing a test suite is asked to find,
+because nobody writes the test that would.
+
+**40 mutants attacked, 40 caught**, after two survivors — and they resolved in
+opposite directions, which is the useful part.
+
+*One was a missing test, and the fixtures explain why.* A duplicate is a clash
+on host **and** port, and dropping the host comparison entirely passed all five
+duplicate tests: every one of them varied the *port* while holding one host, so
+the host was never the thing that differed. §190's rule, met from the same side
+it was first written on — a test about **keying** needs fixtures that collide on
+everything except the key.
+
+*The other was a line that could not fail.* `urlDestination` ended with
+`url.hostname.toLowerCase()`, and removing the call changed nothing, because
+WHATWG host parsing lowercases the host itself. §213's question — is another
+layer already making this guarantee? — answers yes, so the call is deleted
+rather than tested. **A line that cannot fail still costs something**: it reads
+as a guarantee this function makes, and the next person to need that guarantee
+somewhere else would copy a call that was never doing the work. The property is
+still asserted, and the test now says where it actually comes from — so it goes
+red if somebody swaps the parser for a regex, which is the change that would
+break it. The mutant it replaced sits on the one host this module *does*
+lowercase itself, a database source's, where the call is live.
+
+**2100 API tests**; **1707 unit tests** (39 new); **792 browser tests**, 8 of
+them new in `e2e/test_egress_policies.py`.
+
+One note on the gate itself, because it cost a run. An earlier full browser
+pass reported two failures, and they were **mine**: API suites were being run
+against the shared dev database at the same time, and those fixtures create and
+drop databases and roles out from under whatever else is using them. The clean
+re-run is green end to end. **A browser suite that shares a database is not
+something to run alongside other work** — the same isolation argument §263 just
+made for the worker, arriving one layer up.
+
 ### 263. Egress policies, and the two outbound paths that were never checked (this session)
 
 `data-connection.md`'s build order item 1, and the only piece of Foundry's
@@ -9109,6 +9197,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard duplicated one level up is invisible to every test, because the level below is still right.** §213's Object View widget asked whether the bound type had a configured view and used the answer to fall back and to withhold a switch that led nowhere. Both rules are correct; both were already enforced by `ObjectView`, which the widget renders. Replacing the widget's answer with a constant changed nothing on screen, so the mutant survived — and the survivor was not a missing test but two functions, a query and eight unit tests that could never have been observed. §195's version of this was a fix that fixed nothing; this is subtler, because a duplicated guard reads like ordinary defensiveness and the behaviour is right either way. **The question to ask a surviving guard is not "which test is missing" but "who else already refuses this"** — and when somebody does, delete rather than test. The tell is a survivor whose code restates a rule you can point at in another file.
 
 - **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
+
+- **A line that cannot fail still costs something, so delete it rather than testing it.** §264's `urlDestination` ended with `url.hostname.toLowerCase()`; a mutant removing the call survived, and the reason was not a missing test — WHATWG host parsing lowercases the host, so the call had never done anything. The instinct on a survivor is to write the test that kills it, and here that test would have passed against the mutant too, which is how a *vacuous* assertion gets added in good faith. The real cost of the line is not the microsecond: it **reads as a guarantee this function makes**, so the next person needing that guarantee elsewhere copies a call that was never doing the work. §213's question is the one to ask of every survivor before writing a test — is another layer already making this promise? — and when the answer is yes, the code goes and the *property* keeps its test, worded to say where the promise actually comes from.
 
 - **A lesson recorded where it was learned does not generalise on its own.** `apps/api/requirements-dev.txt` carried a written-up diagnosis of exactly one bug — a test dependency nothing installed, so "the suite ran locally because a venv had it installed by hand, and a fresh checkout could not have run it at all" — and the identical case sat unfixed in `apps/worker` for the whole life of the repo, 78 tests that no documented command could run. §263 found it only by needing to run one of them. A comment is addressed to whoever opens *that file*; the class of bug it describes lives in files nobody will open for that reason. **When a fix is worth a paragraph, ask what check would have caught it, and write that too** — here, one that counts the `apps/*/tests` directories against `scripts/check.sh` and fails on any that is neither run nor explained. The same reading applies to every "found the hard way" note in this document: each one is a candidate assertion that has not been written yet.
 
