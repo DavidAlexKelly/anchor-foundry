@@ -36,7 +36,7 @@ Foundry separates **worker** (where compute runs) from **networking** (how the t
 | Streaming syncs | TOC §19 | ○ — out of scope |
 | Media set syncs | TOC §21 | ○ — tracks the media reference property type in `ontology.md` |
 | **Exports** — push data out | TOC §24–25 | ○ |
-| **Webhooks** — outbound calls to a source | TOC §26–29 | ○ — also an action side effect (`ontology.md` §5.2) |
+| **Webhooks** — outbound calls to a source | TOC §26–29 | ◔ §259 — the resource is built (decision 0012): a request shape on a REST source, p.228's inputs and p.229's outputs, p.222's test call and p.242's per-caller history. What is left is the action rule in p.106's two modes, which is where `ontology.md` §5.2 picks it up |
 | **Listeners** — inbound events | TOC §30–39 | ○ |
 | Source exploration — browse a source before syncing | TOC §17 | ◑ |
 
@@ -73,7 +73,7 @@ Foundry's own fallback is worth copying: "For systems without a dedicated connec
 ## 5. Build order
 
 1. **Egress policies** — an explicit per-source destination allowlist. A security control, and the only piece of Foundry's networking model worth taking.
-2. **Webhooks**, shared with action side effects.
+2. ~~**Webhooks**, shared with action side effects.~~ — **the resource is done (`STATUS.md` §259)**; the action rule is the half that is left. Struck in halves per §216: a line goes stale in the commit that finishes part of it. Decision 0012 records the design, including the two constraints that no test here can see — no external call inside the transaction, and none on the event loop.
 3. **Exports** — the reverse direction; currently data only flows in.
 4. **Source exploration** — browse tables and files before configuring a sync.
 5. **Connectors on demand.**
@@ -88,5 +88,5 @@ Deliberately never: agent workers, streaming, Rubix-specific networking, the ful
 - **Egress policy** — a source configured for `host-a` cannot reach `host-b`, and the refusal names the policy. Mutation: remove the policy check, and the test goes red.
 - **Credential handling** — a credential is never returned by any read endpoint, at any role. This wants an explicit test rather than an assumption.
 - **Schema drift** — a column removed upstream is recorded on the sync run and does not silently produce nulls.
-- **Webhook** — a failing webhook does not roll back the action that fired it, and the failure is visible. (Decide which way round this should be, then test it — silence is the bad outcome either way.)
+- **Webhook** — ~~decide which way round this should be~~: **both ways round, chosen per rule** (`action-types` p.105-107, decision 0012). A *writeback* fails the action and shows why; a *side effect* leaves the object changed and records the failure without surfacing it. The tests are paired, because each passes against an implementation that got the other mode's semantics.
 - **Export** — an export writes what a sync of the same dataset would read back.
