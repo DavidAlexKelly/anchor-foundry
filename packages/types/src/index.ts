@@ -80,6 +80,64 @@ export interface NotificationRecipient {
   display_name: string | null;
 }
 
+/** A webhook: a request shape held against a connection
+ * (`data-connection` p.216-242, §259).
+ *
+ * The connection owns the base URL, the auth and the secret; this owns the
+ * method, relative path, query, headers and body. p.220 draws the line in
+ * those words, and decision 0012 §4 records why it is kept. */
+export interface Webhook {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  connection_id: string;
+  /** Named on the way out, because a list carrying only ids would need a
+   * second fetch to be readable. */
+  connection_name: string;
+  api_name: string;
+  display_name: string;
+  description: string;
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  /** `null` is a request with no body, which is not the same as a request with
+   * an empty one. */
+  body: unknown | null;
+  inputs: { api_name: string; data_type: string; required: boolean }[];
+  outputs: { api_name: string; data_type: string; path: string }[];
+  store_responses: boolean;
+  retry_statuses: number[];
+  timeout_seconds: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One execution of a webhook (p.242's history).
+ *
+ * **Scoped to the person who made the call** by db 0067's policy, not by a
+ * role: "inputs passed to the webhook and the full response will only be
+ * visible to the user who called the webhook". */
+export interface WebhookRun {
+  id: string;
+  mode: string;
+  ok: boolean;
+  status_code: number | null;
+  /** p.237's three-valued answer, and `null` means **unknown** rather than
+   * "no" — a 500 after a POST may well have written, and rendering that as a
+   * definite no would be believed. */
+  system_changed: boolean | null;
+  error: string | null;
+  duration_ms: number | null;
+  /** `null` when the webhook has `store_responses` off (p.242). An absent body
+   * is "deliberately not kept"; an empty one is a stored empty body. */
+  request_body: unknown | null;
+  response_body: unknown | null;
+  outputs: Record<string, unknown>;
+  action_run_id: string | null;
+  created_at: string;
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;
