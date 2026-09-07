@@ -16,6 +16,22 @@ import pytest
 from dagster import build_op_context
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+# `packages/db/dsn.py` (§263). This suite's source-database fixtures used to
+# rewrite the admin DSN with a string replace that only worked when the
+# platform database was literally called `platform` - which stopped being true
+# the moment the worker suite got a database of its own, and three tests then
+# failed with "table public.items does not exist" about tables created in the
+# wrong database.
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))),
+        "packages", "db",
+    ),
+)
+
+from dsn import for_database  # noqa: E402
 
 import anchor_worker.jobs.sync_configs as sync_configs  # noqa: E402
 from anchor_worker.jobs.sync_configs import run_due_scheduled_syncs  # noqa: E402
@@ -49,7 +65,7 @@ def source_database():
         conn.execute(f"CREATE ROLE {SOURCE_USER} LOGIN PASSWORD '{SOURCE_PASSWORD}'")
         conn.execute(f"GRANT {SOURCE_USER} TO platform")
         conn.execute(f"CREATE DATABASE {SOURCE_DB} OWNER {SOURCE_USER}")
-    src_dsn = ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
+    src_dsn = for_database(ADMIN_DSN, SOURCE_DB)
     with psycopg.connect(src_dsn, autocommit=True) as conn:
         conn.execute("CREATE TABLE public.items (id bigint PRIMARY KEY, val text NOT NULL)")
         conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {SOURCE_USER}")
@@ -64,7 +80,7 @@ def _seed_items(source_database: dict) -> None:
     """Reset the shared source table to its known two rows before every
     test - tests share source_database (module-scoped, expensive to set
     up) but must not see each other's row mutations."""
-    src_dsn = ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
+    src_dsn = for_database(ADMIN_DSN, SOURCE_DB)
     with psycopg.connect(src_dsn, autocommit=True) as conn:
         conn.execute("TRUNCATE public.items")
         conn.execute("INSERT INTO public.items (id, val) VALUES (1,'a'), (2,'b')")
@@ -188,7 +204,7 @@ def test_schema_drift_is_recorded_on_the_scheduled_run(
     assert run_due_scheduled_syncs(_ctx()) >= 1
     assert _latest_run_drift(cid) is None  # first version, no baseline
 
-    src_dsn = ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
+    src_dsn = for_database(ADMIN_DSN, SOURCE_DB)
     with psycopg.connect(src_dsn, autocommit=True) as conn:
         conn.execute("ALTER TABLE public.items ADD COLUMN score double precision")
         conn.execute("UPDATE public.items SET score = id * 1.5")
@@ -240,7 +256,7 @@ def test_incremental_sync_first_run_then_merges_new_rows(workspace: dict, source
     assert (version, count) == (1, 2)
 
     # A new upstream row arrives; force the schedule due again and re-run.
-    src_dsn = ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
+    src_dsn = for_database(ADMIN_DSN, SOURCE_DB)
     with psycopg.connect(src_dsn, autocommit=True) as conn:
         conn.execute("INSERT INTO public.items (id, val) VALUES (3,'c')")
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:

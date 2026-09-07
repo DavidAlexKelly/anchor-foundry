@@ -26,6 +26,23 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# `packages/db/dsn.py`, re-exported for the whole suite (§263). Six files here
+# need to point a DSN at a second database — a stand-in for a customer's source
+# system, or a scratch database migrated from empty — and every one of them did
+# it with `ADMIN_DSN.replace("/platform?", ...)`, which fails by silently doing
+# nothing when the platform database is not called `platform`. That module's
+# docstring records both times it has cost something. Imported here rather than
+# in each file because most of them already import from this one.
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))),
+        "packages", "db",
+    ),
+)
+
+from dsn import for_database  # noqa: E402,F401  (re-exported)
 
 ADMIN_DSN = os.environ["TEST_ADMIN_DSN"]      # role: platform (owner) - fixtures only
 APP_DSN = os.environ["DATABASE_URL"]          # role: platform_app - what the API uses

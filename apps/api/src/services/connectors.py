@@ -55,6 +55,8 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
+from . import egress
+
 
 class ConnectorConfigError(ValueError):
     """Config failed the connector's schema. Message is user-safe."""
@@ -242,6 +244,15 @@ class PostgresConnector:
 
     def _conninfo(self, config: dict[str, Any], secret: dict[str, str]) -> dict[str, Any]:
         cfg = PostgresConfig(**config)
+        # **The one chokepoint for this connector** (§263). Every `test`,
+        # `discover` and `snapshot` builds its connection here, so the guard is
+        # made once rather than three times — and a fourth operation added
+        # later gets it without anybody remembering to.
+        #
+        # A host and a port, not a URL, which is the shape decision 0013 §3 says
+        # the check has to take: this path never had a URL and `_check_url` was
+        # never on it.
+        egress.check_current(cfg.host, cfg.port)
         return {
             "host": cfg.host,
             "port": cfg.port,
@@ -470,6 +481,8 @@ class MySQLConnector:
 
     def _connect_kwargs(self, config: dict[str, Any], secret: dict[str, str]) -> dict[str, Any]:
         cfg = MySQLConfig(**config)
+        # The same chokepoint one connector over (§263), for the same reason.
+        egress.check_current(cfg.host, cfg.port)
         kwargs: dict[str, Any] = {
             "host": cfg.host,
             "port": cfg.port,
@@ -744,6 +757,8 @@ class S3Connector:
         return cleaned
 
     def _client(self, config: dict[str, Any], secret: dict[str, str]):
+        import urllib.parse
+
         import boto3
         from botocore.config import Config as BotoConfig
 
@@ -757,6 +772,21 @@ class S3Connector:
             ),
         }
         if cfg.endpoint_url:
+            # **Only a custom endpoint is checkable here** (§263). AWS's own S3
+            # host is derived by boto3 from the bucket and region at request
+            # time and never passes through this function, and p.184's
+            # troubleshooting page is a list of the destinations an S3 sync
+            # reaches that nobody expected — STS among them. So an allowlist
+            # cannot honestly claim to scope an AWS S3 source, and pretending
+            # otherwise would be the worst kind of security control: one that
+            # reads as covering something it does not.
+            #
+            # A custom endpoint *is* a destination somebody typed, so it is
+            # checked. `data-connection.md`'s row says the rest out loud.
+            parsed = urllib.parse.urlparse(cfg.endpoint_url)
+            egress.check_current(
+                parsed.hostname or "", egress.port_for(parsed.scheme, parsed.port)
+            )
             kwargs["endpoint_url"] = cfg.endpoint_url
         if secret.get("access_key_id") and secret.get("secret_access_key"):
             kwargs["aws_access_key_id"] = secret["access_key_id"]
@@ -1089,6 +1119,19 @@ class RestConnector:
                 "client_secret": client_secret}
         if config.get("oauth_scope"):
             form["scope"] = config["oauth_scope"]
+        # **The token endpoint is a second destination** (§263, decision 0013's
+        # enforcement table). p.12's own example is a source that needs both —
+        # "retrieve credentials from an internet-hosted system, and use said
+        # credentials to authenticate with an on-premise system" — so an
+        # allowlist that covered only `base_url` would cover the smaller half.
+        #
+        # Checked here rather than only in `validate_config`, which does look at
+        # `token_url` when the connection is saved. §259 recorded why that is
+        # not the same thing: `_check_url` resolves the hostname *when it runs*,
+        # and a name that answered publicly at configure time can answer
+        # differently later. This path had no send-time check at all until now.
+        _check_url(config["token_url"], config.get("allow_insecure_http", False),
+                   field="token_url")
         request = urllib.request.Request(
             config["token_url"],
             data=urllib.parse.urlencode(form).encode(),
@@ -1333,6 +1376,19 @@ def _check_url(url: str, allow_insecure_http: bool, *, field: str = "base_url") 
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ConnectorConfigError(f"{field}: must be an http(s) URL")
+    # **The source's own allowlist, before the platform's own guard** (§263).
+    # Two controls, and this is the one that says whether the *destination* was
+    # asked for; the link-local refusal below is the platform's, and a source's
+    # policies cannot override it. Order matters only for which message a call
+    # to a link-local address inside its own allowlist gets, and the specific
+    # one is more use than "not allowed".
+    #
+    # `port_for` fills in the port a scheme implies, because
+    # `https://api.example.com/x` and `https://api.example.com:443/x` are the
+    # same destination and a port-scoped policy has to allow both.
+    egress.check_current(
+        parsed.hostname or "", egress.port_for(parsed.scheme, parsed.port)
+    )
     if parsed.scheme == "http" and not allow_insecure_http:
         raise ConnectorConfigError(
             f"{field}: refusing plaintext http - use https, or set "

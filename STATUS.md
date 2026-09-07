@@ -4388,6 +4388,164 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 263. Egress policies, and the two outbound paths that were never checked (this session)
+
+`data-connection.md`'s build order item 1, and the only piece of Foundry's
+networking model that survived its own recommendation: "do model egress
+policies — an explicit allowlist of destinations per source is a security
+control we will be asked for." p.12, p.103, p.184.
+
+**The source barely specifies this, and decision 0013 says so first.** p.12 and
+p.103 describe Rubix networking policies from the outside — what they are for,
+never what they contain — so most of the model here is inferred, and the
+decision record marks each inference rather than implying the PDF settled it.
+§216 is about opening what a line cites; this is the case where opening it
+finds a gap, and the honest move is to name the gap in the artefact somebody
+will read next.
+
+**Then §216 caught this unit out on its own terms.** The decision record marked
+the **port** as inferred — "the document never says so" — and p.37 says so in
+one clause: egress policies "allowlist the specific hosts, ports, and protocols
+a source is permitted to connect to". It was found after the code was written,
+while planning §264, by opening a page `data-connection.md` was already citing
+for something else. The page is titled *Connectivity and egress* and reads as a
+troubleshooting guide, which is exactly why nobody looked there for a data
+model. **A page's title tells you what it is for, not what it contains** — and
+the search that would have found it took nine seconds. Decision 0013 is
+corrected rather than quietly left standing, and it now records the third
+dimension p.37 names and why this build does not have it: a `protocol` column
+would be checked against a constant the connector already fixed, so its only
+possible failure is somebody typing the wrong word into it.
+
+**Empty means unrestricted, and that is not a soft default.** Every source that
+already exists has no policies, so closed-by-default would break all of them in
+the migration that introduced the table. It also decides the shape of the whole
+test file: a refusal on its own passes against an implementation that refuses
+everything, so **every refusal here is paired with an allowed call**. The
+harness agrees — `"no policies refuses everything"` is one of its mutants, and
+what kills it is the presence half.
+
+**Writing decision 0013's enforcement table found two paths with no check at
+all.** The table was meant to be documentation: four outbound paths, one column
+saying where each is guarded. Two columns could not be filled in.
+
+*A database host is not a URL.* `_check_url` guarded every REST call and there
+was nothing on the Postgres or MySQL connectors, so an allowlist on a database
+source was a control that did nothing — §214's shape, a control that cannot
+work being worse than an absent one. The guard went to `_conninfo` and
+`_connect_kwargs`, which every `test`, `discover` and `snapshot` builds through.
+
+*And a token endpoint is a second destination.* p.12's own example is a source
+that "retrieve[s] credentials from an internet-hosted system, and use[s] said
+credentials to authenticate with an on-premise system" — two hosts, and an
+allowlist covering `base_url` alone covers the smaller half. `validate_config`
+did look at `token_url` when the source was saved, which §259 already recorded
+is not the same claim: `_check_url` resolves the hostname *when it runs*.
+
+**Neither was found by a test failing.** Both were found by filling in a table
+that had a column for the answer. §240's lesson generalises: the artefact that
+forces a per-case answer is worth writing before the code that would need one.
+
+**The worker's copy is the same file, asserted byte-for-byte.** The worker has
+its own connectors deliberately — independently deployable images, no shared
+package — and a scheduled sync is the one outbound path with no caller at all.
+Duplicating a *security* rule is §191's mirror at the worst stakes: two copies
+free to be identically wrong, and the one that drifts stops refusing without
+anything failing to compile. So `egress.py` is copied, not reimplemented, and
+the test compares bytes rather than behaviour. "They agree on the cases I
+thought of" is what a behavioural comparison buys.
+
+**The RLS design was wrong twice, and the second one was instructive.**
+`egress_policies` has to be visible exactly when its connection is, and a
+connection is workspace- or project-scoped depending on a column. The first
+attempt gave the helper a connection id and had it query `connections`, which
+risks recursion once `conn_isolation` uses it. Marking it `SECURITY DEFINER` to
+escape that broke **every INSERT in the table** — a `USING` clause with no
+`WITH CHECK` is also the insert check, and the new row is not visible to a
+subquery in the same command. `services/workspaces.create` documents that exact
+trap and it was still walked into. The answer was to pass **columns**, not an
+id: the helper then reads nothing at all, which is a property
+`test_a_delegating_helper_reads_nothing_itself` now asserts by name.
+
+**29 mutants attacked, 29 caught**, after three survivors and one no-op.
+
+*Two of the survivors were the two paths above* — the guards were new, and new
+code with no test is the ordinary case a harness exists to catch. Both got a
+pair against a real socket: the database one dials a real Postgres, and the
+token one needed **a second fixture server on a second port**, because one
+server cannot tell the two checks apart. A policy naming its host and port
+would permit both destinations, so a missing guard on the token endpoint would
+look exactly like a present one. *A fixture that cannot distinguish two things
+cannot test which of them fired* — §190's rule about colliding fixtures, read
+from the other end: there, the fixtures were too distinguishable; here, not
+enough.
+
+*The third was `MAX_POLICIES`.* A ceiling is the easiest kind of line to write
+and never exercise, and one that never fires could be off by a factor of ten
+without anybody noticing.
+
+*The no-op was the harness's own fault and worth the four lines that caught
+it.* The worker's Postgres and MySQL guards are the same line, so the mutation
+matched twice and was reported NO-OP rather than as a hole — §189's rule
+working as intended.
+
+**Then the worker's half of this turned out to be unrunnable, and that was the
+larger finding.** Writing a behavioural test for the scheduled-sync path — the
+one outbound path with no caller, where `restricted_to` fails *open* — meant
+running the worker suite, and nothing could. `scripts/setup.sh` built one
+virtualenv from `apps/api/requirements-dev.txt` and never installed the
+worker's; `scripts/check.sh`, whose first line is "every check this repo has,
+in one command", had no worker step. **78 tests, not failing — absent**, which
+is worse, because a red suite is visible and a missing one is not.
+
+**The same bug, already found once, in the file next door.**
+`apps/api/requirements-dev.txt` carries a comment about playwright: "It was
+missing entirely until the CI workflow was read against the repo: the suite ran
+locally because a venv had it installed by hand, and a fresh checkout could not
+have run it at all." That is this defect, diagnosed, written up, and fixed for
+one suite while the identical case stood next to it. **A lesson recorded in the
+place it was learned does not generalise on its own** — it needs a check that
+asks the question about everything, which `test_dependency_pins.py` now is: it
+counts the `apps/*/tests` directories on disk against `check.sh` and fails on
+one that is neither run nor explained.
+
+**And the worker suite paid for itself in the first run.**
+`run_due_scheduled_syncs` catches an enumerated tuple of exceptions, under a
+comment that says exactly why: "anything missed here crashes the whole batch and
+leaves every other due connection unprocessed instead of failing just this one."
+§263 had put `EgressRefused` on that call path and not in the tuple — precisely
+*because* it is deliberately not a `ConnectorError` (decision 0013 §4: a refused
+destination is not a failure to reach one), so it slipped past a list that
+already covered every connector fault. The effect was worse than the comment's
+own warning: restricting **one** source would have ended the batch and stopped
+every other scheduled sync in the deployment. **A comment that names the rule is
+not the rule**; the tuple was the rule, and only running the code found it.
+
+**One more thing fell out of giving that suite its own database.** Six files
+across two suites built a second DSN with `ADMIN_DSN.replace("/platform?", ...)`
+— a string match on two things that are not syntax: that the platform database
+is called `platform`, and that the DSN has a query string. `STATUS.md` already
+records that costing a session when the `?` was missing. Here the *name* was
+different, so four fixtures created their tables in the wrong database and three
+tests failed with "table public.items does not exist" — a message pointing at
+the source system rather than at the DSN that never changed. **Both failures are
+the same shape: a string operation that no-ops instead of erroring.** It is now
+one parsed function, `packages/db/dsn.py`, which raises rather than returning
+the input unchanged — because returning the input unchanged is the original bug.
+
+**And the S3 gap is a test, not a comment.** `_client` checks a custom
+`endpoint_url` and cannot check anything else: with no endpoint, boto3 derives
+the host from the bucket and region at request time, and p.184's
+troubleshooting page lists the destinations an S3 sync reaches that nobody
+expected, STS among them. An allowlist there would read as covering something
+it does not. That limitation now has a passing test that *asserts the absence*,
+so if somebody later makes the path raise they have to come here and decide
+whether the claim has become true — rather than the comment quietly going stale
+in either direction.
+
+**2100 API tests**, 2 skipped; **78 worker tests**, 1 skipped — the first number
+this project has ever been able to report for that app.
+
 ### 262. The webhook rule in the editor, and two defects §260 left (this session)
 
 The last of the seven rule kinds reachable only by posting JSON. §258 closed
@@ -8952,6 +9110,16 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
 
+- **A lesson recorded where it was learned does not generalise on its own.** `apps/api/requirements-dev.txt` carried a written-up diagnosis of exactly one bug — a test dependency nothing installed, so "the suite ran locally because a venv had it installed by hand, and a fresh checkout could not have run it at all" — and the identical case sat unfixed in `apps/worker` for the whole life of the repo, 78 tests that no documented command could run. §263 found it only by needing to run one of them. A comment is addressed to whoever opens *that file*; the class of bug it describes lives in files nobody will open for that reason. **When a fix is worth a paragraph, ask what check would have caught it, and write that too** — here, one that counts the `apps/*/tests` directories against `scripts/check.sh` and fails on any that is neither run nor explained. The same reading applies to every "found the hard way" note in this document: each one is a candidate assertion that has not been written yet.
+
+- **A string operation that no-ops instead of erroring is a silent wrong answer.** Two separate failures, one root: `ADMIN_DSN.replace("/platform?", f"/{other}?")`, copied into ten places to point a DSN at a second database. Once the DSN had no `?` and every scratch fixture's `CREATE TABLE`, `CREATE VIEW` and blanket `GRANT` ran against the shared dev database, breaking unrelated suites on a `DROP ROLE`. Once (§263) the database was not called `platform` and four fixtures built their tables in the wrong place, surfacing as "table public.items does not exist" — a message about the source system, pointing nowhere near the DSN that never changed. `.replace`, `.strip`, `.removeprefix` and a regex `sub` all share this: **the failure case returns the input, which is a plausible value.** Where the result is a *resource identifier* — a DSN, a path, a URL — parse it instead, and raise when the part you meant to change is not there.
+
+- **A comment that names a rule is not the rule.** `run_due_scheduled_syncs` catches an enumerated tuple of exceptions under a comment saying "anything missed here crashes the whole batch and leaves every other due connection unprocessed instead of failing just this one" — and §263 added a new exception type to that call path without adding it to the tuple. The comment was read, agreed with, and not acted on, because the thing it describes is a list twelve lines away with nothing tying them together. It slipped through for a specific reason worth remembering: the new type was deliberately *not* a subclass of anything already in the tuple, so every "is this covered?" instinct answered from the wrong taxonomy. **A hand-maintained exhaustive list needs something that fails when it is not exhaustive** — a test, or a base class the enumeration can name — and until it has one, adding an exception type means grepping for every handler on its call path.
+
+- **A table with a column for the answer finds the cases that have none.** §263 built an enforcement table into decision 0013 as documentation — four outbound paths, one column saying where each is guarded — and two of the four columns could not be filled in: the database connectors had no check at all, and a REST source's OAuth token endpoint was a second destination nobody had guarded. Neither was found by a test failing, because neither had a test to fail; both were found by a *format that refuses to be vague*. Prose would have said "the guard is in `_check_url`", which is true and is not the same claim as "every path reaches it". Whenever a control is supposed to be universal, enumerate the things it must cover and write the answer for each one down — the row you cannot complete is the hole.
+
+- **A fixture that cannot distinguish two things cannot test which of them fired.** §263's OAuth source reaches two hosts: the data URL and the token URL. Pointed at one fixture server, a policy naming its host and port permits both, so a missing guard on the token endpoint looks exactly like a present one — the test passes either way and asserts nothing. The fix was a **second fixture server on a second port**, so the permitted destination and the refused one are different rows. This is §190's colliding-fixtures rule read from the other end: there the fixtures were too *distinguishable* and hid a keying bug; here they were not distinguishable enough and hid a missing guard. The question is the same either way — which of these values is the code actually reading? — and the fixture has to make the wrong answer visible.
+
 - **A fixture that never crosses the limit the code is written against cannot see the limit.** §212's Links widget header reports a link's `total`; the section under it lists the first page, which the traversal caps at ten. The fixture gave the object two linked rows, so `total` and `items.length` were both 2 — and a header that counted its own list passed every assertion while being wrong by exactly the amount nobody could observe. This is the "two things that had to differ were the same thing" family once more, but with a tell of its own: a **fixture sized under a boundary the code claims to handle**. Any pagination, truncation, clamp or preview limit has one, and the fixture has to cross it or the branch on the far side is untested. The fix is a number, not a test: eleven reports instead of two, and the widget now says "11" over a list of ten.
 
 - **A stop hook that checks `git status` cannot tell your work from a harness's in-flight mutation, and "commit and push" is the wrong answer during a run.** §197 hit this three times; one of the prompts landed on the mutant that makes `CanvasUnused` render its children, which is the exact failure its decision record exists to prevent — committing it would have shipped parked widgets onto the page for every reader. A mutation harness works *by* dirtying `git status`, so during a run the only safe responses are to verify against the running process and wait, or `git checkout --` the file. The check to run is `ps aux | grep <harness>` plus `git diff`: a one-line change reverting a guard, with the harness alive, is never yours.
@@ -8993,4 +9161,4 @@ From a fresh checkout to a stack you can sign into. It asks before anything slow
 
 **`docs/local-setup.md` is the guide** — the same steps by hand, what each one is for, how to seed a test client or user, and the failures worth recognising by sight (the DSN form `migrate.py` refuses, the `PLATFORM_APP_PASSWORD` the schema needs, why a token stops working when the API restarts).
 
-Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own; `scripts/dev-down.sh` stops the two servers again and leaves Postgres alone, because it is not this repo's to stop. `scripts/check.sh` runs every check the repo has.
+Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own; `scripts/dev-down.sh` stops the two servers again and leaves Postgres alone, because it is not this repo's to stop. `scripts/check.sh` runs every check the repo has — types, unit, worker, API, browser — and `apps/api/tests/test_dependency_pins.py` is what makes that sentence true rather than aspirational: it counts the test directories on disk against the script, and §263 added it because the worker's 78 tests had been absent from that list since the app was written.

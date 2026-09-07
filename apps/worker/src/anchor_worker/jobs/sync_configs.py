@@ -31,6 +31,7 @@ from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
 from .. import dataset_engine as engine
+from .. import egress
 from ..connectors import ConnectorError, get_connector
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env, slugify, storage_prefix
@@ -188,6 +189,20 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
                     context.log.warning("connection %s has a schedule but no sync target set", connection_id)
                     continue
                 source_schema = source_schema or ""
+                # §263: the source's egress policies, read in the same scoped
+                # transaction as the row they belong to. The worker resolves
+                # this itself rather than inheriting an ambient scope, because
+                # it has no request to inherit one from — a scheduled sync is
+                # the one outbound path with no caller at all.
+                cur.execute(
+                    "SELECT host, port, description FROM egress_policies"
+                    " WHERE connection_id = %s",
+                    (connection_id,),
+                )
+                policies = [
+                    {"host": h, "port": p, "description": d}
+                    for h, p, d in cur.fetchall()
+                ]
             conn.commit()
 
         ok, error, rows_synced = True, None, 0
@@ -195,7 +210,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
         new_cursor_value = last_cursor
         try:
             connector = get_connector(source_type)
-            with tempfile.TemporaryDirectory() as tmp:
+            with egress.restricted_to(policies), tempfile.TemporaryDirectory() as tmp:
                 cursor_for_query = cursor_column if mode == "incremental" else None
                 extract = connector.snapshot(
                     config, secret,
@@ -290,12 +305,25 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
         # standing checklist item from instance_syncs.py's own history): a
         # driver/extract failure (ConnectorError, including an unregistered
         # source type), a DuckDB failure, a missing workspace (LookupError), a
-        # filesystem failure (OSError), or a malformed storage key
-        # (StorageKeyError, a ValueError subclass none of the others cover).
+        # filesystem failure (OSError), a malformed storage key
+        # (StorageKeyError, a ValueError subclass none of the others cover), or
+        # a destination this source's egress policies do not permit.
         # Anything missed here crashes the whole batch and leaves every other
         # due connection unprocessed instead of failing just this one.
+        #
+        # **`EgressRefused` is here because §263 put it on the call path and
+        # this list did not follow.** It is deliberately not a `ConnectorError`
+        # — a refused destination is not a failure to reach one, and the API's
+        # four call sites report the two differently — which is exactly what
+        # made it slip past a tuple that already covered every connector fault.
+        # The consequence was the one the paragraph above describes and worse:
+        # one source carrying a policy would end the whole batch, so restricting
+        # a single source could stop every other scheduled sync in the
+        # deployment. Found by running the worker suite, which until §263
+        # nothing could.
         except (
             ConnectorError,
+            egress.EgressRefused,
             engine.DatasetEngineError,
             LookupError,
             OSError,

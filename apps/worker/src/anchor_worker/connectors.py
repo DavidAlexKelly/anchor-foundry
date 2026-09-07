@@ -17,6 +17,9 @@ to introduce by copy-paste.
 import csv
 import os
 import re
+import urllib.parse
+
+from . import egress
 from dataclasses import dataclass
 
 
@@ -78,6 +81,9 @@ class PostgresConnector:
     type_name = "postgres"
 
     def conninfo(self, config: dict, secret: dict) -> dict:
+        # §263: the source's egress allowlist, at this connector's one
+        # chokepoint — the same placement as the API's copy.
+        egress.check_current(config["host"], config.get("port"))
         return {
             "host": config["host"],
             "port": config["port"],
@@ -196,6 +202,7 @@ class MySQLConnector:
     type_name = "mysql"
 
     def _connect_kwargs(self, config: dict, secret: dict) -> dict:
+        egress.check_current(config["host"], config.get("port"))
         kwargs = {
             "host": config["host"],
             "port": config["port"],
@@ -477,6 +484,8 @@ class RestConnector:
                 "client_secret": client_secret}
         if config.get("oauth_scope"):
             form["scope"] = config["oauth_scope"]
+        _t = urllib.parse.urlparse(config["token_url"])
+        egress.check_current(_t.hostname or "", egress.port_for(_t.scheme, _t.port))
         request = urllib.request.Request(
             config["token_url"],
             data=urllib.parse.urlencode(form).encode(),
@@ -512,6 +521,10 @@ class RestConnector:
             separator = "&" if urllib.parse.urlparse(url).query else "?"
             url = f"{url}{separator}{urllib.parse.urlencode(params)}"
 
+        _parsed = urllib.parse.urlparse(url)
+        egress.check_current(
+            _parsed.hostname or "", egress.port_for(_parsed.scheme, _parsed.port)
+        )
         headers = {"Accept": "application/json", **self._auth_headers(config, secret)}
         request = urllib.request.Request(url, headers=headers, method="GET")
         try:

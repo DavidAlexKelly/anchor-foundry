@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from test_api import Fixture, LocalVerifier, for_database, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import connections as conn_routes  # noqa: E402
@@ -40,7 +40,7 @@ def source_database() -> dict[str, object]:
         conn.execute(f"CREATE ROLE {SOURCE_USER} LOGIN PASSWORD '{SOURCE_PASSWORD}'")
         conn.execute(f"GRANT {SOURCE_USER} TO platform")  # needed for OWNER below
         conn.execute(f"CREATE DATABASE {SOURCE_DB} OWNER {SOURCE_USER}")
-    src_dsn = ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
+    src_dsn = for_database(ADMIN_DSN, SOURCE_DB)
     with psycopg.connect(src_dsn, autocommit=True) as conn:
         conn.execute(
             """CREATE TABLE public.orders (

@@ -37,6 +37,7 @@ sys.path.insert(
 )
 
 import migrate  # noqa: E402
+from dsn import for_database  # noqa: E402
 
 ADMIN_DSN = os.environ["TEST_ADMIN_DSN"]
 SCRATCH_DB = "action_conversion_test"
@@ -79,7 +80,7 @@ def legacy() -> dict[str, str]:
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"DROP DATABASE IF EXISTS {SCRATCH_DB}")
         conn.execute(f"CREATE DATABASE {SCRATCH_DB}")
-    dsn = ADMIN_DSN.replace("/platform?", f"/{SCRATCH_DB}?")
+    dsn = for_database(ADMIN_DSN, SCRATCH_DB)
     _apply(dsn, "0043_link_side_names.sql")
 
     tag = uuid.uuid4().hex[:8]

@@ -38,6 +38,7 @@ from ..services import instance_store
 from ..services import notification_store
 from ..services import notifications as notifications_service
 from ..services import connections as conn_service
+from ..services import egress_store
 from ..services import webhook_calls, webhook_store
 from ..services import webhooks as webhooks_service
 from . import connections as connection_routes
@@ -560,8 +561,16 @@ async def _run_webhooks(
             secret = conn_service.secret_values_for(
                 connection_routes.secrets_gateway(), connection
             )
+            # §263: the connection's own allowlist. Read here rather than left
+            # ambient, because this caller already has the connection in hand
+            # and an argument cannot be forgotten.
+            policies = await egress_store.for_connection(
+                conn, UUID(str(connection["id"]))
+            )
             values = actions_service.webhook_inputs(config, bound)
-            result = await webhook_calls.perform(webhook, connection, secret, values)
+            result = await webhook_calls.perform(
+                webhook, connection, secret, values, policies
+            )
         except webhooks_service.WebhookError as exc:
             # A request that could not be *built* — a required input the rule
             # does not supply. `_validate_definition` refuses that shape at save
