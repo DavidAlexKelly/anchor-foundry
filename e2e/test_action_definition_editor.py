@@ -841,3 +841,59 @@ def test_a_writebacks_outputs_are_offered_only_to_rules_below_it(page, api, webh
     page.get_by_role("button", name="Add a rule").click()
     below = page.get_by_label("Rule 3 parameter").locator("option").all_inner_texts()
     assert "webhook.unique_id" in below
+
+
+def test_changing_the_webhook_forgets_the_old_ones_inputs(page, api, webhook_target):
+    """Inputs are keyed by the *previous* webhook's input names.
+
+    A leftover key is a field the server refuses for a reason nobody could see
+    on screen — the same argument the rule-kind select makes, and the same one
+    §258 made for the notify rule's recipient kinds. Asserted as the whole
+    inputs map rather than as an absent key, so a third field arriving later is
+    checked by this too.
+    """
+    mod = build(api, "Action editor webhook reselect")
+    first = make_webhook(api, mod, webhook_target)
+    second = make_webhook(
+        api, mod, webhook_target,
+        inputs=[{"api_name": "note"}], body={"note": "{{{note}}}"},
+    )
+    open_editor(page, mod)
+    add_webhook_rule(page)
+
+    page.get_by_test_id("rule-2-webhook").select_option(first["id"])
+    page.get_by_label("Rule 2 priority parameter").select_option("status")
+    page.get_by_test_id("rule-2-webhook").select_option(second["id"])
+    page.get_by_label("Rule 2 note parameter").select_option("status")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    assert definition(api, mod)["rules"][1]["config"]["inputs"] == {
+        "note": {"parameter": "status"}
+    }
+
+
+def test_switching_an_inputs_source_forgets_the_other_one(page, api, webhook_target):
+    """An input holding both a parameter and a fixed value is refused by the
+    server and by the form.
+
+    The path that produces one is *switching*, which no other check here walks:
+    fill one in, change your mind, fill the other in. A version that merged
+    rather than replaced would look right the whole time and save something
+    neither the form nor the server accepts.
+    """
+    mod = build(api, "Action editor webhook switch")
+    hook = make_webhook(api, mod, webhook_target)
+    open_editor(page, mod)
+    add_webhook_rule(page)
+
+    page.get_by_test_id("rule-2-webhook").select_option(hook["id"])
+    page.get_by_label("Rule 2 priority parameter").select_option("status")
+    page.get_by_label("Rule 2 priority source").select_option("value")
+    page.get_by_label("Rule 2 priority value").fill("fixed")
+    page.get_by_role("button", name="Save", exact=True).click()
+    expect(page.get_by_role("dialog")).to_have_count(0)
+
+    assert definition(api, mod)["rules"][1]["config"]["inputs"] == {
+        "priority": {"value": "fixed"}
+    }

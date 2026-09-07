@@ -17,26 +17,37 @@
  * wrong answer is a line.
  */
 
-import { useQuery } from "@tanstack/react-query";
 import { Field } from "@/components/dialog";
-import { webhooks as api } from "@/lib/api";
 import {
   MODES, WebhookRuleConfig, problem, requiredInputs,
 } from "@/lib/webhook-rule";
 import type { Webhook } from "@/lib/types";
 
 export function WebhookRuleFields({
-  workspaceId,
   index,
   config,
   parameters,
+  webhooks,
+  webhooksLoaded,
   valueNames,
   onChange,
 }: {
-  workspaceId: string;
   index: number;
   config: WebhookRuleConfig;
   parameters: { api_name: string; data_type: string }[];
+  /** The workspace's webhooks, fetched **once by the editor** rather than by
+   * each rule.
+   *
+   * The first version had its own `useQuery` on the same key, which react-query
+   * deduped against the editor's — so the component's own `queryFn` never ran,
+   * and a mutant replacing it with `Promise.resolve([])` changed nothing and
+   * survived. §213's question with a fetch in place of a guard: somebody else
+   * already does this, so delete rather than test. The editor needs the list
+   * anyway, to work out which outputs are available above each rule. */
+  webhooks: Webhook[];
+  /** Whether that fetch has answered. Separate from an empty list, because
+   * "none yet" and "still loading" want different things on screen. */
+  webhooksLoaded: boolean;
   /** What a value may be read from at this rule's position — the action's
    * parameters plus any writeback outputs produced *above* it. Computed by the
    * editor rather than here, because it depends on the other rules and this
@@ -44,17 +55,7 @@ export function WebhookRuleFields({
   valueNames: string[];
   onChange: (next: WebhookRuleConfig) => void;
 }) {
-  // **Workspace-wide, not project-wide** (§262). An action type is a workspace
-  // resource and the server resolves a rule's webhook workspace-wide, so a
-  // picker fed by the project listing would offer a narrower set than the save
-  // accepts — §258's defect, which is what this endpoint was added to avoid.
-  const listed = useQuery({
-    queryKey: ["workspace-webhooks", workspaceId],
-    queryFn: () => api.listForWorkspace(workspaceId),
-  });
-  const chosen: Webhook | undefined = (listed.data ?? []).find(
-    (w) => w.id === config.webhook,
-  );
+  const chosen: Webhook | undefined = webhooks.find((w) => w.id === config.webhook);
 
   const patch = (next: Partial<WebhookRuleConfig>) => onChange({ ...config, ...next });
   const setInput = (name: string, source: { parameter?: string; value?: string }) =>
@@ -79,7 +80,7 @@ export function WebhookRuleFields({
           }
         >
           <option value="">Choose…</option>
-          {(listed.data ?? []).map((webhook) => (
+          {webhooks.map((webhook) => (
             <option key={webhook.id} value={webhook.id}>
               {webhook.display_name}
             </option>
@@ -89,7 +90,7 @@ export function WebhookRuleFields({
       {/* **Present rather than absent** when there are none: an empty dropdown
           with no explanation reads as a list still loading, and the fix is on
           a different screen. */}
-      {listed.isSuccess && listed.data.length === 0 && (
+      {webhooksLoaded && webhooks.length === 0 && (
         <p className="field-hint" data-testid={`rule-${index}-no-webhooks`}>
           This workspace has no webhooks yet. Add one on a project&apos;s
           Connections page.

@@ -666,9 +666,10 @@ export function ActionDefinitionEditor({
               )}
               {r.kind === "webhook" && (
                 <WebhookRuleFields
-                  workspaceId={workspaceId}
                   index={i + 1}
                   parameters={parameters}
+                  webhooks={workspaceWebhooks.data ?? []}
+                  webhooksLoaded={workspaceWebhooks.isSuccess}
                   config={config as unknown as WebhookRuleConfig}
                   // **Position-dependent**, which is why it is computed here
                   // rather than inside the component: p.110's outputs are only
