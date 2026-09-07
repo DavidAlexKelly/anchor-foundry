@@ -4388,6 +4388,53 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 261. Webhooks, on the source they belong to (this session)
+
+§259 built the resource and §260 the action rule, and left both reachable only
+by posting JSON. That is the shape §258 closed for the notify rule and §252
+before it: **a feature the product cannot express does not exist for the person
+who would use it.** `data-connection` p.216-242.
+
+**On the connections screen**, because p.220 puts it there — "once the source
+has been created, select the Webhooks tab and select New webhook" — and a
+webhook without a source is not a thing p.216 has a word for.
+
+**The body is a textarea with a live parse.** p.233's Raw JSON is a *document*
+whose values may be references, and it is the one field here where somebody can
+be wrong in a way no other field can express. A form that only found out on
+Save would also hide the distinction that decides what gets sent — a value that
+is exactly one reference keeps the input's type, one with text around it
+becomes text — so the message sits under the box, carries the position the
+browser reports, and disables Save while it stands.
+
+**A typed render prop instead of a cast.** Inputs and outputs are the same
+shape but for one field, and both obvious ways to share the editor — a
+`Record<string, unknown>` row, or a `"required" | "path"` flag — make the
+shared component patch a field its own type parameter does not have, which
+needs a cast per branch. A cast in a shared component is a cast on *both*
+callers. Passing the differing cell as a render prop lets each caller draw its
+own with no cast anywhere. §189 said a mutation harness will happily argue for
+deleting the line that makes a type check out; **the better answer is to not
+need the line.**
+
+**39 mutants attacked, 39 caught**, after two survivors, and both are the same
+family — a check that looked already covered.
+
+*The outputs list had no duplicate-name check that could fail.* The inputs and
+outputs validations are near-identical and only one was tested; they are
+separate loops over separate sets, so a guard on one says nothing about the
+other. **Any pair of near-identical validations needs both halves checked,
+because the resemblance is exactly what makes the second look covered.**
+
+*And the round trip chose the method the form already defaults to.* POST is
+what a blank form starts on, and the test typed POST — so a panel that ignored
+the method select entirely and always sent POST passed every assertion in it.
+§190's rule again, with the sharpest version of its tell: **a default is the
+easiest value to accidentally agree with**, so a test that exercises a control
+must choose something the control was not already showing.
+
+**1641 unit tests** (was 1604); 9 browser tests in `e2e/test_webhooks.py`.
+
 ### 260. A webhook as an action rule, in both modes (this session)
 
 Decision 0012's second unit, and the one that makes a webhook reachable from

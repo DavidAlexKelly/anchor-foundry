@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
+import { WebhooksPanel } from "@/components/webhooks-panel";
 import type {
   Connection,
   DiscoveredTable,
@@ -1158,6 +1159,20 @@ export default function ConnectionsPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* p.220: "Once the source has been created, select the Webhooks tab and
+          select New webhook." Beneath the sources rather than on a screen of
+          its own, because a webhook without one is not a thing p.216 has a
+          word for — and the panel says so when there is no REST source to
+          attach one to. Its own component (§261) because p.221's wizard is
+          seven steps and this file is already over a thousand lines. */}
+      {workspace && project && (
+        <WebhooksPanel
+          workspaceId={workspace.id}
+          projectId={project.id}
+          connections={list.data ?? []}
+        />
       )}
     </main>
   );

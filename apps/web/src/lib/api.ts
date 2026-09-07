@@ -468,6 +468,55 @@ export async function downloadFile(url: string, filename: string): Promise<void>
   URL.revokeObjectURL(objectUrl);
 }
 
+/** Webhooks (`data-connection` p.216-242, §259; the surface is §261).
+ *
+ * Project-scoped, beside the connections they are built on, because that is
+ * where p.216 puts them: "each webhook is associated with a single source in
+ * Data Connection". */
+export const webhooks = {
+  list: (wid: string, pid: string) =>
+    request<import("./types").Webhook[]>(
+      `/workspaces/${wid}/projects/${pid}/webhooks`,
+    ),
+  get: (wid: string, pid: string, id: string) =>
+    request<import("./types").Webhook>(
+      `/workspaces/${wid}/projects/${pid}/webhooks/${id}`,
+    ),
+  create: (wid: string, pid: string, input: Record<string, unknown>) =>
+    request<import("./types").Webhook>(
+      `/workspaces/${wid}/projects/${pid}/webhooks`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** PUT because the body is the whole definition: "drop a field" and "set it
+   * to this" are the same request, which is the shape every other whole-document
+   * save here uses. */
+  update: (wid: string, pid: string, id: string, input: Record<string, unknown>) =>
+    request<import("./types").Webhook>(
+      `/workspaces/${wid}/projects/${pid}/webhooks/${id}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  remove: (wid: string, pid: string, id: string) =>
+    request<void>(`/workspaces/${wid}/projects/${pid}/webhooks/${id}`, {
+      method: "DELETE",
+    }),
+  /** p.222: "After saving, you will be able to run a test request to see if
+   * your configuration is correct." Recorded in the history like any other
+   * call — a request to somebody's production system that the platform kept no
+   * record of making would be the wrong kind of quiet. */
+  test: (wid: string, pid: string, id: string, values: Record<string, unknown>) =>
+    request<import("./types").WebhookRun>(
+      `/workspaces/${wid}/projects/${pid}/webhooks/${id}/test`,
+      { method: "POST", body: JSON.stringify({ values }) },
+    ),
+  runs: (wid: string, pid: string, id: string) =>
+    request<{
+      items: import("./types").WebhookRun[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(`/workspaces/${wid}/projects/${pid}/webhooks/${id}/runs`),
+};
+
 export const sync = {
   trigger: (
     wid: string,
