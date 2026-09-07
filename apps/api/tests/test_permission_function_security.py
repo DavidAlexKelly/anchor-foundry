@@ -48,6 +48,18 @@ RESOLVERS = (
 #: named rather than merely absent, so "is this list complete" has an answer.
 SETTING_ONLY = ("rls_current_user_id", "rls_worker_for_workspace")
 
+#: Reads *neither* a table nor a setting: it dispatches to the resolvers above,
+#: which are `SECURITY DEFINER` and do the reading. Its own list rather than a
+#: line in `SETTING_ONLY`, because that name would be a small lie and the
+#: exemption has a different reason — there is no query to be filtered, so
+#: `SECURITY INVOKER` is not merely safe here, it is correct: making it a
+#: definer would grant the owner's rights to a function that needs none.
+#:
+#: `rls_can_access_connection` (db 0068) is the first, and it exists so that
+#: `conn_isolation` and `egress_policies_isolation` share one definition of
+#: what access to a source means (§191).
+DELEGATING = ("rls_can_access_connection",)
+
 
 @pytest.fixture(scope="module")
 def functions():
@@ -91,8 +103,26 @@ def test_the_two_setting_only_helpers_are_still_setting_only(functions) -> None:
             )
 
 
+def test_a_delegating_helper_reads_nothing_itself(functions) -> None:
+    """The claim that earns `DELEGATING` its exemption.
+
+    It is asserted rather than assumed for `SETTING_ONLY`'s reason: the moment
+    one of these grows a query it needs `SECURITY DEFINER` like the resolvers,
+    and nothing else would notice — the answer would still come out right on
+    data where the policies happen to agree, which is the exact failure this
+    file's docstring describes.
+    """
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn, conn.cursor() as cur:
+        for name in DELEGATING:
+            cur.execute("SELECT prosrc FROM pg_proc WHERE proname = %s", (name,))
+            body = cur.fetchone()[0].lower()
+            assert "from " not in body, (
+                f"{name} now reads a table, so it needs SECURITY DEFINER like the rest"
+            )
+
+
 def test_the_list_covers_every_permission_helper(functions) -> None:
     """A helper added later and left as invoker would simply not be checked."""
-    assert set(functions) == set(RESOLVERS) | set(SETTING_ONLY), (
+    assert set(functions) == set(RESOLVERS) | set(SETTING_ONLY) | set(DELEGATING), (
         "a permission helper was added or removed - decide which list it belongs in"
     )

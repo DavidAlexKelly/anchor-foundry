@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from test_api import Fixture, LocalVerifier, for_database, hdr  # noqa: E402
 from test_connections import (  # noqa: E402,F401 (fixture used by name)
     SOURCE_DB,
     SOURCE_PASSWORD,
@@ -43,7 +43,7 @@ ADMIN_DSN = os.environ["TEST_ADMIN_DSN"]
 
 
 def _source_dsn() -> str:
-    return ADMIN_DSN.replace("/platform?", f"/{SOURCE_DB}?")
+    return for_database(ADMIN_DSN, SOURCE_DB)
 
 
 # ---- the diff itself ---------------------------------------------------------

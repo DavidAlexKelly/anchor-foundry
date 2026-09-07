@@ -35,7 +35,7 @@ from ..middleware.permissions import (
 )
 from ..services import audit
 from ..services import connections as conn_service
-from ..services import webhook_calls, webhook_store
+from ..services import egress_store, webhook_calls, webhook_store
 from ..services import webhooks as webhooks_service
 from . import connections as connection_routes
 
@@ -309,9 +309,18 @@ async def test_webhook(
     secret = conn_service.secret_values_for(
         connection_routes.secrets_gateway(), connection
     )
+    async with user_connection(access.auth.user_id) as conn:
+        # §263. A test call reaches out exactly as an action's would, so it is
+        # scoped exactly as an action's is — a source's allowlist that the test
+        # button could step around would be an allowlist with a button.
+        policies = await egress_store.for_connection(
+            conn, UUID(str(connection["id"]))
+        )
 
     try:
-        outcome = await webhook_calls.perform(webhook, connection, secret, body.values)
+        outcome = await webhook_calls.perform(
+            webhook, connection, secret, body.values, policies
+        )
     except webhooks_service.WebhookError as exc:
         # A request that could not be *built* — a missing required input — is a
         # fault in the call rather than in the response, so it is a 4xx here

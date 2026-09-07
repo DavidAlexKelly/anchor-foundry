@@ -210,9 +210,18 @@ fi
 # that has drifted from requirements-dev.txt is the reason a whole session's
 # test results once had to be thrown away: they had run against four packages
 # at versions nobody had asked for.
+# **Both apps, into the one virtualenv** (§263). `apps/worker` has 78 tests and
+# nothing installed what they need, so `scripts/check.sh` had no worker step and
+# a fresh checkout could not have run one - the same bug the playwright comment
+# in apps/api/requirements-dev.txt records having found once already, still
+# standing in the app next door. The two apps pin every shared package to the
+# same version, which is what makes one virtualenv enough;
+# `apps/api/tests/test_dependency_pins.py` is what notices if that stops being
+# true. This is a *dev* environment, not an image: each Dockerfile still
+# installs its own requirements.txt alone.
 if "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check \
-     -r apps/api/requirements-dev.txt; then
-  ok "installed to the pins in apps/api/requirements-dev.txt"
+     -r apps/api/requirements-dev.txt -r apps/worker/requirements-dev.txt; then
+  ok "installed to the pins in apps/api and apps/worker requirements-dev.txt"
 else
   die "pip install failed - see the output above"
 fi

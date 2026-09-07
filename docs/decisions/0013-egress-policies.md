@@ -21,9 +21,15 @@ What the document actually says:
 
 > "Use this ad-hoc domain instead of `10.0.0.1` in your source **and egress policy** configuration." (p.103)
 
+> "Foundry worker sources control this through egress policies, which **allowlist the specific hosts, ports, and protocols** a source is permitted to connect to. A connection that fails before authentication is usually an egress problem." (p.37)
+
 Four facts fall out and they are the whole model: a policy belongs to a **source**; a source may have **several** ("both direct connection and agent proxy policies can be assigned to the same source", p.12); a policy names a **destination**, by domain rather than by address (p.103's whole point is that you give the policy a name, not an IP); and the set is an **allowlist** — "which egress destinations are permitted".
 
-**Inferred, and flagged as such:** that a policy carries a port. The document never says so. It is included because a destination allowlist that cannot say "port 443 only" is a weaker control than the one somebody asking for this feature means, and because every other allowlist in this class has one. If that turns out to be wrong it is a column nobody has to use.
+**p.37 is the closest thing to a reference page in the set, and it was found late.** §263 was built and committed with the port marked *inferred* — "the document never says so" — and p.37 says so in one clause, along with a third dimension. It was reached while planning the panel, by opening what `data-connection.md`'s own troubleshooting row cited. §216's rule holds even when the citation looks like it is about something else: this page is titled *Connectivity and egress* and reads as a debugging guide, which is why it was not where anybody looked for a data model.
+
+**So the port is not inferred. It is p.37's second word.** What p.37's own step 1 asks somebody to do — "confirm that the correct egress policies are attached to the source, and that the host, port, and protocol they allow match the system you are connecting to" — is a screen, and it is the screen §264 builds.
+
+**Protocol is a deliberate omission, not an oversight** (see §5). Everything else in this section is designed from fragments the way §251 did for interfaces, and marked where it is.
 
 ## The decision
 
@@ -68,9 +74,20 @@ The last row is the one that shapes the interface: a Postgres connection's `host
 
 `data-connection.md`'s acceptance test asks for this in its own words — *"a source configured for `host-a` cannot reach `host-b`, and the refusal names the policy"* — and it is worth keeping because the failure it prevents is specific. "Could not reach `internal.example.com`" sends somebody to check DNS, a firewall and the far end's health before they think to look at a list in the platform. "This source is not allowed to reach `internal.example.com`; its egress policies allow `api.example.com:443`" ends the investigation in one line.
 
+### 5. A destination is a host and a port. Protocol is not the third column it looks like
+
+p.37 says an egress policy allowlists "hosts, ports, **and protocols**", and this build has the first two. That is a narrowing, and it is worth saying what it costs, because a third column would be cheap to add and would buy almost nothing here.
+
+**A protocol we could check is one we already chose.** Every destination this platform reaches, it reaches through a connector that speaks exactly one protocol: a Postgres source dials Postgres, an S3 source speaks S3, a REST source and a webhook speak HTTP. Nobody can point a `postgres` connection at an HTTP endpoint and have it emit HTTP. So a `protocol` column would be a field an editor sets, a check that compares it against a constant the connector already determined, and a refusal that can only fire when somebody has written the wrong word in a box — a control whose only failure mode is its own configuration. §214 is the rule: a control that cannot work is worse than an absent one, and this one is a step down from that — one that *can* work and has nothing to catch.
+
+**The half of "protocol" that is a real control already exists at a different layer.** In Foundry's model the meaningful protocol distinction is `http` versus `https`, and this platform refuses plain HTTP outright unless a source sets `allow_insecure_http`, checked in `_check_url` at both save and send time. That is protocol enforcement; it is not per-destination, and per-destination is not what makes it useful.
+
+**What is lost, stated plainly:** a source cannot say "this host on 443, and only over TLS". It can say "this host on 443", and the TLS half is the source-wide setting. If somebody needs the finer form, the column is additive and the check has one place to grow — `egress.permitted`, which already takes the port and would take a scheme beside it.
+
 ## What this does not build
 
 * **Agent proxy policies** (p.12) — §1 above.
+* **Protocol as part of a destination** (p.37) — §5 above.
 * **Host overrides** (p.102-103), which map a name to an address on an agent host. They exist to give a private IP a name *so that a policy can name it*, and with no agent there is nothing to override on.
 * **Ingress** (p.253-255) — listener subdomains and IP allowlists are the other direction, and listeners are `data-connection.md`'s item 6.
 * **An enrollment-wide requirement** that every source carry a policy — §2 above.

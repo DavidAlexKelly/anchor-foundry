@@ -19,7 +19,7 @@ This is stage 6 — lowest felt urgency, because it is plumbing users rarely see
 | **Credential** | "a secret value required to access a particular system… all credentials are encrypted and stored securely" | ✅ `secrets.py` |
 | Credential-free auth — OpenID Connect, outbound applications, cloud identity | | ◑ IAM role for S3 only |
 | **Worker** | where compute for capabilities runs | ○ — implicit; ours always runs in our worker |
-| **Networking / egress policies** | how target systems are reached | ○ |
+| **Networking / egress policies** | how target systems are reached | ✅ §263 the rule, the store and all four outbound paths; §264 the panel. ○ for agent proxy policies and host overrides (decision 0013 §1), and for **protocol** as part of a destination (p.37, decision 0013 §5) |
 
 Foundry separates **worker** (where compute runs) from **networking** (how the target is reached), and says so explicitly because customers get it confused. We have neither concept — everything runs in our worker and reaches out directly.
 
@@ -72,7 +72,7 @@ Foundry's own fallback is worth copying: "For systems without a dedicated connec
 
 ## 5. Build order
 
-1. **Egress policies** — an explicit per-source destination allowlist. A security control, and the only piece of Foundry's networking model worth taking.
+1. ~~**Egress policies** — an explicit per-source destination allowlist. A security control, and the only piece of Foundry's networking model worth taking.~~ **Done (`STATUS.md` §263, §264)**: the rule and its enforcement, then the panel that lets somebody write one and put it beside what the source actually dials — p.37's step 1, which is a comparison between two lists of which only one existed. Struck in halves per §216. Decision 0013 records the design and, more usefully, the **source gap**: p.12 and p.103 describe Rubix networking policies from the outside and never specify their shape, so most of what a policy *is* here is inferred and marked as inferred. The exception is **p.37**, found after the build and worth the correction — "egress policies … allowlist the specific hosts, ports, and protocols a source is permitted to connect to" — which settles the port the decision had flagged as a guess, and names a third dimension this build deliberately does not have (decision 0013 §5: a protocol column would only ever be checked against a constant the connector already fixed). Two things the row above cannot say: **an empty list means unrestricted**, because every source that exists is already in that state and closed-by-default would break all of them at once; and **an AWS S3 source is not scopeable** — boto3 derives the host from the bucket and region at request time and p.184 lists the destinations an S3 sync reaches that nobody expected, so an allowlist there would read as covering something it does not. A custom `endpoint_url` *is* checked. `test_an_aws_bucket_is_not_scoped_by_a_policy_and_this_is_deliberate` holds that line so the limitation cannot quietly become a claim.
 2. ~~**Webhooks**, shared with action side effects.~~ — **done (`STATUS.md` §259, §260)**: the resource, then the action rule in both of p.106's modes. Struck in halves per §216: a line goes stale in the commit that finishes part of it. Decision 0012 records the design, including the two constraints that no test here can see — no external call inside the transaction, and none on the event loop.
 3. **Exports** — the reverse direction; currently data only flows in.
 4. **Source exploration** — browse tables and files before configuring a sync.
@@ -85,7 +85,7 @@ Deliberately never: agent workers, streaming, Rubix-specific networking, the ful
 
 ## 6. Acceptance tests
 
-- **Egress policy** — a source configured for `host-a` cannot reach `host-b`, and the refusal names the policy. Mutation: remove the policy check, and the test goes red.
+- **Egress policy** — ~~a source configured for `host-a` cannot reach `host-b`, and the refusal names the policy. Mutation: remove the policy check, and the test goes red.~~ **Done (§263)**, and written literally: `test_a_policy_for_another_host_refuses_the_call` quotes this line. Every refusal here is **paired with an allowed call**, because a refusal alone passes against an implementation that refuses everything — which is what closed-by-default would have been. The mutation the line asks for is one of 29 in §263's harness and all 29 are caught; the two that matter most are "no policies refuses everything" and "the worker's copy has drifted".
 - **Credential handling** — a credential is never returned by any read endpoint, at any role. This wants an explicit test rather than an assumption.
 - **Schema drift** — a column removed upstream is recorded on the sync run and does not silently produce nulls.
 - **Webhook** — ~~decide which way round this should be~~: **both ways round, chosen per rule** (`action-types` p.105-107, decision 0012). A *writeback* fails the action and shows why; a *side effect* leaves the object changed and records the failure without surfacing it. The tests are paired, because each passes against an implementation that got the other mode's semantics.

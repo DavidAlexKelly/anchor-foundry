@@ -63,7 +63,11 @@ troubleshooting note below for what it looks like when this is missing.
 
 ```bash
 python3 -m venv .venv-api
-.venv-api/bin/pip install -r apps/api/requirements-dev.txt
+# Both apps, into the one virtualenv: they pin every shared package to the same
+# version, and `apps/worker`'s suite was unrunnable from a fresh checkout until
+# the second line was added (§263).
+.venv-api/bin/pip install -r apps/api/requirements-dev.txt \
+                         -r apps/worker/requirements-dev.txt
 npm ci                          # npm workspaces; run it at the repo root
 .venv-api/bin/playwright install chromium   # only the browser suite needs this
 ```
@@ -219,12 +223,22 @@ There is no UI for workspace membership yet — the API has it
 ```bash
 scripts/check.sh          # everything
 scripts/check.sh api      # the API suite, against real Postgres
+scripts/check.sh worker   # the worker suite, against a database of its own
 scripts/check.sh types    # tsc --noEmit
 scripts/check.sh unit     # the TypeScript unit tests
 scripts/check.sh e2e      # the browser suite, against the running stack
 ```
 
-Ordered cheapest-first and exits on the first failure. The browser suite is
+Ordered cheapest-first and exits on the first failure.
+
+**The worker target creates and migrates its own database** (`platform_worker_test`
+by default, `ANCHOR_WORKER_DB` to change it) and that is not a nicety: the
+worker's discovery functions are RLS-blind by design, so a run against the
+shared dev database picks up and acts on whatever real source happens to be
+due. `apps/control-plane/tests` is deliberately absent — it needs a second
+database nothing here provisions, and pins `httpx` against `apps/api`'s, so it
+cannot share the virtualenv. `apps/api/tests/test_dependency_pins.py` holds
+that reason and goes red if a new suite appears without one. The browser suite is
 skipped when the stack is down rather than failing — set
 `ANCHOR_E2E_REQUIRED=1` to make a missing stack an error, which is what CI
 wants, since there it is the bug.
@@ -244,6 +258,7 @@ Environment variables, all read by `dev-up.sh` and `check.sh`:
 | `ANCHOR_TOKENS_FILE` | `/tmp/anchor-dev-tokens.json` |
 | `ANCHOR_LOG_DIR` | `/tmp/anchor-dev` |
 | `ANCHOR_PYTHON` | `.venv-api/bin/python` |
+| `ANCHOR_WORKER_DB` | `platform_worker_test`, created and migrated by `check.sh worker` |
 | `PLAYWRIGHT_CHROMIUM` | `/opt/pw-browsers/chromium`, used only when the path exists |
 
 `DATABASE_URL` connects as `platform_app`, which **is** subject to row-level

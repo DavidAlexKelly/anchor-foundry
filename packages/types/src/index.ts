@@ -717,6 +717,19 @@ export interface Connection {
   updated_at: string;
 }
 
+/** One destination a source is permitted to reach (db 0068; decision 0013).
+ *
+ * `port: null` is a real answer and not a missing one: a policy that names no
+ * port allows any port on that host, and reading the absence as zero would
+ * refuse the call it was written to allow. */
+export interface EgressPolicy {
+  id: string;
+  host: string;
+  port: number | null;
+  description: string;
+  created_at: string;
+}
+
 export interface SourceTypeInfo {
   type: string;
   display_name: string;

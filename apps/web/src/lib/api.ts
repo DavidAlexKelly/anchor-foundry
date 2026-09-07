@@ -348,6 +348,33 @@ export const connections = {
     request<void>(`/workspaces/${wid}/projects/${pid}/connections/${cid}`, { method: "DELETE" }),
 };
 
+/** A source's egress policies (decision 0013; §263 the rule, §264 the screen).
+ *
+ * Its own object rather than three more methods on `connections`, because
+ * every call carries a connection id in the path and the grouping is what
+ * makes that obvious at the call site. */
+export const egressPolicies = {
+  list: (wid: string, pid: string, cid: string) =>
+    request<import("./types").EgressPolicy[]>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/egress-policies`,
+    ),
+  create: (
+    wid: string,
+    pid: string,
+    cid: string,
+    input: { host: string; port: number | null; description: string },
+  ) =>
+    request<import("./types").EgressPolicy>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/egress-policies`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  remove: (wid: string, pid: string, cid: string, id: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/egress-policies/${id}`,
+      { method: "DELETE" },
+    ),
+};
+
 export const datasets = {
   list: (wid: string, pid: string) =>
     request<import("./types").Dataset[]>(`/workspaces/${wid}/projects/${pid}/datasets`),

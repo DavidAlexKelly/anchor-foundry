@@ -25,7 +25,7 @@ from ..lib.errors import ConflictError, ForbiddenError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import connections as conn_service
-from ..services import webhook_store
+from ..services import egress, egress_store, webhook_store
 from ..services.connectors import (
     ConnectorConfigError,
     ConnectorOperationError,
@@ -276,6 +276,121 @@ async def delete_connection(
         )
 
 
+# ---- egress policies (decision 0013; §263) -----------------------------------
+class EgressPolicyOut(BaseModel):
+    id: UUID
+    host: str
+    port: int | None
+    description: str
+    created_at: datetime
+
+
+class EgressPolicyCreate(BaseModel):
+    """Validated by `services/egress.parse` rather than here, for the reason
+    every other create in this file gives: pydantic can say a field is a
+    string, and what this needs said is that the string is a destination and
+    not a range."""
+
+    host: str = Field(min_length=1, max_length=253)
+    port: int | None = None
+    description: str = Field(default="", max_length=500)
+
+
+@router.get("/{connection_id}/egress-policies", response_model=list[EgressPolicyOut])
+async def list_egress_policies(
+    connection_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[EgressPolicyOut]:
+    """Where this source is allowed to reach.
+
+    **An empty list means unrestricted**, which is decision 0013 §2 and is not
+    something this endpoint can say on its own — the screen reading it has to,
+    because an empty list rendered without that sentence reads as "nothing is
+    allowed", which is the opposite of what it means.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        # Resolved through the connection so a source in another project is a
+        # 404 rather than an empty list: "no policies" and "no such source" are
+        # different answers and only one of them means unrestricted.
+        await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        rows = await egress_store.for_connection(conn, connection_id)
+    return [EgressPolicyOut(**row) for row in rows]
+
+
+@router.post(
+    "/{connection_id}/egress-policies", response_model=EgressPolicyOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_egress_policy(
+    connection_id: UUID,
+    body: EgressPolicyCreate,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> EgressPolicyOut:
+    """Editor, matching every other write to a source.
+
+    **Adding the first policy is what turns the allowlist on**, so this is the
+    one endpoint here whose effect is larger than the row it writes — and the
+    audit record says so with the destination, because "somebody restricted
+    this source" is a sentence a security review will want to read.
+    """
+    policy = egress.parse(body.model_dump())
+    async with user_connection(access.auth.user_id) as conn:
+        await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        row = await egress_store.create(
+            conn, connection_id=connection_id, policy=policy,
+            created_by=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.egress_policy.add",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"host": policy["host"], "port": policy["port"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return EgressPolicyOut(**row)
+
+
+@router.delete(
+    "/{connection_id}/egress-policies/{policy_id}",
+    status_code=status.HTTP_204_NO_CONTENT, response_model=None,
+)
+async def remove_egress_policy(
+    connection_id: UUID,
+    policy_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> None:
+    """**Removing the last policy turns the allowlist off**, which is the same
+    act as adding the first one and deserves the same record. Audited with the
+    count that remains, so a review can see the moment a source became
+    unrestricted rather than inferring it from an absence."""
+    async with user_connection(access.auth.user_id) as conn:
+        await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        await egress_store.delete(conn, policy_id)
+        remaining = await egress_store.for_connection(conn, connection_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.egress_policy.remove",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"remaining": len(remaining),
+                      "now_unrestricted": len(remaining) == 0},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+
 # ---- test & discover --------------------------------------------------------
 @router.post("/{connection_id}/test", response_model=TestResult)
 async def test_connection(
@@ -285,13 +400,24 @@ async def test_connection(
 ) -> TestResult:
     async with user_connection(access.auth.user_id) as conn:
         row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        policies = await egress_store.for_connection(conn, connection_id)
 
     connector = get_connector(str(row["source_type"]))
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     ok, error = True, None
     try:
         secret = conn_service.secret_values_for(_secrets, row)
-        await anyio.to_thread.run_sync(connector.test, config, secret)
+        # §263: the source's allowlist, in scope for the whole operation.
+        # `anyio.to_thread.run_sync` copies the context into the worker thread,
+        # which is what lets an ambient scope reach a blocking connector.
+        with egress.restricted_to(policies):
+            await anyio.to_thread.run_sync(connector.test, config, secret)
+    except egress.EgressRefused as exc:
+        # A refused destination is a *configuration* answer, not a dead source,
+        # so it reads as a failed test with the policy's own sentence rather
+        # than as "could not reach" — which is the investigation decision 0013
+        # §4 exists to prevent.
+        ok, error = False, str(exc)
     except ConnectorOperationError as exc:
         ok, error = False, str(exc)
     except KeyError:
@@ -323,12 +449,23 @@ async def discover_schema(
 ) -> list[TableOut]:
     async with user_connection(access.auth.user_id) as conn:
         row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        policies = await egress_store.for_connection(conn, connection_id)
 
     connector = get_connector(str(row["source_type"]))
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     try:
         secret = conn_service.secret_values_for(_secrets, row)
-        tables = await anyio.to_thread.run_sync(connector.discover, config, secret)
+        with egress.restricted_to(policies):
+            tables = await anyio.to_thread.run_sync(connector.discover, config, secret)
+    except egress.EgressRefused as exc:
+        # Reported like a failed test for the same reason `test` does: a
+        # refused destination is a configuration answer, and the sentence names
+        # the policy rather than sending somebody to check DNS. Recorded on the
+        # connection too, because discovery reaching nothing is the same signal
+        # a failed test is.
+        async with user_connection(access.auth.user_id) as conn:
+            await conn_service.record_test_result(conn, connection_id, ok=False, error=str(exc))
+        raise ConnectorConfigError(str(exc)) from exc
     except ConnectorOperationError as exc:
         # Surface as a failed test too: discovery reaching a dead source is
         # the same signal.
@@ -448,6 +585,8 @@ async def trigger_sync(
         )
     async with user_connection(access.auth.user_id) as conn:
         row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        # §263: the source's own allowlist, resolved with the row it belongs to.
+        policies = await egress_store.for_connection(conn, connection_id)
         run_id = await sync_service.open_run(
             conn,
             connection_id=connection_id,
@@ -462,11 +601,14 @@ async def trigger_sync(
     tmp_dir = _tempfile.mkdtemp()
     try:
         secret = conn_service.secret_values_for(_secrets, row)
-        extract = await anyio.to_thread.run_sync(
-            sync_service.snapshot_source_table,
-            str(row["source_type"]), config, secret,
-            body.source_schema, body.source_table, tmp_dir,
-        )
+        # Wrapped per call rather than around the whole `try`, which would
+        # reindent a hundred lines to say the same thing.
+        with egress.restricted_to(policies):
+            extract = await anyio.to_thread.run_sync(
+                sync_service.snapshot_source_table,
+                str(row["source_type"]), config, secret,
+                body.source_schema, body.source_table, tmp_dir,
+            )
         async with user_connection(access.auth.user_id) as conn:
             dataset, rows_synced, created, schema_changes = await sync_service.run_full_sync(
                 conn,
@@ -746,6 +888,8 @@ async def run_scheduled_sync(
                 "no scheduled sync target is configured - set one with PUT .../scheduled-sync first"
             )
         row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        # §263: the source's own allowlist, resolved with the row it belongs to.
+        policies = await egress_store.for_connection(conn, connection_id)
         run_id = await sync_service.open_run(
             conn,
             connection_id=connection_id,
@@ -764,22 +908,27 @@ async def run_scheduled_sync(
         secret = conn_service.secret_values_for(_secrets, row)
         cursor_col = schedule["sync_cursor_column"] if mode == "incremental" else None
         source_type = str(row["source_type"])
-        extract = await anyio.to_thread.run_sync(
-            sync_service.snapshot_source_table,
-            source_type, config, secret,
-            schedule["sync_source_schema"], schedule["sync_source_table"],
-            tmp_dir, cursor_col, schedule["sync_last_cursor_value"],
-        )
+        # The scheduled half of the same handler shape.
+        with egress.restricted_to(policies):
+            extract = await anyio.to_thread.run_sync(
+                sync_service.snapshot_source_table,
+                source_type, config, secret,
+                schedule["sync_source_schema"], schedule["sync_source_table"],
+                tmp_dir, cursor_col, schedule["sync_last_cursor_value"],
+            )
         if mode == "incremental":
             # Asked for unconditionally: whether a cursor needs a column at all
             # is the connector's business (object storage uses the object's own
             # LastModified), and a connector with nothing to report returns
             # None, leaving the stored value untouched.
-            new_cursor_value = await anyio.to_thread.run_sync(
-                sync_service.max_cursor_value,
-                source_type, config, secret,
-                schedule["sync_source_schema"], schedule["sync_source_table"], cursor_col,
-            ) or schedule["sync_last_cursor_value"]
+            # A second connector call in the same handler, and it reaches the
+            # source too — so it needs the scope as much as the snapshot does.
+            with egress.restricted_to(policies):
+                new_cursor_value = await anyio.to_thread.run_sync(
+                    sync_service.max_cursor_value,
+                    source_type, config, secret,
+                    schedule["sync_source_schema"], schedule["sync_source_table"], cursor_col,
+                ) or schedule["sync_last_cursor_value"]
 
         async with user_connection(access.auth.user_id) as conn:
             if mode == "incremental":

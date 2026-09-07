@@ -34,6 +34,7 @@ from typing import Any
 
 import anyio
 
+from . import egress
 from . import webhooks as webhooks_service
 from .connectors import RestConnector, _check_url, _join_url
 
@@ -73,6 +74,7 @@ async def perform(
     connection: dict[str, Any],
     secret: dict[str, str],
     values: dict[str, Any],
+    policies: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Render the request, send it, and say what happened.
 
@@ -82,9 +84,16 @@ async def perform(
     caller has to tell those apart to decide whether to retry.
     """
     built = webhooks_service.render(webhook, values)
-    return await anyio.to_thread.run_sync(
-        lambda: _send(webhook, connection, secret, built)
-    )
+    # §263: the source's own allowlist, in scope for the call. **An explicit
+    # argument here rather than an ambient scope set by the caller**, because
+    # this one has a caller that already holds the connection row and nothing
+    # else runs inside it — and an argument that cannot be forgotten is better
+    # than a context that can. The connectors get the ambient form because
+    # their protocol has no room for a fifth parameter.
+    with egress.restricted_to(policies):
+        return await anyio.to_thread.run_sync(
+            lambda: _send(webhook, connection, secret, built)
+        )
 
 
 def _send(
@@ -110,6 +119,11 @@ def _send(
         # otherwise name the link-local range and read the task role's
         # credentials out of the response.
         _check_url(url, bool(config.get("allow_insecure_http", False)))
+    except egress.EgressRefused as exc:
+        # A refused destination is not a failure to reach one: nothing was
+        # attempted. Recorded like any other failure, and with p.237's answer
+        # for it — the far end cannot have changed, because nothing was sent.
+        return result(ok=False, error=str(exc))
     except Exception as exc:
         return result(ok=False, error=str(exc))
 

@@ -66,6 +66,44 @@ jobs:
           PLATFORM_APP_PASSWORD: devpass
       - run: scripts/check.sh api
 
+  # §263. There was no worker job because there was no worker target, and there
+  # was no worker target because nothing installed what the worker's 78 tests
+  # need - three absences that each explained the next and none of which
+  # announced itself. `check.sh worker` creates and migrates its own database,
+  # so this job needs no Migrate step of its own: the worker's suite must never
+  # share a database with anything, because its discovery functions are
+  # RLS-blind and act on every workspace they can see.
+  worker:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
+      TEST_ADMIN_DSN: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+      STORAGE_ROOT: /tmp/anchor-storage
+      ANCHOR_PYTHON: python
+      # The same note as the api job's Migrate step, and the reason nineteen
+      # runs were red: 0006_rls.sql creates platform_app with a checksummed
+      # placeholder password, and `migrate.py` is what reconciles it.
+      PLATFORM_APP_PASSWORD: devpass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r apps/worker/requirements.txt -r apps/worker/requirements-dev.txt
+      - run: scripts/check.sh worker
+
   types:
     name: types and unit tests
     runs-on: ubuntu-latest

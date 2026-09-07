@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from test_api import Fixture, client, fx  # noqa: E402,F401  (fixtures + reuse)
+from test_api import Fixture, client, for_database, fx  # noqa: E402,F401  (fixtures + reuse)
 from src.lib import config as config_lib  # noqa: E402
 from src.lib import db as db_lib  # noqa: E402
 from src.main import create_app  # noqa: E402
@@ -93,7 +93,7 @@ def scratch_dsns() -> Iterator[dict[str, str]]:
     name = f"bootstrap_scratch_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"CREATE DATABASE {name} OWNER platform")
-    owner_dsn = ADMIN_DSN.replace("/platform?", f"/{name}?")
+    owner_dsn = for_database(ADMIN_DSN, name)
     subprocess.run(
         [sys.executable, str(MIGRATE_PY)],
         check=True,
