@@ -351,7 +351,9 @@ def render(webhook: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
         "headers": {
             k: _fill(v, values) for k, v in (webhook.get("headers") or {}).items()
         },
-        "body": _fill_json(webhook.get("body"), values),
+        # `_none` because the body may itself be one whole reference, and a
+        # sentinel is an internal marker rather than something to send.
+        "body": _none(_fill_json(webhook.get("body"), values)),
     }
 
 
@@ -363,18 +365,42 @@ def _fill(text: str, values: dict[str, Any], *, encode: bool = False) -> str:
     return templates.REFERENCE.sub(one, text or "")
 
 
+#: What `_fill_json` returns for a whole reference to an input that was never
+#: supplied. A sentinel rather than `None`, because **`None` is a value a caller
+#: can supply** and the two have to be told apart: an object key whose input is
+#: absent is dropped, and one explicitly set to null is sent as null.
+_ABSENT = object()
+
+
 def _fill_json(node: Any, values: dict[str, Any]) -> Any:
     if isinstance(node, str):
         if templates.is_whole_reference(node):
-            # The typed substitution: an integer input stays an integer, and a
-            # missing optional one becomes JSON null rather than "".
-            return values.get(templates.references(node)[0])
+            # The typed substitution: an integer input stays an integer.
+            name = templates.references(node)[0]
+            return values[name] if name in values else _ABSENT
         return _fill(node, values)
     if isinstance(node, list):
-        return [_fill_json(item, values) for item in node]
+        # A list is positional, so a dropped element would shift every element
+        # after it. An absent one becomes null here — the alternative changes
+        # what the *other* values mean.
+        return [_none(_fill_json(item, values)) for item in node]
     if isinstance(node, dict):
-        return {_fill(str(k), values): _fill_json(v, values) for k, v in node.items()}
+        # **An unsupplied optional input drops its key.** d-p.229's optional
+        # inputs "may or may not be present", and `{"note": null}` is not the
+        # same request as `{}` to any API that tells "not provided" from
+        # "explicitly cleared" — most that accept PATCH-shaped bodies do, and
+        # they read the first as an instruction to erase the value. A required
+        # input never reaches here: `render` refuses the call before building
+        # anything.
+        filled = {
+            _fill(str(k), values): _fill_json(v, values) for k, v in node.items()
+        }
+        return {k: v for k, v in filled.items() if v is not _ABSENT}
     return node
+
+
+def _none(value: Any) -> Any:
+    return None if value is _ABSENT else value
 
 
 def _text(value: Any) -> str:

@@ -658,11 +658,11 @@ def test_an_unsupplied_optional_parameter_is_absent_rather_than_null(
     # `note` is declared on the action and simply not submitted.
     assert run(client, fx, action, tickets[0], "no-note").json()["ok"]
     body = runs_for(client, fx, hook)[0]["request_body"]["body"]
-    assert body["priority"] == "no-note"
-    assert body["note"] is None or "note" not in body
-    # The template rendered a *gap* rather than the string "None", which is the
-    # other way this goes wrong.
-    assert body.get("note") != "None"
+    # **The key is gone, not null.** The first version of this assertion said
+    # `is None or not in`, which is true either way and therefore said nothing
+    # — the mutant it was written for survived it. `==` against the whole body
+    # is what makes the claim.
+    assert body == {"priority": "no-note"}
 
 
 def test_a_webhook_whose_inputs_changed_after_the_rule_was_written(
