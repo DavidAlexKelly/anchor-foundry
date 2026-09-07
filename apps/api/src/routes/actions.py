@@ -37,6 +37,10 @@ from ..lib.errors import NotFoundError
 from ..services import instance_store
 from ..services import notification_store
 from ..services import notifications as notifications_service
+from ..services import connections as conn_service
+from ..services import webhook_calls, webhook_store
+from ..services import webhooks as webhooks_service
+from . import connections as connection_routes
 from ..services import instances as instances_service
 from ..services import ontology as ontology_service
 from ..services.dataset_engine import DatasetEngineError
@@ -494,6 +498,87 @@ async def check_action(
     return CheckResult(ok=True, error=None)
 
 
+async def _run_webhooks(
+    conn,
+    *,
+    rules: list[dict],
+    mode: str,
+    bound: dict,
+    project_id: UUID,
+    workspace_id: UUID,
+    actor_id: UUID,
+    run_id: UUID | None,
+) -> tuple[dict[str, Any], str | None]:
+    """Fire this action's webhook rules in one of p.106's two modes.
+
+    Returns the outputs to merge into the value namespace, and the first
+    failure's message — which the caller reads or ignores depending on the
+    mode, because that is the whole difference between them:
+
+    * **writeback** (p.106): "if the webhook execution fails, no other changes
+      will be made", so the caller refuses the action and the message reaches
+      whoever ran it. Only one can be configured, and `_validate_definition`
+      refuses a second at save time.
+    * **side effect** (p.107): "executed after other rules are evaluated" and
+      the failure is not shown. The caller records it and returns success,
+      because the object *did* change and saying otherwise would be a lie about
+      the thing the person was looking at.
+
+    **Every call is recorded either way** (p.242). A side effect whose failure
+    is invisible to the caller must not also be invisible to the person
+    debugging it — "no notification" and "no record" are different kinds of
+    quiet, and only the first is what p.107 asks for.
+    """
+    outputs: dict[str, Any] = {}
+    failure: str | None = None
+    for rule in actions_service.webhook_rules(rules, mode=mode):
+        config = rule.get("config") or {}
+        webhook = await webhook_store.get(conn, UUID(str(config["webhook"])))
+        connection = await webhook_store.connection_for(
+            conn, project_id, UUID(str(webhook["connection_id"]))
+        )
+        secret = conn_service.secret_values_for(
+            connection_routes.secrets_gateway(), connection
+        )
+        values = actions_service.webhook_inputs(config, bound)
+        try:
+            result = await webhook_calls.perform(webhook, connection, secret, values)
+        except webhooks_service.WebhookError as exc:
+            # A request that could not be *built* — a required input the rule
+            # does not supply. `_validate_definition` refuses that shape at save
+            # time, so reaching it means the webhook's own inputs changed after
+            # the rule was written. Recorded as a failure rather than raised,
+            # so a side effect still cannot take the action down.
+            result = webhook_calls.result(ok=False, error=str(exc))
+        # **Recorded on its own connection, not the caller's.** A failing
+        # writeback makes the caller raise, which rolls its transaction back —
+        # and the row recording the call would go with it, leaving the one
+        # failure most worth debugging as the only one with no history. p.242's
+        # history is a record of calls *made*, not of actions that succeeded,
+        # so it must outlive the action's rollback. Found by the test for
+        # exactly that case.
+        async with user_connection(actor_id) as own:
+            await webhook_store.record(
+                own,
+                webhook_id=UUID(str(webhook["id"])),
+                workspace_id=workspace_id,
+                action_run_id=run_id,
+                called_by=actor_id,
+                mode=mode,
+                result=result,
+                store_responses=bool(webhook["store_responses"]),
+            )
+        if not result["ok"]:
+            if failure is None:
+                failure = (
+                    f"the {webhook['display_name']!r} webhook failed: {result['error']}"
+                )
+            continue
+        for name, value in (result.get("outputs") or {}).items():
+            outputs[actions_service.webhook_output_name(name)] = value
+    return outputs, failure
+
+
 async def _pending_notifications(
     conn,
     *,
@@ -642,6 +727,42 @@ async def execute_action(
             criteria=action_type["criteria"],
             user=await actions_service.criteria_user(conn, access.auth.user_id),
         )
+        # **p.106's writeback, before anything is written and before the
+        # notifications are even rendered.**
+        #
+        # Before the write, because that is what the mode *is*: "if the webhook
+        # execution fails, no other changes will be made". Before
+        # `_pending_notifications`, because p.110 says a writeback's outputs
+        # are for "a subsequent logic rule … or use in a subsequent
+        # notification or side effect Webhook" — and a notification rendered
+        # first would substitute an empty string for every one of them.
+        #
+        # Outside the transaction `commit_versions` opens, which decision 0012
+        # §2 records as the non-negotiable part: the alternative holds dataset
+        # row locks across a network call to a system that is already having a
+        # bad day, and buys transactionality p.106 says is not on offer.
+        writeback_outputs, writeback_failure = await _run_webhooks(
+            conn,
+            rules=action_type["rules"],
+            mode="writeback",
+            bound=bound,
+            project_id=access.project_id,
+            workspace_id=access.workspace_id,
+            actor_id=access.auth.user_id,
+            run_id=None,
+        )
+        if writeback_failure:
+            # No run is opened and nothing is written. The message names the
+            # webhook, because "the action failed" about an external system is
+            # not something the person who clicked can act on.
+            raise ValueError(writeback_failure)
+        # p.111's "Writeback response", spelled as a reserved name in the one
+        # namespace every rule kind already reads from. It cannot collide with
+        # a parameter (no dots in an api_name) and cannot be forged by a caller
+        # (`bind_parameters` refuses undeclared keys), so this is the only
+        # thing that writes it.
+        bound.update(writeback_outputs)
+
         deletions = actions_service.object_deletions(
             bound, rules=action_type["rules"], default_object_type_id=object_type_id
         )
@@ -884,7 +1005,13 @@ async def execute_action(
         notices = await _pending_notifications(
             conn,
             action_type=action_type,
-            values=values,
+            # **A new dict, not `values` itself.** p.110 lets a notification
+            # read a writeback's outputs, and rendering is the only thing that
+            # may see them: `values` becomes `column_updates` a few lines down,
+            # keyed by property and mapped through `reverse_map`, so a
+            # `webhook.<output>` key in it would be looked up as a column that
+            # does not exist.
+            values={**values, **writeback_outputs},
             bound=bound,
             subject=_parse_json(instance["properties"]),
             object_type_id=object_type_id,
@@ -1097,6 +1224,25 @@ async def execute_action(
         # changed, sent after the change failed, is the one outcome worse than
         # no notification: the recipient acts on it and finds nothing.
         if ok:
+            # **p.107's side effects, after the objects changed and unable to
+            # undo that.** "Modifications to Foundry objects will occur before
+            # side effects are applied", and the failure is not shown — so this
+            # is under the same `if ok:` as the notifications, its result is
+            # dropped, and every call is recorded on the run regardless.
+            #
+            # Dropped rather than merged into anything: p.110 gives outputs to
+            # a *writeback* only, and there is no subsequent rule here for a
+            # side effect's output to reach.
+            await _run_webhooks(
+                conn,
+                rules=action_type["rules"],
+                mode="side_effect",
+                bound=bound,
+                project_id=access.project_id,
+                workspace_id=access.workspace_id,
+                actor_id=access.auth.user_id,
+                run_id=run_id,
+            )
             for notice in notices:
                 await notification_store.deliver(
                     conn,
