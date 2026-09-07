@@ -155,7 +155,26 @@ describe("insertReference", () => {
   it("survives a caret past the end of the text", () => {
     // A stale caret from a field that was cleared: the reference lands at the
     // end rather than throwing while somebody is typing.
-    expect(insertReference("ab", 99, 99, "x").text).toBe("ab{{{x}}}");
+    //
+    // **The caret is asserted, not just the text**, and that is the whole
+    // check: appending at 99 and appending at 2 produce the same string, so a
+    // version that never clamped passed this test on its text alone while
+    // reporting a caret of 108 in an eleven-character field. `setSelectionRange`
+    // would clamp that back and hide it, which is exactly why nothing downstream
+    // would ever say so.
+    const out = insertReference("ab", 99, 99, "x");
+    expect(out.text).toBe("ab{{{x}}}");
+    expect(out.caret).toBe(out.text.length);
+  });
+
+  it("survives a caret before the start of the text", () => {
+    // The other end of the same clamp. A negative index is not something a
+    // text field produces, but it is what arithmetic on one produces, and
+    // `slice` reads it from the *right* — so an unclamped -1 would insert
+    // before the last character rather than at the beginning.
+    const out = insertReference("ab", -1, -1, "x");
+    expect(out.text).toBe("{{{x}}}ab");
+    expect(out.caret).toBe(7);
   });
 });
 
