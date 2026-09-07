@@ -21,10 +21,11 @@ from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
-from ..lib.errors import ForbiddenError
+from ..lib.errors import ConflictError, ForbiddenError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import connections as conn_service
+from ..services import webhook_store
 from ..services.connectors import (
     ConnectorConfigError,
     ConnectorOperationError,
@@ -46,6 +47,23 @@ _secrets: SecretsGateway = InMemorySecretsGateway()
 def configure_secrets_gateway(gateway: SecretsGateway) -> None:
     global _secrets
     _secrets = gateway
+
+
+def secrets_gateway() -> SecretsGateway:
+    """The one gateway, for the other module that sends a connection's secret.
+
+    §259's webhooks need it, and the obvious thing — a second module-level
+    `_secrets` with its own `configure_` — is the trap §17 records in the
+    comment on `_wire_production_gateways`: nothing had ever called these with
+    a real gateway, so credentials only lived in process memory on every
+    deployed stack until somebody noticed. A second knob is a second thing to
+    forget, and forgetting it is silent.
+
+    A function rather than an import of `_secrets`, because the module rebinds
+    the name and a caller holding the old object would keep the in-memory one
+    forever.
+    """
+    return _secrets
 
 
 # ---- schemas ----------------------------------------------------------------
@@ -223,6 +241,20 @@ async def delete_connection(
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> None:
     async with user_connection(access.auth.user_id) as conn:
+        # **Asked before the delete, not caught after it** (§259). db 0067
+        # makes `webhooks.connection_id` `ON DELETE RESTRICT`, so the database
+        # already refuses — but a raw `ForeignKeyViolation` reaches the caller
+        # as a 500 naming a constraint, which is the failure `actions`'
+        # parameter-usage check exists to avoid one table over. Names rather
+        # than a count, because the person who has to fix it is usually not the
+        # person who typed the delete.
+        in_use = await webhook_store.uses_connection(conn, connection_id)
+        if in_use:
+            raise ConflictError(
+                "this connection is used by "
+                + ", ".join(repr(name) for name in in_use)
+                + " - delete or repoint the webhook first"
+            )
         await conn_service.delete(
             conn,
             _secrets,
