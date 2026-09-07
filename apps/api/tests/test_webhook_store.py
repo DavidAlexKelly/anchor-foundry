@@ -279,3 +279,69 @@ def test_a_viewer_may_not_make_the_test_call(
 def test_a_stranger_sees_no_webhooks(client: TestClient, fx: Fixture) -> None:
     r = client.get(f"{base(fx)}/webhooks", headers=hdr(fx.outsider_sub))
     assert r.status_code == 404
+
+
+# ---- the workspace-wide listing (§262) ------------------------------------------
+def test_the_workspace_listing_crosses_projects(
+    client: TestClient, fx: Fixture, connection: str
+) -> None:
+    """**Not the project listing, and the difference is the whole point.**
+
+    An action type is a workspace resource and can be run from any project that
+    maps an instance of its object type, so `_validate_definition` resolves a
+    rule's webhook workspace-wide. A picker fed by the *project* listing would
+    offer a narrower set than the server accepts — §258's defect, which is why
+    this endpoint exists rather than the editor reusing the one next door.
+
+    Asserted as a strict superset rather than as a count, so it stays a claim
+    about the two listings answering different questions.
+    """
+    here = create(client, fx, connection, display_name="In this project").json()
+    other = client.post(
+        f"{wbase(fx)}/projects", headers=hdr(fx.owner_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:6]}"},
+    )
+    assert other.status_code == 201, other.text
+    far_connection = client.post(
+        f"{wbase(fx)}/projects/{other.json()['id']}/connections",
+        headers=hdr(fx.owner_sub),
+        json={"name": "Far", "source_type": "rest", "scope": "project",
+              "config": {"base_url": "https://example.invalid"}, "secret": {}},
+    )
+    assert far_connection.status_code == 201, far_connection.text
+    far = client.post(
+        f"{wbase(fx)}/projects/{other.json()['id']}/webhooks", headers=hdr(fx.owner_sub),
+        json={"connection_id": far_connection.json()["id"],
+              "api_name": f"hook_{uuid.uuid4().hex[:8]}",
+              "display_name": "In another project", "method": "POST", "path": ""},
+    )
+    assert far.status_code == 201, far.text
+
+    workspace_wide = {
+        row["id"] for row in client.get(
+            f"{wbase(fx)}/webhooks", headers=hdr(fx.editor_sub)
+        ).json()
+    }
+    project_only = {
+        row["id"] for row in client.get(
+            f"{base(fx)}/webhooks", headers=hdr(fx.editor_sub)
+        ).json()
+    }
+    assert here["id"] in workspace_wide and far.json()["id"] in workspace_wide
+    assert here["id"] in project_only and far.json()["id"] not in project_only
+    assert project_only < workspace_wide
+
+
+def test_a_stranger_sees_no_workspace_webhooks(
+    client: TestClient, fx: Fixture
+) -> None:
+    """It names what an action may call, so it is gated by seeing the workspace
+    at all — and db 0067's project policy narrows it further to the projects
+    the caller can actually reach, which is the same narrowing the validation
+    gets."""
+    r = client.get(f"{wbase(fx)}/webhooks", headers=hdr(fx.outsider_sub))
+    assert r.status_code == 404
+
+
+def wbase(fx: Fixture) -> str:
+    return f"/api/workspaces/{fx.workspace}"

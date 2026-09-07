@@ -379,9 +379,45 @@ def test_an_inherited_shape_is_shown_resolved(page, module):
     ).check()
     page.get_by_test_id("iface-save").click()
 
-    # The row still reports its own one declaration.
-    expect(page.get_by_test_id(f"iface-props-{child}")).to_have_text("1", timeout=15000)
+    # **The dialog closing is what says the save was accepted**, and the row
+    # count is not. The child declares one property before the edit and one
+    # after — extending a parent changes what it *amounts to*, never what it
+    # declares — so the assertion that used to stand here passed whether or not
+    # anything had been saved. An assertion whose two branches are the same
+    # answer is not an assertion, which this session has now written down
+    # twice (§260, §261) and is the reason this one was replaced.
+    expect(page.get_by_role("dialog")).to_have_count(0, timeout=15000)
+    # The row still reports its own one declaration, which is the claim that
+    # sentence *is* about: the listing shows what an interface declares.
+    expect(page.get_by_test_id(f"iface-props-{child}")).to_have_text("1")
 
     page.get_by_role("button", name=f"Edit {child}").click()
-    expect(page.get_by_test_id("iface-effective")).to_contain_text("2 properties")
-    expect(page.get_by_test_id("iface-effective")).to_contain_text("tracking_tag")
+    effective = page.get_by_test_id("iface-effective")
+    try:
+        expect(effective).to_contain_text("2 properties")
+    except AssertionError:
+        # **This failed once in a full run and never in isolation** (§262's
+        # gate), and the snapshot could not say why: it showed no dialog and
+        # neither interface. Three causes look identical from outside — the
+        # save never reached the server, the dialog did not re-open, or it
+        # re-opened holding a stale detail. So the next occurrence answers that
+        # instead of costing another investigation (§240: instrument rather
+        # than guess).
+        listed = module.api.call(
+            "GET", f"/workspaces/{module.workspace_id}/interfaces"
+        )
+        mine = next((i for i in listed if i["api_name"] == child), None)
+        detail = module.api.call(
+            "GET", f"/workspaces/{module.workspace_id}/interfaces/{mine['id']}"
+        ) if mine else None
+        raise AssertionError(
+            "the resolved shape never appeared. "
+            f"dialogs open now: {page.get_by_role('dialog').count()}; "
+            f"interface rows on screen: "
+            f"{page.get_by_test_id('iface-table').locator('tbody tr').count()}; "
+            f"this interface is in the listing: {mine is not None}; "
+            f"what the server holds: extends="
+            f"{detail['extends'] if detail else None}, effective="
+            f"{[p['api_name'] for p in detail['effective_properties']] if detail else None}"
+        ) from None
+    expect(effective).to_contain_text("tracking_tag")

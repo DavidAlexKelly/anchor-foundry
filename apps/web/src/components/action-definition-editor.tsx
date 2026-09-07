@@ -30,6 +30,12 @@ import { Dialog, Field } from "@/components/dialog";
 import { NotifyRuleFields } from "@/components/notify-rule-fields";
 import { TypePicker } from "@/components/type-picker";
 import { NotifyConfig, blankNotifyConfig, problem as notifyProblem } from "@/lib/notify-rule";
+import { WebhookRuleFields } from "@/components/webhook-rule-fields";
+import {
+  WebhookRuleConfig, blankWebhookConfig, listProblem as webhookListProblem,
+  valueOptions,
+} from "@/lib/webhook-rule";
+import { webhooks as webhookApi } from "@/lib/api";
 import { actions as actionApi, objects as objApi, type ActionDefinitionInput } from "@/lib/api";
 import type { ActionType } from "@/lib/types";
 
@@ -58,6 +64,9 @@ const RULE_KINDS = [
   ["delete_link", "Remove a link"],
   ["delete_object", "Delete an object"],
   ["notify", "Send a notification"],
+  // p.113: "select Add new rule, then select Webhook". The sixth and last
+  // kind the executor runs (§260); §262 is what makes it selectable.
+  ["webhook", "Call a webhook"],
 ];
 
 /** p.54–55's operators, named as Foundry names them. */
@@ -154,6 +163,17 @@ export function ActionDefinitionEditor({
     queryKey: ["link-types", workspaceId],
     queryFn: () => objApi.listLinkTypes(workspaceId),
   });
+  // The workspace's webhooks, for the one question the *editor* has to answer
+  // rather than the rule: which outputs a writeback above this rule produces
+  // (p.110). Fetched once here rather than per rule, and shared with
+  // `WebhookRuleFields` through react-query's cache under the same key.
+  const workspaceWebhooks = useQuery({
+    queryKey: ["workspace-webhooks", workspaceId],
+    queryFn: () => webhookApi.listForWorkspace(workspaceId),
+  });
+  const outputsFor = (id: string) =>
+    (workspaceWebhooks.data ?? [])
+      .find((w) => w.id === id)?.outputs.map((o) => o.api_name) ?? [];
   // Both ends now (§142). The join property lives on the *from* side: a rule on
   // that side writes its own object's, and a rule on the other side writes the
   // named object's, so a link touching this type at either end is settable. One
@@ -374,7 +394,9 @@ export function ActionDefinitionEditor({
                               // itself on the first render.
                               config: e.target.value === "notify"
                                 ? (blankNotifyConfig() as unknown as Record<string, unknown>)
-                                : {},
+                                : e.target.value === "webhook"
+                                  ? (blankWebhookConfig() as unknown as Record<string, unknown>)
+                                  : {},
                             }
                           : rule))
                     }
@@ -438,8 +460,19 @@ export function ActionDefinitionEditor({
                         onChange={(e) => patch({ ...config, parameter: e.target.value })}
                       >
                         <option value="">Choose…</option>
-                        {parameters.map((p) => (
-                          <option key={p.api_name} value={p.api_name}>{p.api_name}</option>
+                        {/* **Not just `parameters`** (§262). p.111's "Writeback
+                            response" is a value source for a logic rule, and
+                            the executor reads it from the same namespace as a
+                            parameter — so a picker offering only parameters
+                            would leave p.110's whole point reachable by JSON
+                            alone, which is the gap §258 and §252 both closed
+                            one level up. Position-dependent, because an output
+                            is only available below the writeback that produces
+                            it. */}
+                        {valueOptions(
+                          parameters.map((p) => p.api_name), rules, i, outputsFor,
+                        ).map((name) => (
+                          <option key={name} value={name}>{name}</option>
                         ))}
                       </select>
                     </Field>
@@ -631,6 +664,25 @@ export function ActionDefinitionEditor({
                   })()}
                 </>
               )}
+              {r.kind === "webhook" && (
+                <WebhookRuleFields
+                  index={i + 1}
+                  parameters={parameters}
+                  webhooks={workspaceWebhooks.data ?? []}
+                  webhooksLoaded={workspaceWebhooks.isSuccess}
+                  config={config as unknown as WebhookRuleConfig}
+                  // **Position-dependent**, which is why it is computed here
+                  // rather than inside the component: p.110's outputs are only
+                  // available to rules *below* the writeback that produces
+                  // them, and a rule can only see itself.
+                  valueNames={valueOptions(
+                    parameters.map((p) => p.api_name), rules, i, outputsFor,
+                  )}
+                  onChange={(next) =>
+                    patch(next as unknown as Record<string, unknown>)
+                  }
+                />
+              )}
               {(r.kind === "create_link" || r.kind === "delete_link") &&
                 settableLinks.length === 0 && (
                   <p className="field-hint">
@@ -741,9 +793,30 @@ export function ActionDefinitionEditor({
         Add a criterion
       </button>
 
+      {/* **Beside Save rather than on a rule**, because these two refusals do
+          not belong to one: p.106's "only a single webhook as a writeback" is
+          broken by the *second* one, and p.110's ordering rule is about where a
+          rule sits relative to another. A message pinned to either rule would
+          be blaming a line that is fine on its own. */}
+      {(() => {
+        const said = webhookListProblem(rules, outputsFor);
+        return said ? (
+          <p
+            className="state error"
+            data-testid="definition-rules-problem"
+          >
+            {said}
+          </p>
+        ) : null;
+      })()}
+
       <div className="row-actions" style={{ marginTop: 20 }}>
         <button className="btn quiet" onClick={onClose}>Cancel</button>
-        <button className="btn" disabled={save.isPending} onClick={() => save.mutate()}>
+        <button
+          className="btn"
+          disabled={save.isPending || !!webhookListProblem(rules, outputsFor)}
+          onClick={() => save.mutate()}
+        >
           {save.isPending ? "Saving…" : "Save"}
         </button>
       </div>

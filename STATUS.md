@@ -4388,6 +4388,65 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 262. The webhook rule in the editor, and two defects §260 left (this session)
+
+The last of the seven rule kinds reachable only by posting JSON. §258 closed
+the same gap for `notify`; §252 named the shape. `action-types` p.105-116.
+
+**Planning the picker found two defects, by forcing a question the editor could
+not avoid: which webhooks may a rule name?**
+
+*A rule naming a webhook from another project saved and then failed on the
+first click.* `_validate_definition` resolves a rule's webhook from every
+webhook in the **workspace** — it has to, because `PUT .../definition` has no
+project in its path and an action type can be run from any project that maps an
+instance of its object type. Execution then resolved the *connection* against
+the **executing** project. §129's and §214's shape, from two layers that each
+looked right alone.
+
+The fix is at run time, because the executing project was never the question: a
+webhook was configured against a connection, in a project, and its own row says
+which. Whether it can reach its source has nothing to do with where somebody
+pressed the button.
+
+*And a side effect could still take the action down.* `_run_webhooks` caught
+only `WebhookError`; `webhook_store.get` raises `NotFoundError`, which is an
+`HTTPException` — so a webhook deleted after the rule was written returned **404
+for an action that had already committed its write**. p.106's "the failure is
+not shown to the end user" became "the failure is the entire response".
+
+**Both were only reachable across a project boundary or after a delete**, which
+§260's one-project, nothing-ever-deleted fixtures could not do. §257's tell
+again: a suite whose fixtures all sit on one side of a rule cannot see the rule.
+
+**32 mutants attacked, 32 caught**, after four survivors, and three of them are
+worth keeping.
+
+*A fetch that was never running.* `WebhookRuleFields` declared its own
+`useQuery` for the workspace's webhooks and the editor already had one on the
+same key — react-query deduped them, so the component's `queryFn` never ran and
+replacing it with `Promise.resolve([])` changed nothing. **§213's question with
+a fetch in place of a guard**: somebody else already does this, so delete
+rather than test. The list is a prop now, and the equivalent mutation lives on
+the editor's one query where it has an effect.
+
+*A test that walked the right path and erased the difference at the end.* The
+switching-source check filled the new box after switching, and `setInput`
+*replaces* rather than merges — so the leftover the mutant preserves was
+overwritten a moment later and the final state was identical either way.
+**A test can cover the right path and still be blind, if a later step
+overwrites the state the defect lives in.** The tell is a mutation whose effect
+is confined to an intermediate value; the fix is to assert on that value rather
+than on what the sequence ends with.
+
+*And the editor offered p.110's outputs in the rule's own pickers and not in
+the `modify_object` picker that would use them* — so writing an external
+system's response into a property stayed reachable by JSON alone. §252's gap
+one level further down, inside the unit that existed to close it.
+
+**2044 API tests**, 2 skipped; **1668 unit tests**; 25 browser tests in
+`e2e/test_action_definition_editor.py`.
+
 ### 261. Webhooks, on the source they belong to (this session)
 
 §259 built the resource and §260 the action rule, and left both reachable only

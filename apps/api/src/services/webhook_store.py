@@ -62,6 +62,32 @@ async def list_for_project(
     )
 
 
+async def list_for_workspace(
+    conn: AsyncConnection, workspace_id: UUID
+) -> list[dict[str, Any]]:
+    """Every webhook an action rule in this workspace may name (§262).
+
+    **Not `list_for_project`, and the difference is the whole reason this
+    exists.** An action type is workspace-scoped and can be run from any
+    project that maps an instance of its object type, so `_validate_definition`
+    resolves a rule's webhook workspace-wide — and a picker offering one
+    project's would be §258's defect again, a form refusing what the server
+    would take. RLS narrows this to the projects the caller can see, which is
+    the same narrowing the validation gets.
+    """
+    return await fetch_all(
+        conn,
+        f"""
+        SELECT {_COLUMNS}
+          FROM webhooks w
+          JOIN connections c ON c.id = w.connection_id
+         WHERE w.workspace_id = :wid
+         ORDER BY w.display_name
+        """,
+        {"wid": str(workspace_id)},
+    )
+
+
 async def get(conn: AsyncConnection, webhook_id: UUID) -> dict[str, Any]:
     row = await fetch_one(
         conn,

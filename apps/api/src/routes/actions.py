@@ -533,15 +533,34 @@ async def _run_webhooks(
     failure: str | None = None
     for rule in actions_service.webhook_rules(rules, mode=mode):
         config = rule.get("config") or {}
-        webhook = await webhook_store.get(conn, UUID(str(config["webhook"])))
-        connection = await webhook_store.connection_for(
-            conn, project_id, UUID(str(webhook["connection_id"]))
-        )
-        secret = conn_service.secret_values_for(
-            connection_routes.secrets_gateway(), connection
-        )
-        values = actions_service.webhook_inputs(config, bound)
+        webhook_id = UUID(str(config["webhook"]))
+        # Whether the webhook row still exists, which decides whether there is
+        # anything to hang a history entry off.
+        webhook: dict[str, Any] | None = None
         try:
+            webhook = await webhook_store.get(conn, webhook_id)
+            connection = await webhook_store.connection_for(
+                # **The webhook's project, not the caller's** (§262). An action
+                # type is workspace-scoped and can be run from any project that
+                # maps an instance of its object type, so "the project it will
+                # run in" is not something a definition's save could check —
+                # and `_validate_definition` resolves the webhook workspace-wide
+                # for exactly that reason. Narrowing here to the *executing*
+                # project made a rule that saved and then failed on the first
+                # click, which is §129's and §214's shape.
+                #
+                # The executing project is not the question anyway: a webhook
+                # was configured against a connection, in a project, and its own
+                # row says which. Whether it can reach its source has nothing to
+                # do with where somebody pressed the button.
+                conn,
+                UUID(str(webhook["project_id"])),
+                UUID(str(webhook["connection_id"])),
+            )
+            secret = conn_service.secret_values_for(
+                connection_routes.secrets_gateway(), connection
+            )
+            values = actions_service.webhook_inputs(config, bound)
             result = await webhook_calls.perform(webhook, connection, secret, values)
         except webhooks_service.WebhookError as exc:
             # A request that could not be *built* — a required input the rule
@@ -550,6 +569,24 @@ async def _run_webhooks(
             # the rule was written. Recorded as a failure rather than raised,
             # so a side effect still cannot take the action down.
             result = webhook_calls.result(ok=False, error=str(exc))
+        except NotFoundError:
+            # **Resolving the webhook is part of the call, not a precondition
+            # of it** (§262). This catch was missing, and `NotFoundError` is an
+            # `HTTPException` — so a webhook deleted after the rule was written
+            # returned 404 for an action that had already committed its write.
+            # The object changed, the caller was told it had not, and p.106's
+            # "the failure is not shown to the end user" became "the failure is
+            # the entire response".
+            #
+            # A *writeback* still refuses the action, and that difference is
+            # the caller's to make from `failure`: it runs before the write,
+            # and one that could not find its webhook has not run — which under
+            # p.106 means no other changes may be made. Returning the outcome
+            # rather than raising is what lets one call site do both.
+            result = webhook_calls.result(
+                ok=False, error="this webhook no longer exists, or its source moved",
+            )
+            webhook = None
         # **Recorded on its own connection, not the caller's.** A failing
         # writeback makes the caller raise, which rolls its transaction back —
         # and the row recording the call would go with it, leaving the one
@@ -557,22 +594,29 @@ async def _run_webhooks(
         # history is a record of calls *made*, not of actions that succeeded,
         # so it must outlive the action's rollback. Found by the test for
         # exactly that case.
-        async with user_connection(actor_id) as own:
-            await webhook_store.record(
-                own,
-                webhook_id=UUID(str(webhook["id"])),
-                workspace_id=workspace_id,
-                action_run_id=run_id,
-                called_by=actor_id,
-                mode=mode,
-                result=result,
-                store_responses=bool(webhook["store_responses"]),
-            )
+        # **Nothing to record when the webhook is gone**, and that is the
+        # schema's answer rather than a shortcut: `webhook_runs.webhook_id` is
+        # `ON DELETE CASCADE`, so deleting a webhook already takes its history
+        # with it. A row pointing at a webhook that no longer exists is not
+        # something db 0067 can hold, and inventing somewhere else to put it
+        # would be inventing a second history. The failure still reaches
+        # `failure`, which is what lets a writeback refuse.
+        if webhook is not None:
+            async with user_connection(actor_id) as own:
+                await webhook_store.record(
+                    own,
+                    webhook_id=UUID(str(webhook["id"])),
+                    workspace_id=workspace_id,
+                    action_run_id=run_id,
+                    called_by=actor_id,
+                    mode=mode,
+                    result=result,
+                    store_responses=bool(webhook["store_responses"]),
+                )
         if not result["ok"]:
             if failure is None:
-                failure = (
-                    f"the {webhook['display_name']!r} webhook failed: {result['error']}"
-                )
+                named = webhook["display_name"] if webhook else "a deleted"
+                failure = f"the {named!r} webhook failed: {result['error']}"
             continue
         for name, value in (result.get("outputs") or {}).items():
             outputs[actions_service.webhook_output_name(name)] = value
