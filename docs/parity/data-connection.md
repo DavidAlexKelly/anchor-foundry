@@ -36,7 +36,7 @@ Foundry separates **worker** (where compute runs) from **networking** (how the t
 | Streaming syncs | TOC §19 | ○ — out of scope |
 | Media set syncs | TOC §21 | ○ — tracks the media reference property type in `ontology.md` |
 | **Exports** — push data out | TOC §24–25 | ○ |
-| **Webhooks** — outbound calls to a source | TOC §26–29 | ◑ §259, §260 — built (decision 0012): a request shape on a REST source, p.228's inputs and p.229's outputs, p.222's test call, p.242's per-caller history, and the action rule in `action-types` p.106's two modes. What is absent is named on `ontology.md` §5.2's row: function-mapped inputs, chained multi-call webhooks, the OAuth authorization-code grant, and the privileged history read |
+| **Webhooks** — outbound calls to a source | TOC §26–29 | ◑ §259, §260, §261 — built (decision 0012): a request shape on a REST source, p.228's inputs and p.229's outputs, p.222's test call, p.242's per-caller history, the action rule in `action-types` p.106's two modes, and p.220's Webhooks section on the source itself (§261). What is absent is named on `ontology.md` §5.2's row: function-mapped inputs, chained multi-call webhooks, the OAuth authorization-code grant, and the privileged history read |
 | **Listeners** — inbound events | TOC §30–39 | ○ |
 | Source exploration — browse a source before syncing | TOC §17 | ◑ |
 
