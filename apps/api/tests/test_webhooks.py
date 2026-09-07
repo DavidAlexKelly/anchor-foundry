@@ -376,3 +376,17 @@ def test_a_whole_reference_is_told_from_one_among_text() -> None:
     assert templates.is_whole_reference("x{{{a}}}") is False
     assert templates.is_whole_reference("{{{a}}}{{{b}}}") is False
     assert templates.is_whole_reference("{{a}}") is False
+
+
+def test_a_dotted_path_missing_a_middle_key_is_null() -> None:
+    """The other way a path can name nothing, and the one a `{"a": 1}` fixture
+    cannot reach.
+
+    `a.b` against `{"a": 1}` stops because `1` is not a container — a different
+    branch. This one walks into a real dict and finds no `b`, which is the case
+    an implementation that raised on a missing key would fail on and the first
+    version of this file never exercised. A mutant turning that early return
+    into a `raise` survived because of it.
+    """
+    outputs = wh.parse(definition(outputs=[{"api_name": "x", "path": "a.b"}]))["outputs"]
+    assert wh.extract(outputs, {"a": {"c": 1}}) == {"x": None}

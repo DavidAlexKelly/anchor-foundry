@@ -447,3 +447,89 @@ def test_runs_for_a_webhook_that_does_not_exist_are_a_404(
         f"{base(fx)}/webhooks/{uuid.uuid4()}/runs", headers=hdr(fx.editor_sub)
     )
     assert r.status_code == 404
+
+
+def test_an_empty_response_gives_null_outputs_rather_than_failing(
+    client: TestClient, fx: Fixture, connection: str
+) -> None:
+    """A 204 is a *legitimate* answer, not a parse failure, even when outputs
+    are declared.
+
+    The earlier 204 check declares no outputs, so it passes against an
+    implementation that treats an empty body as unparseable — the failure only
+    surfaces where something reads the response. Both halves are needed, and a
+    mutant making an empty body a parse error survived until this one existed.
+    """
+    hook = make(
+        client, fx, connection, path="empty",
+        outputs=[{"api_name": "unique_id", "path": "results.unique_id"}],
+    )
+    run = call(client, fx, hook)
+    assert run["ok"] is True
+    assert run["outputs"] == {"unique_id": None}
+
+
+def test_the_history_is_newest_first(
+    client: TestClient, fx: Fixture, connection: str
+) -> None:
+    """Two runs, told apart by something that survives into the row.
+
+    A one-run history is the same list in either order, which is why a mutant
+    reversing the sort survived: nothing had ever put two of them there. The
+    status codes differ because the *paths* differ, so the assertion is about
+    ordering rather than about timestamps a fast machine may not separate.
+    """
+    hook = make(client, fx, connection, path="created")
+    call(client, fx, hook)
+    client.put(
+        f"{base(fx)}/webhooks/{hook['id']}", headers=hdr(fx.editor_sub),
+        json={"connection_id": connection, "display_name": hook["display_name"],
+              "method": "POST", "path": "refuse"},
+    )
+    call(client, fx, hook)
+
+    page = client.get(
+        f"{base(fx)}/webhooks/{hook['id']}/runs", headers=hdr(fx.editor_sub)
+    ).json()
+    assert page["total"] == 2
+    assert [item["status_code"] for item in page["items"]] == [400, 201]
+
+
+def test_the_send_time_destination_guard_refuses_link_local(
+    target: str
+) -> None:
+    """**§213's question, asked and answered.**
+
+    A surviving guard's first question is not "which test is missing" but "who
+    else already refuses this" — and `RestConnector.validate_config` does call
+    `_check_url` on `base_url`, at create *and* at update, so no connection
+    holding a link-local address can be saved through the API. `_join_url`
+    concatenates rather than resolving, so a rendered path cannot change the
+    host either.
+
+    The guard is kept anyway, and this is the case that makes it more than a
+    duplicate: `_check_url` resolves the hostname **when it runs**. A name that
+    answered with a public address at configure time and answers with
+    169.254.169.254 at send time is the classic DNS-rebinding bypass, and the
+    configure-time check cannot see it by construction. So the check is tested
+    where it acts — on a connection row, not through an endpoint that would
+    have refused the row first.
+    """
+    import anyio
+
+    from src.services import webhook_calls
+
+    hook = {"method": "GET", "path": "", "query": {}, "headers": {}, "body": None,
+            "inputs": [], "outputs": [], "timeout_seconds": 5}
+    rebound = {"config": {"base_url": "http://169.254.169.254/latest",
+                          "allow_insecure_http": True}}
+    run = anyio.run(webhook_calls.perform, hook, rebound, {}, {})
+    assert run["ok"] is False
+    assert "link-local" in run["error"]
+    # And the same call against a host that is fine goes through, so the
+    # refusal above is about the address rather than about the code path.
+    ok = anyio.run(
+        webhook_calls.perform, {**hook, "path": "echo"},
+        {"config": {"base_url": target, "allow_insecure_http": True}}, {}, {},
+    )
+    assert ok["ok"] is True
