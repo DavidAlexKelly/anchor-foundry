@@ -4495,7 +4495,7 @@ the URL a template and part of a template comes from a property value — a
 notification is the one surface here where somebody else's data becomes a
 control the recipient is invited to click.
 
-**1925 API tests**, 2 skipped (was 1867): 45 without a database and 15 through
+**1927 API tests**, 2 skipped (was 1867): 45 without a database and 15 through
 it; **1580 unit tests**; 3 browser tests in `e2e/test_notifications.py`.
 
 ### 256. The ontology listing is a page, and it says so (this session)
