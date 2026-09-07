@@ -620,3 +620,88 @@ def test_an_action_whose_only_rule_sends_data_out_is_refused_as_empty(
     # And nothing was sent, because the refusal happens before the write and a
     # side effect fires after it.
     assert runs_for(client, fx, hook) == []
+
+
+def test_an_unsupplied_optional_parameter_is_absent_rather_than_null(
+    client: TestClient, fx: Fixture, connection: str, ticket_type: str, tickets: list[str]
+) -> None:
+    """d-p.229's optional inputs, mapped to a parameter the caller left out.
+
+    **Absent, not null**, and the difference is not pedantry: an API that
+    distinguishes "field not provided" from "field explicitly cleared" — and
+    most that accept PATCH-shaped bodies do — would read the second as a
+    request to erase the value. The rule maps the input, the caller supplies
+    nothing, and the key does not appear.
+
+    The earlier optional-input check leaves the input out of the *rule*, which
+    never exercises this: a mutant sending `None` for an unsupplied parameter
+    survived until this existed.
+    """
+    hook = make_webhook(
+        client, fx, connection,
+        inputs=[{"api_name": "note", "required": False},
+                {"api_name": "priority"}],
+        body={"note": "{{{note}}}", "priority": "{{{priority}}}"},
+    )
+    action = make_action(client, fx, ticket_type)
+    assert define(client, fx, action, [
+        modify_rule(),
+        hook_rule(hook, "side_effect", inputs={
+            "priority": {"parameter": "priority"},
+            "note": {"parameter": "note"},
+        }),
+    ], parameters=[
+        {"api_name": "priority", "display_name": "Priority", "data_type": "string"},
+        {"api_name": "note", "display_name": "Note", "data_type": "string"},
+    ]).status_code == 200
+
+    # `note` is declared on the action and simply not submitted.
+    assert run(client, fx, action, tickets[0], "no-note").json()["ok"]
+    body = runs_for(client, fx, hook)[0]["request_body"]["body"]
+    assert body["priority"] == "no-note"
+    assert body["note"] is None or "note" not in body
+    # The template rendered a *gap* rather than the string "None", which is the
+    # other way this goes wrong.
+    assert body.get("note") != "None"
+
+
+def test_a_webhook_whose_inputs_changed_after_the_rule_was_written(
+    client: TestClient, fx: Fixture, connection: str, ticket_type: str, tickets: list[str]
+) -> None:
+    """The one path `_validate_definition` cannot close.
+
+    A rule is refused at save time when it does not supply a required input —
+    so reaching the run-time failure means the *webhook* changed underneath it,
+    which nothing stops: the two are edited on different screens by different
+    people. The rule is saved against an optional input, the input is then made
+    required, and the call can no longer be built.
+
+    **It has to be a recorded failure rather than a raise**, because this is a
+    side effect and a-p.106 says a side effect cannot fail the action. A
+    `WebhookError` escaping here would take down an action that had already
+    written its object — the exact outcome the mode exists to prevent.
+    """
+    hook = make_webhook(
+        client, fx, connection,
+        inputs=[{"api_name": "priority", "required": False}],
+    )
+    action = make_action(client, fx, ticket_type)
+    assert define(client, fx, action, [
+        modify_rule(), hook_rule(hook, "side_effect", inputs={}),
+    ]).status_code == 200
+
+    r = client.put(
+        f"{pbase(fx)}/webhooks/{hook['id']}", headers=hdr(fx.editor_sub),
+        json={"connection_id": connection, "display_name": hook["display_name"],
+              "method": "POST", "path": "echo",
+              "inputs": [{"api_name": "priority", "required": True}],
+              "body": {"priority": "{{{priority}}}"}},
+    )
+    assert r.status_code == 200, r.text
+
+    result = run(client, fx, action, tickets[1], "still-written")
+    assert result.status_code == 200 and result.json()["ok"], result.text
+    assert priority_of(client, fx, ticket_type, tickets[1]) == "still-written"
+    failed = runs_for(client, fx, hook)[0]
+    assert failed["ok"] is False
+    assert "missing required input" in failed["error"]
