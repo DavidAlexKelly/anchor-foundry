@@ -22,7 +22,14 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-pymysql = pytest.importorskip("pymysql", reason="PyMySQL not installed")
+if os.environ.get("ANCHOR_MYSQL_REQUIRED"):
+    # The same sentence as the server guard below, one step earlier: where this
+    # suite is required, a missing driver is the bug rather than a reason to
+    # skip - and `importorskip` has no required mode, so leaving it here would
+    # have left the hole open at the only point it could still be silent.
+    import pymysql
+else:
+    pymysql = pytest.importorskip("pymysql", reason="PyMySQL not installed")
 
 from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from src.main import create_app  # noqa: E402

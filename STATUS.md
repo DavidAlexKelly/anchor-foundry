@@ -4485,8 +4485,62 @@ Also left out and recorded rather than forgotten: p.143's relationship graph,
 which Foundry says of its own feature "is not always available", and which
 needs foreign keys `ColumnInfo` does not carry.
 
-**34 new API tests** (19 in `test_source_preview.py`, 4 egress, 5 REST, 6
+**34 mutants attacked, 32 runnable, 32 caught.** The two that are not runnable
+are the MySQL pair, and the harness prints them as `NOT RUN` rather than
+counting them either way — a mutant whose only possible killer is a skipped
+suite would come back a survivor for a reason that has nothing to do with the
+tests, which is §267's confusion one mutant at a time instead of one layer at a
+time.
+
+**Three of the first run's nine problems were the harness's own**, and the
+cause is worth keeping: `S3Connector.snapshot` opens with the same six lines as
+its `preview`, so every anchor taken from those lines matched twice and came
+back a NO-OP. The harness gained a `within` scope — a substitution applied only
+inside the method containing a marker unique to it — and the marker has to be
+unique or it is an error, because silently picking the first occurrence is the
+same failure the NO-OP check exists to catch.
+
+**Three survivors were one shape, and it is the most useful finding here: a cap
+applied twice is a cap the outer one hides.** `build_preview` limits the rows
+on the way out, so the `LIMIT` in the query, the slice on the REST page and the
+limit in `sample_file` were all invisible to any assertion on the response — a
+connector that pulled a billion-row table and then kept fifty would pass every
+test in the file. §265's rule is to ask whether the state a guard defends can
+be built by hand, and all three could be:
+
+- **Postgres**: a view whose rows past the cap divide by zero. The query with a
+  `LIMIT` never evaluates them; the one without fails.
+- **REST**: a page of sixty records where the fifty-fifth carries a key none of
+  the others do. A preview that scanned the whole page offers a column with
+  fifty empty cells under it — so the assertion is about the *columns*, which
+  is the only thing the outer cap does not flatten.
+- **The file sampler**: tested at the sampler, which is the only place its own
+  limit is visible.
+
+**Two survivors were the caps themselves, and the reason nothing caught them is
+a habit that is otherwise right.** Every fixture is built from `PREVIEW_ROWS`,
+because a table hard-coded to fifty goes stale the day the cap moves — and the
+cost is that the value is measured against itself, so changing it changes the
+fixture with it. They are checked against **decision 0015 §4** instead: not a
+copy of the number, but the place a reviewer would go to argue about it. Same
+move as §267's `export-form.ts` mirror, one layer further out.
+
+**The last one was ordinary and real**: an egress refusal marks the connection
+down, and only the message had been asserted.
+
+**One more needed §213's question rather than a test.** The S3 extension check
+survived because `dataset_engine` refuses an unreadable type too — so deleting
+it changed *when* the refusal happens, not whether, and the same words arrived
+from one layer in. The answer to "who else already refuses this" was "somebody,
+but only after downloading the object", which is a difference worth keeping and
+one that is observable: ask for a file that is not there. With the check the
+answer is about the type and the bucket is never touched; without it the
+connector goes to S3 and reports a missing object.
+
+**39 new API tests** (22 in `test_source_preview.py`, 4 egress, 6 REST, 7
 object storage), plus 3 MySQL ones that finally have somewhere to run.
+**2191 API tests, 2 skipped** — and the two skips are now a number to watch
+rather than background noise, because one of them was this unit's finding.
 
 ### 267. The export panel, and the question a green tick stopped answering (this session)
 

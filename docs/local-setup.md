@@ -243,6 +243,24 @@ skipped when the stack is down rather than failing — set
 `ANCHOR_E2E_REQUIRED=1` to make a missing stack an error, which is what CI
 wants, since there it is the bug.
 
+**`apps/api/tests/test_mysql_connector.py` needs a MariaDB and nothing here
+provisions one**, so on a plain checkout it skips. That is fine locally and was
+not fine in CI, where it also skipped and therefore had never run at all (§268)
+— roughly twenty tests reported as a clean pass without executing. CI now
+starts a MariaDB service and sets `ANCHOR_MYSQL_REQUIRED=1`, which turns the
+skip into a failure, the same arrangement `ANCHOR_E2E_REQUIRED` gives the
+browser suite. To run it here, point it at any MariaDB or MySQL you have:
+
+```bash
+docker run -d --name anchor-mariadb -p 3306:3306 \
+  -e MARIADB_ROOT_PASSWORD=devpass -e MARIADB_ROOT_HOST='%' mariadb:11
+TEST_MYSQL_ADMIN_USER=root TEST_MYSQL_ADMIN_PASSWORD=devpass \
+  ANCHOR_MYSQL_REQUIRED=1 scripts/check.sh api
+```
+
+The suite creates its own database and login role, so root is what it wants;
+`TEST_MYSQL_HOST` and `TEST_MYSQL_PORT` move it off `127.0.0.1:3306`.
+
 ---
 
 ## Knobs
@@ -259,6 +277,9 @@ Environment variables, all read by `dev-up.sh` and `check.sh`:
 | `ANCHOR_LOG_DIR` | `/tmp/anchor-dev` |
 | `ANCHOR_PYTHON` | `.venv-api/bin/python` |
 | `ANCHOR_WORKER_DB` | `platform_worker_test`, created and migrated by `check.sh worker` |
+| `TEST_MYSQL_HOST` / `TEST_MYSQL_PORT` | `127.0.0.1` / `3306` |
+| `TEST_MYSQL_ADMIN_USER` / `TEST_MYSQL_ADMIN_PASSWORD` | `platform_test` / `devpass` |
+| `ANCHOR_MYSQL_REQUIRED` | unset; `1` turns the MySQL suite's skip into a failure |
 | `PLAYWRIGHT_CHROMIUM` | `/opt/pw-browsers/chromium`, used only when the path exists |
 
 `DATABASE_URL` connects as `platform_app`, which **is** subject to row-level
