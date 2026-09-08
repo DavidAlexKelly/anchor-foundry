@@ -4388,6 +4388,87 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 267. The export panel, and the question a green tick stopped answering (this session)
+
+§265 built exports and left every part reachable only by posting JSON — the
+shape §252 named, closed here as it was for notify rules (§258), webhooks
+(§261) and egress policies (§264). p.203 says where it goes: "navigate to the
+Overview page of the source to which you want to export", which is where p.220
+put webhooks and for the same reason.
+
+**The panel's real work is p.192, and it is a consequence nobody planned.**
+Since June 2025 an export with nothing to send is a **success** — which is the
+right call, and it means a history of green ticks no longer says whether the
+destination is current. A run that wrote nothing and a run that wrote
+everything look identical. So two things exist that would not otherwise: every
+row carries `freshness` (*up to date (v7)*, *one version behind*), and the
+history says **"nothing new (v7)"** rather than a second kind of success.
+`full` is exempt from both, because p.195's use for it is a destination that
+empties itself — "behind" is not a state it can be in, and marking it up to
+date would be as wrong as marking it behind.
+
+**Two sentences where one would have been easier.** A source that could be a
+destination but has not been switched on (p.202) is kept in the panel and
+flagged, not filtered out. "Your admin has not enabled this" and "this kind of
+source cannot be a destination" are different problems with different fixes,
+and a picker that merged them would send somebody to ask the wrong question.
+The switch itself is offered right there to whoever can work it, and the
+sentence explains what it is for rather than just labelling a toggle.
+
+**A mirror caught before it could drift.** The picker needs its own copy of
+which source types can be a destination, and the obvious test — compare it to a
+literal — is a copy checked against a copy, which §191 says is two chances to be
+identically wrong. So the *server's* suite reads `export-form.ts` and compares
+the map to `services/exports.DESTINATIONS`. Verified by making them disagree and
+watching it fail, because a drift guard that has never fired is a guard nobody
+has checked.
+
+**A type that had been wrong since §265, found by using it.** `ConnectionOut`
+gained `exports_enabled` on the wire and `packages/types`' `Connection` never
+did — so the browser had been receiving a field TypeScript did not know about.
+Nothing failed, because nothing had read it until this panel. `tsc` named it in
+the first compile.
+
+**37 mutants attacked, 37 caught** — after a report that said seven survivors
+and was wrong about six of them.
+
+**All seven were browser-layer mutants and none of the thirty unit ones
+survived**, and that shape was the tell. A layer that catches *nothing* is not
+a coverage gap; it is a runner that did not run. The dev stack had gone down
+between the last browser run and the harness, so every test **skipped** — and
+`pytest` exits **0** on a skip, which the harness read as "the tests passed
+against the mutant".
+
+**A skip is not a pass, and that is the third member of a family this project
+already knows.** §189 added NO-OP detection because a mutation that never
+landed looks exactly like a survivor; every harness since has refused to count
+a HANG as a catch for the same reason. This is the same mistake one level up,
+and it is worse than either: a hang is slow enough to notice and a no-op is
+reported, while a skipped layer produces a clean, fast, entirely wrong report.
+The harness now refuses a run that reports success without the word `passed` in
+it, and prints `BROKEN LAYER` rather than `SURVIVOR`.
+
+**The rule underneath it:** *before believing a survivor, check that the layer
+that let it through can fail at all.* The cheapest version is what was missing
+here — a runner that treats "nothing ran" as an error. The shape to watch for
+in a report is a whole layer surviving at once, which is almost never what a
+real gap looks like.
+
+**One of the seven was real**, and §257 explains why it hid: nothing checked
+that a non-admin is *not* offered p.202's enable button, because every test in
+the file runs as the dev owner — a workspace admin — so `canAdmin` was true in
+every fixture and the false branch had nothing on the other side of it. §214's
+rule makes it worth fixing rather than shrugging at: the button's only possible
+outcome for that person is a 403, so the explanation stays and the button goes.
+
+Its test then failed for a second, quieter reason: the tests above it enable
+exports and share a project, so by the time it ran the panel had a usable
+destination and correctly did not render the empty state at all. **The
+leftovers were not noise, they were a different valid state** — §122's trap in
+its least obvious form. It has a project of its own now.
+
+**1740 unit tests** (33 new); **31** in `test_exports.py`; **5 browser tests**.
+
 ### 266. The form that discarded what you typed (this session)
 
 §265's gate left one red browser test with four possibilities eliminated and
@@ -9420,6 +9501,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard duplicated one level up is invisible to every test, because the level below is still right.** §213's Object View widget asked whether the bound type had a configured view and used the answer to fall back and to withhold a switch that led nowhere. Both rules are correct; both were already enforced by `ObjectView`, which the widget renders. Replacing the widget's answer with a constant changed nothing on screen, so the mutant survived — and the survivor was not a missing test but two functions, a query and eight unit tests that could never have been observed. §195's version of this was a fix that fixed nothing; this is subtler, because a duplicated guard reads like ordinary defensiveness and the behaviour is right either way. **The question to ask a surviving guard is not "which test is missing" but "who else already refuses this"** — and when somebody does, delete rather than test. The tell is a survivor whose code restates a rule you can point at in another file.
 
 - **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
+
+- **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
 

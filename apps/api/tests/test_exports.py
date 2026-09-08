@@ -337,3 +337,35 @@ def test_a_summary_says_which_way_round_the_mode_is() -> None:
     assert exports.summarise(
         {"kind": "file", "destination": {"prefix": "exports/orders"}}
     ) == "files to exports/orders"
+
+
+def test_the_browser_offers_exactly_the_destinations_the_server_accepts() -> None:
+    """**The browser's copy of `DESTINATIONS`, compared against this one.**
+
+    `apps/web/src/lib/export-form.ts` has to know which sources can be a
+    destination, because the picker is built from it — and §191's rule is that
+    two copies of a list are two chances to be identically wrong. The browser's
+    own test compares that map to a literal, which is a copy checked against a
+    copy; this is the one that compares it to the thing it mirrors.
+
+    Read out of the TypeScript rather than duplicated here, so the failure is
+    "the two disagree" rather than "somebody forgot to update a third place".
+    The same argument `test_egress.py` makes for the worker's copy, at the one
+    boundary where the languages differ and a shared module is not available.
+    """
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    source = open(
+        os.path.join(root, "web", "src", "lib", "export-form.ts"), encoding="utf-8"
+    ).read()
+    block = re.search(
+        r'DESTINATIONS: Record<string, "table" \| "file"> = \{(.*?)\}', source, re.S
+    )
+    assert block, "could not find DESTINATIONS in export-form.ts - has it been renamed?"
+    theirs = dict(re.findall(r'(\w+):\s*"(table|file)"', block.group(1)))
+    assert theirs, "DESTINATIONS parsed to nothing - the regex has gone stale"
+    assert theirs == exports.DESTINATIONS, (
+        "the export form offers different destinations from the ones the server "
+        f"accepts: browser={theirs}, server={exports.DESTINATIONS}"
+    )
