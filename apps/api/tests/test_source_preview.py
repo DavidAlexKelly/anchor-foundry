@@ -102,6 +102,21 @@ def source_database() -> dict[str, object]:
             f" SELECT generate_series(1, {connectors.PREVIEW_ROWS + 1})"
         )
         conn.execute("CREATE TABLE public.empty_table (n int)")
+        # **A view that cannot be read past the cap.**
+        #
+        # The `LIMIT` in the preview query is invisible to any assertion on the
+        # response, because `build_preview` caps the rows again on the way out
+        # - so a connector that pulled a billion-row table over the wire and
+        # then kept fifty would pass every test in this file. §265's rule is to
+        # ask whether the state a guard defends can be built by hand, and here
+        # it can: rows past the cap divide by zero, so a query without a limit
+        # fails and one with a limit never evaluates them.
+        conn.execute(
+            f"""CREATE VIEW public.explodes_past_the_cap AS
+                SELECT n, 1 / (CASE WHEN n > {connectors.PREVIEW_ROWS + 1} THEN 0 ELSE 1 END)
+                       AS guard
+                  FROM generate_series(1, 500) AS n"""
+        )
         conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {SOURCE_USER}")
 
         # A table the connection's user cannot read. Created and owned by the
@@ -225,6 +240,53 @@ def test_one_row_past_the_cap_is_reported_as_more(
     body = r.json()
     assert len(body["rows"]) == connectors.PREVIEW_ROWS
     assert body["more"] is True
+
+
+def test_the_cap_is_applied_at_the_source_and_not_on_the_way_out(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """**The limit no assertion on the response can see.**
+
+    `build_preview` caps the rows again, so a connector that fetched the whole
+    table and then kept fifty would return exactly what this file expects
+    everywhere else — and would drag an arbitrarily large result over the wire
+    to do it. The view makes that difference observable: reading past the cap
+    divides by zero, so the query without a `LIMIT` fails and the one with it
+    never evaluates those rows.
+    """
+    r = preview(client, fx, source, "explodes_past_the_cap")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["rows"]) == connectors.PREVIEW_ROWS
+    assert body["more"] is True
+
+
+def test_the_caps_are_the_numbers_the_decision_states(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A constant every test measures itself against is a constant no test
+    can pin.**
+
+    The tables above are built from `PREVIEW_ROWS`, which is right — a fixture
+    hard-coded to fifty would go stale the day the cap moved. The cost is that
+    changing the cap changes the fixture with it, so nothing in this file
+    notices. Decision 0015 §4 is where the numbers are actually decided, so
+    that is what they are checked against: not a copy of the value, but the
+    place a reviewer would go to argue about it.
+    """
+    import pathlib
+    import re
+
+    decision = pathlib.Path(__file__).parents[3] / "docs/decisions/0015-source-preview.md"
+    text = decision.read_text(encoding="utf-8")
+    stated = {
+        name: int(value)
+        for name, value in re.findall(r"`(PREVIEW_ROWS|PREVIEW_CELL) = (\d+)`", text)
+    }
+    assert stated == {
+        "PREVIEW_ROWS": connectors.PREVIEW_ROWS,
+        "PREVIEW_CELL": connectors.PREVIEW_CELL,
+    }, "decision 0015 §4 and services/connectors disagree about the caps"
 
 
 def test_an_empty_table_previews_as_no_rows_rather_than_an_error(
@@ -370,3 +432,23 @@ def test_the_audit_records_the_table_and_never_the_rows(
     assert previews[0]["metadata"]["rows"] == len(ROWS)
     assert "ada@example.com" not in r.text
     assert SOURCE_PASSWORD not in r.text
+
+
+# ---- the file sampler's own cap ---------------------------------------------
+def test_sample_file_returns_only_what_it_was_asked_for(tmp_path) -> None:
+    """`dataset_engine.sample_file`, directly, because nothing else can see it.
+
+    A file preview goes through `build_preview`, which caps the rows again — so
+    a sampler that read a whole file and handed back ten thousand rows would
+    produce exactly the response the S3 tests assert, having loaded the entire
+    object into memory to do it. The cap belongs to the sampler, so the test
+    has to be at the sampler.
+    """
+    from src.services import dataset_engine
+
+    csv = tmp_path / "many.csv"
+    csv.write_text("n\n" + "".join(f"{i}\n" for i in range(1, 201)), encoding="utf-8")
+    columns, rows = dataset_engine.sample_file(str(csv), ".csv", 7)
+    assert [c.name for c in columns] == ["n"]
+    assert len(rows) == 7
+    assert rows[0] == [1]

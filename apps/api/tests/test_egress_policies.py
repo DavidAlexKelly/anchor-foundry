@@ -546,6 +546,13 @@ def test_a_database_preview_is_guarded_by_the_same_allowlist(
     )
     assert r.status_code in (422, 502), r.text
     assert f"not allowed to reach {DB.hostname}:{DB.port or 5432}" in r.text
+    # **And the source is marked down, which a refusal message alone cannot
+    # show.** `test` and `discover` both record it, because a destination the
+    # allowlist refuses is a configuration answer somebody has to act on — and
+    # unlike a table the credential cannot read (which leaves the connection
+    # `ok` on purpose), this really is the source being unreachable.
+    listed = client.get(f"{base(fx)}/connections", headers=hdr(fx.editor_sub)).json()
+    assert next(c for c in listed if c["id"] == cid)["status"] == "error"
 
 
 def test_a_database_preview_with_a_policy_for_its_host_reads_the_table(

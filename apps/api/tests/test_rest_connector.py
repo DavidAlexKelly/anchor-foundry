@@ -428,3 +428,27 @@ def test_an_empty_collection_previews_as_no_rows(api_base: str) -> None:
     )
     assert sample.rows == []
     assert sample.columns == []
+
+
+def test_a_rest_preview_describes_the_sample_and_not_the_whole_page(
+    api_base: str,
+) -> None:
+    """**The columns belong to the rows on screen.**
+
+    `/many` serves sixty records in one page and the fifty-fifth carries a key
+    none of the others do. A preview that scanned the whole page would offer
+    `late_only` as a header with fifty empty cells under it — a column somebody
+    can see and cannot explain. `discover` is where the collection's full shape
+    is answered; a sample answers for the sample.
+
+    It is also the only assertion that can see the slice at all: `build_preview`
+    caps the rows again, so the row count is identical either way.
+    """
+    from src.services.connectors import PREVIEW_ROWS
+
+    sample = RestConnector().preview(
+        cfg(api_base, "/many"), {}, source_schema="", source_table="records"
+    )
+    assert len(sample.rows) == PREVIEW_ROWS
+    assert sample.more is True
+    assert sample.columns == ["id", "name"]
