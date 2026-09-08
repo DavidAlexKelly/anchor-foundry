@@ -25,7 +25,7 @@ from ..lib.errors import ConflictError, ForbiddenError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import connections as conn_service
-from ..services import egress, egress_store, webhook_store
+from ..services import egress, egress_store, export_store, webhook_store
 from ..services.connectors import (
     ConnectorConfigError,
     ConnectorOperationError,
@@ -83,6 +83,10 @@ class ConnectionOut(BaseModel):
     last_tested_at: datetime | None
     last_synced_at: datetime | None
     last_error: str | None
+    #: p.202's switch (decision 0014 §4). On the read shape because the export
+    #: form has to say *why* a source is not offered, and "not enabled" and
+    #: "not a possible destination" are different sentences.
+    exports_enabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -255,6 +259,18 @@ async def delete_connection(
                 + ", ".join(repr(name) for name in in_use)
                 + " - delete or repoint the webhook first"
             )
+        # db 0069 makes `exports.connection_id` RESTRICT for the same reason,
+        # and the same 500 would come back without this. Asked separately from
+        # the webhooks above rather than merged into one list: "delete the
+        # webhook" and "delete the export" are different things to go and do,
+        # and a combined sentence would name neither.
+        exporting = await export_store.uses_connection(conn, connection_id)
+        if exporting:
+            raise ConflictError(
+                "this connection is the destination of "
+                + ", ".join(repr(name) for name in exporting)
+                + " - delete or repoint the export first"
+            )
         await conn_service.delete(
             conn,
             _secrets,
@@ -389,6 +405,60 @@ async def remove_egress_policy(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+
+
+# ---- exports switch (decision 0014; `data-connection` p.202) ------------------
+class ExportsEnabled(BaseModel):
+    enabled: bool
+
+
+@router.put("/{connection_id}/exports-enabled", response_model=ExportsEnabled)
+async def set_exports_enabled(
+    connection_id: UUID,
+    body: ExportsEnabled,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ExportsEnabled:
+    """p.202: "you must enable exports in the Connection settings section of
+    the source to which you are exporting… A Foundry user with the
+    `Information Security Officer` role should navigate to this tab and toggle
+    on the option to Enable exports to this source."
+
+    **Workspace admin, not project editor**, and the route floor is editor only
+    because that is what reaches the connection at all — the real check is the
+    line below. Foundry's gate is an enrollment-level role this platform does
+    not have; workspace admin is the nearest and decision 0014 §4 records it as
+    a genuine narrowing rather than an equivalent.
+
+    **Both directions are audited, and turning it off matters as much.** A
+    source that stops being an export destination is a source whose exports all
+    start failing, and a review that could see only the enabling would have to
+    infer the other from an absence — the same argument the egress-policy
+    delete above makes for the same reason.
+    """
+    if access.workspace_role != "admin":
+        raise ForbiddenError(
+            "enabling exports on a source is a workspace admin's decision (p.202)"
+        )
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.set_exports_enabled(
+            conn, access.workspace_id, access.project_id, connection_id,
+            enabled=body.enabled,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.exports_enabled",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"enabled": body.enabled, "name": row["name"]},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return ExportsEnabled(enabled=body.enabled)
 
 
 # ---- test & discover --------------------------------------------------------

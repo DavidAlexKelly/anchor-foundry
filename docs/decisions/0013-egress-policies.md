@@ -70,6 +70,14 @@ The check goes beside `_check_url`, which already refuses the link-local range a
 
 The last row is the one that shapes the interface: a Postgres connection's `host` is not a URL, so `_check_url` was never on that path and never could be. **The policy check therefore takes a host and a port**, and `_check_url` becomes one caller of it rather than its home — which is also what lets the token fetch be fixed by adding a call rather than by restructuring it.
 
+**A fifth path arrived with §265, and the table is why it needed no new guard.** Decision 0014's exports write through `PostgresConnector._conninfo`, `MySQLConnector._connect_kwargs` and `S3Connector._client` — the same three chokepoints this section put the check at, chosen because every operation on those connectors shares them. So an export was governed by a source's allowlist the moment it existed, with no line added anywhere.
+
+| Path | Checked at send time |
+|---|---|
+| Export (table, file) | **yes** — through the connector chokepoints above, by construction |
+
+That is exactly the sentence this table exists to distrust. "The guard is in a shared function" is not the same claim as "every path reaches it", and two of the four rows above were written *because* that reasoning had been applied and was wrong. So the export path gets a paired test against a real socket like the four before it, and the claim in this row is the test's, not the argument's.
+
 ### 4. A refusal names the policy, not the address
 
 `data-connection.md`'s acceptance test asks for this in its own words — *"a source configured for `host-a` cannot reach `host-b`, and the refusal names the policy"* — and it is worth keeping because the failure it prevents is specific. "Could not reach `internal.example.com`" sends somebody to check DNS, a firewall and the far end's health before they think to look at a list in the platform. "This source is not allowed to reach `internal.example.com`; its egress policies allow `api.example.com:443`" ends the investigation in one line.
