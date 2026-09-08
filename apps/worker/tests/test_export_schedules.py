@@ -478,3 +478,80 @@ def test_a_refused_destination_is_recorded_and_does_not_stop_the_others(
 
     run_due_exports(_ctx())
     assert _exported_rows() == [(1, "a"), (2, "b")]
+
+
+# ---- the discovery function itself ------------------------------------------
+#
+# **Two of its three filters are invisible from the job**, and that is not a
+# reason to leave them untested. `_run_one` re-checks the schedule and the
+# switch after discovery — deliberately, because both can change between the
+# enumeration and the run — so a `list_due_exports()` that returned a disabled
+# source anyway would be caught one layer down and every behavioural test would
+# still pass. §270's harness proved it: both mutants survived the whole suite.
+#
+# §268's rule is the one that applies: the cap belongs to the sampler, so the
+# test has to be at the sampler. This filter belongs to the function, so these
+# call the function. It is a documented interface — SECURITY DEFINER, granted
+# to `platform_app` — not an implementation detail being reached into.
+def _due_ids() -> set:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return {r[0] for r in conn.execute("SELECT export_id FROM list_due_exports()").fetchall()}
+
+
+def test_discovery_leaves_out_a_source_with_exports_turned_off(
+    workspace: dict, source_database: dict
+) -> None:
+    """The join the job's re-check hides. Both are wanted — the join keeps the
+    poll from enumerating exports that can never run, the re-check handles the
+    switch being thrown between enumeration and execution — and only this can
+    see the join."""
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset)
+    assert eid in _due_ids()
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE connections SET exports_enabled = false WHERE id = %s", (cid,))
+    assert eid not in _due_ids()
+
+
+def test_discovery_leaves_out_an_export_with_no_schedule(
+    workspace: dict, source_database: dict
+) -> None:
+    """The other filter the re-check hides. Paired with its own presence case,
+    because a function returning nothing at all would satisfy the absence half
+    on its own."""
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    scheduled = _export(workspace, cid, dataset)
+    manual = _export(workspace, cid, dataset, schedule=None)
+
+    due = _due_ids()
+    assert scheduled in due
+    assert manual not in due
+
+
+def test_an_export_that_is_not_due_yet_is_left_alone(
+    workspace: dict, source_database: dict
+) -> None:
+    """**The filter nothing re-checks**, which makes it the one that would
+    actually have fired early.
+
+    `_run_one` verifies the schedule and the switch after discovery and does
+    *not* verify due-ness, on purpose — the poll is what decides that. So a
+    `list_due_exports()` that ignored `next_run_at` would run every scheduled
+    export every five minutes, and p.192's skip would hide it: the destination
+    would stay correct and the history would fill with skips nobody ordered.
+    """
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset)
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE exports SET next_run_at = now() + interval '1 day' WHERE id = %s", (eid,)
+        )
+
+    assert eid not in _due_ids()
+    run_due_exports(_ctx())
+    assert _runs(eid) == []

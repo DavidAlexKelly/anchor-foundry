@@ -364,3 +364,37 @@ def test_the_two_runners_record_the_same_shape() -> None:
     from src.services import export_runs as api_runner
 
     assert set(worker_runner.result(ok=True)) == set(api_runner.result(ok=True))
+
+
+def test_a_schedule_cannot_be_set_on_another_project_s_export(
+    client: TestClient, fx: Fixture, warehouse: dict
+) -> None:
+    """**RLS is not what makes this true, and that is the whole point.**
+
+    The dev fixture's editor can reach both projects, so row-level security
+    lets the UPDATE see the row; what stops it is the `project_id` in the
+    statement's own WHERE clause. §270's harness found this by removing that
+    clause and watching every other test still pass — the same shape §265 found
+    on the export read, which is why it is worth writing twice.
+    """
+    source = a_source(client, fx, warehouse)
+    export = an_export(client, fx, source, a_dataset(client, fx))
+
+    other = client.post(
+        f"/api/workspaces/{fx.workspace}/projects", headers=hdr(fx.admin_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:6]}",
+              "slug": f"elsewhere-{uuid.uuid4().hex[:6]}"},
+    )
+    assert other.status_code == 201, other.text
+
+    r = client.put(
+        f"/api/workspaces/{fx.workspace}/projects/{other.json()['id']}"
+        f"/exports/{export['id']}/schedule",
+        headers=hdr(fx.editor_sub), json={"schedule": "0 3 * * *"},
+    )
+    assert r.status_code == 404, r.text
+    # And the export it could not reach is untouched.
+    still = client.get(
+        f"{base(fx)}/exports/{export['id']}", headers=hdr(fx.editor_sub)
+    ).json()
+    assert still["schedule"] is None
