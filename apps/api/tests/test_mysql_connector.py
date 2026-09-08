@@ -7,9 +7,20 @@ a real database, real login role, and the real PyMySQL driver end to end. No
 mocks - a connector that only works against a fake is not evidence of
 anything.
 
-Requires a reachable MySQL/MariaDB (TEST_MYSQL_* below); the module skips
-rather than fails when there isn't one, so a Postgres-only environment still
-runs the rest of the suite.
+Requires a reachable MySQL/MariaDB (TEST_MYSQL_* below). Locally the module
+skips when there isn't one, so a Postgres-only checkout still runs everything
+else; `ANCHOR_MYSQL_REQUIRED=1` turns that skip into a failure, which is what
+CI sets.
+
+**That flag exists because this file had never run** (§268). It skipped on
+every developer machine, because nothing provisions a MariaDB, and in CI,
+because the api job had only a Postgres service - so roughly twenty tests
+were reported as a clean pass without executing, for as long as they had
+existed. Turning them on found two things immediately: an assertion in this
+file about the fixture's TLS, which had quietly stopped being true, and a
+test of ours that assumed the row count of a table another test appends to.
+Both are fixed below, and both are the kind of rot a suite that never runs
+accumulates silently.
 """
 from __future__ import annotations
 
@@ -47,6 +58,18 @@ from src.services.storage import LocalStorageGateway  # noqa: E402
 
 MYSQL_HOST = os.environ.get("TEST_MYSQL_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.environ.get("TEST_MYSQL_PORT", "3306"))
+
+#: A **second** server, on a second port, that has TLS (§268).
+#:
+#: `ssl_mode` has two halves and one server cannot show both: the connector
+#: must refuse a session that finished in plaintext, and it must actually
+#: encrypt one where the server can. The first needs a server without TLS and
+#: the second needs one with, so the suite gets one of each - the same reason
+#: §263's egress tests needed two fixture servers to tell two checks apart.
+#:
+#: Unset means only the plaintext half runs. That is a real gap and it is
+#: reported as one rather than skipped: see `test_tls_is_actually_negotiated`.
+MYSQL_TLS_PORT = int(os.environ.get("TEST_MYSQL_TLS_PORT", "0"))
 MYSQL_ADMIN_USER = os.environ.get("TEST_MYSQL_ADMIN_USER", "platform_test")
 MYSQL_ADMIN_PASSWORD = os.environ.get("TEST_MYSQL_ADMIN_PASSWORD", "devpass")
 
@@ -55,10 +78,22 @@ SOURCE_USER = "mysql_source_user"
 SOURCE_PASSWORD = "my-s0urce-Secret-42"
 
 
-def _admin_connect(database: str = "mysql"):
+def have_ssl(port: int) -> str:
+    """The server's own answer to whether it can do TLS at all.
+
+    `DISABLED` means no certificates, which is the state the refusal test needs
+    and the state MariaDB stopped defaulting to at 11.4.
+    """
+    with _admin_connect(port=port) as conn, conn.cursor() as cur:
+        cur.execute("SHOW VARIABLES LIKE 'have_ssl'")
+        row = cur.fetchone()
+    return str(row[1]) if row else "unknown"
+
+
+def _admin_connect(database: str = "mysql", port: int | None = None):
     return pymysql.connect(
         host=MYSQL_HOST,
-        port=MYSQL_PORT,
+        port=port or MYSQL_PORT,
         user=MYSQL_ADMIN_USER,
         password=MYSQL_ADMIN_PASSWORD,
         database=database,
@@ -123,9 +158,11 @@ def source_database() -> dict[str, object]:
         "port": MYSQL_PORT,
         "database": SOURCE_DB,
         "user": SOURCE_USER,
-        # This server is built without TLS (@@have_ssl = DISABLED), so the
+        # The server on MYSQL_PORT is the one **without** TLS, so the
         # connection has to opt out explicitly - which is the point of the
-        # default being the other way round.
+        # default being the other way round. Asserted rather than assumed in
+        # the two ssl_mode tests: this comment used to state it as a fact about
+        # the image, and it stopped being one without anything noticing (§268).
         "ssl_mode": "disabled",
     }
 
@@ -282,9 +319,23 @@ def test_wrong_password_is_a_clean_error_not_a_500(
 def test_tls_required_against_a_non_tls_server_fails_loudly(
     client: TestClient, fx: Fixture, source_database: dict
 ) -> None:
-    """The whole point of the `required` default: this MariaDB has no TLS, and
-    PyMySQL will happily finish the handshake in plaintext, so the connector
-    has to notice and refuse rather than silently downgrade."""
+    """The whole point of the `required` default: PyMySQL will happily finish
+    the handshake in plaintext against a server with no TLS, so the connector
+    has to notice and refuse rather than silently downgrade.
+
+    **The premise is asserted rather than assumed** (§268). This test was
+    written against a MariaDB image with no certificates and then never ran
+    anywhere, so nothing noticed when the image gained them: MariaDB 11.4 and
+    later generate a self-signed pair at first start, `required` genuinely
+    encrypts, and the assertion below fails while the connector is completely
+    correct. A test whose fixture has to have a property should say so in the
+    sentence that fails, not in a comment.
+    """
+    assert have_ssl(MYSQL_PORT) == "DISABLED", (
+        f"this test needs a server without TLS and {MYSQL_HOST}:{MYSQL_PORT} has it "
+        f"(have_ssl={have_ssl(MYSQL_PORT)}) - point TEST_MYSQL_PORT at a build "
+        "without certificates, or see the CI workflow's two mariadb services"
+    )
     r = client.post(
         cbase(fx),
         headers=hdr(fx.editor_sub),
@@ -439,7 +490,12 @@ def test_a_mysql_preview_returns_the_rows(source_database: dict[str, object]) ->
         source_schema=SOURCE_DB, source_table="orders",
     )
     assert sample.columns == ["id", "customer_email", "total_pence", "placed_at"]
-    assert {row[1] for row in sample.rows} == {
+    # **A superset, not an equality.** `orders` is module-scoped and the
+    # incremental-sync test above appends a fourth row to it - so an exact set
+    # asserts the order this file's tests run in rather than anything about the
+    # preview. §122's trap: the leftovers are not noise, they are a later valid
+    # state of the same table.
+    assert {row[1] for row in sample.rows} >= {
         "a@example.com", "b@example.com", "c@example.com"
     }
     assert sample.more is False
@@ -471,3 +527,56 @@ def test_a_mysql_preview_of_a_missing_table_is_a_clean_error(
             source_database, {"password": SOURCE_PASSWORD},
             source_schema=SOURCE_DB, source_table="no_such_table",
         )
+
+
+def test_tls_is_actually_negotiated_where_the_server_has_it(
+    source_database: dict,
+) -> None:
+    """**The other half, which one server cannot show.**
+
+    The test above proves the connector refuses a session that finished in
+    plaintext. On its own that passes against a connector which refuses
+    `required` *always* — the mirror of §263's rule that a refusal alone passes
+    against an implementation refusing everything. So this asserts the opposite
+    case against a server that does have certificates: `required` connects, and
+    the session it gets is genuinely encrypted rather than reported as such.
+
+    `Ssl_cipher` is the same signal `MySQLConnector._connect` reads to decide,
+    which is deliberate: what is being checked is that the discriminator tells
+    the two states apart on real servers, not that a constant is returned.
+    """
+    assert MYSQL_TLS_PORT, (
+        "TEST_MYSQL_TLS_PORT is unset, so nothing here checks that ssl_mode="
+        "'required' encrypts anything — only that it refuses when it cannot. "
+        "CI runs a second mariadb service for this; see .github/workflows/ci.yml"
+    )
+    assert have_ssl(MYSQL_TLS_PORT) != "DISABLED", (
+        f"{MYSQL_HOST}:{MYSQL_TLS_PORT} was meant to be the server with TLS"
+    )
+    with _admin_connect(port=MYSQL_TLS_PORT) as conn, conn.cursor() as cur:
+        cur.execute(f"CREATE DATABASE IF NOT EXISTS {SOURCE_DB}")
+        cur.execute(
+            f"CREATE USER IF NOT EXISTS '{SOURCE_USER}'@'%' IDENTIFIED BY '{SOURCE_PASSWORD}'"
+        )
+        cur.execute(f"GRANT ALL PRIVILEGES ON {SOURCE_DB}.* TO '{SOURCE_USER}'@'%'")
+        cur.execute("FLUSH PRIVILEGES")
+
+    config = {**source_database, "port": MYSQL_TLS_PORT, "ssl_mode": "required"}
+    connector = MySQLConnector()
+    connector.test(config, {"password": SOURCE_PASSWORD})  # no raise: it encrypted
+
+    with connector._connect(config, {"password": SOURCE_PASSWORD}) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SHOW STATUS LIKE 'Ssl_cipher'")
+            cipher = (cur.fetchone() or ("", ""))[1]
+    assert cipher, "ssl_mode='required' connected without encrypting the session"
+
+    # And the same server, asked for plaintext, gives plaintext — so the empty
+    # cipher the refusal keys on is a state this server can really be in, not
+    # an artefact of the server that has no TLS at all.
+    plain = {**config, "ssl_mode": "disabled"}
+    with connector._connect(plain, {"password": SOURCE_PASSWORD}) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SHOW STATUS LIKE 'Ssl_cipher'")
+            plain_cipher = (cur.fetchone() or ("", ""))[1]
+    assert not plain_cipher

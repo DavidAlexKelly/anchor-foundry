@@ -252,14 +252,23 @@ skip into a failure, the same arrangement `ANCHOR_E2E_REQUIRED` gives the
 browser suite. To run it here, point it at any MariaDB or MySQL you have:
 
 ```bash
+# 10.11 has no certificates; 11.4+ generates a self-signed pair at first start.
 docker run -d --name anchor-mariadb -p 3306:3306 \
+  -e MARIADB_ROOT_PASSWORD=devpass -e MARIADB_ROOT_HOST='%' mariadb:10.11
+docker run -d --name anchor-mariadb-tls -p 3307:3306 \
   -e MARIADB_ROOT_PASSWORD=devpass -e MARIADB_ROOT_HOST='%' mariadb:11
 TEST_MYSQL_ADMIN_USER=root TEST_MYSQL_ADMIN_PASSWORD=devpass \
-  ANCHOR_MYSQL_REQUIRED=1 scripts/check.sh api
+  TEST_MYSQL_TLS_PORT=3307 ANCHOR_MYSQL_REQUIRED=1 scripts/check.sh api
 ```
 
 The suite creates its own database and login role, so root is what it wants;
 `TEST_MYSQL_HOST` and `TEST_MYSQL_PORT` move it off `127.0.0.1:3306`.
+
+**Two servers, because `ssl_mode` has two halves and one server cannot show
+both.** The connector has to refuse a session that finished in plaintext, which
+needs a build with no certificates, and it has to actually encrypt one where
+the server can, which needs a build that has them. Running only the first is
+allowed and the second test says so out loud rather than skipping.
 
 ---
 
@@ -279,6 +288,7 @@ Environment variables, all read by `dev-up.sh` and `check.sh`:
 | `ANCHOR_WORKER_DB` | `platform_worker_test`, created and migrated by `check.sh worker` |
 | `TEST_MYSQL_HOST` / `TEST_MYSQL_PORT` | `127.0.0.1` / `3306` |
 | `TEST_MYSQL_ADMIN_USER` / `TEST_MYSQL_ADMIN_PASSWORD` | `platform_test` / `devpass` |
+| `TEST_MYSQL_TLS_PORT` | unset; a **second** MariaDB that has TLS, for the half of `ssl_mode` the plaintext one cannot show |
 | `ANCHOR_MYSQL_REQUIRED` | unset; `1` turns the MySQL suite's skip into a failure |
 | `PLAYWRIGHT_CHROMIUM` | `/opt/pw-browsers/chromium`, used only when the path exists |
 

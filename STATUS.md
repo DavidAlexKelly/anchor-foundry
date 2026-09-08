@@ -4537,10 +4537,33 @@ one that is observable: ask for a file that is not there. With the check the
 answer is about the type and the bucket is never touched; without it the
 connector goes to S3 and reports a missing object.
 
+**Turning the suite on found two things in its first run**, which is the part
+of this worth remembering. CI went from 2191 local to **2204 tests, and two
+red** — both in the file that had never executed:
+
+- **A test whose premise had quietly stopped being true.**
+  `test_tls_required_against_a_non_tls_server_fails_loudly` opens *"this
+  MariaDB has no TLS"*, and MariaDB 11.4 started generating a self-signed
+  certificate at first start. So `ssl_mode='required'` genuinely encrypts, the
+  connector is completely correct, and the assertion fails. Nothing had noticed
+  because nothing had run. **A test that needs its fixture to have a property
+  should assert that property in the sentence that fails**, not state it in a
+  docstring — the failure now names `have_ssl` and says what to point the port
+  at.
+  And the fix is the pairing this file was missing anyway: `ssl_mode` has two
+  halves, and **one server cannot show both**. A refusal alone passes against a
+  connector that refuses `required` always, which is §263's rule about a
+  refusal needing an allowed call beside it. CI now runs two MariaDBs — 10.11
+  without certificates for the refusal, 11 with them for the assertion that
+  `required` actually encrypts, checked on `Ssl_cipher`, the same signal the
+  connector's own guard reads.
+- **A test of mine that asserted the row count of a shared table.** The preview
+  test compared an exact set of three emails; an incremental-sync test earlier
+  in the same module-scoped file appends a fourth. §122 again, in its quiet
+  form — the leftovers are a later valid state of the same table, not noise.
+
 **39 new API tests** (22 in `test_source_preview.py`, 4 egress, 6 REST, 7
-object storage), plus 3 MySQL ones that finally have somewhere to run.
-**2191 API tests, 2 skipped** — and the two skips are now a number to watch
-rather than background noise, because one of them was this unit's finding.
+object storage), plus 4 MySQL ones that finally have somewhere to run.
 
 ### 267. The export panel, and the question a green tick stopped answering (this session)
 
@@ -9658,7 +9681,9 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
 
-- **A suite that skips in every environment has never run, and nothing will ever tell you.** §268 wrote three tests into `test_mysql_connector.py` and they passed instantly, because the whole file had skipped since it was written — no MariaDB on any developer machine, and none in CI either, where the `api` job had only a Postgres service. Twenty-odd tests proving the connector interface generalises had never executed, reported as a clean pass every time. This is the skip-is-not-a-pass family one level above §267's: there, a *layer* of a harness had not run and seven mutants came back as phantom survivors; here a *suite* had not run and nothing came back at all, which is worse, because a survivor at least gets looked at. **A skip is only honest where the dependency is genuinely optional, and CI is never that place** — so every suite with an external dependency needs a required-mode switch that turns its skip into a failure, and the environment that sets it needs the dependency. The tell is a test you just wrote passing faster than it possibly could.
+- **A suite that skips in every environment has never run, and nothing will ever tell you.** §268 wrote three tests into `test_mysql_connector.py` and they passed instantly, because the whole file had skipped since it was written — no MariaDB on any developer machine, and none in CI either, where the `api` job had only a Postgres service. Twenty-odd tests proving the connector interface generalises had never executed, reported as a clean pass every time. This is the skip-is-not-a-pass family one level above §267's: there, a *layer* of a harness had not run and seven mutants came back as phantom survivors; here a *suite* had not run and nothing came back at all, which is worse, because a survivor at least gets looked at. **A skip is only honest where the dependency is genuinely optional, and CI is never that place** — so every suite with an external dependency needs a required-mode switch that turns its skip into a failure, and the environment that sets it needs the dependency. The tell is a test you just wrote passing faster than it possibly could. And the first green run is not the end of it: turning this one on immediately found a test whose fixture assumption had expired and one of mine that assumed a shared table's row count — **a suite that has not run is not merely unproven, it has been rotting**, because everything around it moved and nothing pulled on it.
+
+- **A test that needs its fixture to have a property should assert that property in the sentence that fails.** §268's TLS test opened "this MariaDB has no TLS" — true when written, false from MariaDB 11.4, which generates a self-signed certificate at first start. The connector was correct and the test was red, and the failure said `assert True is False`, which points at the code. Stating the premise as an assertion (`have_ssl(port) == "DISABLED"`, with a message naming what to point the port at) turns a confusing failure into an instruction. This is the same shelf-life problem §213 recorded for comments claiming something is inexpressible: **a fact about the environment written as prose is a fact nobody re-checks**, and a test is the one place it can be written so that it re-checks itself.
 
 - **When a document's own section is thin, the sentence that decides the design is usually in the overview chapter.** §268's *Source exploration* is two pages, mostly screenshot callouts, and reads as a tree plus a preview pane. p.18, three chapters earlier, says exploration "is most commonly used to check that a connection is working as intended and that the correct permissions and credentials are being used to connect" — which reframes the whole feature: the most common use of the data browser is not browsing data, and the credential-refusal path is the product rather than the error handling. A build designed from the feature section alone would have got the code right and the *emphasis* wrong, which is the kind of wrong that no test catches. The habit: before building from a short section, read what the overview says the capability is **for**.
 
