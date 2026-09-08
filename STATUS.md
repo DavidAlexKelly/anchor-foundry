@@ -4388,6 +4388,143 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 265. Exports, and the four modes we cannot mean (this session)
+
+`data-connection.md`'s build order item 3, server half. `data-connection`
+p.17, p.192-206; decision 0014.
+
+**The source is unusually complete here, and that changed the job.** §263 was
+designed from fragments and had to mark every inference. This is a full chapter
+— three export types, six table modes with a table of what each means, a page
+of constraints, a permissions model. So the risk was never under-specification.
+It was the other one: **implementing the words without having the thing they
+describe.**
+
+**Four of p.195-196's six table modes are defined over a transaction log this
+platform does not keep.** Every one of them says "unexported *transactions*
+from the current view", or names a `SNAPSHOT` / `APPEND` / `UPDATE` / `DELETE`
+transaction type. `dataset_versions` is, in migration 0003's own words, a
+"snapshot per sync/upload": every version is a complete view and there is no
+transaction type on it, because nothing here has ever needed one — a full sync
+writes a new view, an incremental sync merges and writes a new view, an action
+writes a new view.
+
+So two are built, and they are the two whose definitions never mention a
+transaction: `mirror` (p.195's *Full dataset with truncation*) and `full`
+(*Full dataset without truncation*). **A build that shipped all six would have
+shipped four settings that could not do what their own names say** — and
+nothing in the code would have complained, because a mode is a string in a
+dropdown. `test_the_absent_modes_are_absent_on_purpose` asserts the absence, so
+the decision cannot be undone by somebody adding an obvious-looking option.
+
+**What is lost is worth stating rather than eliding.** p.195 calls the first
+mode *recommended* and it is absent; `mirror` reaches the same end state by
+p.195's own second-best route, which that page itself calls "less efficient".
+The outcome is available and the efficiency is not, and the efficiency is
+exactly the part that needs the transaction log. **The gap is in the dataset
+model, not in exports**, and it is recorded there — adding transaction types
+would unlock four modes and change every writer in the platform, which is a
+migration and a decision of its own rather than something to smuggle in behind
+a dropdown.
+
+**p.192's June 2025 change, and the one place it does not apply.** An export
+with nothing new is a success that writes nothing. Except under `full`, whose
+stated purpose (p.195) is a destination that "consume[s] and remove[s] rows
+after each run" — so there is always something new to send, and a `full` that
+skipped would be a queue that stopped being fed. That is not an exception to
+p.192 but a consequence of it, and it has its own test: **a single skip-test
+would have erased the distinction entirely.**
+
+**p.202's switch is the security half.** Exports are off on every source until
+a workspace admin turns them on, and turning them off stops exports that
+already exist — the second direction being the one that matters, since a
+control that only applied to exports nobody had made yet would do nothing about
+the ones somebody is worried about. Foundry gates this on an enrollment-level
+`Information Security Officer` role, and exportable markings beside it; this
+platform has neither, and decision 0014 §4 names both rather than approximating
+them.
+
+**A REST source is refused with a redirection, not an absence.** p.17 lists
+webhooks alongside the three export types as the other way data leaves for an
+external system, and §259-§262 built that. An export to a REST source would
+have to invent a method, a path and a body — which is a webhook, described
+worse. Said in a sentence, because "REST is missing from the dropdown" reads as
+a gap somebody should fill in.
+
+**An export is a fifth outbound path and needed no new guard**, because §263
+put the egress check at the connector chokepoints every operation shares rather
+than at each operation. Decision 0013's table gains a row — and since that
+table exists precisely to distrust "the guard is in a shared function", the row
+is carried by a paired test against a real socket rather than by the argument.
+
+**45 mutants attacked, 45 caught**, after six survivors and one withdrawal.
+
+*Four were ordinary gaps* — a duplicate name, a cross-project read, a version
+whose bytes are unaddressable, and a refusal that read like any other failure.
+The cross-project one is §257's tell again: this suite had exactly one project,
+so `export_store.get`'s `project_id` filter had nothing on the other side of it
+to be wrong about.
+
+*One was a defensive line I had written knowing it was untestable*, and the
+harness was right to ask. Postgres' `COPY t (a, b) FROM STDIN … HEADER true`
+**skips** the header and maps values by the position of the column list, so a
+column list built from the dataset row and a file written from the parquet
+would — if they ever disagreed on order — put every value in the wrong column
+and report success. They agree today. The fix was not to delete the guard but
+to **force them apart in a test**: reverse the stored schema, leave the parquet
+alone, and assert the rows land correctly. An untestable guard became a tested
+one by constructing the divergence it defends against.
+
+*And two survivors that look identical resolved in opposite directions.* Both
+were clauses no test could kill. `not skipped` on the version-mark update is
+redundant — `GREATEST` already makes a skip a no-op — so it is deleted (§264's
+rule). `GREATEST` itself cannot be killed either, but for the opposite reason:
+it guards two overlapping runs finishing out of order, and every test here makes
+one request at a time. **A line that cannot fail because another layer covers it
+gets deleted; a line that cannot fail because the tests cannot interleave gets a
+comment.** Telling those apart is the whole judgement, and the question that
+separates them is *what would have to be true for this to fire* — not *can I
+write a test*.
+
+**2151 API tests**, 2 skipped; **1707 unit**, **78 worker**, `tsc` clean;
+**791 of 792 browser tests**.
+
+**The one browser failure is not this unit's, and the investigation is worth
+more than the result.** `test_interfaces.py::test_an_active_interface_offers_no_delete_button`
+went red. Four things were established before anything was changed:
+
+* It is **not §265**. Checked out the previous commit, restarted the stack, ran
+  the test: still red. Nothing in exports touches interfaces, and now nothing
+  has to take that on trust.
+* It is **not flakiness**. It reproduces alone in thirty seconds, every time —
+  which is a much better position than the transient this same file produced
+  during §262's gate.
+* It is **not the server**. Driving the same status change over the API
+  succeeds and reads back `active`; the dev log has no 500s. The failure is in
+  the browser.
+* It is **not accumulation**, which was the first hypothesis and the one worth
+  recording as wrong. There are 977 interfaces in the dev database and 757 of
+  them come from this one test, which looked exactly like §249's canvas apps —
+  but each browser module builds its **own workspace**, so the listing this page
+  actually renders is 23 rows in 40ms. Measuring it took two minutes and killed
+  a theory that would have cost an afternoon.
+
+**Then a plausible mechanism was tested and refuted, which is the part worth
+keeping.** The edit dialog loads its form in an effect depending on
+`detail.data`, under a comment saying that keys it "on the fetched object so a
+refetch does not overwrite edits in progress" — an intent resting on a
+guarantee react-query does not make, since structural sharing preserves object
+identity only while the refetched data is deeply equal. That is a real weakness
+and it explains the symptom exactly: a status selected between the fetch and the
+save, silently reset. Keying the load on `interfaceId` instead made the file go
+from **one failure to two**. So the mechanism is not the cause, the change is
+reverted, and §243's rule stands unamended: *a plausible mechanism is not a
+diagnosis*, and the only thing separating the two is the experiment.
+
+What is left is a red test with four possibilities eliminated and one refuted,
+which is where a diagnosis should start rather than where it should stop. It is
+§266.
+
 ### 264. The egress panel, and p.37's step 1 as a screen (this session)
 
 §263 built the rule and enforced it at all four outbound paths, and left it
@@ -9197,6 +9334,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard duplicated one level up is invisible to every test, because the level below is still right.** §213's Object View widget asked whether the bound type had a configured view and used the answer to fall back and to withhold a switch that led nowhere. Both rules are correct; both were already enforced by `ObjectView`, which the widget renders. Replacing the widget's answer with a constant changed nothing on screen, so the mutant survived — and the survivor was not a missing test but two functions, a query and eight unit tests that could never have been observed. §195's version of this was a fix that fixed nothing; this is subtler, because a duplicated guard reads like ordinary defensiveness and the behaviour is right either way. **The question to ask a surviving guard is not "which test is missing" but "who else already refuses this"** — and when somebody does, delete rather than test. The tell is a survivor whose code restates a rule you can point at in another file.
 
 - **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
+
+- **Two lines that no test can kill can need opposite treatments, and the question that separates them is not "can I write a test".** §265 hit both in one file. `not skipped` guarding a version-mark update was redundant, because the `GREATEST` beside it already made the skip case a no-op — deleted. `GREATEST` itself was equally unkillable, because it guards two *overlapping* runs finishing out of order and every test in the suite makes one request at a time — kept, with a comment saying so. The useful question on an unkillable line is **what would have to be true for this to fire**: if the answer is "nothing, another expression already covers it", the line goes; if it is "a state the test harness cannot construct", the line stays and the harness gets a withdrawal note. Concurrency, clock skew and partial failure all produce the second kind, and a project that treats every survivor as a test gap will delete exactly the guards it most needs.
+
+- **The right response to an untestable defensive guard is sometimes to construct the divergence it defends against.** §265 wrote a column list from a CSV's own header rather than from the dataset row, because Postgres' `COPY t (a, b) FROM STDIN … HEADER true` skips the header and maps by *position* — so two lists that disagreed on order would write every value into the wrong column and report success. They agree today, so the mutant survived. Deleting the guard and writing a comment were both available and both wrong: the test that kills it just needs the two sources forced apart (reverse the stored schema, leave the parquet alone). **Before accepting that a guard cannot be tested, ask whether the state it guards can be built by hand** — a fixture, a direct row, a reversed list. It usually can, and the test that results is the only one that actually describes the failure.
 
 - **A line that cannot fail still costs something, so delete it rather than testing it.** §264's `urlDestination` ended with `url.hostname.toLowerCase()`; a mutant removing the call survived, and the reason was not a missing test — WHATWG host parsing lowercases the host, so the call had never done anything. The instinct on a survivor is to write the test that kills it, and here that test would have passed against the mutant too, which is how a *vacuous* assertion gets added in good faith. The real cost of the line is not the microsecond: it **reads as a guarantee this function makes**, so the next person needing that guarantee elsewhere copies a call that was never doing the work. §213's question is the one to ask of every survivor before writing a test — is another layer already making this promise? — and when the answer is yes, the code goes and the *property* keeps its test, worded to say where the promise actually comes from.
 

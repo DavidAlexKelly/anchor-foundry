@@ -416,6 +416,108 @@ class PostgresConnector:
             raise self._operational(exc) from exc
         return None if row is None or row[0] is None else str(row[0])
 
+    # ---- export (decision 0014; `data-connection` p.195-197) -----------------
+    def destination_columns(
+        self, config: dict[str, Any], secret: dict[str, str],
+        *, schema: str, table: str,
+    ) -> list[str]:
+        """The target table's column names, in the destination's own spelling.
+
+        For p.197's 1:1 check, which this platform makes *before* writing.
+        Foundry lets a mismatch "fail at runtime", and failing at row 40,000 of
+        a table export tells nobody which column was wrong.
+
+        A focused query rather than `discover`, which enumerates every table in
+        the database to answer a question about one.
+        """
+        import psycopg
+        from psycopg import sql
+
+        try:
+            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT column_name FROM information_schema.columns"
+                        " WHERE table_schema = %s AND table_name = %s"
+                        " ORDER BY ordinal_position",
+                        (schema or "public", table),
+                    )
+                    names = [str(row[0]) for row in cur.fetchall()]
+        except psycopg.OperationalError as exc:
+            raise self._operational(exc) from exc
+        if not names:
+            # p.197: "The destination table must already exist in the source
+            # system; it will not be automatically created by Foundry." An
+            # empty column list and a missing table are the same answer here,
+            # and the message says the actionable one.
+            raise SourceReadError(
+                f"table {schema or 'public'}.{table} does not exist in the "
+                "destination - an export does not create it (p.197)"
+            )
+        return names
+
+    def export_rows(
+        self, config: dict[str, Any], secret: dict[str, str],
+        *, schema: str, table: str, columns: list[str], csv_path: str,
+        truncate: bool,
+    ) -> int:
+        """Write a CSV's rows into the target table. Returns rows written.
+
+        `COPY ... FROM STDIN` rather than p.198-200's `INSERT` statements. That
+        page is about what Foundry emits *for a custom JDBC source whose
+        dialect it cannot assume*; this connector knows it is talking to
+        Postgres, and `COPY` is the same operation stated in the dialect the
+        far end actually speaks. Decision 0014 says parity is with the model,
+        not the wire format.
+
+        **The truncate and the insert are one transaction.** p.195's mirror
+        mode promises the external table "always matches what you see in the
+        Foundry dataset", and a truncate committed before a failed insert would
+        leave it matching nothing — which is worse than either end state and is
+        the moment somebody's dashboard goes blank.
+        """
+        import psycopg
+        from psycopg import sql
+
+        target = sql.SQL("{}.{}").format(
+            sql.Identifier(check_identifier(schema or "public")),
+            sql.Identifier(check_identifier(table)),
+        )
+        column_list = sql.SQL(", ").join(
+            sql.Identifier(check_identifier(name)) for name in columns
+        )
+        written = 0
+        try:
+            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+                with conn.cursor() as cur:
+                    if truncate:
+                        cur.execute(sql.SQL("TRUNCATE TABLE {}").format(target))
+                    copy_sql = sql.SQL(
+                        "COPY {} ({}) FROM STDIN (FORMAT csv, HEADER true)"
+                    ).format(target, column_list)
+                    with open(csv_path, "rb") as handle, cur.copy(copy_sql) as copy:
+                        while chunk := handle.read(1 << 20):
+                            copy.write(chunk)
+                    written = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                conn.commit()
+        except psycopg.errors.InsufficientPrivilege as exc:
+            # p.197 and p.203 both warn about this and it is worth its own
+            # sentence: truncation needs a permission a plain writer does not
+            # have, so "permission denied" here has two quite different causes.
+            what = "truncate and write" if truncate else "write to"
+            raise SourceReadError(
+                f"the connection's user cannot {what} {schema or 'public'}.{table}"
+            ) from exc
+        except psycopg.errors.UndefinedTable as exc:
+            raise SourceReadError(
+                f"table {schema or 'public'}.{table} does not exist in the destination"
+            ) from exc
+        except psycopg.OperationalError as exc:
+            raise self._operational(exc) from exc
+        except psycopg.Error as exc:
+            raise SourceReadError(self._operational(exc).args[0]) from exc
+        return written
+
 
 # ---- MySQL / MariaDB ---------------------------------------------------------
 # MySQL has no schema-within-database concept: what Postgres calls a schema is
@@ -470,6 +572,10 @@ class MySQLConnector:
 
     _CONNECT_TIMEOUT_S = 8
     _SYSTEM_SCHEMAS = ("information_schema", "performance_schema", "mysql", "sys")
+    #: Rows per `INSERT` on an export (p.199's multi-row form). Large enough
+    #: that the round trips stop dominating, small enough to stay well under
+    #: `max_allowed_packet`'s 4 MB default at any plausible row width.
+    _BATCH = 500
 
     def validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -668,6 +774,110 @@ class MySQLConnector:
         except pymysql.MySQLError as exc:
             raise self._translate(exc, source_schema, source_table) from exc
         return None if row is None or row[0] is None else str(row[0])
+
+    # ---- export (decision 0014; `data-connection` p.195-197) -----------------
+    def destination_columns(
+        self, config: dict[str, Any], secret: dict[str, str],
+        *, schema: str, table: str,
+    ) -> list[str]:
+        """The target table's columns. See `PostgresConnector.destination_columns`.
+
+        `schema` is a MySQL *database*, per this connector's own vocabulary
+        note above — and it falls back to the connection's configured database
+        rather than to a constant, because MySQL has no `public`.
+        """
+        import pymysql
+
+        database = schema or str(config.get("database") or "")
+        if not database:
+            raise SourceReadError("a MySQL export needs a database to write into")
+        try:
+            with self._connect(config, secret) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT column_name FROM information_schema.columns"
+                        " WHERE table_schema = %s AND table_name = %s"
+                        " ORDER BY ordinal_position",
+                        (database, table),
+                    )
+                    names = [str(row[0]) for row in cur.fetchall()]
+        except pymysql.MySQLError as exc:
+            raise self._translate(exc, database, table) from exc
+        if not names:
+            raise SourceReadError(
+                f"table {database}.{table} does not exist in the destination - "
+                "an export does not create it (p.197)"
+            )
+        return names
+
+    def export_rows(
+        self, config: dict[str, Any], secret: dict[str, str],
+        *, schema: str, table: str, columns: list[str], csv_path: str,
+        truncate: bool,
+    ) -> int:
+        """Write a CSV's rows into the target table. Returns rows written.
+
+        **Batched `INSERT`, which is p.198-200's shape and here it is not a
+        compromise**: MySQL has no `COPY FROM STDIN`, and `LOAD DATA LOCAL
+        INFILE` needs a server-side setting the connection cannot assume. So
+        this is the multi-row insert p.199 shows, at `_BATCH` rows a statement.
+
+        **The truncate and the inserts are one transaction**, for the reason
+        `PostgresConnector.export_rows` gives — and it costs something here
+        that it does not there: `TRUNCATE TABLE` is DDL in MySQL and commits
+        implicitly, so this uses `DELETE FROM` instead. Slower on a large
+        table, and the only form that can be rolled back. p.195's mirror mode
+        promises the table always matches the dataset, and a table left empty
+        by a half-done export matches nothing.
+        """
+        import csv as csv_module
+
+        import pymysql
+
+        database = schema or str(config.get("database") or "")
+        target = f"{_quote_mysql(database)}.{_quote_mysql(table)}"
+        column_list = ", ".join(_quote_mysql(name) for name in columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        statement = f"INSERT INTO {target} ({column_list}) VALUES ({placeholders})"
+
+        written = 0
+        try:
+            with self._connect(config, secret) as conn:
+                with conn.cursor() as cur:
+                    if truncate:
+                        cur.execute(f"DELETE FROM {target}")
+                    with open(csv_path, newline="", encoding="utf-8") as handle:
+                        reader = csv_module.reader(handle)
+                        header = next(reader, None)
+                        if header is None:
+                            conn.commit()
+                            return 0
+                        # The CSV is written from the dataset in its own column
+                        # order; the insert names its columns in the same
+                        # order, so position is meaningful. Asserted rather
+                        # than assumed, because a silent mismatch here writes
+                        # every value into the wrong column.
+                        if [h.strip() for h in header] != list(columns):
+                            raise SourceReadError(
+                                "the exported file's columns do not match the "
+                                "export's column list"
+                            )
+                        batch: list[tuple] = []
+                        for row in reader:
+                            batch.append(tuple(None if v == "" else v for v in row))
+                            if len(batch) >= self._BATCH:
+                                cur.executemany(statement, batch)
+                                written += len(batch)
+                                batch = []
+                        if batch:
+                            cur.executemany(statement, batch)
+                            written += len(batch)
+                conn.commit()
+        except pymysql.err.OperationalError as exc:
+            raise self._translate(exc, database, table) from exc
+        except pymysql.MySQLError as exc:
+            raise self._translate(exc, database, table) from exc
+        return written
 
 
 def _csv_value(value: Any) -> Any:
@@ -961,6 +1171,51 @@ class S3Connector:
         except Exception as exc:
             raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
         return _s3_timestamp(head.get("LastModified"))
+
+    # ---- export (decision 0014; `data-connection` p.193, p.203) --------------
+    def export_file(
+        self, config: dict[str, Any], secret: dict[str, str],
+        *, prefix: str, filename: str, local_path: str,
+    ) -> str:
+        """Put one file under the export's path. Returns the key written.
+
+        p.193: "File exports write files from the selected Foundry dataset to
+        the configured destination… By default, if a file already exists in the
+        destination, export jobs will overwrite that file with the exported
+        data."
+
+        **Under the connection's own prefix, not instead of it.** The
+        connection's prefix is a trust boundary — `_resolve_key` exists for
+        that reason on the read side — and an export that could write above it
+        would let somebody who may configure an export reach objects the
+        connection was scoped away from. p.193's own advice points the same
+        way: "we recommend creating a dedicated sub-folder in which to land
+        exported data from Foundry."
+
+        `s3:PutObject` is what this needs (p.203) and a refusal says so,
+        because the alternative is a generic AccessDenied against a bucket
+        somebody can read perfectly well.
+        """
+        cfg = S3Config(**config)
+        folder = (prefix or "").strip("/")
+        if ".." in folder or ".." in filename or "/" in filename:
+            raise SourceReadError(f"invalid export path {prefix!r}")
+        key = f"{cfg.prefix}{folder + '/' if folder else ''}{filename}"
+        if len(key) > _S3_KEY_MAX or not key.startswith(cfg.prefix):
+            raise SourceReadError(f"invalid export path {prefix!r}")
+
+        client = self._client(config, secret)
+        try:
+            client.upload_file(local_path, cfg.bucket, key)
+        except Exception as exc:
+            translated = self._translate(exc, f"{cfg.bucket}/{key}")
+            if "denied" in str(translated).lower():
+                raise SourceReadError(
+                    f"the connection's credentials cannot write {cfg.bucket}/{key} - "
+                    "a file export needs s3:PutObject (p.203)"
+                ) from exc
+            raise translated from exc
+        return key
 
 
 def _s3_timestamp(value: Any) -> str | None:

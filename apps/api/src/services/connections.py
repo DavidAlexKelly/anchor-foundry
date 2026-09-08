@@ -25,8 +25,8 @@ from .secrets import SecretsGateway
 
 _LIST_COLUMNS = """
     id, workspace_id, project_id, scope, name, source_type, config, sync_mode,
-    status, last_tested_at, last_synced_at, last_error, created_by,
-    created_at, updated_at
+    status, last_tested_at, last_synced_at, last_error, exports_enabled,
+    created_by, created_at, updated_at
 """
 
 
@@ -179,6 +179,40 @@ async def delete(
         # After the row delete in the same transaction; gateway delete is not
         # transactional, but the 7-day recovery window covers a crashed commit.
         secrets.delete_secret(str(existing["secret_arn"]))
+
+
+async def set_exports_enabled(
+    conn: AsyncConnection,
+    workspace_id: UUID,
+    project_id: UUID,
+    connection_id: UUID,
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    """p.202's switch: may this source be written to at all (decision 0014 §4).
+
+    **Not part of `update`**, deliberately. `update` is a project editor's
+    route and rotates credentials; this is a workspace admin's decision about
+    whether data may leave the platform through this source. Folding it in
+    would put the two behind one role floor, and the floor would have to be the
+    lower of them.
+
+    Goes through the service rather than raw SQL in the route for the reason
+    every write here does: `get` is what applies the scope rule, so a route
+    updating by id alone would edit a connection its caller could not read.
+    """
+    await get(conn, workspace_id, project_id, connection_id)
+    row = await fetch_one(
+        conn,
+        f"""
+        UPDATE connections SET exports_enabled = :on
+         WHERE id = :cid
+        RETURNING {_LIST_COLUMNS}
+        """,
+        {"on": enabled, "cid": str(connection_id)},
+    )
+    assert row is not None
+    return row
 
 
 _SCHEDULE_COLUMNS = """

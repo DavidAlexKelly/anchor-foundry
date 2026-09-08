@@ -36,6 +36,7 @@ from .routes import connections as connection_routes
 from .routes import datasets as dataset_routes
 from .routes import models as model_routes
 from .routes import notifications as notification_routes
+from .routes import exports as export_routes
 from .routes import webhooks as webhook_routes
 from .routes import objects as object_routes
 from .routes import org as org_routes
@@ -194,6 +195,7 @@ def create_app() -> FastAPI:
     app.include_router(canvas_routes.published_router, prefix=prefix)
     app.include_router(code_routes.router, prefix=prefix)
     app.include_router(notification_routes.router, prefix=prefix)
+    app.include_router(export_routes.router, prefix=prefix)
     app.include_router(webhook_routes.router, prefix=prefix)
     app.include_router(webhook_routes.workspace_router, prefix=prefix)
     app.include_router(bootstrap_routes.router, prefix=prefix)

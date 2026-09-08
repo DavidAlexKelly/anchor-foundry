@@ -49,6 +49,20 @@ def configure_storage_gateway(gateway: StorageGateway) -> None:
     _storage = gateway
 
 
+def storage() -> StorageGateway:
+    """The one gateway, for the other module that reads a dataset's bytes.
+
+    §265's exports need it, and the obvious thing — a second module-level
+    `_storage` with its own `configure_` — is exactly the trap
+    `connections.secrets_gateway` was added to close: a second knob is a second
+    thing to forget wiring in production, and forgetting it is silent.
+
+    A function rather than an import of `_storage`, because the module rebinds
+    the name and an importer would hold the value it had at import time.
+    """
+    return _storage
+
+
 # ---- schemas ----------------------------------------------------------------
 class DatasetOut(BaseModel):
     id: UUID
