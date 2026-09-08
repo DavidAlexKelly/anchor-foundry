@@ -37,6 +37,17 @@ RECORDS = [
     {"id": 3, "name": "alan", "score": 7.0, "active": True, "tags": ["z"]},
 ]
 
+#: A collection whose objects disagree about their keys, which is the ordinary
+#: shape of a real JSON API and the one a preview is read to notice (§268). The
+#: second record carries `nickname`, which the first omits; the third carries
+#: `note`, which neither of the others has. A header taken from record one
+#: would hide both.
+RAGGED = [
+    {"id": 1, "name": "ada"},
+    {"id": 2, "name": "grace", "nickname": "amazing grace"},
+    {"id": 3, "name": "alan", "note": {"seen": True, "where": ["bletchley"]}},
+]
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep pytest output clean
@@ -72,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/records":
             self._send(200, RECORDS)
+        elif path == "/ragged":
+            self._send(200, RAGGED)
         elif path == "/wrapped":
             self._send(200, {"data": {"items": RECORDS}, "meta": {"total": len(RECORDS)}})
         elif path == "/paged":

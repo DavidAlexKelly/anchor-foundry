@@ -78,6 +78,13 @@ The last row is the one that shapes the interface: a Postgres connection's `host
 
 That is exactly the sentence this table exists to distrust. "The guard is in a shared function" is not the same claim as "every path reaches it", and two of the four rows above were written *because* that reasoning had been applied and was wrong. So the export path gets a paired test against a real socket like the four before it, and the claim in this row is the test's, not the argument's.
 
+**A sixth arrived with §268** — source preview, decision 0015 §6 — and it is the first one where the distrust changes what gets written rather than only how it is checked. A database preview reaches `_conninfo` and so is covered by the same construction argument as an export. **A REST preview is not**: it never touches `_conninfo` or `_client` and goes through `_fetch_page` instead, which calls `_check_url`. That is still a chokepoint, but it is a *different* one, so "preview is guarded" is two claims wearing one sentence, and a single fixture would have proved half of it while reading as though it had proved both.
+
+| Path | Checked at send time |
+|---|---|
+| Preview (database, object storage) | **yes** — through the connector chokepoints above |
+| Preview (REST) | **yes** — through `_fetch_page`'s `_check_url`, which is a second claim and has its own paired test |
+
 ### 4. A refusal names the policy, not the address
 
 `data-connection.md`'s acceptance test asks for this in its own words — *"a source configured for `host-a` cannot reach `host-b`, and the refusal names the policy"* — and it is worth keeping because the failure it prevents is specific. "Could not reach `internal.example.com`" sends somebody to check DNS, a firewall and the far end's health before they think to look at a list in the platform. "This source is not allowed to reach `internal.example.com`; its egress policies allow `api.example.com:443`" ends the investigation in one line.

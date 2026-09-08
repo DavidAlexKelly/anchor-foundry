@@ -4388,6 +4388,106 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 268. Source preview, and a suite that had never run (this session)
+
+`data-connection.md`'s build order item 4 — "browse tables and files before
+configuring a sync". Decision 0015 records the design; this is the server half.
+
+**The section that decides what to build is not the section about the
+feature.** *Sources / Source exploration* is p.142-143, two pages that are
+mostly the numbered callouts of a screenshot, and read alone it is a tree, a
+graph and a preview pane. The sentence that matters is three chapters earlier:
+
+> "Exploration is most commonly used to check that a connection is working as
+> intended and that **the correct permissions and credentials are being used to
+> connect**." (p.18)
+
+The most common use of the data browser is not browsing data. And a handful of
+real rows is the sharpest possible answer to "does this work, as this user?" —
+a row that arrives proves the host, the port, the credential, the privilege and
+the table name at once, and no test button proves the last two. So preview is
+not a convenience laid over discovery; it is the only check in the platform
+that exercises the read path a sync will actually take, and the
+credential-refusal cases are the feature rather than its error path.
+
+**Half of item 4 already existed, and saying which half was most of the
+design.** `discover()` has been on the connector interface since §2 and the
+tree is on screen, so p.143's callout 1 was done. What was missing was the
+sample — the only one of p.143's six items that needs a connector method rather
+than a screen.
+
+**What a preview must not become.** It takes a schema and a table and nothing
+else, checked as identifiers. The moment a caller can shape the read — SQL, a
+filter, a column list — an editor's ability to see fifty rows becomes an
+ability to run statements as the connection's user, which is a much larger
+grant than the sync it stands in for. That bound is the whole permission
+argument: **preview is bounded above by what a sync could already do, and by
+nothing else**, which is why it is editor and not viewer, and what to revisit
+if a credential ever reads more than a sync would.
+
+**The pair that keeps p.18's answer from becoming a false alarm.** `test` and
+`discover` both mark the connection failed when they cannot reach the source,
+and copying that here would have been the obvious thing. It is wrong: "this
+credential cannot read that table" is the check *working*. A source that went
+red every time somebody previewed the wrong table would be a status nobody
+could trust. Two tests, and neither is optional on its own.
+
+**`more` needed two tables, not one.** A connector that asked for exactly the
+cap and inferred "there is more" from a full page passes a test with fifty-one
+rows and fails one with exactly fifty. So every connector asks for one row past
+the cap and `more` is something the source said. Both tables exist.
+
+**The one place a preview is allowed to be inexact, stated rather than
+buried.** A cell over 500 characters is shortened with an ellipsis, and a real
+value that is exactly the cap long and ends in an ellipsis cannot be told from
+a truncated one. Mitigated rather than solved: the response carries an exact
+count of how many cells were shortened, and the columns and row count are never
+approximate. `size_cap_error`'s refuse-rather-than-lie is still the rule
+wherever the result is a source of record — which is why an object over the
+download cap is **refused** instead of sampled: DuckDB's readers want a whole
+file, and a truncated CSV parses into rows that are not in the source.
+
+**The sixth outbound path, and the first one where decision 0013's distrust
+changed the tests rather than only the wording.** A database preview reaches
+`_conninfo`, so the construction argument that covered exports covers it. A
+REST preview does not — it goes through `_fetch_page`'s `_check_url`, a
+different chokepoint. "Preview is guarded" was two claims wearing one sentence,
+and one fixture would have proved half while reading as though it proved both.
+Two paired refusals, two paired allows.
+
+**A suite that skips everywhere has never run.**
+
+`test_mysql_connector.py` is the file that proves the connector interface
+generalises rather than being a rename of the Postgres path. It skipped on
+every developer machine, because nothing provisions a MariaDB — and it skipped
+in CI, because the `api` job had only a Postgres service. Roughly twenty tests
+had not executed since they were written, and `pytest` reported that as a clean
+pass every time. Writing three more preview tests into it is what surfaced it:
+they passed, instantly, without running.
+
+This is §267's finding one level up. There, a *layer* of a mutation harness had
+not run and seven mutants came back as survivors. Here a whole *suite* has not
+run since it was authored, and nothing came back at all — which is worse,
+because a survivor at least gets looked at. The fix is the one the browser
+suite already had: `ANCHOR_E2E_REQUIRED` turns its skip into a failure because
+in CI a missing stack *is* the bug. `ANCHOR_MYSQL_REQUIRED` now does the same,
+and CI gained the MariaDB service that makes it meaningful. Locally the skip
+stays, so a Postgres-only checkout still runs everything else.
+
+**The narrowing that has now appeared twice, which is worth more than either
+appearance.** p.143's file-import filter is defined by p.160-161 in terms of
+`SNAPSHOT`, `APPEND` and `UPDATE` transactions — the same transaction log
+decision 0014 §2 found `dataset_versions` does not keep. Two chapters of the
+same document have now been narrowed by one missing concept. The gap is in the
+dataset model, not in exports or in exploration, and it will keep surfacing.
+
+Also left out and recorded rather than forgotten: p.143's relationship graph,
+which Foundry says of its own feature "is not always available", and which
+needs foreign keys `ColumnInfo` does not carry.
+
+**34 new API tests** (19 in `test_source_preview.py`, 4 egress, 5 REST, 6
+object storage), plus 3 MySQL ones that finally have somewhere to run.
+
 ### 267. The export panel, and the question a green tick stopped answering (this session)
 
 §265 built exports and left every part reachable only by posting JSON — the
@@ -9503,6 +9603,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
 
 - **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
+
+- **A suite that skips in every environment has never run, and nothing will ever tell you.** §268 wrote three tests into `test_mysql_connector.py` and they passed instantly, because the whole file had skipped since it was written — no MariaDB on any developer machine, and none in CI either, where the `api` job had only a Postgres service. Twenty-odd tests proving the connector interface generalises had never executed, reported as a clean pass every time. This is the skip-is-not-a-pass family one level above §267's: there, a *layer* of a harness had not run and seven mutants came back as phantom survivors; here a *suite* had not run and nothing came back at all, which is worse, because a survivor at least gets looked at. **A skip is only honest where the dependency is genuinely optional, and CI is never that place** — so every suite with an external dependency needs a required-mode switch that turns its skip into a failure, and the environment that sets it needs the dependency. The tell is a test you just wrote passing faster than it possibly could.
+
+- **When a document's own section is thin, the sentence that decides the design is usually in the overview chapter.** §268's *Source exploration* is two pages, mostly screenshot callouts, and reads as a tree plus a preview pane. p.18, three chapters earlier, says exploration "is most commonly used to check that a connection is working as intended and that the correct permissions and credentials are being used to connect" — which reframes the whole feature: the most common use of the data browser is not browsing data, and the credential-refusal path is the product rather than the error handling. A build designed from the feature section alone would have got the code right and the *emphasis* wrong, which is the kind of wrong that no test catches. The habit: before building from a short section, read what the overview says the capability is **for**.
+
+- **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
 

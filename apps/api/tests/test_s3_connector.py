@@ -444,3 +444,111 @@ def test_incremental_resyncs_only_when_the_object_changes(
 
     preview = client.get(f"{dbase(fx)}/{did}/preview", headers=hdr(fx.viewer_sub)).json()
     assert preview["total_rows"] == 3
+
+
+# ---- preview (`data-connection` p.142-143; decision 0015; §268) ---------------
+def _preview(client: TestClient, fx: Fixture, cid: str, name: str, folder: str = ""):
+    return client.post(
+        f"{cbase(fx)}/{cid}/preview", headers=hdr(fx.editor_sub),
+        json={"source_schema": folder, "source_table": name},
+    )
+
+
+def test_a_file_preview_reads_the_objects_rows(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """p.143's file-based half: "See a preview of the files that will be
+    synced." A file source's "table" is one object, so its preview is that
+    object's rows."""
+    r = _preview(client, fx, connection_id, "orders.csv")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["columns"] == ["id", "customer_email", "total_pence"]
+    assert {row[1] for row in body["rows"]} == {"a@example.com", "b@example.com"}
+    assert body["more"] is False
+
+
+def test_a_nested_file_previews_through_its_folder(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """`source_schema` is the folder for an object store, which is what
+    `discover` reports and what a sync takes - a preview that ignored it could
+    only ever read the prefix root."""
+    r = _preview(client, fx, connection_id, "regions.csv", folder="nested")
+    assert r.status_code == 200, r.text
+    assert r.json()["rows"] == [["se", "Sweden"]]
+
+
+def test_a_parquet_preview_shows_parquet_values_not_re_inferred_text(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """Read through `dataset_engine`'s own readers, so what the preview shows
+    is what the ingest would land - a preview that parsed the file its own way
+    could show a clean table for a file the sync would then refuse."""
+    r = _preview(client, fx, connection_id, "events.parquet")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["columns"] == ["id", "label", "score"]
+    assert {row[1] for row in body["rows"]} == {"launch", "retry"}
+
+
+def test_a_file_type_the_ingest_cannot_read_is_refused_by_name(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """`notes.txt` is in the bucket and is filtered out of `discover`, so the
+    only way to ask for it is to name it - and the refusal lists what is
+    supported rather than failing inside DuckDB."""
+    r = _preview(client, fx, connection_id, "notes.txt")
+    assert r.status_code == 422, r.text
+    assert "unsupported file type" in r.json()["detail"]
+
+
+def test_an_object_outside_the_prefix_cannot_be_previewed(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """**The prefix is a boundary, and a preview is a new way to test it.**
+
+    `private/secrets.csv` exists in the bucket and is outside the configured
+    prefix; `discover` already refuses to list it. A preview that resolved keys
+    its own way would be a second path to the same bucket with none of that
+    reasoning applied.
+    """
+    r = _preview(client, fx, connection_id, "secrets.csv", folder="../private")
+    assert r.status_code == 422, r.text
+    # Named, so this cannot start passing for some other reason - a 422 alone
+    # would also be what an unsupported extension or a missing bucket returns.
+    assert "invalid object name" in r.json()["detail"]
+    assert "top,secret" not in r.text
+
+
+def test_an_object_too_large_to_download_is_refused_with_the_limit(
+    client: TestClient, fx: Fixture, connection_id: str, s3
+) -> None:
+    """**Refused, not sampled** — and the distinction is the reason this test
+    is worth its seconds.
+
+    DuckDB's readers want a whole file, not a prefix of one, so there is no
+    honest way to preview part of a large object: a truncated CSV parses into
+    rows that are not in the source. `discover` makes the same size call and
+    degrades to reporting no columns; here there is nothing to degrade to, so
+    the limit is stated instead, with the thing to do about it.
+    """
+    from src.services.connectors import _MAX_INSPECT_BYTES
+
+    key = f"{PREFIX}huge.csv"
+    # Sized from the line's own length rather than a round number, so the
+    # object is over the cap by construction instead of by arithmetic that has
+    # to be redone whenever the padding changes.
+    line = b"1," + b"x" * 990 + b"\n"
+    header = b"id,pad\n"
+    body = header + line * (_MAX_INSPECT_BYTES // len(line) + 100)
+    assert len(body) > _MAX_INSPECT_BYTES
+    s3.put_object(Bucket=BUCKET, Key=key, Body=body)
+    try:
+        r = _preview(client, fx, connection_id, "huge.csv")
+        assert r.status_code == 422, r.text
+        detail = r.json()["detail"]
+        assert "too large to preview" in detail
+        assert "sync it and preview the dataset instead" in detail
+    finally:
+        s3.delete_object(Bucket=BUCKET, Key=key)

@@ -63,10 +63,24 @@ def _admin_connect(database: str = "mysql"):
 try:
     _admin_connect().close()
 except Exception as exc:  # pragma: no cover - environment guard
-    pytest.skip(
-        f"no MySQL/MariaDB reachable at {MYSQL_HOST}:{MYSQL_PORT} ({exc})",
-        allow_module_level=True,
-    )
+    #: **A suite that skips everywhere has never run** (§268).
+    #:
+    #: This file skipped on every developer machine and in CI, because nothing
+    #: provisioned a MariaDB and the api job had only a Postgres service - so
+    #: roughly twenty tests proving the connector interface generalises had not
+    #: executed since they were written, and `pytest` reported that as a clean
+    #: pass every time.
+    #:
+    #: It is the same mistake §267 found one level down: a skip is not a pass,
+    #: and the layer that let a mutant through had not run. The browser suite
+    #: already had the fix - `ANCHOR_E2E_REQUIRED` turns its skip into a
+    #: failure because in CI a missing stack *is* the bug - and this is that
+    #: rule applied to the other suite with an external dependency. Locally the
+    #: skip stays, so a Postgres-only checkout still runs everything else.
+    message = f"no MySQL/MariaDB reachable at {MYSQL_HOST}:{MYSQL_PORT} ({exc})"
+    if os.environ.get("ANCHOR_MYSQL_REQUIRED"):
+        pytest.fail(message, pytrace=False)
+    pytest.skip(message, allow_module_level=True)
 
 
 @pytest.fixture(scope="module")
@@ -409,3 +423,44 @@ def test_scheduled_incremental_sync_merges_only_new_rows(
 
     preview = client.get(f"{dbase(fx)}/{did}/preview", headers=hdr(fx.viewer_sub)).json()
     assert preview["total_rows"] == 4
+
+
+# ---- preview (`data-connection` p.142-143; decision 0015; §268) ---------------
+def test_a_mysql_preview_returns_the_rows(source_database: dict[str, object]) -> None:
+    sample = MySQLConnector().preview(
+        source_database, {"password": SOURCE_PASSWORD},
+        source_schema=SOURCE_DB, source_table="orders",
+    )
+    assert sample.columns == ["id", "customer_email", "total_pence", "placed_at"]
+    assert {row[1] for row in sample.rows} == {
+        "a@example.com", "b@example.com", "c@example.com"
+    }
+    assert sample.more is False
+
+
+def test_a_mysql_preview_takes_a_leading_digit_table_name(
+    source_database: dict[str, object],
+) -> None:
+    """The identifier rule this file exists to prove is per-connector.
+
+    `2024_archive` is a legal MySQL table and an illegal Postgres one, so a
+    preview that reused Postgres' `check_identifier` would refuse a table the
+    source has - the exact failure a shared helper invites. `_quote_mysql` is
+    what makes the two paths differ, and this is the one table that can tell.
+    """
+    sample = MySQLConnector().preview(
+        source_database, {"password": SOURCE_PASSWORD},
+        source_schema=SOURCE_DB, source_table="2024_archive",
+    )
+    assert sample.columns == ["id"]
+    assert sample.rows == []
+
+
+def test_a_mysql_preview_of_a_missing_table_is_a_clean_error(
+    source_database: dict[str, object],
+) -> None:
+    with pytest.raises(SourceReadError):
+        MySQLConnector().preview(
+            source_database, {"password": SOURCE_PASSWORD},
+            source_schema=SOURCE_DB, source_table="no_such_table",
+        )

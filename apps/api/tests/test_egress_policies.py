@@ -524,3 +524,76 @@ def test_the_platforms_own_guard_is_not_overridable_by_a_policy(
     )
     assert r.status_code == 422
     assert "link-local" in r.json()["detail"]
+
+
+# ---- the sixth path (decision 0015 §6; §268) ---------------------------------------
+#
+# Decision 0013's table says a shared chokepoint is an argument, not a claim,
+# and two of its original four rows exist because that argument had been made
+# and was wrong. Preview is the sixth path and gets the same treatment — and it
+# needs **two** pairs rather than one, because a database preview reaches
+# `_conninfo` and a REST preview reaches `_fetch_page`. Those are different
+# chokepoints, so a fixture that exercised only one would be testing a claim
+# about the other that nothing had made.
+def test_a_database_preview_is_guarded_by_the_same_allowlist(
+    client: TestClient, fx: Fixture
+) -> None:
+    cid = db_connection(client, fx)
+    assert allow(client, fx, cid, host="warehouse.example.com", port=5432).status_code == 201
+    r = client.post(
+        f"{base(fx)}/connections/{cid}/preview", headers=hdr(fx.editor_sub),
+        json={"source_schema": "public", "source_table": "audit_log"},
+    )
+    assert r.status_code in (422, 502), r.text
+    assert f"not allowed to reach {DB.hostname}:{DB.port or 5432}" in r.text
+
+
+def test_a_database_preview_with_a_policy_for_its_host_reads_the_table(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The pair. Without it, a preview that refused *every* destination would
+    pass the test above — which is exactly what closed-by-default would have
+    been, and what decision 0013 §2 rejected."""
+    cid = db_connection(client, fx)
+    assert allow(client, fx, cid, host=DB.hostname, port=DB.port or 5432).status_code == 201
+    r = client.post(
+        f"{base(fx)}/connections/{cid}/preview", headers=hdr(fx.editor_sub),
+        json={"source_schema": "public", "source_table": "audit_log"},
+    )
+    assert r.status_code == 200, r.text
+    assert "action" in r.json()["columns"]
+
+
+def test_a_rest_preview_is_guarded_by_the_same_allowlist(
+    client: TestClient, fx: Fixture, target
+) -> None:
+    """**The second claim, and the reason it is a separate test.**
+
+    A REST preview never touches `_conninfo` or `_client`; it goes through
+    `_fetch_page`, which calls `_check_url`. That is still a chokepoint, but it
+    is a different one — so the row decision 0015 §6 writes is only true if
+    both are checked, and one test could only ever have proved half of it.
+    """
+    url, _ = target
+    cid = rest_connection(client, fx, url)
+    allow(client, fx, cid, host="api.example.com")
+    r = client.post(
+        f"{base(fx)}/connections/{cid}/preview", headers=hdr(fx.editor_sub),
+        json={"source_schema": "", "source_table": "records"},
+    )
+    assert r.status_code in (422, 502), r.text
+    assert "not allowed to reach" in r.text
+
+
+def test_a_rest_preview_with_a_policy_for_its_host_reads_the_records(
+    client: TestClient, fx: Fixture, target
+) -> None:
+    url, port = target
+    cid = rest_connection(client, fx, url)
+    assert allow(client, fx, cid, host="127.0.0.1", port=port).status_code == 201
+    r = client.post(
+        f"{base(fx)}/connections/{cid}/preview", headers=hdr(fx.editor_sub),
+        json={"source_schema": "", "source_table": "records"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["rows"], "the fixture server serves records"

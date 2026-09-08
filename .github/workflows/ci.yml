@@ -29,11 +29,35 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s
           --health-timeout 5s --health-retries 20
+      # §268. `test_mysql_connector.py` is the file that proves the connector
+      # interface generalises rather than being a rename of the Postgres path,
+      # and it had skipped in every environment this project runs - locally
+      # because nothing provisions a MariaDB, here because this job had only a
+      # Postgres service. Twenty-odd tests reported as a clean pass without
+      # executing. Root rather than a named user because the suite creates its
+      # own database and login role, which is the arrangement that lets it hold
+      # the credential boundary it exists to hold.
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: devpass
+          MARIADB_ROOT_HOST: "%"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 30
     env:
       DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
       TEST_ADMIN_DSN: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
       STORAGE_ROOT: /tmp/anchor-storage
       ANCHOR_PYTHON: python
+      TEST_MYSQL_ADMIN_USER: root
+      TEST_MYSQL_ADMIN_PASSWORD: devpass
+      # A missing MariaDB is the bug here, not a reason to skip - the same
+      # sentence the browser job makes with ANCHOR_E2E_REQUIRED, and for the
+      # same reason: without it, a service that failed to start would put the
+      # suite back to reporting a pass it never earned.
+      ANCHOR_MYSQL_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
