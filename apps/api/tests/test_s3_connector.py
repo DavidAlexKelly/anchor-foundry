@@ -503,6 +503,33 @@ def test_a_file_type_the_ingest_cannot_read_is_refused_by_name(
     assert "unsupported file type" in r.json()["detail"]
 
 
+def test_an_unreadable_file_type_is_refused_before_the_object_is_fetched(
+    client: TestClient, fx: Fixture, connection_id: str
+) -> None:
+    """**The half the message alone cannot show.**
+
+    `dataset_engine` refuses an unreadable extension too, so deleting the
+    connector's check leaves the same words arriving from one layer further in
+    — after the object has been downloaded. Asking for a file that is *not
+    there* is what separates them: with the check, the answer is about the
+    type and the bucket is never touched; without it, the connector goes to S3
+    and comes back saying the object does not exist.
+
+    The pair is the second half: a *supported* type that is equally absent does
+    reach the bucket, so this is not passing against a connector that refuses
+    every missing file the same way.
+    """
+    ghost = _preview(client, fx, connection_id, "ghost.txt")
+    assert ghost.status_code == 422, ghost.text
+    assert "unsupported file type" in ghost.json()["detail"]
+
+    missing = _preview(client, fx, connection_id, "ghost.csv")
+    assert missing.status_code == 422, missing.text
+    detail = missing.json()["detail"]
+    assert "does not exist" in detail
+    assert "unsupported file type" not in detail
+
+
 def test_an_object_outside_the_prefix_cannot_be_previewed(
     client: TestClient, fx: Fixture, connection_id: str
 ) -> None:
