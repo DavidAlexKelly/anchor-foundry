@@ -4450,6 +4450,30 @@ real read of somebody else's system with their credentials, and clicking
 through a tree of forty tables should not be forty queries against a production
 database. p.18 makes this the check people press deliberately.
 
+**43 mutants attacked, 43 caught — and two of them by deleting the line rather
+than testing it**, which is the part worth keeping.
+
+- `search` had an early return for an empty query. There is no special case to
+  make: `"orders".includes("")` is true, so the name branch already matches
+  every table and returns exactly what the early return returned. §264's rule —
+  a line that cannot change the answer still reads as a guarantee the function
+  makes, and the next person needing that guarantee copies a call that was
+  never doing the work.
+- The panel's render gate was `preview.data && wanted === key`. The query is
+  keyed by the table, so `preview.data` is already undefined for a table nobody
+  asked about. §213's question — who else refuses this — and the answer was the
+  query key.
+
+**The third survivor was real, and the obvious test for it would have raced.**
+Nothing checked that *selecting* a table costs no query, and the natural
+assertion — that the sample is not on screen yet — is also exactly what an
+auto-fetch looks like for its first few hundred milliseconds. §266's rule is
+not to race an intermittent signal: the test **counts requests** to `/preview`
+instead. None on selection, exactly one on the button. The claim underneath is
+worth stating plainly, because it is about somebody else's production database:
+a preview is a real read with the customer's credentials, and clicking through
+a tree of forty tables must not be forty queries.
+
 **1765 unit tests** (25 new); `tsc` clean; **6 browser tests**, green first run.
 
 ### 268. Source preview, and a suite that had never run (this session)
@@ -9746,6 +9770,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
 
 - **A suite that skips in every environment has never run, and nothing will ever tell you.** §268 wrote three tests into `test_mysql_connector.py` and they passed instantly, because the whole file had skipped since it was written — no MariaDB on any developer machine, and none in CI either, where the `api` job had only a Postgres service. Twenty-odd tests proving the connector interface generalises had never executed, reported as a clean pass every time. This is the skip-is-not-a-pass family one level above §267's: there, a *layer* of a harness had not run and seven mutants came back as phantom survivors; here a *suite* had not run and nothing came back at all, which is worse, because a survivor at least gets looked at. **A skip is only honest where the dependency is genuinely optional, and CI is never that place** — so every suite with an external dependency needs a required-mode switch that turns its skip into a failure, and the environment that sets it needs the dependency. The tell is a test you just wrote passing faster than it possibly could. And the first green run is not the end of it: turning this one on immediately found a test whose fixture assumption had expired and one of mine that assumed a shared table's row count — **a suite that has not run is not merely unproven, it has been rotting**, because everything around it moved and nothing pulled on it.
+
+- **"It has not happened yet" and "it will never happen" look identical for the first few hundred milliseconds, so count the requests instead.** §269's Explore screen fetches a sample only when asked, because a preview is a real read of somebody else's production database with their credentials and a tree of forty tables must not be forty queries. The obvious test — assert the sample is not on screen after selecting a table — passes against a screen that fetches on every click, because the request has not come back yet. Two mutants proved it. The fix is §266's rule applied to absence rather than to flakiness: **assert the network, not the DOM**, via `page.on("request", …)` and a wait long enough that an eager fetch would certainly have been issued. Paired with a count of exactly one after the button, since "no requests ever" would otherwise pass too. The general shape: whenever the claim is *that something did not happen*, find the place it would have left a trace and assert on that.
 
 - **A chain of careful distinctions is only as good as its last link, and the last link is usually the render.** §268's connectors go out of their way to send `null` rather than `""`, because "this column is empty" and "this column is missing" are the two answers a preview is read to tell apart, and there is a test for it at the route. §269's screen could have rendered both as an empty cell and thrown the whole thing away one step later, with every test still green — the server test asserts the wire, and a screen test that only checked the visible rows would not have noticed. The habit: when a layer takes trouble to preserve a distinction, **write down what the next layer has to do with it**, and test that too. The tell is a value the API is careful about arriving somewhere that treats it as a formatting detail.
 
