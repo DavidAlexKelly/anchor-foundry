@@ -156,11 +156,29 @@ def test_a_preview_shows_the_rows_that_are_really_there(page, api, source):
     made = a_source(api, mod, source)
     open_explore(page, mod, made["name"])
 
+    # **Counted, not raced** (§266). "The sample is not there yet" is also what
+    # an auto-fetch looks like for its first few hundred milliseconds, so
+    # asserting an absent table would pass against a screen that queries the
+    # customer's database on every click. What is asserted is the request.
+    calls: list[str] = []
+    page.on(
+        "request",
+        lambda r: calls.append(r.url) if "/preview" in r.url else None,
+    )
+
     page.get_by_test_id("explore-entry-orders").click()
     expect(page.get_by_test_id("explore-selected")).to_contain_text("orders")
     # Columns are there from `discover`; the rows are not, until asked for.
     expect(page.get_by_test_id("explore-columns")).to_contain_text("note")
     expect(page.get_by_test_id("explore-sample")).to_have_count(0)
+    # Long enough that a fetch-on-select would certainly have been issued — the
+    # request goes out on render, so this is generous rather than marginal.
+    page.wait_for_timeout(1500)
+    assert calls == [], (
+        "selecting a table must not query the source: a preview is a real read "
+        "of somebody else's system with their credentials, and clicking through "
+        "a tree of forty tables should not be forty queries"
+    )
 
     page.get_by_test_id("explore-preview").click()
     sample = page.get_by_test_id("explore-sample")
@@ -171,6 +189,9 @@ def test_a_preview_shows_the_rows_that_are_really_there(page, api, source):
     # row count of a table that might be bigger.
     expect(page.get_by_test_id("explore-sample-summary")).to_have_text("all 2 rows, 2 columns.")
     expect(page.get_by_test_id("explore-sample-caveat")).to_have_count(0)
+    # And pressing it asked exactly once — the pair for the assertion above,
+    # without which "no requests ever" would also pass.
+    assert len(calls) == 1, calls
 
 
 def test_a_view_is_previewed_and_not_offered_a_sync(page, api, source):

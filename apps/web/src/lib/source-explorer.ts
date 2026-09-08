@@ -70,9 +70,13 @@ export function search(
   tables: readonly DiscoveredTable[],
   query: string,
 ): Match[] {
+  // **No special case for an empty query**, because there is not one:
+  // `"orders".includes("")` is true, so the name branch below matches every
+  // table and the result is the whole list, each as a `name` match. An early
+  // return saying the same thing survived §269's harness for exactly that
+  // reason, and §264's rule applies — a line that cannot change the answer
+  // still reads as a guarantee this function makes.
   const needle = query.trim().toLowerCase();
-  if (!needle) return tables.map((table) => ({ table, kind: "name", via: null }));
-
   const found: Match[] = [];
   for (const table of tables) {
     if (table.name.toLowerCase().includes(needle)) {

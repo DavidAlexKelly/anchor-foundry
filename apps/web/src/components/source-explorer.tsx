@@ -276,7 +276,12 @@ function TableDetails({
         </div>
       )}
 
-      {preview.data && wanted === key && (
+      {/* `preview.data` alone, not `&& wanted === key`: the query is keyed by
+          the table, so selecting a different one leaves `data` undefined until
+          that table's own sample arrives. The extra clause survived §269's
+          harness because the query key already refuses what it was guarding
+          against (§213), so it went rather than gaining a test. */}
+      {preview.data && (
         <div style={{ marginTop: 10 }}>
           <p className="field-hint" data-testid="explore-sample-summary">
             {sampleSummary(preview.data)}
