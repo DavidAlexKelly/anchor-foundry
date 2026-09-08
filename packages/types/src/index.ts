@@ -810,6 +810,23 @@ export interface DiscoveredTable {
   columns: DiscoveredColumn[];
 }
 
+/** A sample of one table from a source, before anything is synced
+ * (`data-connection` p.142-143; decision 0015; §268).
+ *
+ * Every cell is a string or `null`, and the difference carries meaning: the
+ * server refuses to stringify a null, because "this column is empty" and "this
+ * column is missing" are the two answers a preview is read to tell apart.
+ */
+export interface SourcePreview {
+  columns: string[];
+  rows: (string | null)[][];
+  /** The source had at least one row past the sample. Its answer, not an
+   * inference from a full page - so a sample of exactly the cap is `false`. */
+  more: boolean;
+  /** How many cells were shortened to the server's per-cell limit. */
+  truncated_cells: number;
+}
+
 // ---- datasets (Layer 1.5) ---------------------------------------------------
 export type DatasetOrigin = "upload" | "sync" | "model_output" | "fork";
 

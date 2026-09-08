@@ -4388,6 +4388,70 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 269. The Explore screen, and what a table of rows does not say (this session)
+
+§268 built `preview()` on every connector and left it reachable only by posting
+JSON — the shape §252 named, closed here as it was for notify rules (§258),
+webhooks (§261), egress policies (§264) and exports (§267). p.142 says where it
+goes and what it is for: "explore the source and the data it contains to
+preview syncs before they bring data into Foundry", reached from the source.
+
+This replaces the Schema dialog, which showed `discover`'s catalogue and
+nothing else. It is now three of p.143's four panels: the tree with its
+free-text search, the sample, and p.145's path straight into a sync.
+
+**The finding here is smaller than §268's and worth keeping: most of what this
+screen does is say what the sample *is*.**
+
+A table of fifty rows with no caption is a table somebody reads as the data,
+and every wrong conclusion available from that is one they will carry into a
+decision about a sync. So four sentences exist that a naive screen would not
+have, and each answers a specific misreading:
+
+- **"all 12 rows" or "50 of more than 50 rows"**, never a bare count. A bare
+  "50 rows" beside fifty rows reads as the table having fifty rows.
+- **The non-determinism, said only where there is a subset to be
+  non-deterministic about.** There is no `ORDER BY` (decision 0015 §5), so a
+  capped sample is not the first rows and may differ next press — but with
+  every row on screen there is no sample, and a caveat that is always there is
+  one nobody reads by the third time.
+- **A count of shortened cells.** Decision 0015 §4's one inexactness is that a
+  truncated value and a real one ending in an ellipsis are indistinguishable;
+  the count is the only thing that says shortening happened at all.
+- **`null` as a word.** The server takes care to send `null` rather than `""`
+  precisely so an empty column can be told from a missing one, and rendering
+  both as a blank cell would throw that away at the last step. That is the
+  whole chain wasted at its last link, which is the shape worth watching for.
+
+**The search covers column names, and says when it did.** p.143 asks for a
+helper that finds "specific tables"; "which table has `customer_email`" is the
+question people actually arrive with, and a name-only search cannot answer it.
+But a table appearing under a query that is nowhere in its name looks like a
+bug, so the match carries its reason — and a table whose *name* matches is
+never reported as a column match, which would be true and useless.
+
+**A view is previewed and not offered a sync**, which is not an inconsistency:
+p.143 says exploration covers "tables and views", this platform has always
+synced tables, and a view is exactly the thing somebody wants to look at before
+finding out they cannot sync it. §214's rule decides the button — its only
+outcome would be a refusal — and the sentence stays because "why not this one"
+is the next question.
+
+**`tableKey` was about to exist twice.** The page had its own copy of the
+(schema, name) encoding and the new screen needed the same one. It is an
+*identity* function, so two versions that disagreed would mean a table picked
+on one screen resolving to a different row — or none — on the other, with
+nothing failing anywhere. Moved to `lib/source-explorer` and imported by both.
+The same move took `.discover-tree`'s CSS off the dead-code list: the dialog
+that used it is gone, and the styling is what the new tree wants.
+
+**The sample is fetched on request rather than on selection.** A preview is a
+real read of somebody else's system with their credentials, and clicking
+through a tree of forty tables should not be forty queries against a production
+database. p.18 makes this the check people press deliberately.
+
+**1765 unit tests** (25 new); `tsc` clean; **6 browser tests**, green first run.
+
 ### 268. Source preview, and a suite that had never run (this session)
 
 `data-connection.md`'s build order item 4 — "browse tables and files before
@@ -9682,6 +9746,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
 
 - **A suite that skips in every environment has never run, and nothing will ever tell you.** §268 wrote three tests into `test_mysql_connector.py` and they passed instantly, because the whole file had skipped since it was written — no MariaDB on any developer machine, and none in CI either, where the `api` job had only a Postgres service. Twenty-odd tests proving the connector interface generalises had never executed, reported as a clean pass every time. This is the skip-is-not-a-pass family one level above §267's: there, a *layer* of a harness had not run and seven mutants came back as phantom survivors; here a *suite* had not run and nothing came back at all, which is worse, because a survivor at least gets looked at. **A skip is only honest where the dependency is genuinely optional, and CI is never that place** — so every suite with an external dependency needs a required-mode switch that turns its skip into a failure, and the environment that sets it needs the dependency. The tell is a test you just wrote passing faster than it possibly could. And the first green run is not the end of it: turning this one on immediately found a test whose fixture assumption had expired and one of mine that assumed a shared table's row count — **a suite that has not run is not merely unproven, it has been rotting**, because everything around it moved and nothing pulled on it.
+
+- **A chain of careful distinctions is only as good as its last link, and the last link is usually the render.** §268's connectors go out of their way to send `null` rather than `""`, because "this column is empty" and "this column is missing" are the two answers a preview is read to tell apart, and there is a test for it at the route. §269's screen could have rendered both as an empty cell and thrown the whole thing away one step later, with every test still green — the server test asserts the wire, and a screen test that only checked the visible rows would not have noticed. The habit: when a layer takes trouble to preserve a distinction, **write down what the next layer has to do with it**, and test that too. The tell is a value the API is careful about arriving somewhere that treats it as a formatting detail.
 
 - **A test that needs its fixture to have a property should assert that property in the sentence that fails.** §268's TLS test opened "this MariaDB has no TLS" — true when written, false from MariaDB 11.4, which generates a self-signed certificate at first start. The connector was correct and the test was red, and the failure said `assert True is False`, which points at the code. Stating the premise as an assertion (`have_ssl(port) == "DISABLED"`, with a message naming what to point the port at) turns a confusing failure into an instruction. This is the same shelf-life problem §213 recorded for comments claiming something is inexpressible: **a fact about the environment written as prose is a fact nobody re-checks**, and a test is the one place it can be written so that it re-checks itself.
 

@@ -12,6 +12,8 @@ import {
 import { Dialog, Field } from "@/components/dialog";
 import { EgressDialog } from "@/components/egress-panel";
 import { ExportsPanel } from "@/components/exports-panel";
+import { ExploreDialog } from "@/components/source-explorer";
+import { isSyncable, tableKey, tableLabel } from "@/lib/source-explorer";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { WebhooksPanel } from "@/components/webhooks-panel";
 import type {
@@ -37,31 +39,17 @@ function StatusBadge({ connection }: { connection: Connection }) {
   );
 }
 
-// A discovered entry is identified by its (schema, name) pair, but a <select>
-// value is a single string. Encoding it as "schema.name" and splitting on the
-// first dot is ambiguous the moment a schema itself contains one - which
-// object-storage sources make ordinary, since a "schema" there is a folder.
-// Encode with a separator that cannot occur in either half, and resolve back
-// through the discovered list rather than by parsing.
-const TABLE_KEY_SEP = "\u0000";
-
-function tableKey(t: { schema_name: string; name: string }): string {
-  return `${t.schema_name}${TABLE_KEY_SEP}${t.name}`;
-}
-
-function tableLabel(t: { schema_name: string; name: string }): string {
-  // A file at the root of an object-storage prefix has no folder; showing it
-  // as ".orders.csv" would be noise.
-  return t.schema_name ? `${t.schema_name}/${t.name}` : t.name;
-}
-
-// What a sync can actually read. Views stay excluded as they always have
-// been; object-storage entries ("file") are syncable and were being silently
-// dropped by an equality check against "table".
-function isSyncable(t: { kind: string }): boolean {
-  return t.kind !== "view";
-}
-
+// `tableKey`, `tableLabel` and `isSyncable` now live in `lib/source-explorer`
+// and are imported above (§269). They were defined here, and the Explore
+// screen needs the same three - **and `tableKey` in particular must not exist
+// twice**: it is an identity encoding, so two versions that disagreed would
+// mean the table somebody picked on one screen resolving to a different row
+// (or to none) on the other, with nothing failing anywhere.
+//
+// A discovered entry is identified by its (schema, name) pair while a <select>
+// value is one string, which is why the encoding exists at all. `resolveTable`
+// stays here because it is this page's: it goes back through the discovered
+// list rather than parsing, so it cannot mis-resolve a key it did not build.
 function resolveTable(
   tables: DiscoveredTable[] | undefined,
   key: string | null,
@@ -496,92 +484,26 @@ function AddConnectionWizard({
   );
 }
 
-function DiscoverDialog({
-  workspaceId,
-  projectId,
-  connection,
-  onClose,
-}: {
-  workspaceId: string;
-  projectId: string;
-  connection: Connection;
-  onClose: () => void;
-}) {
-  const discover = useQuery({
-    queryKey: ["discover", connection.id],
-    queryFn: () => connApi.discover(workspaceId, projectId, connection.id),
-    retry: false,
-  });
-
-  const bySchema = new Map<string, DiscoveredTable[]>();
-  for (const t of discover.data ?? []) {
-    const list = bySchema.get(t.schema_name) ?? [];
-    list.push(t);
-    bySchema.set(t.schema_name, list);
-  }
-
-  return (
-    <Dialog open title={`Schema of ${connection.name}`} onClose={onClose}>
-      {discover.isPending && <div className="state">Reading the source schema…</div>}
-      {discover.isError && (
-        <div className="form-error">
-          {discover.error instanceof ApiError
-            ? discover.error.message
-            : "Couldn't read the schema."}
-        </div>
-      )}
-      {discover.data && (
-        <div className="discover-tree" style={{ maxHeight: 380, overflowY: "auto" }}>
-          {[...bySchema.entries()].map(([schema, tables]) => (
-            <div key={schema}>
-              <div className="schema-name">{schema || "/"}</div>
-              {tables.map((t) => (
-                <table key={t.name}>
-                  <tbody>
-                    <tr className="tbl-head">
-                      <td colSpan={3}>
-                        {t.name} <span className="count">({t.kind})</span>
-                      </td>
-                    </tr>
-                    {t.columns.map((c) => (
-                      <tr key={c.name}>
-                        <td>
-                          {c.name} {c.is_primary_key && <span className="pk-mark">pk</span>}
-                        </td>
-                        <td>{c.data_type}</td>
-                        <td>{c.nullable ? "null ok" : "not null"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="form-actions">
-        <button className="btn" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    </Dialog>
-  );
-}
-
-
 function SyncDialog({
   workspaceId,
   projectId,
   connection,
+  initialTable = null,
   onClose,
 }: {
   workspaceId: string;
   projectId: string;
   connection: Connection;
+  /** p.145: arriving from the Explore screen with the table already chosen.
+   * The dropdown stays — the choice is still changeable — but nobody has to
+   * find in a list the row they were just looking at. */
+  initialTable?: DiscoveredTable | null;
   onClose: () => void;
 }) {
-  const [table, setTable] = useState<string | null>(null);
-  const [datasetName, setDatasetName] = useState("");
+  const [table, setTable] = useState<string | null>(
+    initialTable ? tableKey(initialTable) : null,
+  );
+  const [datasetName, setDatasetName] = useState(initialTable ? initialTable.name : "");
   const queryClient = useQueryClient();
 
   const discover = useQuery({
@@ -947,9 +869,14 @@ function ConnectionRow({
   health: SyncHealth | undefined;
 }) {
   const queryClient = useQueryClient();
-  const [showSchema, setShowSchema] = useState(false);
+  const [showExplore, setShowExplore] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showSync, setShowSync] = useState(false);
+  // p.145's "begin creating syncs directly from the exploration view": the
+  // table Explore was looking at, carried into the sync form. Cleared when the
+  // sync dialog closes, so the next plain Sync starts empty rather than
+  // silently preselecting whatever was last explored.
+  const [syncFrom, setSyncFrom] = useState<DiscoveredTable | null>(null);
   const [showScheduledSync, setShowScheduledSync] = useState(false);
   const [showNetworking, setShowNetworking] = useState(false);
   // **This was two statements and one of them ran on every render** (§264): a
@@ -1025,12 +952,17 @@ function ConnectionRow({
             >
               {test.isPending ? "Testing…" : "Test"}
             </button>
+            {/* p.142's own name for this: "Select the Explore link". It was
+                "Schema", which described what the dialog could do rather than
+                what somebody comes here to do — and the dialog now shows the
+                rows as well as the columns (§269). */}
             <button
               className="btn quiet"
+              data-testid={`explore-${connection.name}`}
               style={{ padding: "3px 9px", fontSize: 12 }}
-              onClick={() => setShowSchema(true)}
+              onClick={() => setShowExplore(true)}
             >
-              Schema
+              Explore
             </button>
             <button
               className="btn quiet"
@@ -1077,18 +1009,31 @@ function ConnectionRow({
         )}
         {showSync && (
           <SyncDialog
+            // Remounted per table, so arriving from Explore with a different
+            // table sets the form's initial state again rather than keeping
+            // the first one — `useState(initial)` reads its argument once.
+            key={syncFrom ? tableKey(syncFrom) : "none"}
             workspaceId={workspaceId}
             projectId={projectId}
             connection={connection}
-            onClose={() => setShowSync(false)}
+            initialTable={syncFrom}
+            onClose={() => {
+              setShowSync(false);
+              setSyncFrom(null);
+            }}
           />
         )}
-        {showSchema && (
-          <DiscoverDialog
+        {showExplore && (
+          <ExploreDialog
             workspaceId={workspaceId}
             projectId={projectId}
             connection={connection}
-            onClose={() => setShowSchema(false)}
+            onSync={(table) => {
+              setSyncFrom(table);
+              setShowExplore(false);
+              setShowSync(true);
+            }}
+            onClose={() => setShowExplore(false)}
           />
         )}
         {showScheduledSync && (
