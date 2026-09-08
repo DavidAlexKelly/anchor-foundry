@@ -179,6 +179,32 @@ class Api:
                 try:
                     self.call("DELETE", f"{base}/{row['id']}")
                     removed += 1
+                    continue
+                except Exception:
+                    pass
+                # **p.256 refuses to delete an `active` interface, and this
+                # suite deliberately makes one** — so a run that failed between
+                # marking it active and marking it back stranded it forever. The
+                # database had 28 of those by §266, and nothing would ever have
+                # taken them: the sweep only considers rows newer than its own
+                # start, so no later run adopts them either.
+                #
+                # Standing it back down first is the difference between a
+                # cleanup that mostly works and one that closes. It is tried
+                # only after a plain delete has failed, so the ordinary path
+                # stays one request.
+                try:
+                    detail = self.call("GET", f"{base}/{row['id']}")
+                    self.call("PUT", f"{base}/{row['id']}", {
+                        "display_name": detail["display_name"],
+                        "description": detail.get("description", ""),
+                        "properties": detail["properties"],
+                        "extends": detail["extends"],
+                        "status": "experimental",
+                        "deprecation": None,
+                    })
+                    self.call("DELETE", f"{base}/{row['id']}")
+                    removed += 1
                 except Exception:
                     pass
         return removed, attempted

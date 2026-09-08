@@ -713,6 +713,11 @@ export interface Connection {
   last_tested_at: string | null;
   last_synced_at: string | null;
   last_error: string | null;
+  /** p.202's switch (decision 0014 §4): may this source be written to at all.
+   * On the read shape because the export form has to say *why* a source is not
+   * offered — "not enabled" and "cannot be a destination" are different
+   * sentences, and merging them sends somebody looking for the wrong fix. */
+  exports_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -728,6 +733,42 @@ export interface EgressPolicy {
   port: number | null;
   description: string;
   created_at: string;
+}
+
+/** A configured export (db 0069; decision 0014). */
+export interface Export {
+  id: string;
+  project_id: string;
+  connection_id: string;
+  connection_name: string;
+  connection_source_type: string;
+  dataset_id: string;
+  dataset_name: string;
+  /** The dataset's *current* version, so a row can say whether the destination
+   * is behind without a second request per export — which is p.192's whole
+   * question once "nothing to do" counts as success. */
+  dataset_version: number;
+  name: string;
+  kind: string;
+  mode: string | null;
+  destination: Record<string, unknown>;
+  /** The last version successfully written; null when it has never run. */
+  last_version: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One execution (p.206). `skipped` is what distinguishes p.192's
+ * nothing-to-do success from one that actually wrote. */
+export interface ExportRun {
+  id: string;
+  status: string;
+  skipped: boolean;
+  dataset_version: number | null;
+  rows_written: number;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
 }
 
 export interface SourceTypeInfo {

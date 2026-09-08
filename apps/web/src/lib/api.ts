@@ -348,6 +348,37 @@ export const connections = {
     request<void>(`/workspaces/${wid}/projects/${pid}/connections/${cid}`, { method: "DELETE" }),
 };
 
+/** Exports (decision 0014; §265 the server, §267 the screen). */
+export const exports_ = {
+  list: (wid: string, pid: string) =>
+    request<import("./types").Export[]>(`/workspaces/${wid}/projects/${pid}/exports`),
+  create: (wid: string, pid: string, input: Record<string, unknown>) =>
+    request<import("./types").Export>(`/workspaces/${wid}/projects/${pid}/exports`, {
+      method: "POST", body: JSON.stringify(input),
+    }),
+  remove: (wid: string, pid: string, id: string) =>
+    request<void>(`/workspaces/${wid}/projects/${pid}/exports/${id}`, { method: "DELETE" }),
+  run: (wid: string, pid: string, id: string) =>
+    request<import("./types").ExportRun>(
+      `/workspaces/${wid}/projects/${pid}/exports/${id}/run`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  runs: (wid: string, pid: string, id: string) =>
+    request<{
+      runs: import("./types").ExportRun[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(`/workspaces/${wid}/projects/${pid}/exports/${id}/runs`),
+  /** p.202's switch. On the connections path because it is a property of the
+   * source, and a workspace admin's to set — the route enforces that. */
+  setEnabled: (wid: string, pid: string, cid: string, enabled: boolean) =>
+    request<{ enabled: boolean }>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/exports-enabled`,
+      { method: "PUT", body: JSON.stringify({ enabled }) },
+    ),
+};
+
 /** A source's egress policies (decision 0013; §263 the rule, §264 the screen).
  *
  * Its own object rather than three more methods on `connections`, because

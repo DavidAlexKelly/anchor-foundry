@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { EgressDialog } from "@/components/egress-panel";
+import { ExportsPanel } from "@/components/exports-panel";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { WebhooksPanel } from "@/components/webhooks-panel";
 import type {
@@ -1210,6 +1211,19 @@ export default function ConnectionsPage() {
           workspaceId={workspace.id}
           projectId={project.id}
           connections={list.data ?? []}
+        />
+      )}
+
+      {/* p.203: an export is created "from the Overview page of the source to
+          which you want to export" — the same argument that put webhooks here,
+          and the same shape (§265 built the server half and left it reachable
+          only by posting JSON). */}
+      {workspace && project && (
+        <ExportsPanel
+          workspaceId={workspace.id}
+          projectId={project.id}
+          connections={list.data ?? []}
+          canAdmin={canWorkspaceScope}
         />
       )}
     </main>

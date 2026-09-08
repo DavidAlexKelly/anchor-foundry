@@ -24,7 +24,7 @@
  * at all — see `lib/interfaces.ts` for the table.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, Field } from "@/components/dialog";
 import { PROPERTY_TYPES } from "@/components/object-type-editor";
@@ -89,11 +89,33 @@ function InterfaceDialog({
     enabled: editing,
   });
 
-  // Loading an existing shape into the form. Keyed on the fetched object so a
-  // refetch does not overwrite edits in progress with the same values.
+  // Loading an existing shape into the form, **once per opening**.
+  //
+  // §266's bug lived here, and the comment that used to stand in its place had
+  // the wrong suspect: it said this was keyed "on the fetched object so a
+  // refetch does not overwrite edits in progress". A refetch was never the
+  // problem. **The first fetch was.**
+  //
+  // The dialog rendered its form immediately, at `useState`'s defaults —
+  // `status` starts as `"experimental"` — so it looked loaded and was not.
+  // Anyone quick enough to change a field before the request came back had
+  // that change silently overwritten when it did, and Save then wrote the
+  // value they had just replaced. Instrumenting the component made it plain:
+  //
+  //     effect {has: true, already: false, st: experimental}   <- FIRST load…
+  //     save   {status: experimental}                          <- …after the edit
+  //
+  // A person is rarely that quick and a browser test always is, which is why
+  // this surfaced as an intermittent test failure rather than as a bug report.
+  // The fix is below at the render: the form does not exist until its data
+  // does. This ref covers the other window — a refetch landing *after* the
+  // form is populated — which the render gate cannot, and which would reset
+  // edits the same way.
   const loaded = detail.data;
+  const loadedIntoForm = useRef(false);
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || loadedIntoForm.current) return;
+    loadedIntoForm.current = true;
     setDisplayName(loaded.display_name);
     setApiName(loaded.api_name);
     setApiNameTouched(true);
@@ -152,6 +174,18 @@ function InterfaceDialog({
       title={editing ? `Edit ${apiName}` : "New interface"}
       onClose={onClose}
     >
+      {editing && !loaded ? (
+        // **A form nobody can type into yet, rather than one that discards what
+        // they type** (§266). Every field below is bound to state that is still
+        // at its `useState` default until the fetch resolves, so rendering them
+        // offers an interface that looks ready and is not. One line, and the
+        // class of bug it removes is the one where the product agrees with you
+        // and then does something else.
+        <div className="state" data-testid="iface-loading">
+          Loading this interface…
+        </div>
+      ) : (
+      <>
       <p className="field-hint">
         A shape several object types can claim to have. It stores nothing of its
         own — an implementing type keeps its own properties and its own data,
@@ -362,6 +396,8 @@ function InterfaceDialog({
           Save
         </button>
       </div>
+      </>
+      )}
     </Dialog>
   );
 }

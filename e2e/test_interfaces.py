@@ -421,3 +421,47 @@ def test_an_inherited_shape_is_shown_resolved(page, module):
             f"{[p['api_name'] for p in detail['effective_properties']] if detail else None}"
         ) from None
     expect(effective).to_contain_text("tracking_tag")
+
+
+def test_the_editor_offers_nothing_until_it_has_the_interface(page, module):
+    """**The defect §266 found, pinned by making the race deterministic.**
+
+    The dialog used to render its form the moment it opened, at React's initial
+    state — `status` starts as `experimental`, every text field empty. It looked
+    ready and was not. Anyone who changed a field before the fetch came back had
+    that change overwritten when it landed, and Save then wrote back the value
+    they had just replaced: request 200, dialog closed, nothing changed.
+
+    Instrumenting the browser is what named it. Two shapes for one interaction:
+
+        PUT status='active'                      <- worked
+        GET …/interfaces/{id}  PUT status='experimental'   <- silently wrong
+
+    **The race is held open here rather than raced against.** Delaying the
+    detail request by a second turns "sometimes the fetch is slow" into "the
+    fetch is slow", which is the difference between a test that fails one run
+    in five and one that states a rule. Without the delay this passes against
+    the broken build whenever the request happens to be quick — which is most
+    of the time, and is exactly why this shipped.
+    """
+    api_name = declare(page, module, name=f"Slowly {uuid.uuid4().hex[:4]}",
+                       properties=[("Last inspection date", "date", True)])
+
+    def dawdle(route):
+        page.wait_for_timeout(1000)
+        route.continue_()
+
+    page.route("**/interfaces/*", dawdle)
+    try:
+        page.get_by_role("button", name=f"Edit {api_name}").click()
+        # The dialog is open and says so, and there is nothing to type into.
+        expect(page.get_by_test_id("iface-loading")).to_be_visible()
+        expect(page.get_by_test_id("status-select")).to_have_count(0)
+        expect(page.get_by_test_id("iface-save")).to_have_count(0)
+        # And once it arrives, the form is there with the interface in it —
+        # the presence half, without which the assertions above pass against a
+        # dialog that never loads at all.
+        expect(page.get_by_test_id("status-select")).to_be_visible(timeout=15000)
+        expect(page.get_by_test_id("iface-loading")).to_have_count(0)
+    finally:
+        page.unroute("**/interfaces/*")

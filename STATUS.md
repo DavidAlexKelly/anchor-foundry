@@ -4388,6 +4388,173 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 267. The export panel, and the question a green tick stopped answering (this session)
+
+§265 built exports and left every part reachable only by posting JSON — the
+shape §252 named, closed here as it was for notify rules (§258), webhooks
+(§261) and egress policies (§264). p.203 says where it goes: "navigate to the
+Overview page of the source to which you want to export", which is where p.220
+put webhooks and for the same reason.
+
+**The panel's real work is p.192, and it is a consequence nobody planned.**
+Since June 2025 an export with nothing to send is a **success** — which is the
+right call, and it means a history of green ticks no longer says whether the
+destination is current. A run that wrote nothing and a run that wrote
+everything look identical. So two things exist that would not otherwise: every
+row carries `freshness` (*up to date (v7)*, *one version behind*), and the
+history says **"nothing new (v7)"** rather than a second kind of success.
+`full` is exempt from both, because p.195's use for it is a destination that
+empties itself — "behind" is not a state it can be in, and marking it up to
+date would be as wrong as marking it behind.
+
+**Two sentences where one would have been easier.** A source that could be a
+destination but has not been switched on (p.202) is kept in the panel and
+flagged, not filtered out. "Your admin has not enabled this" and "this kind of
+source cannot be a destination" are different problems with different fixes,
+and a picker that merged them would send somebody to ask the wrong question.
+The switch itself is offered right there to whoever can work it, and the
+sentence explains what it is for rather than just labelling a toggle.
+
+**A mirror caught before it could drift.** The picker needs its own copy of
+which source types can be a destination, and the obvious test — compare it to a
+literal — is a copy checked against a copy, which §191 says is two chances to be
+identically wrong. So the *server's* suite reads `export-form.ts` and compares
+the map to `services/exports.DESTINATIONS`. Verified by making them disagree and
+watching it fail, because a drift guard that has never fired is a guard nobody
+has checked.
+
+**A type that had been wrong since §265, found by using it.** `ConnectionOut`
+gained `exports_enabled` on the wire and `packages/types`' `Connection` never
+did — so the browser had been receiving a field TypeScript did not know about.
+Nothing failed, because nothing had read it until this panel. `tsc` named it in
+the first compile.
+
+**37 mutants attacked, 37 caught** — after a report that said seven survivors
+and was wrong about six of them.
+
+**All seven were browser-layer mutants and none of the thirty unit ones
+survived**, and that shape was the tell. A layer that catches *nothing* is not
+a coverage gap; it is a runner that did not run. The dev stack had gone down
+between the last browser run and the harness, so every test **skipped** — and
+`pytest` exits **0** on a skip, which the harness read as "the tests passed
+against the mutant".
+
+**A skip is not a pass, and that is the third member of a family this project
+already knows.** §189 added NO-OP detection because a mutation that never
+landed looks exactly like a survivor; every harness since has refused to count
+a HANG as a catch for the same reason. This is the same mistake one level up,
+and it is worse than either: a hang is slow enough to notice and a no-op is
+reported, while a skipped layer produces a clean, fast, entirely wrong report.
+The harness now refuses a run that reports success without the word `passed` in
+it, and prints `BROKEN LAYER` rather than `SURVIVOR`.
+
+**The rule underneath it:** *before believing a survivor, check that the layer
+that let it through can fail at all.* The cheapest version is what was missing
+here — a runner that treats "nothing ran" as an error. The shape to watch for
+in a report is a whole layer surviving at once, which is almost never what a
+real gap looks like.
+
+**One of the seven was real**, and §257 explains why it hid: nothing checked
+that a non-admin is *not* offered p.202's enable button, because every test in
+the file runs as the dev owner — a workspace admin — so `canAdmin` was true in
+every fixture and the false branch had nothing on the other side of it. §214's
+rule makes it worth fixing rather than shrugging at: the button's only possible
+outcome for that person is a 403, so the explanation stays and the button goes.
+
+Its test then failed for a second, quieter reason: the tests above it enable
+exports and share a project, so by the time it ran the panel had a usable
+destination and correctly did not render the empty state at all. **The
+leftovers were not noise, they were a different valid state** — §122's trap in
+its least obvious form. It has a project of its own now.
+
+**1740 unit tests** (33 new); **31** in `test_exports.py`; **5 browser tests**.
+
+### 266. The form that discarded what you typed (this session)
+
+§265's gate left one red browser test with four possibilities eliminated and
+one mechanism refuted. This is the diagnosis, and the defect it found is a real
+one that a person could hit — not a test artefact.
+
+**The bug.** `InterfaceDialog` rendered its form the moment it opened, at
+React's initial state: `status` starts as `"experimental"`, every text field
+empty. It looked loaded and was not. Anyone who changed a field before the
+detail request came back had that change overwritten when it landed, and Save
+then wrote back the value they had just replaced. **The request returns 200,
+the dialog closes, and nothing has changed** — every visible signal says it
+worked.
+
+**Getting there took three wrong turns, and they are the useful part.**
+
+*First, accumulation.* 977 interfaces in the dev database, 757 of them from
+this one test — the shape of §249's 28,500 canvas apps exactly. Measuring took
+two minutes and killed it: the browser suite's workspace holds 23 of them and
+the listing answers in 40ms. The rest belong to API-suite workspaces the
+browser never opens. **A number that looks alarming in aggregate can be
+irrelevant where it is actually read.**
+
+*Second, a plausible mechanism, tested and refuted.* The effect loading the
+form depended on `detail.data`, under a comment claiming that kept "a refetch
+[from overwriting] edits in progress" — an intent resting on a guarantee
+react-query does not make. Keying it on the interface id instead changed
+nothing. That was the right experiment and the right conclusion; the comment
+had simply named the wrong window.
+
+*Third — and this is the one worth remembering — **the A/B was run against a
+signal too weak to read.*** The failure was intermittent, so "ran the file, still
+red" could not distinguish a bad fix from a good fix landing on a bad run. Two
+attempts were judged that way, and one of them was called a regression on the
+strength of a single run. The fix only became visible once the probe reduced
+the question to a number: fifteen openings, count how many take. **Before
+A/B-testing a fix against an intermittent failure, build something that fails
+most of the time** — otherwise every result is noise wearing a verdict.
+
+**Then instrumenting the component answered it in one run.** Logging inside the
+effect and at the save turned the whole thing into four lines:
+
+```
+<- GET 200                                          (detail resolves…)
+effect {has: true, already: false, st: experimental}   …for the FIRST time
+save   {status: experimental}                          after the edit
+PUT    status='experimental'
+```
+
+`already: false` is the entire diagnosis. This is not a refetch overwriting an
+edit; it is **the first load** overwriting one, because the form was offered
+before it existed. §240 has said "instrument rather than guess" since §198, and
+the cost of not doing it first here was two refuted hypotheses and four
+two-minute file runs.
+
+**The fix is that the form does not exist until its data does** — one ternary,
+and the `useState` defaults stop being a form somebody can type into. The
+loading branch is the honest state the dialog always had and never showed.
+
+**The correct pattern was already in the codebase, one file over.**
+`ScheduledSyncDialog` renders `{schedule.isPending && <div>Loading…</div>}` and
+gates its form on `{schedule.data && …}`; `workshop-app` does the same and keys
+its effect on the version rather than the object. Both were right. The
+interfaces dialog was the single outlier out of three. §263's rule again, from
+the other side: **a pattern applied correctly twice does not apply itself the
+third time**, and nothing in the build compares them.
+
+**The regression test holds the race open rather than racing it.** Delaying the
+detail request by a second turns "sometimes the fetch is slow" into "the fetch
+is slow" — and the test then asserts a rule (while loading, there is nothing to
+type into) instead of hoping for a timing window. It fails against the previous
+build and passes against this one, which was checked both ways rather than
+assumed.
+
+**And a cleanup that could never close, now closes.** p.256 refuses to delete an
+`active` interface, and this test deliberately makes one — so every run that
+died between marking it active and marking it back stranded one permanently.
+There were 31. The sweep now stands an interface down before deleting it, tried
+only after a plain delete has failed so the ordinary path stays one request. The
+branch was verified by building the state by hand (§265's rule): create one,
+make it active, confirm the plain delete is refused, run the sweep, confirm it
+is gone.
+
+**2151 API tests**, 2 skipped; **1707 unit**; **78 worker**; `tsc` clean;
+**12 browser tests** in `test_interfaces.py`, one of them new.
+
 ### 265. Exports, and the four modes we cannot mean (this session)
 
 `data-connection.md`'s build order item 3, server half. `data-connection`
@@ -9334,6 +9501,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard duplicated one level up is invisible to every test, because the level below is still right.** §213's Object View widget asked whether the bound type had a configured view and used the answer to fall back and to withhold a switch that led nowhere. Both rules are correct; both were already enforced by `ObjectView`, which the widget renders. Replacing the widget's answer with a constant changed nothing on screen, so the mutant survived — and the survivor was not a missing test but two functions, a query and eight unit tests that could never have been observed. §195's version of this was a fix that fixed nothing; this is subtler, because a duplicated guard reads like ordinary defensiveness and the behaviour is right either way. **The question to ask a surviving guard is not "which test is missing" but "who else already refuses this"** — and when somebody does, delete rather than test. The tell is a survivor whose code restates a rule you can point at in another file.
 
 - **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
+
+- **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
+
+- **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **Before A/B-testing a fix against an intermittent failure, build something that fails most of the time.** §266 judged two candidate fixes by running a test file and reading pass/fail. The underlying failure happened on roughly four openings in five, so a single run could not tell a bad fix from a good fix landing on a bad run — and one correct fix was discarded as a regression on exactly that evidence. What broke the deadlock was a fifteen-iteration probe reporting a *count*: 1/5 before, 5/5 after, unambiguous in one run. **An intermittent bug has to be turned into a measurement before any change to it can be evaluated**, and the measurement is usually cheaper to build than the second wrong conclusion is to undo.
 
 - **Two lines that no test can kill can need opposite treatments, and the question that separates them is not "can I write a test".** §265 hit both in one file. `not skipped` guarding a version-mark update was redundant, because the `GREATEST` beside it already made the skip case a no-op — deleted. `GREATEST` itself was equally unkillable, because it guards two *overlapping* runs finishing out of order and every test in the suite makes one request at a time — kept, with a comment saying so. The useful question on an unkillable line is **what would have to be true for this to fire**: if the answer is "nothing, another expression already covers it", the line goes; if it is "a state the test harness cannot construct", the line stays and the harness gets a withdrawal note. Concurrency, clock skew and partial failure all produce the second kind, and a project that treats every survivor as a test gap will delete exactly the guards it most needs.
 
