@@ -4388,6 +4388,82 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 270. Export schedules, and a copy that did not have to be one (this session)
+
+p.205, and the last piece `data-connection.md`'s exports row still named as
+owed: §265 built the export, the runner and the manual button, and left the
+trigger. Decision 0016 records the design.
+
+**p.205's scheduling is not an export feature in Foundry**, which is the
+sentence that shapes this. It says to "select Add schedule to open the export
+in Data Lineage… and **configure as you would for any other job**" — the
+platform's build scheduler, reached through lineage, pointed at an export the
+way it is pointed at anything else. The export half of it is one line: exports
+have an Overview page and the schedules that trigger them are listed there.
+
+This platform has no general job scheduler. It has a cron column per
+schedulable resource, and db 0014 established the shape for two of them. So
+this is the **third instance of an existing shape**, not the first use of a
+general one.
+
+**What that costs, and why it is small.** Foundry's schedules can fire on an
+upstream event; a cron fires on the clock whether anything changed or not, so
+the destination is stale for up to one interval. The gap is small because of a
+decision already made: p.192 says an export with nothing new is a **success**,
+and §265 implemented it — so an hourly cron against a daily dataset is
+twenty-three cheap skips and one export, and §267's history says
+`nothing new (v7)` rather than a column of ticks that mean nothing.
+
+**The copy that did not have to be one.** A cron fires in the worker, which is
+where every scheduled thing here runs — and the worker is a separate image with
+no shared Python package, so it already carries trimmed copies of `connectors`,
+`dataset_engine` and `storage`. The instinct was to add two more.
+
+`services/exports.py` imports `re` and `typing` and nothing else. No database,
+no driver, no framework. **So it is the same file**, held byte-for-byte by a
+test, exactly as `egress.py` has been since §263 — and that is the module where
+it matters most, because `should_skip` is the one function whose divergence
+would be invisible: p.192 makes "nothing new" a success, so a worker that
+computed the skip differently would report green whether it stopped writing or
+rewrote every poll. The general form is worth keeping: **before copying a
+module into the worker, check what it imports** — a pure rule can be shared by
+a test, and only what touches a driver has to be duplicated.
+
+What genuinely had to be copied is the runner's orchestration, `export_csv`,
+and three connectors' export methods. Those get the weaker guard — a test that
+asserts the methods exist by name, and the worker's own suite running one
+export end to end — and decision 0016 §2 says so rather than letting the two
+kinds of protection look equivalent.
+
+**p.202's switch is re-read every time the schedule comes due**, not only when
+the export was made. `list_due_exports()` joins `connections.exports_enabled`,
+so turning exports off stops the schedule without touching it. That is decision
+0013 §3's send-time-versus-save-time argument, which exists because two of its
+four original outbound paths had been reasoned about the same way and were
+wrong. The API refuses to *set* a schedule on a disabled source too, with a
+sentence naming who can change it — and the pair for that test is the one that
+matters: **clearing** a schedule still works on a disabled source, because a
+guard refusing every write to the column would trap the row in the state it is
+complaining about.
+
+**A guard that was untestable is not any more.** `export_store.record` guards
+its version mark with `GREATEST`, and §265 recorded that its harness could not
+kill a mutant removing it — every test there makes one request at a time, so
+two runs finishing out of order never happens. That note was right and is now
+out of date: a schedule makes the interleaving reachable, because a manual run
+and a scheduled one can genuinely overlap. The line does not change; the reason
+it exists stopped being hypothetical. §213's shelf-life rule, applied to a
+comment saying "the tests cannot construct this" rather than to one saying "the
+platform cannot express this".
+
+**The worker's test exports what a sync just read**, which is
+`data-connection.md`'s own acceptance line — *"an export writes what a sync of
+the same dataset would read back"* — with nobody pressing anything. A fixture
+that hand-wrote a parquet would have proved the runner works against a file
+this suite invented.
+
+**13 API tests, 9 worker tests**; 2204 API tests passing, 87 worker.
+
 ### 269. The Explore screen, and what a table of rows does not say (this session)
 
 §268 built `preview()` on every connector and left it reachable only by posting
@@ -9768,6 +9844,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A comment that says "nothing could express this" is a claim with a shelf life, and nothing points at it when it expires.** §213 added Workshop p.261's Object View Mode. `object-view.tsx` had opened with "the standard view … cannot be turned off, because … there is no setting that could express 'hide it'" — a sentence that was true about the platform's surfaces, written as though it were true about the code, and copied into `ontology.md`'s parity table where it read as a guarantee. Nothing in the build flagged it: the new setting typechecked, every test passed, and the file went on asserting the opposite of what it now did. The same shape sits in build orders — §213's item had named a dependency that had been satisfied eleven units earlier, because a build order records what was true when written and nothing re-asks. **When a change makes something newly expressible, grep for the words that said it was not**: "cannot", "no way to", "nothing that could", "depends on", plus the noun. It is thirty seconds, and the alternative is a confident sentence that will be believed.
 
 - **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
+
+- **Before copying a module into the worker, look at what it imports — a pure rule can be shared as a file, and only what touches a driver has to be duplicated.** §270 needed the export rule in the worker and the reflex was to port the three functions a scheduled run uses. `services/exports.py` imports `re` and `typing`: no database, no driver, no framework. So it is the *same file*, held byte-for-byte by a test, as `egress.py` has been since §263 — and that is where it mattered most, because `should_skip` is the one function whose divergence would be invisible (p.192 makes "nothing new" a success, so a copy that computed the skip differently would report green whether it stopped writing or rewrote every poll). The general test is cheap: **if a module's imports are all standard library, a copy is a choice rather than a constraint**, and the byte-for-byte guard is strictly stronger than any behavioural comparison of two implementations. What is left over — anything touching a driver — gets the weaker guard, and the difference should be *said* rather than left to look equivalent.
+
+- **A comment saying "the tests cannot construct this" has the same shelf life as one saying "the platform cannot express this", and a new caller is what expires it.** §265 could not kill a mutant removing `GREATEST` from the export version mark, and wrote down why: every test there makes one request at a time, so two runs finishing out of order never occurs. §270 added a schedule, and a manual run and a scheduled one can now genuinely overlap — the note was correct and is now wrong, and nothing pointed at it. §213 recorded the grep for the other kind ("cannot", "no way to", "nothing that could"); this kind reads "the harness cannot", "no test can construct", "does not occur here", and the moment to grep for it is **when a second caller appears for something that had one**.
 
 - **A suite that skips in every environment has never run, and nothing will ever tell you.** §268 wrote three tests into `test_mysql_connector.py` and they passed instantly, because the whole file had skipped since it was written — no MariaDB on any developer machine, and none in CI either, where the `api` job had only a Postgres service. Twenty-odd tests proving the connector interface generalises had never executed, reported as a clean pass every time. This is the skip-is-not-a-pass family one level above §267's: there, a *layer* of a harness had not run and seven mutants came back as phantom survivors; here a *suite* had not run and nothing came back at all, which is worse, because a survivor at least gets looked at. **A skip is only honest where the dependency is genuinely optional, and CI is never that place** — so every suite with an external dependency needs a required-mode switch that turns its skip into a failure, and the environment that sets it needs the dependency. The tell is a test you just wrote passing faster than it possibly could. And the first green run is not the end of it: turning this one on immediately found a test whose fixture assumption had expired and one of mine that assumed a shared table's row count — **a suite that has not run is not merely unproven, it has been rotting**, because everything around it moved and nothing pulled on it.
 

@@ -202,6 +202,28 @@ def run_sql_transform(
         writer.close()
 
 
+def export_csv(parquet_path: str, dest_path: str) -> None:
+    """A dataset version as CSV, for a table export (decision 0016).
+
+    The same function as the API's, because a scheduled export and a manual one
+    must produce the same file - the destination's column list is derived from
+    this CSV's own header (`export_runs._put_rows`), so two writers that
+    disagreed about column order would write every value into the wrong column
+    and report success.
+    """
+    con = duckdb.connect()
+    try:
+        try:
+            con.execute(
+                f"COPY (SELECT * FROM read_parquet('{parquet_path}')) TO '{dest_path}' "
+                "(FORMAT csv, HEADER true)"
+            )
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+    finally:
+        con.close()
+
+
 def merge_incremental(
     existing_parquet: str | None,
     new_rows_parquet: str,

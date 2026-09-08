@@ -8,6 +8,7 @@ from urllib.parse import quote
 from dagster import Definitions, ScheduleDefinition
 
 from .jobs.cleanup import workspace_cleanup
+from .jobs.export_schedules import scheduled_exports
 from .jobs.instance_syncs import scheduled_instance_syncs
 from .jobs.model_runs import scheduled_model_runs
 from .jobs.sync_configs import scheduled_connection_syncs
@@ -32,7 +33,13 @@ def _resolve_database_url() -> str:
     return f"postgresql://{username}:{quote(password, safe='')}@{host}:{port}/{name}?sslmode=require"
 
 defs = Definitions(
-    jobs=[workspace_cleanup, scheduled_model_runs, scheduled_connection_syncs, scheduled_instance_syncs],
+    jobs=[
+        workspace_cleanup,
+        scheduled_model_runs,
+        scheduled_connection_syncs,
+        scheduled_instance_syncs,
+        scheduled_exports,
+    ],
     schedules=[
         ScheduleDefinition(
             job=workspace_cleanup,
@@ -54,6 +61,16 @@ defs = Definitions(
             job=scheduled_instance_syncs,
             cron_schedule="*/5 * * * *",  # every 5 minutes, same cadence as connection syncs
             name="poll_instance_syncs",
+        ),
+        ScheduleDefinition(
+            job=scheduled_exports,
+            # Every 5 minutes, the same cadence as syncs and for the same
+            # reason: this is the *poll*, not the schedule. An export's own
+            # cron decides when it is due; this decides how long after
+            # becoming due it waits, and p.192's skip makes an early poll
+            # cheap - a run with nothing new writes nothing (decision 0016 §1).
+            cron_schedule="*/5 * * * *",
+            name="poll_scheduled_exports",
         ),
     ],
     resources={
