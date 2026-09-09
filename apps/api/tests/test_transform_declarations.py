@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.services.transform_declarations import (  # noqa: E402
     DeclarationError,
+    _block_patterns,
     read,
     read_repository,
 )
@@ -268,11 +269,18 @@ def test_a_file_declaring_both_ways_is_refused_naming_both_forms() -> None:
     source = (
         "# output: daily_orders\n"
         "@transform(output='daily_orders')\n"
-        "def build(): ...\n"
+        "def build_the_daily_totals(): ...\n"
     )
     with pytest.raises(DeclarationError) as caught:
         read("x.py", source)
-    assert "@transform" in str(caught.value) and "comment" in str(caught.value)
+    message = str(caught.value)
+    assert "@transform" in message and "comment" in message
+    # **And which function carries the decorator.** The fix is to delete one of
+    # the two declarations, so a message naming only the forms leaves the author
+    # scrolling a file to find the decorated one. The function is deliberately
+    # not called `build` here: a name that short would appear in this assertion
+    # by accident out of almost any message.
+    assert "build_the_daily_totals" in message, message
 
 
 def test_a_stray_input_comment_beside_a_decorator_is_just_a_comment() -> None:
@@ -326,3 +334,33 @@ def test_a_helper_with_no_declaration_is_still_not_an_error() -> None:
     treated "no comment header" as a refusal would make every helper a failure.
     """
     assert read("src/helpers.py", "def clean(df):\n    return df\n") is None
+
+
+def test_a_comment_prefix_is_matched_literally_and_not_as_a_pattern() -> None:
+    """**§265's move: build the divergence the guard defends against.**
+
+    `_block_patterns` escapes its prefix, and against the two prefixes that
+    exist — `--` and `#` — that call does nothing, because neither holds a
+    regex metacharacter. So a mutant removing the escape survives every test
+    that goes through `read`, and §264's rule would say to delete a line that
+    cannot fail.
+
+    It can fail. `COMMENT_PREFIX` is a table meant to gain a row when a third
+    language arrives, and a prefix like `/*` contains one. Unescaped, `/*`
+    means "zero or more slashes", so the pattern would match a line with **no
+    prefix at all** — every `output:` comment anywhere in a leading block, in a
+    language that had not opted in. That is constructible by hand today, so it
+    is tested rather than deleted or excused.
+
+    Tests the private factory deliberately: the hazard is in the pattern, and
+    routing through `read` would need a fourth language to exist first.
+    """
+    pattern_output, pattern_input = _block_patterns("/*")
+
+    assert pattern_output.match("/* output: daily_orders")
+    assert pattern_input.match("/* input: orders = raw_orders")
+
+    # The line the unescaped version would wrongly accept: no prefix at all,
+    # because `/*` would have meant "zero or more slashes".
+    assert pattern_output.match(" output: daily_orders") is None
+    assert pattern_input.match(" input: orders = raw_orders") is None
