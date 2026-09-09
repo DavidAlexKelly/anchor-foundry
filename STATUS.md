@@ -4388,6 +4388,137 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 275. The adoption screen, and the edit it should never have offered (this session)
+
+§274's other half, and the half that turned out to carry a defect of its own.
+
+**`ModelOut` has declared `source_repo_id` since §94 and the shared `Model`
+type did not.** So no screen could read it — and the Models page showed an
+editable body and an enabled Save for *every* model, including the ones
+`services/models.py` refuses with a 409 naming db 0038. A builder editing a
+repository-authored transform typed into a box, pressed a button, and got a
+refusal.
+
+§214's shape — a control that looks like it works — and **§191's mirrored-copy
+problem in its quietest form**. §191's version was two lists that agreed and
+were identically wrong; this is worse to notice, because the two copies did not
+disagree at all. One of them was simply *missing a row*, so nothing looked
+wrong from either side and `tsc` had nothing to object to. A field can be on
+the wire, declared by the server, documented in the route, and still invisible
+to every screen in the product.
+
+What the page does now:
+
+* the body is read-only for a repository-authored transform, and **the reason
+  names the file** — the reader's next move is to open it, and a message that
+  only said "read-only" reads as a permission problem and sends them to an
+  administrator;
+* trigger, schedule and health policy stay editable, because `models.update`
+  gates only what a transform *computes* — gating the rest would make a
+  review-required project unable to pause a job, which is the reason that line
+  is drawn where it is in the service;
+* **Move into a repository**, offered exactly once, because adoption is
+  one-way;
+* a project with no repositories says so rather than showing an empty picker,
+  which reads as broken and whose remedy is on another screen.
+
+**The path box leaves its default empty, and that is a decision rather than
+laziness.** The server derives a path by running the model's name through
+`datasets.slugify`; deriving it here too would be a second copy of that rule,
+and the disagreement §191 describes would show up as a file written where the
+screen did not predict. So an empty box means "you choose", the server answers,
+and the result is displayed. What the browser *can* check without a second copy
+is the extension against the language, because publishing reads the language
+off the path.
+
+**And one locator lesson worth keeping.** The first browser test waited on
+`.data-grid tbody tr`, which is the *history dialog's* table — this screen's
+list is `.table`. The failure dump showed the row rendering perfectly while the
+assertion timed out: §271's family exactly, a message that describes the wrong
+thing. Ten unit tests hold the rules; three browser tests hold what the page
+offers, which is the part a unit test cannot see.
+
+### 274. Adoption — a model becomes a file (this session)
+
+The second third of **B.1**. §273 gave a script a way to declare; this is the
+operation that uses it: take a transform that has never been in a repository,
+write it into one, and point the model at the file. `transform_publish.py` was
+the direction that already existed — a file becomes a model. This is the one
+that did not, and it is what B.1's deletion is blocked on: delete
+`code/page.tsx` and every model that has never been published loses its only
+editor, and in a review-required project loses every editor.
+
+**What adoption is not, and why it is not review-gated.** The code is copied
+through byte for byte and the declaration is written from what the model
+already says it produces and reads. Nothing about what runs changes. The gate
+exists for changes to what runs; this is a change to *where the definition is
+edited from*, which is an editor's decision.
+
+**`render` lives beside `read`, and the placement is the unit's main design
+choice.** It is the inverse function — the writer of the syntax that module
+reads — and §272 was precisely two things that had to agree kept in different
+files and each verified alone. A writer over there and a reader over here is
+that shape, and it drifts the first time either changes. So: same module, and
+`test_a_declaration_survives_being_written_and_read_back` parameterised over
+both languages and five shapes, rather than a promise that they match.
+
+**The refusals are the feature, and each one was measured before it was
+written.** Model and dataset names are constrained only by length (db 0001:
+1–200 characters, any of them), so a name can exist that the declaration syntax
+cannot write down — and the failures are not equally loud:
+
+* a space in the **output** name raises *"this file declares inputs but no
+  output"*, which sends the author to look at their inputs;
+* a space in an input's **dataset** name raises **nothing at all** — the parse
+  succeeds with `inputs={}`, so the file publishes as a transform that reads
+  nothing and fails much later against missing inputs, or simply produces a
+  wrong answer;
+* an alias that is not an identifier is lost the same silent way.
+
+So the check happens before the file exists, names the offending value, and
+reports **every** reason rather than the first — two unwritable names would
+otherwise be two round trips through the same refusal, the second arriving
+after the author thinks they have finished.
+
+**And the round trip is the backstop, compared by exact equality.** The reader
+takes the leading comment block only, so a model whose own code begins with
+comments produces a longer block than the header alone, and a `-- input: x = y`
+sitting in those comments is *absorbed*: the parse succeeds and the transform
+silently gains an input the model never had. A containment check passes that.
+Equality does not. Expressibility is a claim about a regex and the round trip
+is a claim about the actual reader, and §272's whole lesson is that two things
+which ought to agree get checked against each other rather than each verified
+alone.
+
+**An alias is a variable name, which is why its rule is stricter than a
+name's.** The sandbox does `_namespace[alias] = <DataFrame>`, so the alias
+becomes a module-level name the file refers to. `[A-Za-z0-9_]+` is therefore
+what a usable Python name is rather than an arbitrary restriction — and it
+means a directly-authored Python model with a space in an alias is **broken
+today at run time**, with nothing catching it earlier, since the route only
+length-checks and the column is `text DEFAULT ''`. Adoption's check does double
+duty there. Whether the same check belongs at model-save time is adjacent to
+B.1 rather than part of it, so it is named here and not built.
+
+**One transaction, and one way.** The commit and the model's pointer land
+together, because a model naming a path no commit holds has no editor at all —
+the state this unit exists to remove. And nothing hands a model back to direct
+editing: that is the intended end state rather than a gap, because B.1 removes
+direct editing, so a "release" would hand the model back to a surface being
+deleted. Worth knowing alongside it: `transform_publish.orphaned()` reports
+models whose file a later commit dropped and deliberately does not delete them,
+so such a model is stranded until the file returns — pre-existing, recoverable
+by restoring the file, and named rather than quietly closed with a feature that
+contradicts the plan.
+
+**The file is not byte-identical to `models.code`, and should not be.** It is
+the code with a declaration above it, so the publish plan honestly reports a
+change; publishing writes the header in as a version and the two agree from
+then on. The first version of this unit's test asserted `unchanged is True` and
+was wrong about the design rather than finding a bug — the test now publishes
+and asserts the outcome, which is the stronger claim anyway: one model
+throughout, and the code below the header still exactly what was written.
+
 ### 273. How a script declares (this session)
 
 Decision 0017, and the first third of **B.1** — "models live in repositories",
@@ -4534,6 +4665,43 @@ first of two is not one-per-file or many-per-file, it is one-per-file with the
 error left out.
 
 Harness: **15/15**, no survivors, no no-ops.
+
+**One transient worth naming, because it is not the flake and looks like it.**
+A later browser run went red before a single test ran: `playwright install
+--with-deps` runs `apt-get update`, and Google's Chrome repository index was
+regenerated between the download and the hash check (`Last modification
+09:41`, `Release file created at 17:16`) — `E: Failed to fetch … Hash Sum
+mismatch`. Upstream, not ours, and logged rather than fixed on one occurrence,
+which is the same treatment §244 gave its unexplained migration transient.
+
+Small validation in it: the diagnostics behaved correctly under a failure they
+were not designed for. `tail` said the server logs did not exist, because the
+stack never came up, and the artifact step said no files were found. Neither
+pretended to have something.
+
+**The flake this postscript left open is now found, and the four diagnostic
+fixes are what found it.** `test_an_insert_button_writes_the_reference_name_not_its_label`,
+one failure in 807, roughly one CI run in four and never locally. It clicks the
+subject's *Insert* button and then fills the **body** — and `insert` in
+`notify-rule-fields.tsx` schedules a `requestAnimationFrame` that focuses the
+field it just wrote to, so the sentence can be continued. Playwright's `fill`
+focuses its target and *then* types; when that frame fires in between, focus is
+back on the subject and the body's text is typed there. The failure reads
+`For {{{recipient}}}By ` and blames the insert button, which had put exactly
+the right thing in exactly the right place.
+
+**Confirmed by observation rather than by argument** (§266: a plausible
+mechanism is not a diagnosis). Ten runs of the original ordering passed
+locally, and six more at 20× CPU throttling — so the *measurement* never
+reproduced. What settled it was reading `document.activeElement` around the
+click: `rule-2-body` before, `rule-2-subject` immediately after and 300ms
+later. The focus move is deterministic; only whether it lands inside `fill` is
+not. A mechanism can be proved without reproducing the failure, and here that
+was the only route left.
+
+The product is right and the test was wrong, which is worth saying because the
+opposite is the usual finding. Waiting for the insert to have landed before
+touching another field is the fix, and it is an assertion worth making anyway.
 
 **A postscript, because it is an open item and not a tidy one.** §272's PR went
 red on the browser job, and it was not §272: the commit before it carries every
@@ -10115,6 +10283,20 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **A mechanism can be proved without reproducing the failure, and sometimes that is the only route.** §266's rule is to turn an intermittent bug into a measurement before evaluating any fix, and the browser flake refused: ten runs of the failing ordering passed locally, six more at 20× CPU throttling. What settled it was not a better reproduction but a *direct observation of the intermediate state* — reading `document.activeElement` around the click showed focus moving from the body to the subject, deterministically, every time. The race is only whether that move lands inside Playwright's `fill`; the move itself is not a race at all. **When a failure will not reproduce, look for the deterministic half of it** — the state change that always happens, of which the failure is one interleaving. That is testable on a machine where the bug never fires.
+
+- **The usual finding is that the product is wrong; occasionally the test is, and the tell is that the product's behaviour is deliberate and documented.** The flake blamed an Insert button that had put exactly the right text in exactly the right place. The `requestAnimationFrame` that made it look guilty is three lines of comment explaining why the caret goes back where the author was typing. Before changing product code to make a test pass, read what the code says it is doing — if it is doing that, on purpose, with a reason, the test is the thing that is wrong.
+
+- **A diagnostic competes for the end of the log with things you do not control.** §271 fixed this repo's browser-failure step from printing *nothing*; §272 shortened it from printing *too much*; and §275 still could not read one, because GitHub prints the **service container's** log after every job's own steps — and Postgres was logging `FATAL: role "root" does not exist` every five seconds, roughly three hundred lines, because `pg_isready` with no `-U` defaults to the invoking OS user. The probe worked the whole time (it reports "accepting connections" either way), which is exactly why nobody looked at it. **Noise that is harmless to the thing it comes from is not harmless to the log**, and the last few kilobytes of a CI log are a shared resource: anything that writes there on a timer eventually owns it. Three fixes to one diagnostic, and only the third was about something the workflow itself did not print.
+
+- **A field can be on the wire, declared by the server, and still invisible to every screen — and nothing type-checks that gap.** §275: `ModelOut` has carried `source_repo_id` since §94; the shared `Model` interface never gained it. So the Models page offered an edit the server refuses, for a year, and no tool could complain: `tsc` sees a type that is internally consistent, the API sees a field it correctly returns, and the two are never compared. This is **§191's mirrored-copies problem in its worst-to-notice form** — there the two copies agreed and were identically wrong; here they do not disagree at all, one is just *shorter*. When a server-side response model gains a field, the question is not "does the type still compile" but **"which screens should now be different, and are they?"** — and until a generator or a drift test answers it, adding a field to a response model means grepping for the screens that ought to care.
+
+- **A reader and a writer of the same syntax belong in one file, and the round trip belongs in the test suite.** §274 put `render` next to `read` rather than in the adoption service that calls it. The alternative is the exact shape §272 had just spent a unit on: two things that must agree, kept apart, each thoroughly tested against itself and never against the other. The property — `read(render(x)) == x`, over a table, in every language the syntax supports — is what makes them agree; a comment saying they are inverses is what makes them *look* like they agree. This applies to every encode/decode pair a codebase owns: serialisers, URL builders, path encoders, the lot.
+
+- **Two validators for the same value are not the same validator, and the looser one loses data quietly.** §274 needed names writable into a declaration, and there are two rules, not one: a dataset name may hold dots and hyphens, an *alias* may not — because an alias becomes a module-level variable the transform refers to. Collapsing them would have been the obvious tidy-up and it would have produced files whose inputs silently vanish. The tell that they are genuinely different rules is that each one has a *reason* rooted in what the value is used for; when two validators differ only by accident of history, that is a different finding and the fix is the opposite one.
+
+- **Check what a value can be written as before writing it, not after reading it back.** §274 has both, deliberately, and they answer different questions: the up-front check knows *which name* is unwritable and can say so, while the round trip only knows the file came back wrong — and its natural message blames whatever the reader tripped over, which in the measured cases was the author's inputs when the problem was the output, or nothing at all. **A validation whose failure message points at the wrong thing is worse than one layer further out that points at the right thing**, and the round trip earns its place as a backstop rather than as the primary check.
 
 - **"Prints nothing" and "prints a hundred lines of the wrong thing" are the same bug wearing different clothes.** §271 fixed the browser job's failure diagnostic, which had emitted `tail: option used in invalid context -- 1` and nothing else for ten red runs. §272 then hit a red run it *still* could not diagnose: the fixed step printed a hundred very long Next.js request lines after pytest finished, GitHub's log API truncates by size rather than by line, and the tracebacks and summary fell outside anything retrievable — with the raw log on a host the egress policy blocks, so there was no second route either. **A diagnostic is only as good as the window it will be read through**, and that window is usually the last few kilobytes of something. Put the identifying line — the failing test's name, the failing assertion — closest to the end, and keep the context that follows it short enough not to push it out.
 

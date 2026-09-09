@@ -1053,9 +1053,32 @@ export interface Model {
   input_health_policy: "ignore" | "warn" | "block";
   last_run_status: string | null;
   last_run_at: string | null;
+  /** The repository this transform is authored in, or null when it is authored
+   *  directly (db 0038). **The API has declared both of these since §94 and
+   *  this interface did not**, so no screen could read them — which is why the
+   *  Models page went on offering a Save the server refuses for every
+   *  repository-authored model (§275). A field present on the wire and absent
+   *  from the type is invisible in exactly the way that produces a control
+   *  that looks like it works. */
+  source_repo_id: string | null;
+  /** Repository-relative path of the file this transform is published from.
+   *  Null exactly when `source_repo_id` is (db 0038 holds them together). */
+  source_path: string | null;
   inputs: ModelInput[];
   created_at: string;
   updated_at: string;
+}
+
+/** What adoption did (§274): the file it wrote and the commit that holds it. */
+export interface ModelAdoption {
+  model_id: string;
+  repository_id: string;
+  branch: string;
+  /** Where the file landed — **read from here rather than predicted**, because
+   *  the server derives it when the caller does not give one, and a browser
+   *  that guessed would be a second copy of a rule (§191). */
+  path: string;
+  commit_id: string;
 }
 
 /** One node in a project's pipeline graph. Dataset-only and model-only

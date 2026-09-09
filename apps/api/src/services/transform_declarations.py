@@ -13,6 +13,14 @@ Only literals are read. A declaration assembled from a variable or built by
 calling a function is **refused** rather than guessed at: a lineage graph that
 is right most of the time is worse than one that says it cannot read a file,
 because nobody checks the edges they cannot see.
+
+**`render` lives here too, beside `read`, and that placement is the point**
+(§274). It is the inverse function - the writer of the syntax this module
+reads - and §272 was exactly two things that had to agree being kept in
+different files and each verified alone. A writer over there and a reader over
+here is that shape, and it drifts the first time either changes. Same module,
+and `test_a_declaration_survives_being_written_and_read_back` is the property
+that holds them together rather than a promise that they match.
 """
 from __future__ import annotations
 
@@ -62,6 +70,86 @@ class Declaration:
     inputs: dict[str, str] = field(default_factory=dict)
     # Where it was found, so a refusal or a lineage edge can point at a line.
     line: int = 0
+
+
+# What a declaration can *say*, as opposed to what a name may *be*. Model and
+# dataset names are constrained only by length (db 0001: 1-200 characters, any
+# of them), so a name can exist that this syntax cannot write down (§274).
+#
+# **The two are not the same rule, and conflating them loses data silently.**
+# A name accepts dots and hyphens; an alias does not, because an alias becomes
+# a *module-level variable name* in the Python sandbox - `_namespace[alias] =
+# <DataFrame>` - so it has to be something a file can refer to. Measured
+# against the reader: an input whose dataset name holds a space does not fail,
+# it *vanishes*, and the file publishes as a transform that reads nothing.
+_WRITABLE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+_WRITABLE_ALIAS = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def unwritable(output: str, inputs: dict[str, str]) -> list[str]:
+    """Why these names cannot be declared — the output first, then the inputs
+    by alias — or an empty list.
+
+    Separate from `render` so a caller can ask before it acts - the adoption
+    screen wants to say "this model cannot move yet, and here is why" without
+    writing a file first.
+
+    **Every reason, not the first one.** A model with two unwritable names
+    would otherwise be two round trips through the same refusal, and the second
+    one arrives after the author thinks they have finished.
+    """
+    problems: list[str] = []
+    if not _WRITABLE_NAME.match(output):
+        problems.append(
+            f"the name {output!r} cannot be written in a declaration - it may "
+            "hold letters, digits, and _ . - only"
+        )
+    for alias, dataset in sorted(inputs.items()):
+        if not _WRITABLE_ALIAS.match(alias):
+            problems.append(
+                f"the input alias {alias!r} is not a usable name - an alias "
+                "becomes a variable the transform refers to, so it may hold "
+                "letters, digits and _ only"
+            )
+        if not _WRITABLE_NAME.match(dataset):
+            problems.append(
+                f"the dataset {dataset!r} cannot be written in a declaration - "
+                "it may hold letters, digits, and _ . - only"
+            )
+    return problems
+
+
+class UnwritableDeclaration(DeclarationError):
+    """A declaration that cannot be written, with each reason kept separately.
+
+    A subclass so a caller can tell "these names do not fit the syntax" from
+    "this file says something contradictory" - the first is fixed by renaming
+    and the second by editing, and a screen wants to offer different things.
+    """
+
+    def __init__(self, problems: list[str]) -> None:
+        super().__init__("; ".join(problems))
+        self.problems = problems
+
+
+def render(output: str, inputs: dict[str, str], *, prefix: str) -> str:
+    """The declaration block for these names — the inverse of `read`.
+
+    Refuses rather than writing something the reader would misread. That is not
+    caution: measured against the reader, an input whose dataset name holds a
+    space **parses successfully with no inputs at all**, so the file would
+    publish as a transform that reads nothing and fail much later as a run
+    against missing inputs, or simply produce a wrong answer.
+
+    Inputs are written in sorted order so that adopting the same model twice
+    produces the same bytes, and a diff of an unchanged declaration is empty.
+    """
+    problems = unwritable(output, inputs)
+    if problems:
+        raise UnwritableDeclaration(problems)
+    lines = [f"{prefix} output: {output}"]
+    lines += [f"{prefix} input: {alias} = {inputs[alias]}" for alias in sorted(inputs)]
+    return "\n".join(lines) + "\n"
 
 
 def read(path: str, source: str) -> Declaration | None:

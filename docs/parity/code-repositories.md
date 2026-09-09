@@ -200,7 +200,7 @@ Foundry supports several; two matter here (p.3):
 
 ## 9. Build order
 
-1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist.
+1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **Was blocked; the blocker is now two-thirds cleared.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file; what remains before the deletion is moving typed-changes proposal creation into the application.
 2. **Draft persistence**, then **multi-file tabs**.
 3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
 4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful.

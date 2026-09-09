@@ -205,6 +205,50 @@ def api(token: str) -> Api:
     print(f"\ncleanup: removed {removed} rows, left {left} that refused deletion")
 
 
+# ---- what a failure leaves behind (§275) -------------------------------------
+#: Where a failing test's screenshot and DOM go. Read by the workflow, which
+#: uploads it as an artifact when the job is red.
+FAILURE_DIR = os.environ.get("ANCHOR_E2E_FAILURES", "/tmp/anchor-e2e-failures")
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    """Hang each phase's result on the item, so a fixture's teardown can ask
+    whether the test it was serving actually failed.
+
+    pytest gives a fixture no way to know this on its own, and the alternative
+    - capturing on every test - is what makes an artefact nobody looks at.
+    """
+    outcome = yield
+    setattr(item, f"report_{outcome.get_result().when}", outcome.get_result())
+
+
+def _capture_failure(page, name: str) -> None:
+    """A screenshot and the DOM, and only when something went wrong.
+
+    **Written because three separate investigations could not say which test
+    was failing.** §271 fixed this suite's CI diagnostic from printing nothing,
+    §272 from printing too much, and §275 found the runner appending three
+    hundred lines of Postgres healthcheck noise underneath either. A failure
+    that leaves an image behind does not depend on a log window at all.
+
+    Deliberately not a Playwright trace: `snapshots=True` records the DOM on
+    every action, and this suite runs eight hundred tests. The cost of a
+    diagnostic has to be paid on the failing run, not on all of them.
+    """
+    try:
+        os.makedirs(FAILURE_DIR, exist_ok=True)
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)[:120]
+        page.screenshot(path=os.path.join(FAILURE_DIR, f"{safe}.png"), full_page=True)
+        with open(os.path.join(FAILURE_DIR, f"{safe}.html"), "w") as f:
+            f.write(page.content())
+    except Exception:
+        # A page that has been closed, or a browser that died with the test,
+        # cannot be photographed - and a diagnostic that turns a test failure
+        # into a fixture error would hide the thing it exists to explain.
+        pass
+
+
 @pytest.fixture(scope="session")
 def browser():
     from playwright.sync_api import sync_playwright
@@ -218,7 +262,7 @@ def browser():
 
 
 @pytest.fixture
-def page(browser, token: str):
+def page(browser, token: str, request):
     """A signed-in page, and a failure on any console error.
 
     The console check is not decoration. A React error boundary catches a
@@ -239,6 +283,9 @@ def page(browser, token: str):
     opened.wait_for_url(lambda url: "/login" not in url, timeout=FIRST_RENDER_MS)
     opened.console_errors = errors  # type: ignore[attr-defined]
     yield opened
+    report = getattr(request.node, "report_call", None)
+    if report is not None and report.failed:
+        _capture_failure(opened, request.node.name)
     context.close()
 
 

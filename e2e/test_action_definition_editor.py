@@ -606,10 +606,28 @@ def test_an_insert_button_writes_the_reference_name_not_its_label(page, api):
     page.get_by_label(f"Notify {me['email']}").check()
     page.get_by_test_id("rule-2-subject").fill("For ")
     page.get_by_test_id("rule-2-subject-insert-recipient").click()
+    # **Wait for the insert to land before touching another field**, and this
+    # is a real race rather than caution. `insert` in `notify-rule-fields.tsx`
+    # schedules a `requestAnimationFrame` that focuses the field it just wrote
+    # to, so the sentence can be continued - correct, deliberate, and
+    # documented there. Playwright's `fill` focuses its target and *then*
+    # types; when that frame fires in between, focus is back on the subject and
+    # the body's text is typed into the subject instead. The failure reads
+    # `For {{{recipient}}}By ` and blames the insert button, which put exactly
+    # the right thing in exactly the right place.
+    #
+    # One run in about four, and only on CI - a slower machine widens the gap
+    # between `fill`'s focus and its typing. Found by the screenshot-on-failure
+    # this suite gained the same day; three earlier attempts could not even
+    # name it.
+    expect(page.get_by_test_id("rule-2-subject")).to_have_value("For {{{recipient}}}")
+
     page.get_by_test_id("rule-2-body").fill("By ")
     page.get_by_test_id("rule-2-body-insert-current_user").click()
-    expect(page.get_by_test_id("rule-2-subject")).to_have_value("For {{{recipient}}}")
     expect(page.get_by_test_id("rule-2-body")).to_have_value("By {{{current_user}}}")
+    # Re-asserted after the second insert: the subject must still say what it
+    # said, which is what fails if the two fields ever share a write again.
+    expect(page.get_by_test_id("rule-2-subject")).to_have_value("For {{{recipient}}}")
     # And the form is happy with them, because p.101's two are references
     # without being parameters.
     expect(page.get_by_test_id("rule-2-problem")).to_have_count(0)

@@ -29,6 +29,7 @@ from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import models as model_service
 from ..services import pipeline as pipeline_service
+from ..services import transform_adoption as adoption_service
 from ..services.dataset_engine import DatasetEngineError
 
 router = APIRouter(
@@ -541,3 +542,72 @@ async def pipeline_graph(
         return PipelineGraph(
             **await pipeline_service.project_graph(conn, access.project_id, focus=focus)
         )
+
+
+# ---- moving a transform into a repository (B.1; §274) ------------------------
+class AdoptIn(BaseModel):
+    repository_id: UUID
+    branch: str = Field(default="main", min_length=1, max_length=200)
+    #: Omitted means "derive one from the model's name". Offered rather than
+    #: required because a repository with a layout of its own should not have to
+    #: accept `src/`.
+    path: str | None = Field(default=None, min_length=1, max_length=1000)
+
+
+class AdoptOut(BaseModel):
+    model_id: UUID
+    repository_id: UUID
+    branch: str
+    path: str
+    commit_id: UUID
+
+
+@router.post("/{model_id}/adopt", response_model=AdoptOut)
+async def adopt_into_repository(
+    model_id: UUID,
+    body: AdoptIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> AdoptOut:
+    """Write this transform into a repository and author it from there.
+
+    **Editor, not the review gate.** Adoption copies the code through byte for
+    byte and writes a declaration from what the model already says it produces
+    and reads, so nothing about what runs changes - and the gate exists for
+    changes to what runs (`services/models.py`). What changes is where the
+    definition is edited from, which is an editor's decision.
+
+    One transaction: the commit and the model's pointer land together, because
+    a model naming a path no commit holds has no editor at all - the state B.1
+    exists to remove.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        result = await adoption_service.adopt(
+            conn,
+            project_id=access.project_id,
+            workspace_id=access.workspace_id,
+            model_id=model_id,
+            repo_id=body.repository_id,
+            branch=body.branch,
+            path=body.path,
+            actor_id=access.auth.user_id,
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="model.adopt",
+            resource_type="model",
+            resource_id=model_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={
+                "repository_id": result["repository_id"],
+                "branch": result["branch"],
+                "path": result["path"],
+                "commit_id": result["commit_id"],
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        return AdoptOut(**result)

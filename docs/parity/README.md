@@ -134,6 +134,22 @@ The order that follows: **B.1 first, then the deletion.** Until then the Code
 pillar keeps its editor, and the honest description of it is not "a duplicate"
 but "the only authoring surface for transforms that are not yet files".
 
+**Progress, and the blocker re-verified rather than inherited (§272–§274).**
+Before building on this paragraph its central claim was checked: `.propose(` is
+called in exactly two places, and `repository-app.tsx:432` only ever sends the
+`source_repo_id`/`source_commit_id` shape, so `code/page.tsx:179` really is the
+sole creator of typed-changes proposals. The paragraph holds.
+
+Asking what a model *becomes* in a repository then turned up two defects on the
+way, both merged: the Python transform shape decision 0004 prints could not run
+at all (§272), and a script — which is what every model authored in the Models
+editor is — had no way to declare, so it could not live in a repository under
+any name (§273). §274 built **adoption**: a model becomes a file, one
+transaction, with the declaration written from what the model already says.
+
+What remains before the deletion is moving typed-changes proposal creation into
+the application, so the two shapes of proposal live in one place.
+
 #### Stage 2 progress
 
 - **External IDs and the module interface** — done (`STATUS.md` §116). A
