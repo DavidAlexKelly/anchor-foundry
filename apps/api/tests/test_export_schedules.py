@@ -400,23 +400,23 @@ def test_a_schedule_cannot_be_set_on_another_project_s_export(
     assert still["schedule"] is None
 
 
-def test_the_store_refuses_a_schedule_for_the_wrong_project(
+def test_the_store_stages_no_write_for_the_wrong_project(
     client: TestClient, fx: Fixture, warehouse: dict
 ) -> None:
-    """**The route's own guard hides this one, so the test goes at the store.**
+    """**Two guards, one masking the other, and this is the one that matters.**
 
-    `set_schedule` scopes its UPDATE by `project_id`, and §270's harness could
-    not kill a mutant removing it: the route calls `export_store.get` first,
-    which is scoped too and raises before the UPDATE is reached. So the clause
-    is unreachable *through that caller* — which is not the same as unnecessary,
-    because a store function that trusted its caller to have checked would be
-    one the next caller gets wrong.
+    `set_schedule` scopes its UPDATE by `project_id` and then returns
+    `get(conn, project_id, export_id)`, which is scoped as well — so a caller
+    passing the wrong project gets `NotFoundError` either way and §270's
+    harness could not kill a mutant removing the UPDATE's clause. The trailing
+    `get` is there to return the joined shape (connection name, dataset name),
+    not to be a guard; its scoping is incidental, and relying on it would mean
+    the *write* still happens and survives only because a later line raises
+    before anything commits.
 
-    §213's question is "who else already refuses this", and the answer here is
-    "this caller, today". That is the weaker form of the answer, and the
-    response is §268's: the guard belongs to the store, so the test calls the
-    store. `list_due_exports` got the same treatment in this unit for the same
-    reason.
+    §265's rule is to ask whether the state a guard defends can be built by
+    hand. It can: catch the refusal, commit anyway, and look. With the clause
+    the row is untouched; without it, a cross-project schedule is sitting there.
     """
     import asyncio
     from uuid import UUID
@@ -434,13 +434,32 @@ def test_the_store_refuses_a_schedule_for_the_wrong_project(
     )
     assert other.status_code == 201, other.text
 
-    async def wrong_project() -> None:
+    async def attempt_and_commit() -> None:
         async with user_connection(UUID(str(fx.editor))) as conn:
-            await export_store.set_schedule(
-                conn, UUID(other.json()["id"]), UUID(export["id"]),
-                schedule="0 3 * * *", next_run_at=None,
-            )
+            try:
+                await export_store.set_schedule(
+                    conn, UUID(other.json()["id"]), UUID(export["id"]),
+                    schedule="0 3 * * *", next_run_at=None,
+                )
+            except NotFoundError:
+                # **Committed on purpose.** `NotFoundError` is raised by this
+                # codebase rather than by the driver, so the transaction is
+                # still usable — and committing is what makes the difference
+                # between "the write was refused" and "the write was staged and
+                # happened to be discarded" observable at all.
+                await conn.commit()
 
+    asyncio.run(attempt_and_commit())
+
+    still = client.get(
+        f"{base(fx)}/exports/{export['id']}", headers=hdr(fx.editor_sub)
+    ).json()
+    assert still["schedule"] is None, (
+        "a cross-project call staged a write: the UPDATE's project_id clause is "
+        "what stops it, and the NotFoundError afterwards only hides it"
+    )
+
+    # The pair, so this cannot pass against a store that writes nothing.
     async def right_project() -> dict:
         async with user_connection(UUID(str(fx.editor))) as conn:
             row = await export_store.set_schedule(
@@ -450,9 +469,4 @@ def test_the_store_refuses_a_schedule_for_the_wrong_project(
             await conn.commit()
         return row
 
-    with pytest.raises(NotFoundError):
-        asyncio.run(wrong_project())
-
-    # The pair: the same call with the right project does write, so this is not
-    # passing against a function that refuses everything.
     assert asyncio.run(right_project())["schedule"] == "0 4 * * *"
