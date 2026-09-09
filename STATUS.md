@@ -4388,6 +4388,82 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 271. Twenty-eight failures nobody had read (this session)
+
+Not a unit. `docs/parity/README.md`'s Stage 0 row says "All three jobs now
+green. Every 'at parity' claim below now means something", and that sentence
+had stopped being true **ten merges earlier**. The browser job was red on
+`main` at every one of them, with the same 28 failures each time, and every
+one of those merges was made by reading three green ticks and a fourth that
+had been red long enough to look like scenery.
+
+**The first thing to fix was not a test.** The workflow's failure step is
+`tail -100 api.log web.log`, and with two files GNU tail refuses the
+obsolescent form: `tail: option used in invalid context -- 1`. So the one step
+whose entire job is to explain a red run had printed that message and nothing
+else on every red run since it was written. Ten failures produced zero server
+logs. It is `-n 100` now.
+
+**The first diagnosis was wrong, and the way it was wrong is the useful part.**
+The failures all looked like races, so the hypothesis was that an ontology
+request was arriving late — and the probe for it delayed `GET
+/object-types/**` by two seconds and ran the suite. Control and delayed both
+passed. That is not a weak signal, it is a *refutation*: the tests already wait
+longer than the delay, so lateness alone cannot be the mechanism. What actually
+reproduced it was **a fresh database**. The dev Postgres here has been
+accumulating since §248 — 28,500 modules — and its ontology queries are warm
+in a way a database created ninety seconds ago is not. CI builds one every run.
+Locally, `platform_ci271`, created and migrated for the purpose, produced all
+28 immediately.
+
+**Then all 28 turn out to be one bug written 28 times.** Every failure is a
+*one-shot read of a collection that starts empty* — `text_content()`,
+`all_text_contents()`, `evaluate_all`, `get_attribute`, `.all()`. None of these
+retry. `expect()` does. So a table read straight after `settled()` finds no
+header row and fails with `'Name' is not in list`: a message about a missing
+column, from a table that had not drawn yet. That message is why these sat
+unfixed — each one names something plausible and specific and wrong.
+`test_prominent_terms.py` has carried a comment about this exact hazard since
+§202 and §231, and five other files read raw anyway, which is §263's lesson
+about where a lesson gets written arriving again.
+
+The fix is the same shape everywhere: put a wait in front of the read, and put
+it **in the helper** so the next test gets it for free. `conftest.py` gained
+`option_values(select, count=N)` and `option_labels(...)`, which assert the
+count before reading; `column()` in the table-sort file waits for the row count
+before finding the header; `titles()` in the timeline file holds its own wait.
+
+Three of the 28 were not that, and each needed its own answer:
+
+* **A control that shows nothing cannot be waited on.** `test_open_module_event`
+  clicked a button that passes a variable's current value, after `settled()`.
+  The obvious wait — read the parameter control — fails, because that control
+  is a *filter box* (`<input type="search" placeholder="Type to filter…">`) and
+  never displays the value. So the fixture grew a readout widget rendering
+  `PICK={{v_pick}}`, and the test waits for that. Clicking in the gap sent an
+  empty value, the target module correctly showed its own default, and the
+  assertion blamed the event.
+* **One testid, two elements.** `table-sort-property-N` names a `<select>` once
+  the type's properties arrive and an `<input type="text">` while they have
+  not — §231's deliberate fallback for a table configured before an object type
+  is chosen. Playwright retries `select_option` for visibility and enabledness
+  but **not for element kind**, so a call in the gap fails outright with
+  "Element is not a `<select>` element". Waiting for the options is what waits
+  for the picker.
+* **A computed colour is only meaningful once the state is settled.**
+  `test_stepper` now waits on `data-state` before reading a colour, which is
+  §78's rule about asserting computed colours meeting §271's about when.
+
+Twenty-eight fixed, verified against a database created for the run — and
+**`scripts/fresh-e2e.sh` is that run, as a command**. It creates a database
+nothing has touched, migrates it, brings the stack up on it, runs the suite,
+then drops it and puts the developer's stack back. `check.sh e2e` deliberately
+still does not do this: it drives a stack somebody else started and must not
+take it away from them, which is the split, and it now says so in its own
+header. §263's rule about a lesson recorded where it was learned applies
+squarely here — the paragraph above is worth nothing without the command
+underneath it.
+
 ### 270. Export schedules, and a copy that did not have to be one (this session)
 
 p.205, and the last piece `data-connection.md`'s exports row still named as
@@ -9863,6 +9939,20 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
 
+- **A red job stops being read after about the third time you see it red.** §271 found the browser job failing on `main` at ten consecutive merges with an identical 28-failure set, while `docs/parity/README.md` went on saying "all three jobs now green, every parity claim below now means something". Nobody decided to ignore it; it just moved from *signal* to *scenery*, and each merge was made by checking the three ticks that still moved. The structural fix is not discipline, it is **making the count visible**: a failure set that is the same 28 every run is a different fact from one that changes, and only the second is news. Until a check exists that says "this job has been red since <date>", treat any long-red job as an unread bug report and read it before merging past it again.
+
+- **The step that explains a failure has to be tested by a failure.** The browser job's diagnostic was `tail -100 api.log web.log`, which GNU tail refuses with two files — `tail: option used in invalid context -- 1`. It ran on ten red runs and printed that message and nothing else, so the one artefact that would have made the 28 legible never existed. Diagnostics are `if: failure()`, which means they run **only** in the situation nobody rehearses. Every one of them needs to be forced to run once on purpose, the same way §198's console filter did.
+
+- **Warm data hides races; a fresh database is a test environment, not a detail.** All 28 failures reproduce on a database created ninety seconds ago and none on this repo's dev Postgres, which has been accumulating since §248. The local gate runs against the accumulated one, which is exactly why it stayed green through ten red CI runs. **Where a suite's timing depends on the server being slow enough to lose a race, the state of the database is part of the test environment** — and "it passes locally" means "it passes against my warm data" until proven otherwise.
+
+- **A failing probe that refutes the hypothesis is worth more than a passing one that confirms it.** §271's first theory was a late ontology request, and the probe delayed that request by two seconds. Control and delayed both passed — which is not an inconclusive result, it is a proof that lateness alone is not the mechanism, because the tests already wait longer than the injected delay. The instinct on a both-passed probe is to conclude the probe was bad; the useful move is to ask what the passing result *rules out*, which here pointed straight at the difference between the two environments rather than at the timing within one.
+
+- **A one-shot read is an assertion with no wait attached, and its failure message describes the wrong thing.** `text_content()`, `all_text_contents()`, `evaluate_all`, `get_attribute` and `.all()` return whatever is there *now*; `expect()` retries. Read a table before it draws and `.index()` raises `'Name' is not in list` — a precise, plausible complaint about a missing column, from a table that had not rendered. Twenty-eight tests failed this way and none of them said so. **Any raw read of a collection needs an `expect(...).to_have_count(n)` in front of it**, and the place to put it is the helper, so the next test inherits the wait instead of the bug.
+
+- **A control that shows nothing cannot be the thing you wait on.** The natural wait before clicking a button that sends a variable's current value is "read the variable's control" — and that control is a filter box with a placeholder, which never displays the value at all. The wait timed out, looked like a product bug, and the correct fix was to give the *fixture* a readout widget to wait on. When a wait needs a value that no widget renders, add the widget: **a test can only wait for something the page actually says.**
+
+- **One testid on two different elements is a wait that cannot be written.** `table-sort-property-N` is a `<select>` once the ontology arrives and an `<input>` before it — a deliberate fallback, and a reasonable one. But Playwright retries `select_option` for visibility and enabledness and **not for element kind**, so a call in the gap fails immediately with "Element is not a `<select>` element". Where a testid can name two kinds of control, the retry mechanism silently stops covering the switch, and the test has to wait for the *contents* (`option` count) rather than for the element.
+
 - **Before A/B-testing a fix against an intermittent failure, build something that fails most of the time.** §266 judged two candidate fixes by running a test file and reading pass/fail. The underlying failure happened on roughly four openings in five, so a single run could not tell a bad fix from a good fix landing on a bad run — and one correct fix was discarded as a regression on exactly that evidence. What broke the deadlock was a fifteen-iteration probe reporting a *count*: 1/5 before, 5/5 after, unambiguous in one run. **An intermittent bug has to be turned into a measurement before any change to it can be evaluated**, and the measurement is usually cheaper to build than the second wrong conclusion is to undo.
 
 - **Two lines that no test can kill can need opposite treatments, and the question that separates them is not "can I write a test".** §265 hit both in one file. `not skipped` guarding a version-mark update was redundant, because the `GREATEST` beside it already made the skip case a no-op — deleted. `GREATEST` itself was equally unkillable, because it guards two *overlapping* runs finishing out of order and every test in the suite makes one request at a time — kept, with a comment saying so. The useful question on an unkillable line is **what would have to be true for this to fire**: if the answer is "nothing, another expression already covers it", the line goes; if it is "a state the test harness cannot construct", the line stays and the harness gets a withdrawal note. Concurrency, clock skew and partial failure all produce the second kind, and a project that treats every survivor as a test gap will delete exactly the guards it most needs.
@@ -9922,4 +10012,4 @@ From a fresh checkout to a stack you can sign into. It asks before anything slow
 
 **`docs/local-setup.md` is the guide** — the same steps by hand, what each one is for, how to seed a test client or user, and the failures worth recognising by sight (the DSN form `migrate.py` refuses, the `PLATFORM_APP_PASSWORD` the schema needs, why a token stops working when the API restarts).
 
-Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own; `scripts/dev-down.sh` stops the two servers again and leaves Postgres alone, because it is not this repo's to stop. `scripts/check.sh` runs every check the repo has — types, unit, worker, API, browser — and `apps/api/tests/test_dependency_pins.py` is what makes that sentence true rather than aspirational: it counts the test directories on disk against the script, and §263 added it because the worker's 78 tests had been absent from that list since the app was written.
+Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own; `scripts/dev-down.sh` stops the two servers again and leaves Postgres alone, because it is not this repo's to stop. `scripts/check.sh` runs every check the repo has — types, unit, worker, API, browser — and `apps/api/tests/test_dependency_pins.py` is what makes that sentence true rather than aspirational: it counts the test directories on disk against the script, and §263 added it because the worker's 78 tests had been absent from that list since the app was written. `scripts/fresh-e2e.sh` runs the browser suite against a database it creates for the run and drops afterwards — §271's addition, because `check.sh e2e` runs against the accumulated dev database and that difference hid 28 failures through ten red CI runs; run it before merging anything the browser suite covers.

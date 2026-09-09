@@ -227,9 +227,25 @@ scripts/check.sh worker   # the worker suite, against a database of its own
 scripts/check.sh types    # tsc --noEmit
 scripts/check.sh unit     # the TypeScript unit tests
 scripts/check.sh e2e      # the browser suite, against the running stack
+scripts/fresh-e2e.sh      # the browser suite, against a database made for it
 ```
 
 Ordered cheapest-first and exits on the first failure.
+
+**Run `fresh-e2e.sh` before merging anything the browser suite covers, and
+know why.** §271 found the browser job red on `main` at ten consecutive merges
+with the same 28 failures, none of which reproduced on any developer machine.
+The difference was the *database*: CI creates one at the top of every run, and
+the dev Postgres here has been accumulating since §248, so its ontology queries
+come back warm. Every one of the 28 was a one-shot read of a collection that
+starts empty — `all_text_contents`, `evaluate_all`, `get_attribute`, `.all()`,
+none of which retry — and against warm data the collection was always already
+there. `check.sh e2e` runs against whatever the stack is up on and cannot fix
+this, because it drives a stack somebody else started and must not take it
+away from them. `fresh-e2e.sh` owns the whole thing: it creates a database,
+migrates it, brings the stack up on it, runs the suite, drops it, and puts your
+stack back on the default. It takes arguments through to pytest, and
+`ANCHOR_KEEP_DB=1` leaves the database behind if you want to look at it.
 
 **The worker target creates and migrates its own database** (`platform_worker_test`
 by default, `ANCHOR_WORKER_DB` to change it) and that is not a nicety: the

@@ -93,7 +93,7 @@ Parity is a large target, so the order matters more than usual. Four principles:
 
 | Stage | Contents | Why here |
 |---|---|---|
-| **0** | ~~Make CI actually run~~ — **done, PR #52** | It had already been running, and had been **red for nineteen consecutive runs** on a single cause: CI never set `PLATFORM_APP_PASSWORD`, so `platform_app` kept its placeholder password while everything connected as it with `devpass`. All three jobs now green. Every "at parity" claim below now means something. |
+| **0** | ~~Make CI actually run~~ — **done, PR #52; the guarantee re-earned in §271** | It had already been running, and had been **red for nineteen consecutive runs** on a single cause: CI never set `PLATFORM_APP_PASSWORD`, so `platform_app` kept its placeholder password while everything connected as it with `devpass`. Four jobs now green — and "now" has a date on it, because between §258 and §271 the browser job was red on `main` for ten consecutive merges with an identical 28-failure set, and this row went on claiming otherwise. §271 fixed all 28. **A green-CI claim is a claim about the last run, not a property of the repo**, so read this row as saying what was true when it was last checked. |
 | **1** | Navigation (phase-3 §A) — Workshop onto `/r/{id}`, pillar pages become filtered views, delete the duplicate editor **(blocked, see below)** | Mostly deletion. Everything after lands in a cleaner shape, and it answers the original complaint about screens. |
 
 #### Stage 1 progress

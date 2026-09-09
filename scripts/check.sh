@@ -12,6 +12,14 @@
 #   scripts/check.sh unit         # just the TypeScript unit tests
 #   scripts/check.sh e2e          # just the browser suite
 #
+# **`e2e` here runs against whatever database the stack is up on, and that is
+# not the environment CI has.** §271: the browser job was red on `main` for ten
+# merges with 28 failures that reproduced on nobody's machine, because CI
+# creates its database at the top of every run and a developer's has been
+# accumulating since §248 - and all 28 were one-shot reads of collections that
+# start empty. `scripts/fresh-e2e.sh` is the same suite against a database
+# created a minute ago, and it is the one to run before merging.
+#
 # `apps/control-plane/tests` is deliberately not here: it needs a second
 # database nothing in this repo provisions, and pins httpx against apps/api's.
 # `apps/api/tests/test_dependency_pins.py` holds that reason and goes red if a
@@ -96,6 +104,12 @@ run_types() { ( cd "$ROOT/apps/web" && npx tsc --noEmit -p tsconfig.json ); }
 run_unit()  { ( cd "$ROOT/apps/web" && npx vitest run ); }
 # `-p no:randomly`-free and deliberately serial: these drive one dev stack, and
 # two of them at once would each be seeding into the other's workspace.
+#
+# **This target drives a stack it did not start, so it cannot choose the
+# database.** That is the right split - taking somebody's dev sandbox away
+# mid-run would be worse than the blind spot - and `scripts/fresh-e2e.sh` is
+# the other half: it owns the stack from creation to teardown, so it can hand
+# the suite the empty database CI has. See the header.
 run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q ); }
 
 case "$WHICH" in
