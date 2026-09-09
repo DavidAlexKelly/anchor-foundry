@@ -20,6 +20,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
+import { draftKey, readDrafts, saveWarning, writeDrafts } from "@/lib/editor-drafts";
 import {
   ApiError,
   api as platformApi,
@@ -233,10 +234,43 @@ function FilesTab({
   const [edits, setEdits] = useState<Record<string, string | null>>({});
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
+  const [draftWarning, setDraftWarning] = useState<string | null>(null);
+
+  // **Persisted, keyed by repository and branch** (§281). This state was the
+  // only home for uncommitted work, so a reload lost it - and
+  // `code-repositories.md` §2.3 asks for persistence *before* multi-file tabs
+  // for exactly that reason: tabs are what make the loss expensive.
+  const key = draftKey(rid, branch);
+
+  // **Loaded on the branch, not on the commit.** This effect used to clear
+  // `edits` whenever `tree.commit_id` changed, which is also what happens when
+  // *somebody else* commits and the tree refetches - so a colleague landing a
+  // change silently discarded your typing. Keying it to the branch keeps that
+  // from happening, and losing edits on a deliberate branch switch is still
+  // the branch switch's doing. Your own commit clears them explicitly below,
+  // which is the only case that should.
+  // **`loaded` is not bookkeeping - without it the save destroys the draft.**
+  // `setEdits` is batched, so on the first commit the save effect below runs
+  // with `edits` still `{}` - and writing an empty map *removes the key*. The
+  // draft was being deleted on mount, before the load it was waiting for could
+  // apply. A ref would not fix it either: a ref assigned in the load effect is
+  // visible to the save effect in the same commit, which is exactly the pass
+  // that must not write. It has to be state, so the two land together.
+  const [loaded, setLoaded] = useState<string | null>(null);
   useEffect(() => {
-    setEdits({});
+    setEdits(readDrafts(key));
+    setLoaded(key);
     setMessage("");
-  }, [tree?.commit_id, branch]);
+    setDraftWarning(null);
+  }, [key]);
+
+  // Written on every change. `localStorage` is synchronous and these are small,
+  // and the alternative - debouncing - would mean a reload in the debounce
+  // window loses exactly the keystrokes somebody just typed.
+  useEffect(() => {
+    if (loaded !== key) return;
+    setDraftWarning(saveWarning(writeDrafts(key, edits)));
+  }, [key, edits, loaded]);
 
   const committed = tree?.files ?? {};
   const working = useMemo(() => {
@@ -256,6 +290,8 @@ function FilesTab({
     mutationFn: () =>
       repoApi.commit(wid, pid, rid, { branch, files: working, message }),
     onSuccess: () => {
+      // The drafts are committed now, so they stop being drafts. `setEdits({})`
+      // is what removes the stored key, through the effect above.
       setEdits({});
       setMessage("");
       setFailure(null);
@@ -385,6 +421,13 @@ function FilesTab({
             Discard
           </button>
         </form>
+      )}
+      {/* **Only when work is at risk** (§281). A save and a clear are the
+          system working; narrating them would train people to ignore the line
+          that matters. This appears when the browser is not storing drafts at
+          all, or when these edits are too large to keep. */}
+      {draftWarning && (
+        <p className="state error" data-testid="draft-warning">{draftWarning}</p>
       )}
       {failure && <p className="state error">{failure}</p>}
     </div>

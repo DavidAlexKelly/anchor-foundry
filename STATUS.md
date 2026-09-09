@@ -4388,6 +4388,56 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 281. Drafts that survive a reload, and a save that ate them (this session)
+
+`code-repositories.md` §2.3's own warning, closed — and it is build-order item
+2 for a stated reason:
+
+> "Uncommitted edits live in `useState` keyed by path with no persistence
+> anywhere. That survives switching files but not a page reload — so a
+> five-tab editor with unsaved work is five ways to lose work at once. Tabs are
+> what make the loss expensive; ship `localStorage` keyed by repository and
+> branch first."
+
+**Keyed by branch as well as repository**, because the same path on two
+branches is two files, and a draft that followed somebody across a branch
+switch would paste one branch's work onto another's — the one outcome worse
+than losing it.
+
+**Then the persistence deleted the thing it was persisting**, and the bug is
+worth keeping because nothing in the unit tests could have found it. Two
+effects: one loads drafts into state when the key changes, one writes state
+back on every change. On the first commit React has **batched** `setEdits`, so
+the save effect runs with `edits` still `{}` — and writing an empty map is what
+*removes the key*. The draft was destroyed on mount, before the load it was
+waiting for could apply.
+
+A ref does not fix it: a ref assigned in the load effect is already visible to
+the save effect in the same commit, which is exactly the pass that must not
+write. The guard has to be **state**, so it and the loaded drafts land
+together.
+
+The general shape: **a load and a save over the same state are a cycle, and the
+first turn of it runs with the pre-load value.** Any pair of effects where one
+seeds state and the other persists it has this, and the failure is silent in
+the direction that loses data.
+
+**Three findings in the test, each one a real fact about the tools.**
+
+* Clicking `.monaco-editor textarea` does not work — the textarea carries the
+  value but sits *under* the rendered text, so Playwright reports
+  `<span class="mtk8">…</span> … intercepts pointer events` and retries until it
+  gives up. `.view-lines` is the layer a person clicks.
+* **Monaco renders every space as U+00A0**, so `get_by_text("-- a thought I
+  have not committed")` matches nothing at all. The failure reads as "the text
+  is not there", which is true of the string searched for and false of the
+  editor. `editor_text` normalises it and says why.
+* `Control+End` rather than `End`: a click leaves the caret where it landed,
+  and appending to the document is what the test means.
+
+None of the three is about this feature, and all three cost a probe to find —
+which is the argument for the probe over the fourth guess, again.
+
 ### 279. The Settings tab, and a checkbox that argued back (this session)
 
 §278 found five capabilities living only on the page B.1 deletes. This gives
@@ -10443,6 +10493,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
 
 - **"It duplicates X" is a claim about the parts somebody looked at, and the way to check it is to enumerate the calls rather than to read the description again.** §278 was one step from deleting a 463-line page a plan called "463 lines duplicating this, worse" — accurate about its editor, and silent about the five things it is the only home for, including the **only control for whether a project requires code review**. Nothing would have errored; the capability would just have been gone. The check took one grep per API call the page makes, and it is the same check worth running before deleting *anything* substantial: not "what is this for", which the name and the comment already answer, but **"what does this call that nothing else calls"**. A duplicate is a claim about a set, and sets are counted, not described.
+
+- **A load and a save over the same state are a cycle, and the first turn runs with the pre-load value.** §281 persisted editor drafts with two effects — one reading storage into state when the key changes, one writing state back on every change — and it **deleted every draft on mount**: React batches the `setState`, so the save effect ran with the initial empty map, and writing an empty map is what removes the key. A ref assigned in the load effect does not help, because it is already visible to the save effect in the same commit; the guard has to be *state*, so it lands with the data it is guarding. Any pair of effects where one seeds and the other persists has this shape, and **the failure is silent in the direction that loses data** — the write succeeds, the value is just wrong.
 
 - **A wait on the wrong property is worse than no wait, because it reads as diligence and nobody looks again.** §280's CI run found a second browser flake, and it is a sharper case than §271's twenty-eight: this test *had* a wait. It waited for **two pills to exist** and then read their text once — and a pill renders as soon as its filter does, using the property's `api_name` (`band`), becoming `Band` when the object type's display names resolve. "Two pills" is satisfied a beat before "the right two pills". Six other call sites in the same file wait on the content and are correct; this one waited on the count. **When a wait and an assertion are about different properties of the same thing, the wait is decoration** — and the way to spot it is to read them as a pair and ask whether the wait could pass while the assertion fails.
 
