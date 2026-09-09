@@ -14,10 +14,32 @@ deployment layer, which is a production hardening step out of scope for
 this build. Treat this the same way the rest of this platform treats size
 caps: a conservative day-one boundary, not the final word.
 
-Contract with user code: each input dataset is loaded into a pandas
-DataFrame available under its input alias as a plain module-level name; the
-script must assign its result to a variable named `output` (a DataFrame) by
-the time it finishes.
+Contract with user code: **two shapes, and the file says which** (§272).
+
+*The declared transform* — what `docs/decisions/0004-running-customer-code.md`
+shows, what `transform_declarations.py` parses, and the shape a file published
+from a repository is written in:
+
+    @transform(output="daily_orders", inputs={"orders": "raw_orders"})
+    def build(orders):
+        return orders
+
+*The script* — every model authored directly in the Models editor since before
+repositories existed: each input arrives as a plain module-level name and the
+script assigns its result to `output`.
+
+**These had never met, and the first one could not run.** Decision 0004
+documents the decorator; this file documented the script; each was right about
+itself. A repository-authored Python transform died on `NameError: name
+'transform' is not defined` before reaching any of the sandbox's actual
+limits - and if `transform` had been defined as a no-op, the function's return
+value still went nowhere, because nothing called it. Neither half was wrong;
+they were two contracts for one thing, written eleven units apart, and no test
+used a `.py` file on the publish path or a decorator in this one.
+
+The script shape stays because every existing model is written in it, and a
+run is stamped to the exact code that produced it (0001) - a contract change
+that broke old definitions would rewrite history rather than extend it.
 """
 from __future__ import annotations
 
@@ -48,6 +70,32 @@ for _alias, _path in _inputs.items():
         f"SELECT * FROM read_parquet({{_path!r}})"
     ).df()
 
+# **The decorator, defined so the declared shape can run at all.** It records
+# the function and returns it unchanged: importing this file must not be how
+# the declaration is read - that is `transform_declarations.py`'s job and
+# decision 0004's whole point - so nothing here parses or validates. It exists
+# because a file that says `@transform(...)` has to find a `transform`.
+#
+# `anchor.transform` as well as bare `transform`, because the reader accepts
+# both spellings (`_decorator_name`), and a spelling that parses as a
+# declaration and then dies on NameError is the same defect in its second form.
+_declared = []
+
+
+def transform(**_kwargs):
+    def _register(_fn):
+        _declared.append((_fn, _kwargs))
+        return _fn
+    return _register
+
+
+class _Anchor:
+    transform = staticmethod(transform)
+
+
+_namespace["transform"] = transform
+_namespace["anchor"] = _Anchor()
+
 with open({code_path!r}) as _f:
     _user_code = _f.read()
 
@@ -57,9 +105,66 @@ except Exception as exc:
     print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
+# **A module-level `output` wins.** Not a precedence puzzle: a file with both
+# is a script that also happens to declare, and the script's assignment is the
+# thing that ran last. Checking it first also means the old shape reaches its
+# result without the decorator machinery being involved at all.
 _output = _namespace.get("output")
+if _output is None and len(_declared) > 1:
+    # The publisher refuses this too (§272), so reaching it means the file
+    # changed between publish and run. Refusing rather than picking the first
+    # keeps "what was declared" and "what ran" the same sentence.
+    print(
+        "MODEL_ERROR: this file declares more than one transform, so which one "
+        "produces the output is ambiguous",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if _output is None and _declared:
+    _fn, _kwargs = _declared[0]
+    _aliases = dict(_kwargs.get("inputs") or {{}})
+    # **By keyword, never by position.** `@transform` itself refuses positional
+    # arguments so that the file says which name means what rather than relying
+    # on order; passing the inputs positionally here would put that back in
+    # through the other door, and a transform whose parameters were in a
+    # different order would silently read the wrong dataset.
+    _missing = [_a for _a in _aliases if _a not in _namespace]
+    if _missing:
+        print(
+            "MODEL_ERROR: this transform declares inputs that were not provided: "
+            + ", ".join(sorted(_missing)),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        _output = _fn(**{{_a: _namespace[_a] for _a in _aliases}})
+    except TypeError as exc:
+        # The common mistake, and a raw TypeError names the function rather
+        # than the mismatch: a parameter list that does not match the declared
+        # aliases.
+        print(
+            f"MODEL_ERROR: {{_fn.__name__}} does not take the inputs it declares "
+            f"({{', '.join(sorted(_aliases)) or 'none'}}): {{exc}}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except Exception as exc:
+        print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
+        sys.exit(1)
+    if _output is None:
+        print(
+            f"MODEL_ERROR: {{_fn.__name__}} returned nothing - a declared "
+            "transform returns the table it produces",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 if _output is None:
-    print("MODEL_ERROR: the script did not set a variable named `output`", file=sys.stderr)
+    print(
+        "MODEL_ERROR: this file neither set a variable named `output` nor "
+        "declared a transform with @transform",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 _con = duckdb.connect()

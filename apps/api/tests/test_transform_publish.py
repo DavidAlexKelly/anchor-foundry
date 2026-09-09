@@ -704,3 +704,125 @@ def test_a_commit_proposal_goes_stale_when_another_one_lands_first(
     refused = client.post(f"{cbase(fx)}/proposals/{b['id']}/apply",
                           headers=hdr(fx.editor_sub))
     assert refused.status_code == 422, refused.text
+
+
+# ---- Python, which no test here had ever published (§272) --------------------
+def py(output: str, source: str, alias: str = "raw") -> str:
+    """A Python transform as decision 0004 prints one."""
+    return (
+        f"@transform(output={output!r}, inputs={{{alias!r}: {source!r}}})\n"
+        f"def build({alias}):\n"
+        f"    return {alias}\n"
+    )
+
+
+def test_publishing_a_python_transform_stores_what_the_runner_will_execute(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**Every file in this suite was `.sql`.** That is how a Python transform
+    came to be publishable and unrunnable at the same time: the publisher
+    copies the file's source into `models.code` verbatim, and the worker's
+    sandbox exec'd it into a namespace with no `transform` in it, so the
+    decorator raised `NameError` before any of the sandbox's limits applied.
+    Neither half was wrong about itself, and nothing here crossed between them.
+
+    This asserts the seam rather than the run: the definition that lands is
+    the file, byte for byte, and `apps/worker/tests/test_python_sandbox.py`
+    holds the other end - that this exact shape produces a table.
+    """
+    out = f"pydaily_{uuid.uuid4().hex[:8]}"
+    file = py(out, source)
+    commit(client, fx, repo["id"], {"src/daily.py": file})
+
+    r = do_publish(client, fx, repo["id"])
+    assert r.status_code == 200, r.text
+    step = r.json()["steps"][0]
+    assert step["language"] == "python", step
+    assert [i["dataset"] for i in step["inputs"]] == [source]
+
+    model = client.get(
+        f"{pbase(fx)}/models/{step['model_id']}", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert model["language"] == "python"
+    # The runner is handed this string and nothing else. A publish that
+    # rewrote it - stripping the decorator, wrapping the body - would make the
+    # repository describe something other than what runs, which is the one
+    # thing db 0038's refusal exists to prevent.
+    assert model["code"] == file
+
+
+def test_a_python_file_declaring_two_transforms_is_refused(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """SQL has refused two `-- output:` lines since it was written; Python
+    returned the first of two and dropped the second silently, so the second
+    transform was never built and never appeared in lineage. Asserted here
+    rather than only in the unit test because this is the layer where the
+    consequence lives: a publish that quietly builds half a file."""
+    a, b = f"one_{uuid.uuid4().hex[:6]}", f"two_{uuid.uuid4().hex[:6]}"
+    both = (
+        f"@transform(output={a!r}, inputs={{'raw': {source!r}}})\ndef one(raw):\n    return raw\n\n"
+        f"@transform(output={b!r}, inputs={{'raw': {source!r}}})\ndef two(raw):\n    return raw\n"
+    )
+    commit(client, fx, repo["id"], {"src/both.py": both})
+
+    r = do_publish(client, fx, repo["id"])
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert "more than one transform" in detail, detail
+    assert "one" in detail and "two" in detail, detail
+
+    # And nothing was created for the half it could have taken.
+    models = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    assert a not in [m["name"] for m in models]
+
+
+def test_a_comment_declared_script_publishes_and_is_stored_verbatim(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """§273: the shape B.1 needs, on the publish path.
+
+    A model authored in the Models editor is a *script* - inputs as
+    module-level names, the result assigned to `output` - and until decision
+    0017 it had no way to declare, so it could not live in a repository at all
+    and its only editor was the one B.1 deletes. This is that file publishing.
+
+    Stored verbatim, like every other published file: the header is comments,
+    so the code the runner gets is the script the author wrote with two lines
+    above it, and `test_python_sandbox.py` holds the other end.
+    """
+    out = f"script_{uuid.uuid4().hex[:8]}"
+    file = f"# output: {out}\n# input: raw = {source}\n\noutput = raw\n"
+    commit(client, fx, repo["id"], {"src/script.py": file})
+
+    r = do_publish(client, fx, repo["id"])
+    assert r.status_code == 200, r.text
+    step = r.json()["steps"][0]
+    assert step["output"] == out
+    assert step["language"] == "python"
+    assert [i["dataset"] for i in step["inputs"]] == [source]
+
+    model = client.get(
+        f"{pbase(fx)}/models/{step['model_id']}", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert model["code"] == file
+
+
+def test_a_python_file_declaring_both_ways_is_refused_at_publish(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """"One file, one transform" between the forms as well as within each.
+    Asserted at this layer too because this is where the consequence lives: a
+    publish that picked one of two declarations would build something the file
+    does not unambiguously say."""
+    out = f"both_{uuid.uuid4().hex[:8]}"
+    both = (
+        f"# output: {out}\n"
+        f"@transform(output={out!r}, inputs={{'raw': {source!r}}})\n"
+        "def build(raw):\n    return raw\n"
+    )
+    commit(client, fx, repo["id"], {"src/both.py": both})
+
+    r = do_publish(client, fx, repo["id"])
+    assert r.status_code == 422, r.text
+    assert "declares a transform twice" in r.json()["detail"], r.text

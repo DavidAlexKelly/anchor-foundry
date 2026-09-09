@@ -128,5 +128,8 @@ DATABASE_URL="$APP" TEST_ADMIN_DSN="$ADMIN" STORAGE_ROOT="$STORE" \
 
 echo
 echo "=== the browser suite ==="
+# `-ra` for the same reason `check.sh e2e` passes it: the teardown below prints
+# after this, so the failing test names have to be the last thing pytest says
+# or they scroll past whoever is reading.
 ( cd "$ROOT/e2e" && DATABASE_URL="$APP" TEST_ADMIN_DSN="$ADMIN" STORAGE_ROOT="$STORE" \
-    ANCHOR_E2E_REQUIRED=1 "$PYTHON" -m pytest -q "$@" )
+    ANCHOR_E2E_REQUIRED=1 "$PYTHON" -m pytest -q -ra "$@" )

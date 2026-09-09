@@ -4388,6 +4388,174 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 273. How a script declares (this session)
+
+Decision 0017, and the first third of **B.1** — "models live in repositories",
+which `docs/parity/README.md` names as the blocker that reorders stage 1.
+
+**The problem in one sentence.** A model authored in the Models editor is a
+*script*: inputs arrive as module-level names, the result is assigned to
+`output`. The only Python declaration form was a `@transform`-decorated
+function. A script has no function to decorate — `read()` returns `None` for
+it, which means "this is a helper" — so publishing a repository containing one
+says *"nothing at this commit declares a transform"*. **Every model written
+before repositories existed could not live in a repository at all**, and those
+are exactly the models whose only editor is the one B.1 deletes: in a project
+that requires review they would have had no editable path left.
+
+For SQL, adoption was already a prepend. For Python it was nothing.
+
+**Three options, and the third.** *Wrap the script into a function* is a code
+transformation applied to customer code, with quiet failure modes — `global`
+changes meaning, a module-level import stops being shared — and the first thing
+the author sees after adoption is a diff they did not write. *Refuse and make
+them rewrite* is honest and fails the goal. So: **a Python file may declare in a
+leading comment block, exactly as SQL always has**, and a file still declares
+exactly one transform, so one carrying both forms is refused like any other
+double declaration.
+
+The reason this is small rather than a new idea: `transform_declarations.py`
+opens by saying both languages answer "the same question" in "the same answer
+shape, so a reader does not have to know which language a repository is written
+in". That was true of SQL and of decorated Python and false of everything else,
+and §272 had just found it false in the other reader too. This is the sentence
+becoming true — one parameterised pattern, not a second hand-written pair,
+because two copies is exactly how it stopped being true the first time.
+
+**Nothing is lost at the parity end.** Foundry has no script-shaped transform;
+its transforms are decorated functions, and that form is untouched. This adds a
+declaration form for a shape that is *this platform's own*.
+
+**The round-trip hazard, measured rather than assumed.** Adoption (§274) will
+prepend a header and then parse the result back. The reader takes the leading
+comment block only, so a model whose code already begins with comments produces
+a longer block than the header alone. A `-- output:` in it is refused as a
+second declaration — loud, fine. **A `-- input: x = y` in it is not:** the parse
+succeeds and the transform silently gains an input the model never had. So the
+check is *exact equality*, not "the header survived". Found by running the real
+reader over the cases rather than by reasoning about it.
+
+**Two asymmetries worth stating.** The prefix is the only difference between
+the languages. And orphan inputs are an error in SQL but a comment in Python
+*beside a decorator*: "declares inputs but no output" exists because a mistyped
+output line otherwise leaves a file that silently builds nothing, and in SQL
+there is no other way to have declared — in Python there is, so raising there
+would answer a question the author did not ask about a file that declares
+perfectly well. With no decorator the refusal stands, because then it is the
+typo it looks like.
+
+A module docstring ends the leading block and a shebang does not, which is the
+surprising half of "leading *comment* block": the rule is about comments, not
+about "before the code starts". Both are tested, because a reader assuming
+either would be wrong about a real file.
+
+**And the seam got tests the same day.** §272's whole finding was two halves
+each thorough about itself and never tested against each other, so the new form
+has a test on the reader, one in the sandbox proving it *runs*, and one on the
+publish path proving it *publishes* — rather than nine reader tests and a note.
+
+### 272. The Python transform shape the decision prints could not run (this session)
+
+Found on the way into B.1, which is "models live in repositories" — so before
+building the path that moves every model into a repository, the question was
+what a model *becomes* there. For SQL, a file with a leading `-- output:`
+comment. For Python, what decision 0004 prints:
+
+```python
+@transform(output="daily_orders", inputs={"orders": "raw_orders"})
+def build(orders): ...
+```
+
+**That file could not run.** The worker's sandbox `exec`s a model's code into a
+namespace holding the input DataFrames and nothing else, so `@transform` raised
+`NameError: name 'transform' is not defined` — before reaching the CPU cap, the
+memory cap, the timeout or any of the things that file's tests check. And had
+the name existed as a no-op, it would have failed a second, independent way:
+nothing called the function, so its return value went nowhere and the runner
+reported "the script did not set a variable named `output`".
+
+**Neither half was wrong about itself.** Decision 0004 documents the decorator
+and explains at length why the declaration is parsed with `ast` rather than by
+importing. `python_sandbox.py` documents a script whose inputs arrive as
+module-level names and whose result is assigned to `output` — which is exactly
+right for every model authored in the Models editor since before repositories
+existed. Two contracts for one thing, written eleven units apart, each correct
+in its own file.
+
+**Nothing crossed the seam.** Every file in `test_transform_publish.py` is
+`.sql` — thirty-three tests, not one `.py`. Every file in
+`test_python_sandbox.py` is a script — not one `@transform`. Both suites are
+careful; neither is about the join.
+
+The runner now defines `transform`, and `anchor.transform` beside it, because
+`_decorator_name` accepts both spellings — a spelling that parses as a
+declaration and then dies on `NameError` is the same defect in its second form,
+and it would surface only at run time. The decorator records and returns; it
+parses nothing, because reading a declaration by importing the file is the
+thing decision 0004 exists to refuse.
+
+**Inputs are passed by keyword, and that is the assertion worth having.**
+`@transform` itself refuses positional arguments so the file says which name
+means what rather than relying on order. Calling the function positionally
+would put that straight back through the other door: a transform whose
+parameters are declared in a different order from its inputs would read the
+wrong dataset for each and *still produce a table*. The test declares the
+parameters in the opposite order on purpose.
+
+**The script shape takes precedence rather than merely surviving.** Every model
+written before repositories is one, and `model_runs.model_version` points at
+the exact code that produced a run (decision 0001) — a contract change that
+made an old definition mean something new would rewrite history rather than
+extend it.
+
+**A second finding at the same seam.** `_read_sql` has always refused a file
+with two `-- output:` lines. `_read_python` returned the first of two
+`@transform` functions and dropped the second **silently** — not built, not
+scheduled, absent from the lineage graph, with a dataset that quietly stops
+changing as the only symptom. The module's own docstring claims both languages
+give "the same answer shape, so a reader does not have to know which language a
+repository is written in", which was true of the syntax and false of the
+answer. Both refuse now, and the Python refusal names both functions, because
+the fix is to split the file and the author needs to know which two things to
+split.
+
+**And that refusal is a divergence from Foundry, which is worth saying rather
+than leaving to read as parity.** `code-repositories` p.39 shows a Foundry file
+holding three transforms produced by a generator, so a file there maps to many.
+Here identity is `(repository, path)` — db 0038's unique index, and the thing
+that makes a *renamed* file publish to the same model instead of quietly
+starting a second one that runs forever. One path cannot name two models, so a
+file declaring twice cannot be honoured whichever one is picked: **the gap is
+in the identity, not in the reader.** Closing it means identity becomes
+`(repository, path, output)`, a schema change touching every published model,
+worth doing when somebody actually wants a file of small related transforms.
+Worth noticing too that the old behaviour matched neither model — returning the
+first of two is not one-per-file or many-per-file, it is one-per-file with the
+error left out.
+
+Harness: **15/15**, no survivors, no no-ops.
+
+**A postscript, because it is an open item and not a tidy one.** §272's PR went
+red on the browser job, and it was not §272: the commit before it carries every
+line of functional code and passed, while the commit that failed adds
+thirty-three lines of which none outside `STATUS.md` and a decision record are
+anything but `#` comments — `git diff` filtered for non-comment lines in
+`apps/` returns nothing. A re-run of the **same commit** then passed. So it is a
+flake, and no e2e file touches repositories, models or transforms at all.
+
+**Which test flaked is not recoverable, and that is the part worth recording.**
+§271 fixed the failure diagnostic from printing nothing; this is the same step
+failing the other way. `tail -n 100 api.log web.log` emits a hundred very long
+Next.js request lines *after* pytest finishes, GitHub's log API truncates by
+size rather than by line, and the tracebacks and summary sat outside anything
+retrievable — the raw log lives on a blob host the egress policy blocks, so
+there was no second route to it either. The tail is 40 lines now and
+`check.sh e2e` passes `-ra`, so the failing test names are the last thing
+pytest prints. **A diagnostic has to fit in the window somebody will read it
+through**, and "prints nothing" and "prints a hundred lines of the wrong thing"
+are the same bug wearing different clothes. The flaky test itself remains
+unidentified; it will name itself the next time it fires.
+
 ### 271. Twenty-eight failures nobody had read (this session)
 
 Not a unit. `docs/parity/README.md`'s Stage 0 row says "All three jobs now
@@ -9947,6 +10115,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **"Prints nothing" and "prints a hundred lines of the wrong thing" are the same bug wearing different clothes.** §271 fixed the browser job's failure diagnostic, which had emitted `tail: option used in invalid context -- 1` and nothing else for ten red runs. §272 then hit a red run it *still* could not diagnose: the fixed step printed a hundred very long Next.js request lines after pytest finished, GitHub's log API truncates by size rather than by line, and the tracebacks and summary fell outside anything retrievable — with the raw log on a host the egress policy blocks, so there was no second route either. **A diagnostic is only as good as the window it will be read through**, and that window is usually the last few kilobytes of something. Put the identifying line — the failing test's name, the failing assertion — closest to the end, and keep the context that follows it short enough not to push it out.
+
+- **Two documents can each be right about themselves and wrong together, and no amount of care inside either one finds it.** §272: decision 0004 documents a Python transform as a `@transform`-decorated function and explains at length why the declaration is parsed rather than imported; `python_sandbox.py` documents a script whose result is assigned to `output`. Both accurate, both thorough, written eleven units apart — and the shape the decision *prints* could not run, because `transform` was undefined in the namespace the runner execs into. The tell is not in either file. It is that **no test used a file of one shape in the other's suite**: every file in the publish suite is `.sql`, every file in the sandbox suite is a script. Whenever two components define a contract for the same artefact, the check that matters is the one whose fixture crosses between them — and its absence is invisible from inside either half, because each half's coverage looks complete.
+
+- **A silent "take the first" is worse than a refusal, and the two look identical in a passing test.** `_read_sql` refused a file declaring two outputs; `_read_python` returned the first of two and dropped the second. The dropped transform is not built, not scheduled, and not in the lineage graph, so **every layer that could have reported it is the layer that lost it** — the author's only symptom is a dataset that stops changing. Where a reader can find more than one of something and the caller expects one, the choice is refuse or return them all; picking one silently is the option with no failure mode a test can name. And when the same rule is implemented once per language, per format, per driver, expect it to hold in one of them: this module's own docstring asserted both languages gave "the same answer shape".
 
 - **A red job stops being read after about the third time you see it red.** §271 found the browser job failing on `main` at ten consecutive merges with an identical 28-failure set, while `docs/parity/README.md` went on saying "all three jobs now green, every parity claim below now means something". Nobody decided to ignore it; it just moved from *signal* to *scenery*, and each merge was made by checking the three ticks that still moved. The structural fix is not discipline, it is **making the count visible**: a failure set that is the same 28 every run is a different fact from one that changes, and only the second is news. Until a check exists that says "this job has been red since <date>", treat any long-red job as an unread bug report and read it before merging past it again.
 

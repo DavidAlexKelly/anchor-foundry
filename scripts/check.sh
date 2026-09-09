@@ -110,7 +110,16 @@ run_unit()  { ( cd "$ROOT/apps/web" && npx vitest run ); }
 # mid-run would be worse than the blind spot - and `scripts/fresh-e2e.sh` is
 # the other half: it owns the stack from creation to teardown, so it can hand
 # the suite the empty database CI has. See the header.
-run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q ); }
+#
+# **`-ra`, so the failing test names are the last thing pytest says.** §272 hit
+# a red browser run whose cause could not be identified at all: the workflow's
+# `tail -n 100 api.log web.log` prints a hundred very long Next.js request
+# lines after pytest finishes, and GitHub's log API truncates by *size*, so the
+# tracebacks and summary sat outside anything retrievable. §271 fixed this step
+# from printing nothing; this is the other failure of the same step, printing
+# too much of the wrong thing. `-ra` adds the short summary block - one
+# `FAILED path::name` line per failure - which survives being read from the end.
+run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q -ra ); }
 
 case "$WHICH" in
   api)    step "API tests" run_api ;;
