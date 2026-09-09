@@ -1286,6 +1286,52 @@ button { font: inherit; cursor: pointer; }
   height: 100%; color: var(--ink-soft); font-size: 13px;
 }
 .repo-file.edited::after { content: " •"; color: var(--brass); }
+
+/* ---- open files, with tabs (§282, code-repositories.md §2.3) --------------- */
+.repo-tabs-strip {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.repo-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: none;
+}
+.repo-tab button {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  padding: 5px 4px 5px 9px;
+  white-space: nowrap;
+}
+.repo-tab .repo-tab-close {
+  padding: 5px 8px 5px 4px;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+}
+.repo-tab .repo-tab-close:hover { color: var(--danger); }
+.repo-tab:hover { background: var(--paper); }
+.repo-tab.on {
+  background: var(--accent-wash);
+  border-color: var(--line);
+}
+.repo-tab.on button { color: var(--accent-deep); font-weight: 600; }
+/* The same brass dot the tree uses, so "this has unsaved work" reads the same
+   in both places. */
+.repo-tab.edited > button:first-child::after { content: " •"; color: var(--brass); }
 .repo-tree-actions { display: flex; gap: 8px; margin-top: 10px; }
 .repo-tree-actions button {
   font: inherit; font-size: 12px; padding: 4px 9px;

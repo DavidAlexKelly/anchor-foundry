@@ -73,7 +73,7 @@ The protected-branch rule is the one to take seriously. It is what makes the Pul
 |---|---|---|
 | Monaco-class editor, self-hosted | ✅ | deliberately not CDN-loaded |
 | File tree | ✅ | |
-| **Multiple open files with tabs** | ○ | the single biggest thing making ours feel unlike an IDE |
+| **Multiple open files with tabs** | ✅ §282 | the open set is **rebuilt, not restored**: a tab for every file with uncommitted work plus the one the link names, so there is no second store to disagree with the drafts. A tab is a view, not a container — closing one keeps the edit, and the button says so |
 | **Draft persistence across reload** | ✅ | §281, `localStorage` keyed by repository *and branch* — the same path on two branches is two files |
 | IntelliSense over platform types | ○ | Monaco's built-ins only |
 | Linting and error checking | ○ | needs §2.4 Problems |
@@ -81,6 +81,8 @@ The protected-branch rule is the one to take seriously. It is what makes the Pul
 | In-app help walkthrough | ○ | (p.11) |
 
 > **Do persistence before tabs.** Uncommitted edits live in `useState` keyed by path (`repository-app.tsx:206`) with no persistence anywhere. That survives switching files but not a page reload — so a five-tab editor with unsaved work is five ways to lose work at once. Tabs are what make the loss expensive; ship `localStorage` keyed by repository and branch first.
+>
+> **Both are done (§281, §282), and the order paid twice.** It found a bug tabs would have multiplied — a save effect that deleted the draft it was meant to keep — and it removed the need for a second store here: the strip is derived from the drafts, so it survives a reload without being persisted at all.
 
 ### 2.4 Helper panels — nine (p.13–15)
 
@@ -215,7 +217,7 @@ Foundry supports several; two matter here (p.3):
 ## 9. Build order
 
 1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **The original blocker is cleared and a larger one was found (§278): see the correction in the header — five capabilities live only on that page, including the only control for `require_code_review`. The editor half is now redundant; the page cannot go until the other five have somewhere to be.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
-2. ~~**Draft persistence**~~ — **done (§281)** — then **multi-file tabs**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
+2. ~~**Draft persistence**, then **multi-file tabs**~~ — **done (§281, §282)**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
 3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
 4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful.
 5. **Problems**, then **File Changes**. These two make the editor feel like an IDE more than anything else here.

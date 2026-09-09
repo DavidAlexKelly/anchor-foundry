@@ -22,6 +22,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
 import { draftKey, readDrafts, saveWarning, writeDrafts } from "@/lib/editor-drafts";
 import {
+  activeTab,
+  closeLabel,
+  closeTab,
+  emptyViewerNote,
+  initialTabs,
+  isDirty,
+  openTab,
+  pruneTabs,
+  tabLabel,
+} from "@/lib/editor-tabs";
+import {
   ApiError,
   api as platformApi,
   code as codeApi,
@@ -224,7 +235,7 @@ function FilesTab({
   pending: boolean;
   error: Error | null;
   openPath: string | undefined;
-  onOpen: (path: string) => void;
+  onOpen: (path: string | undefined) => void;
 }) {
   const queryClient = useQueryClient();
   // The working set: the committed tree with unsaved edits laid over it. Kept
@@ -257,12 +268,44 @@ function FilesTab({
   // visible to the save effect in the same commit, which is exactly the pass
   // that must not write. It has to be state, so the two land together.
   const [loaded, setLoaded] = useState<string | null>(null);
+  // **The open set is rebuilt, not restored** (§282). Everything expensive in
+  // the strip is already persisted - the drafts - so a tab for every file with
+  // uncommitted work, plus the one the link names, gets the session back
+  // without a second store that can return disagreeing with the first.
+  const [tabs, setTabs] = useState<string[]>([]);
   useEffect(() => {
-    setEdits(readDrafts(key));
+    const drafts = readDrafts(key);
+    setEdits(drafts);
+    setTabs(initialTabs(drafts, openPath));
     setLoaded(key);
     setMessage("");
     setDraftWarning(null);
+    // `openPath` is deliberately not a dependency: this seeds the strip when
+    // the *branch* changes, and a later file change is the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+
+  // **There is no effect on `openPath` here, and that is deliberate** (§213).
+  //
+  // The obvious one to write: a deep link, the back button and a jump from the
+  // History tab all move `?file=`, so the strip looks like it needs to follow
+  // the URL wherever it goes. It was written, and it was the *only* way a file
+  // opened - which is how §282 shipped a bug that took a browser test to find.
+  // An effect keyed on a value only fires when the value **changes**, and
+  // `router.replace` does not land synchronously: close the last tab and click
+  // the same file in the tree before the router catches up, and `openPath`
+  // reads `src/a.sql` the whole way through, cleared and set again inside a
+  // window React never observes. The tab never reopened while the address bar
+  // went on naming it.
+  //
+  // Once `openFile` below does its own opening, the effect had nothing left to
+  // catch. Every route that sets `?file=` to an actual path goes through it;
+  // the other three call sites (the branch select, `onOpenCommit`, `onSwitch`)
+  // only ever clear it, which the effect ignored anyway. And `useUrlState`
+  // replaces rather than pushes, so within this application there are no
+  // history entries to go back *to* - a fresh URL is a fresh mount, and the
+  // seed above handles that. Keeping it would have been a second mechanism
+  // that no test could reach, which is the shape §280 deleted too.
 
   // Written on every change. `localStorage` is synchronous and these are small,
   // and the alternative - debouncing - would mean a reload in the debounce
@@ -306,11 +349,36 @@ function FilesTab({
   if (error) return <p className="state error">{error.message}</p>;
 
   const paths = Object.keys(working).sort();
-  const selected = openPath && paths.includes(openPath) ? openPath : paths[0];
+  // Pruned on the way out rather than in an effect: a file leaves the working
+  // set when it is deleted and when a branch switch brings a tree that never
+  // had it, and deriving means the strip cannot lag behind either.
+  const open = pruneTabs(tabs, paths);
+  const selected = activeTab(open, openPath);
   const source = selected === undefined ? undefined : working[selected];
   // Editing is against a branch. A pinned commit is history, and history that
   // could be typed into would stop being a record of what happened.
   const readOnly = pinned;
+
+  /** Open a file: in the strip and in the URL, in that order.
+   *
+   * Both, rather than letting the URL effect above do the opening, because the
+   * router is asynchronous and a file re-opened before a close has landed is a
+   * `?file=` that never changed - which an effect cannot see. */
+  function openFile(path: string) {
+    setTabs((current) => openTab(current, path));
+    onOpen(path);
+  }
+
+  /** Close a tab, and go wherever `closeTab` says.
+   *
+   * **This does not discard the edit**, which is why the button says so: the
+   * draft lives in the working set and in storage, not in the tab, so a file
+   * closed with unsaved changes is still going into the next commit. */
+  function close(path: string) {
+    const next = closeTab(open, path, selected);
+    setTabs(next.tabs);
+    if (next.active !== selected) onOpen(next.active);
+  }
 
   function addFile() {
     const path = window.prompt("New file path", "src/new.sql");
@@ -320,7 +388,18 @@ function FilesTab({
       return;
     }
     setEdits((c) => ({ ...c, [path]: "" }));
-    onOpen(path);
+    openFile(path);
+  }
+
+  /** Delete a file, and leave the strip where closing its tab would.
+   *
+   * Deleting is two things at once - the file goes and its tab goes - and the
+   * second is what makes the neighbour rule matter: without it the deletion
+   * drops you back on the first tab, which is rarely the one you were working
+   * through. */
+  function deleteFile(path: string) {
+    setEdits((c) => ({ ...c, [path]: null }));
+    close(path);
   }
 
   return (
@@ -343,7 +422,7 @@ function FilesTab({
                     : ""
                 }`}
                 aria-current={path === selected}
-                onClick={() => onOpen(path)}
+                onClick={() => openFile(path)}
               >
                 {path}
               </button>
@@ -355,10 +434,7 @@ function FilesTab({
                 New file
               </button>
               {selected !== undefined && (
-                <button
-                  type="button"
-                  onClick={() => setEdits((c) => ({ ...c, [selected]: null }))}
-                >
+                <button type="button" onClick={() => deleteFile(selected)}>
                   Delete file
                 </button>
               )}
@@ -367,6 +443,42 @@ function FilesTab({
         </div>
 
         <div className="repo-viewer">
+          {/* **The strip is above the editor and outside the empty branch**,
+              because tabs that vanished when the last one closed would leave
+              nothing to explain where the files went. */}
+          {open.length > 0 && (
+            <div className="repo-tabs-strip" role="tablist" aria-label="Open files">
+              {open.map((path) => {
+                const dirty = isDirty(path, committed, edits);
+                return (
+                  <span
+                    key={path}
+                    className={`repo-tab${path === selected ? " on" : ""}${
+                      dirty ? " edited" : ""
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={path === selected}
+                      title={path}
+                      onClick={() => openFile(path)}
+                    >
+                      {tabLabel(path, open)}
+                    </button>
+                    <button
+                      type="button"
+                      className="repo-tab-close"
+                      aria-label={closeLabel(path, dirty)}
+                      onClick={() => close(path)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
           {selected !== undefined && source !== undefined ? (
             <>
               <div className="repo-file-head">
@@ -390,9 +502,7 @@ function FilesTab({
               />
             </>
           ) : (
-            <p className="state">
-              {readOnly ? "This commit contains no files." : "No files yet."}
-            </p>
+            <p className="state">{emptyViewerNote(paths.length, readOnly)}</p>
           )}
         </div>
       </div>
