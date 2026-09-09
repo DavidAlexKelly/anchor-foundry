@@ -97,6 +97,10 @@ So the runtime contract is written down here, beside the syntax it belongs to:
 - **The decorator defined in the runner records and returns; it never parses.** Reading a declaration by importing the file is the thing this whole document refuses. The runner's `transform` exists so the file can *find* the name, not so anything can learn what it says.
 - **One file declares one transform, in both languages.** SQL refused a second `-- output:` from the start; Python returned the first of two decorated functions and dropped the second silently — not built, not scheduled, not in the lineage graph, with a stale dataset as its only symptom. Both refuse now, and the Python refusal names both functions, because the fix is to split the file.
 
+  **This one is a divergence from Foundry rather than parity, and it is worth saying so.** A Foundry repository file may hold several transforms — `code-repositories` p.39 shows a generator producing three in a loop. Here identity is `(repository, path)`: db 0038's unique index, and what makes a *renamed* file publish to the same model instead of silently starting a second one that runs forever. One path cannot name two models, so a file declaring twice cannot be honoured whichever one you pick. The gap is therefore in the identity and not in the reader, and closing it means identity becomes `(repository, path, output)` — a schema change touching every published model, worth doing when somebody actually wants a file of small related transforms.
+
+  Note also what the old behaviour was not: returning the first of two is neither one-per-file nor many-per-file. It is one-per-file with the error left out.
+
 ## What this does not decide
 
 - **The scheduler side**: how a run is dispatched to the runner task, and what happens when the task cannot start.

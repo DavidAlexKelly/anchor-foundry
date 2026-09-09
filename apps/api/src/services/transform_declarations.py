@@ -89,6 +89,21 @@ def _read_python(source: str) -> Declaration | None:
             found.append((node.name, _from_call(decorator, node.lineno)))
             break
     if len(found) > 1:
+        # **A divergence from Foundry, and deliberate.** A Foundry repository
+        # file may hold several transforms - `code-repositories` p.39 shows a
+        # generator producing three from a loop. Here identity is
+        # `(repository, path)`, which is db 0038's unique index and the thing
+        # that makes a renamed file publish to the same model rather than a
+        # second one; one path cannot name two models. So the gap is in the
+        # identity rather than in this reader, and closing it means identity
+        # becomes `(repository, path, output)` - a schema change touching every
+        # published model, worth doing when somebody wants a file of small
+        # related transforms and not before.
+        #
+        # What this replaced matched neither model: returning the first of two
+        # is not one-per-file *or* many-per-file, it is one-per-file with the
+        # error left out.
+        #
         # Named, both of them, because the fix is to split the file and the
         # author needs to know which two things to split.
         names = ", ".join(name for name, _ in found)

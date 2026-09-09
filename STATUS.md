@@ -4453,6 +4453,20 @@ answer. Both refuse now, and the Python refusal names both functions, because
 the fix is to split the file and the author needs to know which two things to
 split.
 
+**And that refusal is a divergence from Foundry, which is worth saying rather
+than leaving to read as parity.** `code-repositories` p.39 shows a Foundry file
+holding three transforms produced by a generator, so a file there maps to many.
+Here identity is `(repository, path)` — db 0038's unique index, and the thing
+that makes a *renamed* file publish to the same model instead of quietly
+starting a second one that runs forever. One path cannot name two models, so a
+file declaring twice cannot be honoured whichever one is picked: **the gap is
+in the identity, not in the reader.** Closing it means identity becomes
+`(repository, path, output)`, a schema change touching every published model,
+worth doing when somebody actually wants a file of small related transforms.
+Worth noticing too that the old behaviour matched neither model — returning the
+first of two is not one-per-file or many-per-file, it is one-per-file with the
+error left out.
+
 Harness: **15/15**, no survivors, no no-ops.
 
 ### 271. Twenty-eight failures nobody had read (this session)
