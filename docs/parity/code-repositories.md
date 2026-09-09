@@ -2,7 +2,7 @@
 
 **Source:** `docs/pal/foundry_code-repositories.pdf`, 140 pages. Citations are `(p.13)`.
 
-**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, **Pull requests** (§276), Publish. Checks still live on the project's Code pillar page, as does creation of the typed-changes proposal shape — the one that names no repository.
+**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, **Pull requests** (§276), Publish, **Settings** (§279). Checks still live on the project's Code pillar page, as does creation of the typed-changes proposal shape — the one that names no repository.
 
 Foundry's own summary of the product: "a web-based integrated development environment (IDE) for writing and collaborating on production-ready code", with all common Git tasks through the web UI, integrated pull-request review, and "IntelliSense, code linting and error checking, and rich help dialogs" (p.2).
 
@@ -12,7 +12,7 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 >
 > | only on this page | consequence of deleting it today |
 > |---|---|
-> | `setReviewPolicy` | **no way to turn code review on or off.** `require_code_review` is *read* in `models/page.tsx` and `repository-app.tsx`; it is *set* here and nowhere else |
+> | ~~`setReviewPolicy`~~ | **no way to turn code review on or off.** `require_code_review` was *read* in `models/page.tsx` and `repository-app.tsx` and *set* here alone. **Re-homed by §279** into the Settings tab this file has wanted since it was written |
 > | `saveChangeSet` | decision 0001's "one genuinely new concept" — several transforms saved as one change — becomes unexpressible |
 > | `codeApi.history` | the project's change-set history. The repository app's History tab is *commits in one repository*, which is a different list |
 > | `changeSet` + `diff` | reading what a change set contained, and its diffs |
@@ -20,7 +20,7 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 >
 > Plus creation of the *typed-changes* proposal shape (`code/page.tsx:179`), which §276 could not re-home because it names no repository.
 >
-> So "mostly deletion" is wrong: the page has to be **emptied before it is removed**, and the first row is the one that matters — a security-relevant setting whose only control would go with it. Adoption (§274–§275) makes the editor half redundant, which was the blocker this row originally named; the other five are a separate piece of work and are not blocked by anything.
+> So "mostly deletion" is wrong: the page has to be **emptied before it is removed**. The first row was the one that mattered — a security-relevant setting whose only control would have gone with it — and §279 moved it. **Four left**, plus the typed-changes proposal shape. Adoption (§274–§275) makes the editor half redundant, which was the blocker this row originally named; the rest is a separate piece of work and is not blocked by anything.
 
 ---
 
