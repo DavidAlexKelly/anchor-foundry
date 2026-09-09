@@ -8,6 +8,20 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 
 **Also delete `app/(platform)/[workspace]/[project]/code/page.tsx`.** 463 lines duplicating this, worse, with a `<textarea className="code-editor">` at line 332. Parity is unreachable while two editors exist, and users currently hit the wrong one.
 
+> **Correction (§278): it is not only a duplicate, and this reorders the work.** The line above was written from the editor half and is right about that half. Grepping every call it makes turns up **five capabilities that exist nowhere else in the product**:
+>
+> | only on this page | consequence of deleting it today |
+> |---|---|
+> | `setReviewPolicy` | **no way to turn code review on or off.** `require_code_review` is *read* in `models/page.tsx` and `repository-app.tsx`; it is *set* here and nowhere else |
+> | `saveChangeSet` | decision 0001's "one genuinely new concept" — several transforms saved as one change — becomes unexpressible |
+> | `codeApi.history` | the project's change-set history. The repository app's History tab is *commits in one repository*, which is a different list |
+> | `changeSet` + `diff` | reading what a change set contained, and its diffs |
+> | `codeApi.tree` | the project-wide transform tree, across repositories and directly-authored models alike |
+>
+> Plus creation of the *typed-changes* proposal shape (`code/page.tsx:179`), which §276 could not re-home because it names no repository.
+>
+> So "mostly deletion" is wrong: the page has to be **emptied before it is removed**, and the first row is the one that matters — a security-relevant setting whose only control would go with it. Adoption (§274–§275) makes the editor half redundant, which was the blocker this row originally named; the other five are a separate piece of work and are not blocked by anything.
+
 ---
 
 ## 1. The five tabs (p.10)
@@ -200,7 +214,7 @@ Foundry supports several; two matter here (p.3):
 
 ## 9. Build order
 
-1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **Was blocked; the blocker is now two-thirds cleared.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
+1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **The original blocker is cleared and a larger one was found (§278): see the correction in the header — five capabilities live only on that page, including the only control for `require_code_review`. The editor half is now redundant; the page cannot go until the other five have somewhere to be.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
 2. **Draft persistence**, then **multi-file tabs**.
 3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
 4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful.

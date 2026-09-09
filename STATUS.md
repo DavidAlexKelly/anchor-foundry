@@ -4388,6 +4388,47 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 278. The page B.1 was going to delete is not a duplicate (this session)
+
+Nothing built. §216's rule — open what a line cites before building on it —
+applied to the line I was about to act on, and it was wrong in a way that
+matters.
+
+`code-repositories.md` opens with *"Also delete
+`app/(platform)/[workspace]/[project]/code/page.tsx`. 463 lines duplicating
+this, worse."* That is true of the editor half, and the editor half is exactly
+what §273–§275 made redundant — a model can now be a file, so a project does
+not need a second textarea to edit transforms in. Deletion looked like the next
+step and it was one grep away from being wrong.
+
+**Five capabilities live on that page and nowhere else in the product:**
+
+| only there | what deleting it today would cost |
+|---|---|
+| `setReviewPolicy` | **no way to turn code review on or off.** `require_code_review` is *read* in `models/page.tsx` and `repository-app.tsx`; it is *set* here alone |
+| `saveChangeSet` | decision 0001's "one genuinely new concept" — several transforms saved as one change — becomes unexpressible |
+| `codeApi.history` | the project's change-set history. The repository app's History tab is *commits in one repository*, a different list |
+| `changeSet` + `diff` | reading what a change set contained |
+| `codeApi.tree` | the project-wide transform tree, spanning repositories and directly-authored models |
+
+Plus creation of the typed-changes proposal shape, which §276 could not
+re-home because it names no repository.
+
+**The first row is the one that matters.** A security-relevant setting — the
+gate that decides whether a transform can be changed without review — has
+exactly one control in the entire product, on the page a build-order line
+describes as a duplicate. Deleting it would not have errored, and nothing would
+have failed; the capability would simply have been gone, which is the same
+sentence `docs/parity/README.md` uses about the blocker it *did* record. That
+one was found by reading; this one needed the grep.
+
+So the correction is recorded and nothing is deleted. **"Mostly deletion" is
+wrong: the page has to be emptied before it is removed**, and emptying it is
+work nobody has scoped. What §273–§277 actually achieved is that the *reason*
+for the blocker is gone — the editor half is redundant and a transform under
+the review gate now has a path that survives the page. The remaining five are
+not blocked by anything; they simply need homes.
+
 ### 277. The second reason a transform is read-only (this session)
 
 Small, and it is the piece that makes B.1's deletion survivable rather than
@@ -10350,6 +10391,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **"It duplicates X" is a claim about the parts somebody looked at, and the way to check it is to enumerate the calls rather than to read the description again.** §278 was one step from deleting a 463-line page a plan called "463 lines duplicating this, worse" — accurate about its editor, and silent about the five things it is the only home for, including the **only control for whether a project requires code review**. Nothing would have errored; the capability would just have been gone. The check took one grep per API call the page makes, and it is the same check worth running before deleting *anything* substantial: not "what is this for", which the name and the comment already answer, but **"what does this call that nothing else calls"**. A duplicate is a claim about a set, and sets are counted, not described.
 
 - **A mechanism can be proved without reproducing the failure, and sometimes that is the only route.** §266's rule is to turn an intermittent bug into a measurement before evaluating any fix, and the browser flake refused: ten runs of the failing ordering passed locally, six more at 20× CPU throttling. What settled it was not a better reproduction but a *direct observation of the intermediate state* — reading `document.activeElement` around the click showed focus moving from the body to the subject, deterministically, every time. The race is only whether that move lands inside Playwright's `fill`; the move itself is not a race at all. **When a failure will not reproduce, look for the deterministic half of it** — the state change that always happens, of which the failure is one interleaving. That is testable on a machine where the bug never fires.
 
