@@ -19,6 +19,18 @@ jobs:
   api:
     runs-on: ubuntu-latest
     services:
+      # **`-U platform` on the healthcheck, and it is not cosmetic** (§275).
+      # `pg_isready` with no user defaults to the *invoking OS user*, which in
+      # the service container is root - a role that does not exist here, so
+      # every probe logged `FATAL: role "root" does not exist`. At one probe
+      # every five seconds that is roughly three hundred lines per job, and
+      # GitHub prints the service container's log *after* the job's own steps.
+      # So the noise always lands last: §271 fixed this workflow's failure
+      # diagnostic from printing nothing, §272 shortened it from printing too
+      # much, and it still could not be read, because the runner appends a
+      # wall of healthcheck errors under whatever it says. The probe worked
+      # throughout - it reports "accepting connections" either way - which is
+      # why nobody looked at it.
       postgres:
         image: postgres:16
         env:
@@ -27,7 +39,7 @@ jobs:
           POSTGRES_DB: platform
         ports: ["5432:5432"]
         options: >-
-          --health-cmd pg_isready --health-interval 5s
+          --health-cmd "pg_isready -U platform" --health-interval 5s
           --health-timeout 5s --health-retries 20
       # §268. `test_mysql_connector.py` is the file that proves the connector
       # interface generalises rather than being a rename of the Postgres path,
@@ -129,7 +141,7 @@ jobs:
           POSTGRES_DB: platform
         ports: ["5432:5432"]
         options: >-
-          --health-cmd pg_isready --health-interval 5s
+          --health-cmd "pg_isready -U platform" --health-interval 5s
           --health-timeout 5s --health-retries 20
     env:
       DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
@@ -176,7 +188,7 @@ jobs:
           POSTGRES_DB: platform
         ports: ["5432:5432"]
         options: >-
-          --health-cmd pg_isready --health-interval 5s
+          --health-cmd "pg_isready -U platform" --health-interval 5s
           --health-timeout 5s --health-retries 20
     env:
       DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
