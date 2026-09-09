@@ -4464,6 +4464,15 @@ header. §263's rule about a lesson recorded where it was learned applies
 squarely here — the paragraph above is worth nothing without the command
 underneath it.
 
+**No mutation harness, and the reason is not that this was tidying.** §271
+changed no production source: every edit is a test, a document, or a script.
+A harness answers "would the tests notice if this line were wrong", and there
+is no new line here for it to ask about — the *tests* are the change, and what
+proves them is that all 28 failed before and pass after against the
+environment that produced them. The one piece of new logic that could rot is
+`fresh-e2e.sh` itself, and the check on that is the same one this repo's CI
+header already makes about inlined commands: it is run, not read.
+
 ### 270. Export schedules, and a copy that did not have to be one (this session)
 
 p.205, and the last piece `data-connection.md`'s exports row still named as

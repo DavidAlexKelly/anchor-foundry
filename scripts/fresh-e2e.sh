@@ -75,8 +75,15 @@ with psycopg.connect(for_database(sys.argv[1], "postgres"), autocommit=True) as 
 ' "$ADMIN" "$1"
 }
 
+TORN=""
 teardown() {
   local code=$?
+  # **On Ctrl-C both traps fire**: INT runs this, which exits, which fires EXIT,
+  # which runs it again - a second dev-down/dev-up pair over a stack that is
+  # already back, and a second DROP against a database that is already gone.
+  # Harmless today and exactly the kind of thing that stops being harmless.
+  [ -n "$TORN" ] && exit "$code"
+  TORN=1
   echo
   echo "=== putting the stack back ==="
   "$ROOT/scripts/dev-down.sh" >/dev/null 2>&1
