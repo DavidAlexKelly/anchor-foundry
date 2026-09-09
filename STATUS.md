@@ -4388,6 +4388,56 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 275. The adoption screen, and the edit it should never have offered (this session)
+
+§274's other half, and the half that turned out to carry a defect of its own.
+
+**`ModelOut` has declared `source_repo_id` since §94 and the shared `Model`
+type did not.** So no screen could read it — and the Models page showed an
+editable body and an enabled Save for *every* model, including the ones
+`services/models.py` refuses with a 409 naming db 0038. A builder editing a
+repository-authored transform typed into a box, pressed a button, and got a
+refusal.
+
+§214's shape — a control that looks like it works — and **§191's mirrored-copy
+problem in its quietest form**. §191's version was two lists that agreed and
+were identically wrong; this is worse to notice, because the two copies did not
+disagree at all. One of them was simply *missing a row*, so nothing looked
+wrong from either side and `tsc` had nothing to object to. A field can be on
+the wire, declared by the server, documented in the route, and still invisible
+to every screen in the product.
+
+What the page does now:
+
+* the body is read-only for a repository-authored transform, and **the reason
+  names the file** — the reader's next move is to open it, and a message that
+  only said "read-only" reads as a permission problem and sends them to an
+  administrator;
+* trigger, schedule and health policy stay editable, because `models.update`
+  gates only what a transform *computes* — gating the rest would make a
+  review-required project unable to pause a job, which is the reason that line
+  is drawn where it is in the service;
+* **Move into a repository**, offered exactly once, because adoption is
+  one-way;
+* a project with no repositories says so rather than showing an empty picker,
+  which reads as broken and whose remedy is on another screen.
+
+**The path box leaves its default empty, and that is a decision rather than
+laziness.** The server derives a path by running the model's name through
+`datasets.slugify`; deriving it here too would be a second copy of that rule,
+and the disagreement §191 describes would show up as a file written where the
+screen did not predict. So an empty box means "you choose", the server answers,
+and the result is displayed. What the browser *can* check without a second copy
+is the extension against the language, because publishing reads the language
+off the path.
+
+**And one locator lesson worth keeping.** The first browser test waited on
+`.data-grid tbody tr`, which is the *history dialog's* table — this screen's
+list is `.table`. The failure dump showed the row rendering perfectly while the
+assertion timed out: §271's family exactly, a message that describes the wrong
+thing. Ten unit tests hold the rules; three browser tests hold what the page
+offers, which is the part a unit test cannot see.
+
 ### 274. Adoption — a model becomes a file (this session)
 
 The second third of **B.1**. §273 gave a script a way to declare; this is the
@@ -10196,6 +10246,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **A field can be on the wire, declared by the server, and still invisible to every screen — and nothing type-checks that gap.** §275: `ModelOut` has carried `source_repo_id` since §94; the shared `Model` interface never gained it. So the Models page offered an edit the server refuses, for a year, and no tool could complain: `tsc` sees a type that is internally consistent, the API sees a field it correctly returns, and the two are never compared. This is **§191's mirrored-copies problem in its worst-to-notice form** — there the two copies agreed and were identically wrong; here they do not disagree at all, one is just *shorter*. When a server-side response model gains a field, the question is not "does the type still compile" but **"which screens should now be different, and are they?"** — and until a generator or a drift test answers it, adding a field to a response model means grepping for the screens that ought to care.
 
 - **A reader and a writer of the same syntax belong in one file, and the round trip belongs in the test suite.** §274 put `render` next to `read` rather than in the adoption service that calls it. The alternative is the exact shape §272 had just spent a unit on: two things that must agree, kept apart, each thoroughly tested against itself and never against the other. The property — `read(render(x)) == x`, over a table, in every language the syntax supports — is what makes them agree; a comment saying they are inverses is what makes them *look* like they agree. This applies to every encode/decode pair a codebase owns: serialisers, URL builders, path encoders, the lot.
 
