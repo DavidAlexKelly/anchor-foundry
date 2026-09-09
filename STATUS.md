@@ -4666,6 +4666,30 @@ error left out.
 
 Harness: **15/15**, no survivors, no no-ops.
 
+**The flake this postscript left open is now found, and the four diagnostic
+fixes are what found it.** `test_an_insert_button_writes_the_reference_name_not_its_label`,
+one failure in 807, roughly one CI run in four and never locally. It clicks the
+subject's *Insert* button and then fills the **body** — and `insert` in
+`notify-rule-fields.tsx` schedules a `requestAnimationFrame` that focuses the
+field it just wrote to, so the sentence can be continued. Playwright's `fill`
+focuses its target and *then* types; when that frame fires in between, focus is
+back on the subject and the body's text is typed there. The failure reads
+`For {{{recipient}}}By ` and blames the insert button, which had put exactly
+the right thing in exactly the right place.
+
+**Confirmed by observation rather than by argument** (§266: a plausible
+mechanism is not a diagnosis). Ten runs of the original ordering passed
+locally, and six more at 20× CPU throttling — so the *measurement* never
+reproduced. What settled it was reading `document.activeElement` around the
+click: `rule-2-body` before, `rule-2-subject` immediately after and 300ms
+later. The focus move is deterministic; only whether it lands inside `fill` is
+not. A mechanism can be proved without reproducing the failure, and here that
+was the only route left.
+
+The product is right and the test was wrong, which is worth saying because the
+opposite is the usual finding. Waiting for the insert to have landed before
+touching another field is the fix, and it is an assertion worth making anyway.
+
 **A postscript, because it is an open item and not a tidy one.** §272's PR went
 red on the browser job, and it was not §272: the commit before it carries every
 line of functional code and passed, while the commit that failed adds
