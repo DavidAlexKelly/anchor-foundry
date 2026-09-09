@@ -37,6 +37,7 @@ from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
 from . import code_checks as check_service
 from . import models as model_service
+from . import repositories as repo_service
 
 _EXTENSIONS = {"sql": "sql", "python": "py"}
 _UNSAFE = re.compile(r"[^a-z0-9]+")
@@ -825,6 +826,16 @@ async def _assemble_proposal(
         f["read_by"] = marks.get(key, [])
         f["checks"] = [c for c in checks if _anchor_of(c) == key]
     blockers = _blockers(proposal, files, reviews, checks)
+    lands_on, landing = await _landing(conn, proposal)
+    if landing == repo_service.DIVERGED:
+        # The same shape as `unpublishable`: the surface renders it without
+        # knowing it is special, and it is knowable before the button is
+        # pressed rather than after the publish has already happened.
+        blockers.append(
+            f"branch {lands_on!r} has moved on since this was proposed, so applying "
+            f"this could not move it without discarding commits. Merge {lands_on!r} "
+            "into the branch this was made on and propose again."
+        )
     if unpublishable:
         # Not an error: the commit is fine and has not moved. Something in the
         # project has, and this says which - the same shape every other blocker
@@ -843,7 +854,41 @@ async def _assemble_proposal(
         # have run" when in fact they have and the code moved.
         "checks": checks,
         "blockers": blockers,
+        # Where applying this puts the code, and whether it can go there
+        # (§283). Null for a typed-changes proposal, which names no repository
+        # and so lands on no branch - the one shape `code-repositories.md`'s
+        # header calls out as belonging to nothing.
+        "lands_on": lands_on,
+        "landing": landing,
     }
+
+
+async def _landing(
+    conn: AsyncConnection, proposal: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """Which branch this proposal lands on, and whether it still can (§283).
+
+    **Applying used to publish and stop there**, which was invisible while
+    everything was committed to the default branch first: the branch was
+    already at the commit, so "the branch does not move" and "the branch is
+    right" were the same picture. They come apart the moment work happens on a
+    sandbox - which is the whole point of a pull request, and what §2.1's
+    protected-branch rule will make the only way to work.
+
+    The branch is the repository's default. A proposal records a commit, not a
+    base (db 0039), and the branch it was made on may be deleted by the time it
+    is applied - so the target has to be a property of the repository rather
+    than of the proposal.
+    """
+    if not proposal["source_repo_id"] or not proposal["source_commit_id"]:
+        return None, None
+    repo_id = UUID(str(proposal["source_repo_id"]))
+    branch = await repo_service.default_branch(conn, repo_id)
+    state = await repo_service.landing_state(
+        conn, repo_id=repo_id, branch=branch,
+        commit_id=UUID(str(proposal["source_commit_id"])),
+    )
+    return branch, state
 
 
 async def review_proposal(
@@ -961,6 +1006,24 @@ async def _apply_publish(
         )
     except publish_service.PublishError as exc:
         raise ValueError(str(exc)) from exc
+    # **And the branch moves** (§283). Without this, applying a proposal made on
+    # a sandbox published the code and left the default branch where it was, so
+    # the branch every reader opens the repository on would go stale the first
+    # time anybody used the review path the way it is meant to be used. In the
+    # same transaction as the publish: a repository whose branch says one thing
+    # and whose transforms say another is worse than either failure alone.
+    #
+    # `land` refuses on a divergence, which `_landing` has already reported as a
+    # blocker above - this is the second half of that check, at the moment it
+    # is acted on, because the gap between the two is where the race lives.
+    await repo_service.land(
+        conn,
+        repo_id=UUID(str(detail["source_repo_id"])),
+        branch=await repo_service.default_branch(
+            conn, UUID(str(detail["source_repo_id"]))
+        ),
+        commit_id=UUID(str(detail["source_commit_id"])),
+    )
     await fetch_one(
         conn,
         """

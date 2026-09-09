@@ -2464,4 +2464,9 @@ export interface CodeProposalDetail extends CodeProposal {
   checks: CodeCheck[];
   /** Every reason this cannot be applied, in the words the API used. */
   blockers: string[];
+  /** The branch applying this moves, and whether it still can (§283):
+   * `"landed"`, `"fast_forward"` or `"diverged"`. Both null for a
+   * typed-changes proposal, which names no repository and so lands nowhere. */
+  lands_on: string | null;
+  landing: string | null;
 }

@@ -402,6 +402,97 @@ async def merge_branch(
     return {**comparison, "merged": False}
 
 
+# ---- landing a commit on a branch (§283) --------------------------------------
+# What applying a commit-backed proposal does to the branch it came from.
+#
+# `merge_branch` above answers "merge this branch into that one"; a proposal
+# names a *commit*, not a branch, and by the time it is applied the branch it
+# was made on may be gone. So the question here is narrower and has to be asked
+# of the commit itself.
+#: The branch already has this commit - nothing to move, and nothing wrong.
+LANDED = "landed"
+#: The branch's head is behind this commit: applying moves the pointer forward.
+WILL_MOVE = "fast_forward"
+#: Both have commits the other does not. A pointer cannot express that.
+DIVERGED = "diverged"
+
+
+async def landing_state(
+    conn: AsyncConnection, *, repo_id: UUID, branch: str, commit_id: UUID
+) -> str:
+    """Whether this commit can land on this branch, without landing it.
+
+    Asked before the publish rather than after, for the reason the merge screen
+    exists: every refusal a publish can make is knowable without publishing,
+    and a screen that only reports them afterwards teaches people to press and
+    hope.
+    """
+    head = await branch_head(conn, repo_id=repo_id, name=branch)
+    if head is None or head["head_commit_id"] is None:
+        # **Two ways to have nothing, and both land.** A branch created before
+        # its first commit is the case `move_branch` allows vacuously. A branch
+        # row that does not exist at all is a repository whose commits have only
+        # ever gone somewhere else: `read_tree` falls back to the default branch
+        # and finds no row, so the repository *reads as empty* until something
+        # puts one there. Applying is exactly the moment to - the same act by
+        # which a first commit creates the branch it is on.
+        return WILL_MOVE
+    current = UUID(str(head["head_commit_id"]))
+    if current == commit_id:
+        return LANDED
+    if current in {UUID(str(a)) for a in await ancestors(conn, commit_id)}:
+        return WILL_MOVE
+    if commit_id in {UUID(str(a)) for a in await ancestors(conn, current)}:
+        # **The branch is ahead of the commit, and this is not a refusal.** A
+        # proposal made over an older commit that has since been landed - by
+        # this proposal's own author committing again, or by another proposal -
+        # has nothing left to do to the branch. `move_branch` would refuse it,
+        # because moving *backwards* discards commits; not moving at all does
+        # not, and that is what this is.
+        return LANDED
+    return DIVERGED
+
+
+async def land(
+    conn: AsyncConnection, *, repo_id: UUID, branch: str, commit_id: UUID
+) -> bool:
+    """Move `branch` to `commit_id` if it can go there. True if it moved.
+
+    Refuses rather than merging, for the reason `merge_branch` does: there is
+    no merge commit here, so a divergence cannot be resolved by moving a
+    pointer, and inventing a resolution would be inventing code nobody wrote.
+    """
+    state = await landing_state(conn, repo_id=repo_id, branch=branch, commit_id=commit_id)
+    if state == DIVERGED:
+        head = await branch_head(conn, repo_id=repo_id, name=branch)
+        assert head is not None
+        raise ConflictError(
+            f"branch {branch!r} has moved on since this was proposed: its head "
+            f"({head['head_commit_id']}) is not behind this commit, so applying "
+            f"this could not move {branch!r} without discarding those commits. "
+            f"Merge {branch!r} into the branch this was made on and propose again."
+        )
+    if state == WILL_MOVE:
+        if await branch_head(conn, repo_id=repo_id, name=branch) is None:
+            await conn.exec_driver_sql(
+                "INSERT INTO code_branches (repo_id, name, head_commit_id) VALUES (%s, %s, %s)",
+                (str(repo_id), branch, str(commit_id)),
+            )
+        else:
+            await move_branch(conn, repo_id=repo_id, name=branch, to_commit=commit_id)
+        return True
+    return False
+
+
+async def default_branch(conn: AsyncConnection, repo_id: UUID) -> str:
+    row = await fetch_one(
+        conn, "SELECT default_branch FROM code_repos WHERE id = :rid", {"rid": str(repo_id)}
+    )
+    if row is None:
+        raise NotFoundError("repository not found")
+    return str(row["default_branch"])
+
+
 async def create_branch(
     conn: AsyncConnection,
     *,

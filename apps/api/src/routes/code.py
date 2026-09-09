@@ -343,6 +343,11 @@ class ProposalDetail(ProposalSummary):
     # Every reason this cannot be applied, so the UI can say which rule was
     # tripped rather than showing a disabled button with no explanation.
     blockers: list[str]
+    # Which branch applying this moves, and whether it still can (§283). Both
+    # null for a typed-changes proposal: it names no repository, so it lands on
+    # no branch.
+    lands_on: str | None = None
+    landing: str | None = None
 
 
 class ProposalIn(BaseModel):

@@ -1041,3 +1041,212 @@ def test_adopting_keeps_every_file_the_repository_already_had(
     # would be as wrong as one that dropped it.
     assert files["README.md"] == "# transforms\n"
     assert files["src/existing.sql"] == sql(kept, source)
+
+
+# ---- applying lands the commit on the branch (§283) ---------------------------
+# `code-repositories.md` §2.1's protected-branch rule is what makes the Pull
+# requests tab load-bearing: work happens on a sandbox and lands through a
+# review. That rule is unworkable until applying a proposal *moves the branch* -
+# otherwise the first person to use the review path the way it is meant to be
+# used leaves the default branch behind forever, and the branch everybody opens
+# the repository on stops describing the repository.
+#
+# It was invisible until now because everything was committed to `main` first:
+# the branch was already at the commit, so "the branch does not move" and "the
+# branch is right" were the same picture.
+def branch_head(client: TestClient, fx: Fixture, repo_id: str, name: str) -> str | None:
+    rows = client.get(f"{rbase(fx)}/{repo_id}/branches", headers=hdr(fx.viewer_sub)).json()
+    row = next((b for b in rows if b["name"] == name), None)
+    return row["head_commit_id"] if row else None
+
+
+def sandbox(client: TestClient, fx: Fixture, repo_id: str, name: str,
+            *, frm: str = "main") -> None:
+    r = client.post(f"{rbase(fx)}/{repo_id}/branches", headers=hdr(fx.editor_sub),
+                    json={"name": name, "from_branch": frm})
+    assert r.status_code == 201, r.text
+
+
+def approve_and_apply(client: TestClient, fx: Fixture, proposal_id: str):
+    client.post(f"{cbase(fx)}/proposals/{proposal_id}/reviews", headers=hdr(fx.owner_sub),
+                json={"verdict": "approve", "comment": "yes"})
+    return client.post(f"{cbase(fx)}/proposals/{proposal_id}/apply", headers=hdr(fx.editor_sub))
+
+
+def test_applying_a_proposal_made_on_a_sandbox_moves_the_default_branch(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**The unit.** Before this, `main` stayed where it was and the work only
+    existed on a branch somebody could delete."""
+    out = f"landed_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"README.md": "# transforms\n"})
+    sandbox(client, fx, repo["id"], "work")
+    made = commit(client, fx, repo["id"],
+                  {"README.md": "# transforms\n", "src/t.sql": sql(out, source)},
+                  branch="work")
+    assert branch_head(client, fx, repo["id"], "main") == first["id"]
+
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    assert p["lands_on"] == "main"
+    assert p["landing"] == "fast_forward"
+
+    applied = approve_and_apply(client, fx, p["id"])
+    assert applied.status_code == 200, applied.text
+    assert branch_head(client, fx, repo["id"], "main") == made["id"]
+
+    # And the tree the repository opens on is the work, not the state before it.
+    tree = client.get(f"{rbase(fx)}/{repo['id']}/tree", headers=hdr(fx.viewer_sub)).json()
+    assert "src/t.sql" in tree["files"], sorted(tree["files"])
+
+
+def test_a_commit_already_on_the_branch_lands_without_moving_anything(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """The path every existing proposal takes: committed to `main`, proposed,
+    applied. Nothing to move, and nothing wrong - so this must not become a
+    refusal now that there is something to refuse."""
+    out = f"already_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    assert p["landing"] == "landed"
+
+    assert approve_and_apply(client, fx, p["id"]).status_code == 200
+    assert branch_head(client, fx, repo["id"], "main") == made["id"]
+
+
+def test_a_proposal_over_a_commit_the_branch_has_moved_past_still_applies(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**The branch being ahead is not a divergence.**
+
+    `move_branch` refuses to move backwards, and rightly - that discards
+    commits. But not moving at all discards nothing, and a proposal whose
+    commit is already in the branch's history has simply been overtaken. A
+    refusal here would strand every proposal made before somebody else's
+    landed.
+    """
+    out = f"overtaken_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    p = propose_commit(client, fx, repo["id"], first["id"]).json()
+    later = commit(client, fx, repo["id"],
+                   {"src/t.sql": sql(out, source), "README.md": "# later\n"})
+
+    assert client.get(f"{cbase(fx)}/proposals/{p['id']}",
+                      headers=hdr(fx.viewer_sub)).json()["landing"] == "landed"
+    assert approve_and_apply(client, fx, p["id"]).status_code == 200
+    # The branch stayed where it was: the proposal had nothing to add to it.
+    assert branch_head(client, fx, repo["id"], "main") == later["id"]
+
+
+def test_a_diverged_branch_is_a_blocker_before_the_button_not_an_error_after(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """Every refusal an apply can make is knowable without applying.
+
+    Reported in the same list as every other reason, so the surface renders it
+    without knowing it is special - and the publish never happens, rather than
+    happening and being rolled back.
+    """
+    out = f"diverged_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"README.md": "# transforms\n"})
+    sandbox(client, fx, repo["id"], "side")
+    made = commit(client, fx, repo["id"],
+                  {"README.md": "# transforms\n", "src/t.sql": sql(out, source)},
+                  branch="side")
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    assert p["landing"] == "fast_forward"
+
+    # Somebody else lands something on main, and now a pointer cannot express
+    # both histories.
+    moved = commit(client, fx, repo["id"],
+                   {"README.md": "# transforms\n", "docs/notes.md": "# theirs\n"})
+    detail = client.get(f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.viewer_sub)).json()
+    assert detail["landing"] == "diverged"
+    assert any("has moved on since this was proposed" in b for b in detail["blockers"]), \
+        detail["blockers"]
+
+    r = approve_and_apply(client, fx, p["id"])
+    assert r.status_code == 422, r.text
+    assert "moved on" in r.json()["detail"]
+    # And nothing was published on the way to that refusal.
+    models = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    assert out not in [m["name"] for m in models]
+    assert branch_head(client, fx, repo["id"], "main") == moved["id"]
+
+
+def test_a_typed_changes_proposal_lands_on_no_branch_and_says_so(
+    client: TestClient, fx: Fixture, source: str
+) -> None:
+    """The one shape that names no repository (db 0039). `null` rather than a
+    guessed branch: a proposal that reported landing on `main` when it touches
+    no repository would be describing something that cannot happen."""
+    model = make_model(client, fx, name=f"typed_{uuid.uuid4().hex[:8]}", code="SELECT 1")
+    r = client.post(
+        f"{cbase(fx)}/proposals", headers=hdr(fx.editor_sub),
+        json={"summary": "A typed change",
+              "changes": [{"model_id": model["id"], "code": "SELECT 2"}]},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["lands_on"] is None
+    assert r.json()["landing"] is None
+
+
+def test_applying_creates_the_default_branch_when_nothing_ever_made_it(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**A repository whose commits all went somewhere else reads as empty.**
+
+    `read_tree` falls back to the default branch and finds no row, which is the
+    same answer a repository nobody has committed to gives - the shape
+    `delete_branch` refuses to create. Applying is exactly the moment to put a
+    row there: it is the same act by which a first commit creates the branch it
+    is on, and leaving the repository opening on nothing after publishing its
+    code would be the worse of the two.
+    """
+    out = f"nomain_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)}, branch="only")
+    assert branch_head(client, fx, repo["id"], "main") is None
+
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    assert p["lands_on"] == "main"
+    assert p["landing"] == "fast_forward"
+
+    assert approve_and_apply(client, fx, p["id"]).status_code == 200
+    assert branch_head(client, fx, repo["id"], "main") == made["id"]
+    tree = client.get(f"{rbase(fx)}/{repo['id']}/tree", headers=hdr(fx.viewer_sub)).json()
+    assert "src/t.sql" in tree["files"], sorted(tree["files"])
+
+
+def test_a_repository_whose_default_branch_is_not_main_lands_on_its_own(
+    client: TestClient, fx: Fixture, source: str, gated
+) -> None:
+    """**§212, and it took a mutant to find it.**
+
+    Every repository in every test here is created with the default default
+    branch, so `default_branch()` returning the literal `"main"` passed all of
+    them - a fixture that never crosses the boundary cannot see the boundary,
+    and here the boundary is a repository that named its own trunk.
+    """
+    r = client.post(rbase(fx), headers=hdr(fx.editor_sub),
+                    json={"name": f"Trunked {uuid.uuid4().hex[:8]}",
+                          "default_branch": "trunk"})
+    assert r.status_code == 201, r.text
+    repo = r.json()
+    assert repo["default_branch"] == "trunk"
+
+    out = f"trunk_{uuid.uuid4().hex[:8]}"
+    base = commit(client, fx, repo["id"], {"README.md": "# t\n"}, branch="trunk")
+    sandbox(client, fx, repo["id"], "work", frm="trunk")
+    made = commit(client, fx, repo["id"],
+                  {"README.md": "# t\n", "src/t.sql": sql(out, source)}, branch="work")
+
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    assert p["lands_on"] == "trunk", p["lands_on"]
+    assert p["landing"] == "fast_forward"
+
+    assert branch_head(client, fx, repo["id"], "trunk") == base["id"]
+    assert approve_and_apply(client, fx, p["id"]).status_code == 200
+    assert branch_head(client, fx, repo["id"], "trunk") == made["id"]
+    # And `main` was never invented on the way: a repository that named its own
+    # trunk does not acquire a second one.
+    assert branch_head(client, fx, repo["id"], "main") is None

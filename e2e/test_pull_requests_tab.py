@@ -311,3 +311,61 @@ def test_a_draft_does_not_follow_you_to_another_branch(page, api) -> None:
     expect(page.locator(".code-editor-loading")).to_have_count(0, timeout=30000)
     eventually(lambda: editor_text(page), lambda t: "-- only on main" in t,
                what="the draft still on the branch it was typed on")
+
+
+# ---- where applying puts the code (§283) -------------------------------------
+def test_the_review_surface_says_which_branch_applying_moves(page, api) -> None:
+    """**Applying a commit proposal publishes the code and moves the branch.**
+
+    That was invisible while everything was committed to the default branch
+    first: the branch was already at the commit, so "the branch does not move"
+    and "the branch is right" were the same picture. They come apart the moment
+    work happens on a sandbox, which is the whole point of a pull request - and
+    a screen that mentioned neither would leave "the branch will be updated" as
+    the thing people assume in every case, including the one where it will not.
+
+    The wording rules are in `apps/web/src/lib/proposal-landing.test.ts`; what
+    needs a browser is that the API's answer reaches the screen at all.
+    """
+    mod = project(api, "Landing line")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    commit(mod, repo, {"README.md": "# transforms\n"})
+    mod.api.call("POST", f"{mod.base}/repositories/{repo['id']}/branches",
+                 {"name": "work", "from_branch": "main"})
+    out = f"land_{uuid.uuid4().hex[:6]}"
+    made = commit(mod, repo, {
+        "README.md": "# transforms\n",
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    }, branch="work")
+    proposal = propose_commit(mod, repo, made["id"], "Land the transform")
+
+    page.goto(
+        f"{WEB_BASE}/r/{repo['resource_id']}?tab=pulls&proposal={proposal['id']}"
+    )
+    landing = page.get_by_test_id("proposal-landing")
+    expect(landing).to_be_visible(timeout=30000)
+    expect(landing).to_contain_text("moves main to this commit")
+
+
+def test_a_proposal_over_a_commit_the_branch_already_has_says_nothing_will_move(
+    page, api
+) -> None:
+    """The other half, and the reason the line is not silent here: "nothing
+    will happen to the branch" and "the branch will be updated" look identical
+    on a screen that mentions neither."""
+    mod = project(api, "Landing landed")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    out = f"already_{uuid.uuid4().hex[:6]}"
+    made = commit(mod, repo, {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+    proposal = propose_commit(mod, repo, made["id"], "Already on main")
+
+    page.goto(
+        f"{WEB_BASE}/r/{repo['resource_id']}?tab=pulls&proposal={proposal['id']}"
+    )
+    landing = page.get_by_test_id("proposal-landing")
+    expect(landing).to_be_visible(timeout=30000)
+    expect(landing).to_contain_text("already has this commit")

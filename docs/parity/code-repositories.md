@@ -48,7 +48,7 @@ Six labelled regions (p.10–11): In-App Help, Branch Options, Code Editor Optio
 |---|---|---|
 | Branch dropdown | ✅ | |
 | Create a sandbox branch from an existing branch | ✅ | |
-| **Protected branches cannot be directly edited** | ○ | "To edit code in your repository, you must work in a sandbox branch" (p.12). We allow editing `main` directly. |
+| **Protected branches cannot be directly edited** | ○ | "To edit code in your repository, you must work in a sandbox branch" (p.12). We allow editing `main` directly. **Its prerequisite is now in place (§283):** applying a proposal moves the default branch, so work that only ever happens on a sandbox still leaves `main` describing the repository. |
 | Global branches | ○ | out of scope — see `README.md` on Global Branching |
 
 The protected-branch rule is the one to take seriously. It is what makes the Pull requests tab load-bearing rather than optional, and it is a refusal, so it is testable.
@@ -135,7 +135,7 @@ The docs add a note we should honour: "You should not delete any branches that y
 |---|---|---|
 | List PRs; switch Open / Closed | ◑ | §276: this repository's open proposals, in the tab. Open-only so far; and an empty tab says *where the others are* — three absences with three remedies (nothing anywhere, typed changes reviewed on the Code screen, another repository's) |
 | Search by title or author | ○ | |
-| Create a PR, choosing the base branch | ◑ | |
+| Create a PR, choosing the base branch | ◑ | the base is the repository's default branch and is not chosen. **Applying a proposal now lands the commit on it (§283)** — before that it published and stopped there, which was invisible while everything was committed to `main` first and would have made §2.1's protected-branch rule unworkable |
 | **Line-by-line review with comments** | ◑ | §52 built a review surface; verify it is line-level, not file-level |
 | Require at least one approving review before merge, per repository settings | ✅ | §28 review-gated promotion |
 | **See how changes affect datasets** when reviewing transform code | ○ | see §4.1 |
@@ -219,7 +219,7 @@ Foundry supports several; two matter here (p.3):
 1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **The original blocker is cleared and a larger one was found (§278): see the correction in the header — five capabilities live only on that page, including the only control for `require_code_review`. The editor half is now redundant; the page cannot go until the other five have somewhere to be.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
 2. ~~**Draft persistence**, then **multi-file tabs**~~ — **done (§281, §282)**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
 3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
-4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful.
+4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful. **§283 cleared the prerequisite it would otherwise have broken:** applying a proposal now lands the commit on the default branch. Protect `main` without that and the first person to use the review path as intended leaves `main` behind forever — the branch everybody opens the repository on would stop describing the repository.
 5. **Problems**, then **File Changes**. These two make the editor feel like an IDE more than anything else here.
 6. **Unit tests**, then the **Tests panel**, then test output in the Checks tab.
 7. **Tags**, branch checks column, PR column.

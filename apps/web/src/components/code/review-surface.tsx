@@ -28,6 +28,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, code as codeApi } from "@/lib/api";
+import {
+  divergenceRemedy,
+  landingIsAProblem,
+  landingNote,
+} from "@/lib/proposal-landing";
 import type {
   CodeCheck,
   CodeDiffRow,
@@ -225,6 +230,20 @@ export function ReviewSurface({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* **Where this goes** (§283). Applying a commit proposal publishes the
+          code *and* moves the branch it came from, and a screen that mentioned
+          neither would leave "the branch will be updated" as the thing people
+          assume in every case - including the one where it will not. */}
+      {landingNote(p) && (
+        <p
+          className={`review-landing${landingIsAProblem(p) ? " problem" : ""}`}
+          data-testid="proposal-landing"
+        >
+          {landingNote(p)}
+          {divergenceRemedy(p) && <span className="soft"> {divergenceRemedy(p)}</span>}
+        </p>
       )}
 
       {p.blockers.length > 0 && (

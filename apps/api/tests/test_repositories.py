@@ -466,3 +466,69 @@ async def test_the_default_branch_cannot_be_deleted(conn, repo) -> None:
     assert "default branch" in str(caught.value.detail)
     head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=default)
     assert head is not None
+
+
+# ---- landing a commit on a branch (§283) --------------------------------------
+# `land` is asked at the moment the move happens, and the proposal surface asks
+# `landing_state` *before* the button. Both are needed and neither substitutes
+# for the other: the surface's answer is a read of a moment that has passed by
+# the time anything acts on it, which is exactly where the race lives, and a
+# service that trusted its caller to have checked would be a gate on one screen.
+@pytest.mark.anyio
+async def test_landing_refuses_a_diverged_commit_rather_than_doing_nothing(
+    conn, repo
+) -> None:
+    """**The refusal is load-bearing even though the surface refuses first.**
+
+    Without it `land` falls through every branch and returns False - the
+    publish happens, the branch silently stays put, and the repository opens on
+    code that is not what was published. A quiet no-op is the worst of the
+    three outcomes available here.
+    """
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    first = await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    await _branch_at(conn, repo, side, first["id"])
+    theirs = await commit_files(conn, repo, {"a.sql": "1", "b.sql": "2"}, branch=side)
+    ours = await commit_files(conn, repo, {"a.sql": "1", "c.sql": "3"}, branch=trunk)
+
+    assert await repos.landing_state(
+        conn, repo_id=uuid.UUID(repo["id"]), branch=trunk,
+        commit_id=uuid.UUID(str(theirs["id"])),
+    ) == repos.DIVERGED
+
+    with pytest.raises(ConflictError) as caught:
+        await repos.land(
+            conn, repo_id=uuid.UUID(repo["id"]), branch=trunk,
+            commit_id=uuid.UUID(str(theirs["id"])),
+        )
+    assert trunk in str(caught.value.detail)
+    assert "has moved on" in str(caught.value.detail)
+    # And the branch is where it was, rather than somewhere in between.
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=trunk)
+    assert head["head_commit_id"] == ours["id"]
+
+
+@pytest.mark.anyio
+async def test_landing_moves_a_branch_that_is_behind_and_reports_that_it_did(
+    conn, repo
+) -> None:
+    tag = uuid.uuid4().hex[:6]
+    trunk, side = f"t-{tag}", f"s-{tag}"
+    first = await commit_files(conn, repo, {"a.sql": "1"}, branch=trunk)
+    await _branch_at(conn, repo, side, first["id"])
+    ahead = await commit_files(conn, repo, {"a.sql": "1", "b.sql": "2"}, branch=side)
+
+    assert await repos.land(
+        conn, repo_id=uuid.UUID(repo["id"]), branch=trunk,
+        commit_id=uuid.UUID(str(ahead["id"])),
+    ) is True
+    head = await repos.branch_head(conn, repo_id=uuid.UUID(repo["id"]), name=trunk)
+    assert head["head_commit_id"] == ahead["id"]
+
+    # And a second landing of the same commit is not a second move. `True` here
+    # would tell a caller something happened when nothing did.
+    assert await repos.land(
+        conn, repo_id=uuid.UUID(repo["id"]), branch=trunk,
+        commit_id=uuid.UUID(str(ahead["id"])),
+    ) is False
