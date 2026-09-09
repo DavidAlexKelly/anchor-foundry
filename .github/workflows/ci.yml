@@ -221,10 +221,21 @@ jobs:
       - run: scripts/check.sh e2e
       - name: Server logs on failure
         if: failure()
-        # **`-n 100`, not `-100`.** With two files GNU tail refuses the
-        # obsolescent form — `tail: option used in invalid context -- 1` — so
-        # this step has printed that message and nothing else on every red run
-        # since it was written. §271 found it while trying to read the logs of a
-        # browser job that had been failing for ten merges: the one step whose
-        # whole job is to explain a failure had never explained one.
-        run: tail -n 100 /tmp/anchor-dev/api.log /tmp/anchor-dev/web.log || true
+        # **`-n 40`, not `-n 100`, and not `-100`.** Two bugs in one line,
+        # found one after the other.
+        #
+        # With two files GNU tail refuses the obsolescent form — `tail: option
+        # used in invalid context -- 1` — so this step printed that message and
+        # nothing else on every red run for ten merges. §271 found it while
+        # trying to read the logs of a browser job that had been failing that
+        # whole time: the one step whose job is to explain a failure had never
+        # explained one.
+        #
+        # Then §272 hit a red run it still could not diagnose, for the opposite
+        # reason. A hundred lines of Next.js request logging is a *lot* of
+        # bytes, GitHub's log API truncates by size rather than by line, and
+        # pytest's tracebacks and summary sat outside anything retrievable. So
+        # the tail is shorter, and `check.sh e2e` passes `-ra` so the failing
+        # test names are the last thing pytest prints. A diagnostic has to fit
+        # in the window somebody will actually read it through.
+        run: tail -n 40 /tmp/anchor-dev/api.log /tmp/anchor-dev/web.log || true

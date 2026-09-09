@@ -4469,6 +4469,27 @@ error left out.
 
 Harness: **15/15**, no survivors, no no-ops.
 
+**A postscript, because it is an open item and not a tidy one.** §272's PR went
+red on the browser job, and it was not §272: the commit before it carries every
+line of functional code and passed, while the commit that failed adds
+thirty-three lines of which none outside `STATUS.md` and a decision record are
+anything but `#` comments — `git diff` filtered for non-comment lines in
+`apps/` returns nothing. A re-run of the **same commit** then passed. So it is a
+flake, and no e2e file touches repositories, models or transforms at all.
+
+**Which test flaked is not recoverable, and that is the part worth recording.**
+§271 fixed the failure diagnostic from printing nothing; this is the same step
+failing the other way. `tail -n 100 api.log web.log` emits a hundred very long
+Next.js request lines *after* pytest finishes, GitHub's log API truncates by
+size rather than by line, and the tracebacks and summary sat outside anything
+retrievable — the raw log lives on a blob host the egress policy blocks, so
+there was no second route to it either. The tail is 40 lines now and
+`check.sh e2e` passes `-ra`, so the failing test names are the last thing
+pytest prints. **A diagnostic has to fit in the window somebody will read it
+through**, and "prints nothing" and "prints a hundred lines of the wrong thing"
+are the same bug wearing different clothes. The flaky test itself remains
+unidentified; it will name itself the next time it fires.
+
 ### 271. Twenty-eight failures nobody had read (this session)
 
 Not a unit. `docs/parity/README.md`'s Stage 0 row says "All three jobs now
@@ -10028,6 +10049,8 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **"Prints nothing" and "prints a hundred lines of the wrong thing" are the same bug wearing different clothes.** §271 fixed the browser job's failure diagnostic, which had emitted `tail: option used in invalid context -- 1` and nothing else for ten red runs. §272 then hit a red run it *still* could not diagnose: the fixed step printed a hundred very long Next.js request lines after pytest finished, GitHub's log API truncates by size rather than by line, and the tracebacks and summary fell outside anything retrievable — with the raw log on a host the egress policy blocks, so there was no second route either. **A diagnostic is only as good as the window it will be read through**, and that window is usually the last few kilobytes of something. Put the identifying line — the failing test's name, the failing assertion — closest to the end, and keep the context that follows it short enough not to push it out.
 
 - **Two documents can each be right about themselves and wrong together, and no amount of care inside either one finds it.** §272: decision 0004 documents a Python transform as a `@transform`-decorated function and explains at length why the declaration is parsed rather than imported; `python_sandbox.py` documents a script whose result is assigned to `output`. Both accurate, both thorough, written eleven units apart — and the shape the decision *prints* could not run, because `transform` was undefined in the namespace the runner execs into. The tell is not in either file. It is that **no test used a file of one shape in the other's suite**: every file in the publish suite is `.sql`, every file in the sandbox suite is a script. Whenever two components define a contract for the same artefact, the check that matters is the one whose fixture crosses between them — and its absence is invisible from inside either half, because each half's coverage looks complete.
 
