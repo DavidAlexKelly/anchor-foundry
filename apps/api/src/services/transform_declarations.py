@@ -25,11 +25,29 @@ DECORATOR_NAME = "transform"
 # `-- output: daily_orders` / `-- input: orders = raw_orders`, in the leading
 # comment block of a SQL file. Same question, same answer shape, so a reader
 # does not have to know which language a repository is written in.
-_SQL_OUTPUT = re.compile(r"^\s*--\s*output\s*:\s*(?P<name>[A-Za-z0-9_.-]+)\s*$", re.IGNORECASE)
-_SQL_INPUT = re.compile(
-    r"^\s*--\s*input\s*:\s*(?P<alias>[A-Za-z0-9_]+)\s*=\s*(?P<name>[A-Za-z0-9_.-]+)\s*$",
-    re.IGNORECASE,
-)
+#
+# **And in a Python file too, with `#`** (§273, decision 0017). The only Python
+# declaration form was a decorated function, which a *script* has nowhere to
+# put - and every model authored in the Models editor before repositories
+# existed is a script (§272). So those models could not live in a repository at
+# all, which is the blocker B.1 exists to clear. Built from one pattern with the
+# prefix parameterised rather than as a second pair, because the sentence above
+# is the property being bought and two hand-written copies is how it stops being
+# true.
+def _block_patterns(prefix: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    p = re.escape(prefix)
+    return (
+        re.compile(rf"^\s*{p}\s*output\s*:\s*(?P<name>[A-Za-z0-9_.-]+)\s*$", re.IGNORECASE),
+        re.compile(
+            rf"^\s*{p}\s*input\s*:\s*(?P<alias>[A-Za-z0-9_]+)\s*=\s*(?P<name>[A-Za-z0-9_.-]+)\s*$",
+            re.IGNORECASE,
+        ),
+    )
+
+
+#: The comment prefix each language declares behind. The one asymmetry between
+#: them, and the whole of it.
+COMMENT_PREFIX = {".sql": "--", ".py": "#"}
 
 
 class DeclarationError(ValueError):
@@ -56,7 +74,7 @@ def read(path: str, source: str) -> Declaration | None:
     if path.endswith(".py"):
         return _read_python(source)
     if path.endswith(".sql"):
-        return _read_sql(source)
+        return _read_comment_block(source, COMMENT_PREFIX[".sql"])
     return None
 
 
@@ -111,6 +129,36 @@ def _read_python(source: str) -> Declaration | None:
             f"this file declares more than one transform ({names}) - one file "
             "produces one dataset, so put each in its own"
         )
+
+    # **The other form a Python file may declare in** (§273, decision 0017):
+    # a leading `# output:` block, the same shape SQL has always used. A
+    # *script* - inputs as module-level names, the result assigned to `output`,
+    # which is every model authored before repositories existed - has no
+    # function to decorate, so without this it cannot live in a repository at
+    # all. Read after the decorator so a file with neither costs one `ast` walk
+    # and no regex work.
+    #
+    # **Leniently when a decorator already declared.** The "inputs but no
+    # output" refusal below exists for SQL, where a mistyped output line leaves
+    # a file that silently builds nothing and there is no other way to declare.
+    # Python has another way, so beside a decorator a stray `# input:` line is
+    # a comment, not a broken declaration - raising there would answer a
+    # question the author did not ask, about a file that declares correctly.
+    block = _read_comment_block(
+        source, COMMENT_PREFIX[".py"], orphan_inputs_are_an_error=not found
+    )
+    if block is not None and found:
+        # Same rule as two decorators, and it has to be, or "one file, one
+        # transform" would hold within each form and not between them. Named
+        # by *form* rather than by line, because the fix is to delete one of
+        # them and the author needs to know which two things are competing.
+        raise DeclarationError(
+            f"this file declares a transform twice - once with @transform "
+            f"({found[0][0]}) and once in a leading {COMMENT_PREFIX['.py']} "
+            "output: comment. Keep whichever one describes what actually runs"
+        )
+    if block is not None:
+        return block
     return found[0][1] if found else None
 
 
@@ -177,13 +225,22 @@ def _literal_mapping(node: ast.expr) -> dict[str, str]:
     return inputs
 
 
-def _read_sql(source: str) -> Declaration | None:
+def _read_comment_block(
+    source: str, prefix: str, *, orphan_inputs_are_an_error: bool = True
+) -> Declaration | None:
     """Read the leading comment block only.
 
     Stopping at the first non-comment line is deliberate: a `-- output:` inside
     the body of a query is somebody explaining a column, not declaring a
     transform, and a scanner that read the whole file would find both.
+
+    **One function for both languages** (§273). The prefix is the only thing
+    that differs, and a second hand-written copy for Python is exactly how the
+    module docstring's claim - that a reader does not have to know which
+    language a repository is written in - would have quietly stopped being
+    true. §272 found that same claim already false in the other reader.
     """
+    pattern_output, pattern_input = _block_patterns(prefix)
     output: str | None = None
     inputs: dict[str, str] = {}
     line_number = 0
@@ -191,16 +248,16 @@ def _read_sql(source: str) -> Declaration | None:
         line = raw.strip()
         if not line:
             continue
-        if not line.startswith("--"):
+        if not line.startswith(prefix):
             break
-        matched_output = _SQL_OUTPUT.match(line)
+        matched_output = pattern_output.match(line)
         if matched_output:
             if output is not None:
                 raise DeclarationError("this file declares more than one output")
             output = matched_output.group("name")
             line_number = index
             continue
-        matched_input = _SQL_INPUT.match(line)
+        matched_input = pattern_input.match(line)
         if matched_input:
             alias = matched_input.group("alias")
             if alias in inputs:
@@ -208,7 +265,7 @@ def _read_sql(source: str) -> Declaration | None:
             inputs[alias] = matched_input.group("name")
 
     if output is None:
-        if inputs:
+        if inputs and orphan_inputs_are_an_error:
             raise DeclarationError(
                 "this file declares inputs but no output, so nothing knows what it builds"
             )

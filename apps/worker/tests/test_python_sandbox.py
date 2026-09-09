@@ -235,3 +235,24 @@ def test_a_file_with_neither_says_both_things_it_could_have_done(
     dest = str(tmp_path / "out.parquet")
     with pytest.raises(DatasetEngineError, match="nor declared a transform"):
         run_python_transform({"t": input_parquet}, "x = 1", dest)
+
+
+def test_a_comment_declared_script_runs_as_the_script_it_is(
+    input_parquet: str, tmp_path
+) -> None:
+    """§273's form, run here on purpose rather than only parsed over there.
+
+    §272's whole finding was two halves each thorough about itself and never
+    tested against each other, so a new declaration form gets a test on *this*
+    side of the seam the same day it gets one on the reader's side. The
+    declaration is comments; Python ignores comments; so this must behave
+    exactly like the bare script - which is the claim, and claims get asserted.
+    """
+    dest = str(tmp_path / "out.parquet")
+    source = "# output: daily\n# input: t = raw\n\noutput = t.copy()\n"
+    _, rows = run_python_transform({"t": input_parquet}, source, dest)
+    assert rows == 2
+    result = duckdb.connect().execute(
+        f"SELECT * FROM read_parquet('{dest}') ORDER BY id"
+    ).fetchall()
+    assert result == [(1, "a"), (2, "b")]

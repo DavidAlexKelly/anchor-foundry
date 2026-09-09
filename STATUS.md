@@ -4388,6 +4388,72 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 273. How a script declares (this session)
+
+Decision 0017, and the first third of **B.1** — "models live in repositories",
+which `docs/parity/README.md` names as the blocker that reorders stage 1.
+
+**The problem in one sentence.** A model authored in the Models editor is a
+*script*: inputs arrive as module-level names, the result is assigned to
+`output`. The only Python declaration form was a `@transform`-decorated
+function. A script has no function to decorate — `read()` returns `None` for
+it, which means "this is a helper" — so publishing a repository containing one
+says *"nothing at this commit declares a transform"*. **Every model written
+before repositories existed could not live in a repository at all**, and those
+are exactly the models whose only editor is the one B.1 deletes: in a project
+that requires review they would have had no editable path left.
+
+For SQL, adoption was already a prepend. For Python it was nothing.
+
+**Three options, and the third.** *Wrap the script into a function* is a code
+transformation applied to customer code, with quiet failure modes — `global`
+changes meaning, a module-level import stops being shared — and the first thing
+the author sees after adoption is a diff they did not write. *Refuse and make
+them rewrite* is honest and fails the goal. So: **a Python file may declare in a
+leading comment block, exactly as SQL always has**, and a file still declares
+exactly one transform, so one carrying both forms is refused like any other
+double declaration.
+
+The reason this is small rather than a new idea: `transform_declarations.py`
+opens by saying both languages answer "the same question" in "the same answer
+shape, so a reader does not have to know which language a repository is written
+in". That was true of SQL and of decorated Python and false of everything else,
+and §272 had just found it false in the other reader too. This is the sentence
+becoming true — one parameterised pattern, not a second hand-written pair,
+because two copies is exactly how it stopped being true the first time.
+
+**Nothing is lost at the parity end.** Foundry has no script-shaped transform;
+its transforms are decorated functions, and that form is untouched. This adds a
+declaration form for a shape that is *this platform's own*.
+
+**The round-trip hazard, measured rather than assumed.** Adoption (§274) will
+prepend a header and then parse the result back. The reader takes the leading
+comment block only, so a model whose code already begins with comments produces
+a longer block than the header alone. A `-- output:` in it is refused as a
+second declaration — loud, fine. **A `-- input: x = y` in it is not:** the parse
+succeeds and the transform silently gains an input the model never had. So the
+check is *exact equality*, not "the header survived". Found by running the real
+reader over the cases rather than by reasoning about it.
+
+**Two asymmetries worth stating.** The prefix is the only difference between
+the languages. And orphan inputs are an error in SQL but a comment in Python
+*beside a decorator*: "declares inputs but no output" exists because a mistyped
+output line otherwise leaves a file that silently builds nothing, and in SQL
+there is no other way to have declared — in Python there is, so raising there
+would answer a question the author did not ask about a file that declares
+perfectly well. With no decorator the refusal stands, because then it is the
+typo it looks like.
+
+A module docstring ends the leading block and a shebang does not, which is the
+surprising half of "leading *comment* block": the rule is about comments, not
+about "before the code starts". Both are tested, because a reader assuming
+either would be wrong about a real file.
+
+**And the seam got tests the same day.** §272's whole finding was two halves
+each thorough about itself and never tested against each other, so the new form
+has a test on the reader, one in the sandbox proving it *runs*, and one on the
+publish path proving it *publishes* — rather than nine reader tests and a note.
+
 ### 272. The Python transform shape the decision prints could not run (this session)
 
 Found on the way into B.1, which is "models live in repositories" — so before

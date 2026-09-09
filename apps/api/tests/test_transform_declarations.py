@@ -224,3 +224,105 @@ def test_a_function_carrying_the_decorator_twice_is_one_transform() -> None:
     )
     found = read("x.py", source)
     assert found is not None and found.output == "a"
+
+
+# ---- a script declares in a comment, like SQL always has (§273) --------------
+# decision 0017. The only Python declaration form was a decorated function, and
+# a *script* - inputs as module-level names, the result assigned to `output`,
+# which is every model authored before repositories existed (§272) - has no
+# function to decorate. So those models could not live in a repository at all,
+# which is the blocker B.1 exists to clear.
+SCRIPT = "# output: daily_orders\n# input: orders = raw_orders\n\noutput = orders\n"
+
+
+def test_a_script_declares_in_a_leading_comment() -> None:
+    found = read("src/daily.py", SCRIPT)
+    assert found is not None
+    assert found.output == "daily_orders"
+    assert found.inputs == {"orders": "raw_orders"}
+
+
+def test_the_two_languages_answer_identically_apart_from_the_prefix() -> None:
+    """**The property being bought, asserted directly.**
+
+    This module's docstring says both languages answer "the same question" in
+    "the same answer shape, so a reader does not have to know which language a
+    repository is written in". §272 found that claim already false in the other
+    reader, so it is worth a test that fails when the two drift rather than a
+    sentence that goes on being read.
+
+    The bodies differ because one is SQL and one is Python; the *declarations*
+    are the same text with one prefix swapped.
+    """
+    sql = read("t.sql", "-- output: daily_orders\n-- input: orders = raw_orders\nSELECT 1")
+    py = read("t.py", SCRIPT)
+    assert sql is not None and py is not None
+    assert (sql.output, sql.inputs) == (py.output, py.inputs)
+
+
+def test_a_file_declaring_both_ways_is_refused_naming_both_forms() -> None:
+    """"One file, one transform" has to hold *between* the forms as well as
+    within each, or the rule is two rules that happen to agree. And the message
+    names the forms rather than the lines: the fix is to delete one of them, so
+    what the author needs to know is which two things are competing."""
+    source = (
+        "# output: daily_orders\n"
+        "@transform(output='daily_orders')\n"
+        "def build(): ...\n"
+    )
+    with pytest.raises(DeclarationError) as caught:
+        read("x.py", source)
+    assert "@transform" in str(caught.value) and "comment" in str(caught.value)
+
+
+def test_a_stray_input_comment_beside_a_decorator_is_just_a_comment() -> None:
+    """The "inputs but no output" refusal exists for SQL, where a mistyped
+    output line leaves a file that silently builds nothing and there is no other
+    way to declare. Python has another way, so raising here would answer a
+    question the author did not ask, about a file that declares correctly."""
+    source = (
+        "# input: orders = raw_orders\n"
+        "@transform(output='daily_orders', inputs={'orders': 'raw_orders'})\n"
+        "def build(orders): ...\n"
+    )
+    found = read("x.py", source)
+    assert found is not None and found.output == "daily_orders"
+
+
+def test_a_script_with_inputs_and_no_output_is_still_refused() -> None:
+    """With no decorator there is no other way to have declared, so this is the
+    typo it looks like - the same answer SQL gives."""
+    with pytest.raises(DeclarationError, match="inputs but no output"):
+        read("x.py", "# input: orders = raw_orders\noutput = orders\n")
+
+
+def test_an_output_comment_after_the_first_statement_is_not_a_declaration() -> None:
+    """The leading block only, as with SQL: a `# output:` further down is
+    somebody explaining a variable, and a scanner that read the whole file
+    would find both."""
+    assert read("x.py", "output = orders\n# output: sneaky\n") is None
+
+
+def test_a_shebang_does_not_stop_the_block() -> None:
+    """`#!/usr/bin/env python` is a comment, so it neither declares anything nor
+    ends the leading block - a file that lost its declaration to a shebang would
+    be a rule about line one masquerading as a rule about comments."""
+    found = read("x.py", "#!/usr/bin/env python\n# output: daily_orders\noutput = 1\n")
+    assert found is not None and found.output == "daily_orders"
+
+
+def test_a_docstring_ends_the_block_and_that_is_the_sql_rule_too() -> None:
+    """A module docstring is a statement, not a comment, so it closes the
+    leading block exactly as the first `SELECT` does. Worth a test because it is
+    the surprising half of "leading comment block": the rule is about comments
+    and not about "before the code starts"."""
+    assert read("x.py", '"""Daily totals."""\n# output: daily_orders\noutput = 1\n') is None
+
+
+def test_a_helper_with_no_declaration_is_still_not_an_error() -> None:
+    """The common case, and the reason `read` returns None rather than raising:
+    a repository holds helpers, fixtures and READMEs. Re-asserted here because
+    §273 added a second way for a `.py` file to declare, and a new branch that
+    treated "no comment header" as a refusal would make every helper a failure.
+    """
+    assert read("src/helpers.py", "def clean(df):\n    return df\n") is None
