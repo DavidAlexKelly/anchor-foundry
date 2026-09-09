@@ -54,14 +54,38 @@ export function canAdopt(model: Authored): boolean {
  *
  * Names the file, because the next thing this reader wants is to open it, and
  * a message that only says "this is read-only" makes them go looking.
+ *
+ * **Two refusals, and they are different questions** (§277). Whether this
+ * definition is *authored elsewhere* is db 0038's rule, and the answer is "go
+ * to the file". Whether this project *requires review* is `require_code_review`
+ * (`services/models.py`), and the answer used to be "open a proposal" — which
+ * was true while the Code pillar page existed to open one on, and is the thing
+ * B.1 deletes. For a transform that is not yet a file there is now one path:
+ * move it into a repository, and propose the commit there.
+ *
+ * Collapsing the two would make "your project requires review" read as "this
+ * file lives somewhere else", which sends the reader looking for a file that
+ * does not exist.
  */
-export function readOnlyReason(model: Authored): string | null {
-  if (!authoredInRepository(model)) return null;
-  return (
-    `This transform is authored in a repository, at ${model.source_path}. ` +
-    `Edit the file and publish it — a direct edit here would make the ` +
-    `repository describe a pipeline that is not the one running.`
-  );
+export function readOnlyReason(
+  model: Authored,
+  { reviewRequired = false }: { reviewRequired?: boolean } = {},
+): string | null {
+  if (authoredInRepository(model)) {
+    return (
+      `This transform is authored in a repository, at ${model.source_path}. ` +
+      `Edit the file and publish it — a direct edit here would make the ` +
+      `repository describe a pipeline that is not the one running.`
+    );
+  }
+  if (reviewRequired) {
+    return (
+      `This project requires code review, so a transform cannot be changed ` +
+      `directly. Move it into a repository, then propose the commit there — ` +
+      `a review reads a diff, and a diff needs a file.`
+    );
+  }
+  return null;
 }
 
 /**

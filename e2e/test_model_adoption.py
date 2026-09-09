@@ -133,3 +133,103 @@ def test_a_project_with_no_repository_says_so_rather_than_offering_nothing(
     expect(page.get_by_test_id("adopt-no-repositories")).to_be_visible()
     expect(page.get_by_test_id("adopt-repository")).to_have_count(0)
     expect(page.get_by_test_id("adopt-confirm")).to_be_disabled()
+
+
+def require_review(mod: Module, on: bool = True) -> None:
+    mod.api.call("PUT", f"{mod.base}/code/review-policy", {"require_code_review": on})
+
+
+def test_a_review_required_project_points_a_local_transform_at_a_repository(
+    page, api
+) -> None:
+    """§277: **the state that would have stranded somebody.**
+
+    `models.update` refuses a direct edit when `require_code_review` is set, and
+    the answer used to be "open a proposal" — true while the Code pillar page
+    existed to open one on, and that is the page B.1 deletes. For a transform
+    that is not yet a file there is now exactly one path, and the screen has to
+    say which.
+    """
+    mod = project(api, "Adopt gated")
+    name = f"gated_{uuid.uuid4().hex[:6]}"
+    make_model(mod, name=name)
+    make_repository(mod, f"Transforms {mod.tag}")
+    require_review(mod)
+
+    models_screen(page, mod)
+    row(page, name).get_by_role("button", name="Edit").click()
+
+    body = page.get_by_test_id("model-code")
+    expect(body).to_have_attribute("readonly", "")
+    expect(page.get_by_text("requires code review", exact=False).first).to_be_visible()
+    expect(page.get_by_text("Move it into a repository", exact=False).first).to_be_visible()
+    expect(page.get_by_role("button", name="Save changes")).to_be_disabled()
+
+    # **And the move is still offered**, because adoption copies the code
+    # through unchanged and so is not what the gate is about. A gate that also
+    # blocked it would leave the transform with no editable path at all - the
+    # exact state B.1 exists to remove.
+    page.get_by_role("button", name="Cancel").click()
+    expect(row(page, name).get_by_test_id("model-adopt")).to_be_visible()
+
+
+def test_the_two_read_only_reasons_are_not_the_same_sentence(page, api) -> None:
+    """A repository-authored transform in a review-required project is still
+    "go to the file". Saying "your project requires review" there would send
+    somebody to propose a change to a definition they cannot edit anyway."""
+    mod = project(api, "Adopt gated adopted")
+    name = f"both_{uuid.uuid4().hex[:6]}"
+    model = make_model(mod, name=name)
+    repo = make_repository(mod, f"Transforms {mod.tag}")
+    mod.api.call(
+        "POST", f"{mod.base}/models/{model['id']}/adopt",
+        {"repository_id": repo["id"], "branch": "main"},
+    )
+    require_review(mod)
+
+    models_screen(page, mod)
+    row(page, name).get_by_role("button", name="Edit").click()
+    expect(page.get_by_text(f"src/{name}.sql", exact=False).first).to_be_visible()
+    expect(page.get_by_text("requires code review", exact=False)).to_have_count(0)
+
+
+# ---- the project's transform history (§280) ----------------------------------
+def test_the_projects_change_history_is_not_the_page_b1_deletes(page, api) -> None:
+    """§278 found `codeApi.history` living only on the Code pillar page.
+
+    **Three different histories, and this is the one nothing else shows.** A
+    model's own History dialog is `model_versions` for that model; the
+    repository application's History tab is commits in one repository; this is
+    every transform in the project, with the change sets that group them —
+    decision 0001's "one genuinely new concept".
+    """
+    mod = project(api, "History project")
+    first = f"one_{uuid.uuid4().hex[:6]}"
+    second = f"two_{uuid.uuid4().hex[:6]}"
+    make_model(mod, name=first)
+    make_model(mod, name=second)
+
+    models_screen(page, mod)
+    page.get_by_test_id("project-history").click()
+
+    entries = page.get_by_test_id("project-history-list")
+    expect(entries).to_be_visible()
+    # Both transforms' creations are in it, as ungrouped versions — a single
+    # save is still an edit and belongs in the log.
+    expect(entries).to_contain_text(first)
+    expect(entries).to_contain_text(second)
+    expect(entries).to_contain_text("v1")
+
+
+def test_an_empty_history_tells_the_two_empties_apart(page, api) -> None:
+    """A project whose transforms have never been saved has no history; so does
+    a project with no transforms. Only the second is a reason to go somewhere
+    else, and the reader is the one who knows which they are looking at."""
+    mod = project(api, "History empty")
+    # No models at all. `models_screen` waits for a row, so go straight there.
+    page.goto(f"http://localhost:3100/{mod.workspace_slug}/{mod.project_slug}/models")
+    page.get_by_test_id("project-history").click()
+
+    expect(page.get_by_test_id("project-history-empty")).to_contain_text(
+        "No transforms in this project"
+    )

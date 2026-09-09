@@ -2,11 +2,25 @@
 
 **Source:** `docs/pal/foundry_code-repositories.pdf`, 140 pages. Citations are `(p.13)`.
 
-**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, **Pull requests** (§276), Publish. Checks still live on the project's Code pillar page, as does creation of the typed-changes proposal shape — the one that names no repository.
+**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, **Pull requests** (§276), Publish, **Settings** (§279). Checks still live on the project's Code pillar page, as does creation of the typed-changes proposal shape — the one that names no repository.
 
 Foundry's own summary of the product: "a web-based integrated development environment (IDE) for writing and collaborating on production-ready code", with all common Git tasks through the web UI, integrated pull-request review, and "IntelliSense, code linting and error checking, and rich help dialogs" (p.2).
 
 **Also delete `app/(platform)/[workspace]/[project]/code/page.tsx`.** 463 lines duplicating this, worse, with a `<textarea className="code-editor">` at line 332. Parity is unreachable while two editors exist, and users currently hit the wrong one.
+
+> **Correction (§278): it is not only a duplicate, and this reorders the work.** The line above was written from the editor half and is right about that half. Grepping every call it makes turns up **five capabilities that exist nowhere else in the product**:
+>
+> | only on this page | consequence of deleting it today |
+> |---|---|
+> | ~~`setReviewPolicy`~~ | **no way to turn code review on or off.** `require_code_review` was *read* in `models/page.tsx` and `repository-app.tsx` and *set* here alone. **Re-homed by §279** into the Settings tab this file has wanted since it was written |
+> | `saveChangeSet` | decision 0001's "one genuinely new concept" — several transforms saved as one change — becomes unexpressible |
+> | ~~`codeApi.history`~~ | the project's change-set history. The repository app's History tab is *commits in one repository*, a different list. **Re-homed by §280** onto the Models screen, where the transforms it describes are listed |
+> | `changeSet` + `diff` | reading what a change set contained (**§280**, in the same dialog) — its *diffs* are still only here |
+> | `codeApi.tree` | the project-wide transform tree, across repositories and directly-authored models alike |
+>
+> Plus creation of the *typed-changes* proposal shape (`code/page.tsx:179`), which §276 could not re-home because it names no repository.
+>
+> So "mostly deletion" is wrong: the page has to be **emptied before it is removed**. The first row was the one that mattered — a security-relevant setting whose only control would have gone with it — and §279 moved it; §280 moved the history and the change-set contents. **What is left: `saveChangeSet`, version *diffs*, `codeApi.tree`, and creation of the typed-changes proposal shape.** Two of those four are made redundant rather than moved by adoption — a multi-transform change becomes a commit, and a change to a file becomes a commit proposal — so the honest remaining work is smaller than the row count suggests. Adoption (§274–§275) makes the editor half redundant, which was the blocker this row originally named; the rest is a separate piece of work and is not blocked by anything.
 
 ---
 
@@ -18,7 +32,7 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 | **Branches** | ✅ | create, list, delete, fast-forward, merge |
 | **Pull requests** | ◑ | the tab exists (§276) and shows this repository's commit proposals, reviewed in place. Still ◑ because the *typed-changes* shape belongs to no repository (db 0039's `source_repo_id` is null for it) and so cannot be shown here honestly — it stays on the Code page until adoption (§274) makes it unnecessary rather than moved |
 | **Checks** | ◑ | checks run and block, no tab |
-| **Settings** | ○ | |
+| **Settings** | ◑ | §279: the tab exists and holds the code-review gate, which §278 found had exactly one control in the product — on the page B.1 deletes. p.20's other groups are §6's ○ rows |
 
 Ours has **History** and **Publish**, which have no Foundry counterpart at tab level. History belongs in the File Changes helper; Publish belongs on the branch. Keep both until their replacements land, then fold them in.
 
@@ -169,7 +183,7 @@ Two limits Palantir states plainly and we should copy rather than discover: the 
 | Setting group | Status | Source |
 |---|---|---|
 | Personal editor preferences | ○ | p.20 |
-| Branch settings — protection, required reviews | ◑ scattered | TOC §28 |
+| Branch settings — protection, required reviews | ◑ | required reviews are in the tab (§279); protection is §2.1's ○. **A divergence stated on the screen:** Foundry sets required review per repository (`repoSettings.json`), ours per project — the gate has to cover transforms that are in no repository | TOC §28 |
 | Repository settings | ○ | TOC §29 |
 | Compute usage | ○ | TOC §35 |
 | Ontology imports | ○ | TOC §33 |
@@ -200,7 +214,7 @@ Foundry supports several; two matter here (p.3):
 
 ## 9. Build order
 
-1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **Was blocked; the blocker is now two-thirds cleared.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
+1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **The original blocker is cleared and a larger one was found (§278): see the correction in the header — five capabilities live only on that page, including the only control for `require_code_review`. The editor half is now redundant; the page cannot go until the other five have somewhere to be.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
 2. **Draft persistence**, then **multi-file tabs**.
 3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
 4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful.

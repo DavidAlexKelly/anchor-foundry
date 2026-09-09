@@ -123,8 +123,19 @@ def test_the_pills_are_the_filters_the_set_actually_has(page, api, sites) -> Non
     open_module(page, mod)
     settled(page)
 
-    eventually(lambda: texts(page), lambda t: len(t) == 2, what="two pills")
-    assert texts(page) == ["Band is new", "Region is north"], texts(page)
+    # **Waited on by content, not by count** - the shape the other six call
+    # sites in this file already use, and the one this had wrong. A pill
+    # renders as soon as the filter exists, using the property's `api_name`
+    # (`band`), and becomes `Band` when the object type's display names
+    # resolve. Waiting for *two pills* and then reading them once is satisfied
+    # by `["band is new", "Region is north"]`, which is the same list one
+    # capital letter early.
+    #
+    # §271's family, and a sharper case than its twenty-eight: this one *had*
+    # a wait. A wait on the wrong property is worse than no wait, because it
+    # reads as diligence and nobody looks again. One CI run in about six.
+    eventually(lambda: texts(page), lambda t: t == ["Band is new", "Region is north"],
+               what="both pills, in the ontology's words")
     eventually(lambda: table_rows(page), lambda n: n == len(NEW_NORTH),
                what="the table agreeing with the pills")
 
