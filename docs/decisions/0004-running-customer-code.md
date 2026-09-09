@@ -84,6 +84,19 @@ SQL transforms declare the same way, in a leading comment, so both languages ans
 -- input: orders = raw_orders
 ```
 
+## And the same file has to run — added in §272
+
+The section above says what a declaration *looks like*, and for a long time that was all it said. The runner had its own contract, written in `python_sandbox.py`: each input arrives as a module-level name and the script assigns `output`. Both documents were right about themselves and nothing checked them against each other, so **the shape printed above could not run at all** — `@transform` was undefined in the namespace the sandbox execs into, and a repository-authored Python transform died on `NameError` before reaching any of the sandbox's actual limits. Even given a no-op decorator, the function's return value went nowhere, because nothing called it.
+
+It survived because no test crossed the seam: every file in the publish suite was `.sql`, and every file in the sandbox suite was a script.
+
+So the runtime contract is written down here, beside the syntax it belongs to:
+
+- **The declared shape runs by calling the function**, with the declared inputs passed **by keyword under their aliases**. Keyword and not position, for the same reason `@transform` itself takes no positional arguments: the file says which name means what, and binding by position would let a transform whose parameters are in a different order read the wrong dataset and still produce a table.
+- **The script shape stays, and takes precedence.** Every model authored before repositories existed is a script, and a run is stamped to the exact code that produced it (decision 0001) — a contract change that made an old definition mean something new would rewrite history rather than extend it. A file with both is a script that also declares, and the assignment is what ran last.
+- **The decorator defined in the runner records and returns; it never parses.** Reading a declaration by importing the file is the thing this whole document refuses. The runner's `transform` exists so the file can *find* the name, not so anything can learn what it says.
+- **One file declares one transform, in both languages.** SQL refused a second `-- output:` from the start; Python returned the first of two decorated functions and dropped the second silently — not built, not scheduled, not in the lineage graph, with a stale dataset as its only symptom. Both refuse now, and the Python refusal names both functions, because the fix is to split the file.
+
 ## What this does not decide
 
 - **The scheduler side**: how a run is dispatched to the runner task, and what happens when the task cannot start.

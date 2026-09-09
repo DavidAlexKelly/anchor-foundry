@@ -157,3 +157,70 @@ def test_two_files_claiming_one_output_are_refused() -> None:
     }
     with pytest.raises(DeclarationError, match="one dataset has one producer"):
         read_repository(files)
+
+
+# ---- one file, one transform (§272) -----------------------------------------
+# This module's docstring says both languages answer "the same question" in
+# "the same answer shape, so a reader does not have to know which language a
+# repository is written in". That was true of the syntax and false of the
+# answer: SQL refused a second `-- output:` and Python returned the first of
+# two `@transform` functions, silently. Written as a pair on purpose - a rule
+# stated once per language is a rule that can hold in one of them.
+def test_sql_refuses_a_file_that_declares_two_outputs() -> None:
+    with pytest.raises(DeclarationError, match="more than one output"):
+        read("x.sql", "-- output: a\n-- output: b\nSELECT 1")
+
+
+def test_python_refuses_a_file_that_declares_two_transforms() -> None:
+    """**The second one is invisible, which is what makes this worth a
+    refusal rather than a preference.** A dropped declaration is not built,
+    not scheduled and not in the lineage graph, and its author's only clue is
+    a dataset that stops changing - so the failure is silent at every layer
+    that could have reported it.
+    """
+    source = (
+        "@transform(output='a')\ndef one(): ...\n\n"
+        "@transform(output='b')\ndef two(): ...\n"
+    )
+    with pytest.raises(DeclarationError, match="more than one transform"):
+        read("x.py", source)
+
+
+def test_the_refusal_names_both_functions() -> None:
+    """The fix is to split the file, so the message has to say which two
+    things to split. A refusal naming only the count leaves the author reading
+    the whole file to find the pair."""
+    source = (
+        "@transform(output='a')\ndef daily(): ...\n\n"
+        "@transform(output='b')\ndef weekly(): ...\n"
+    )
+    with pytest.raises(DeclarationError) as caught:
+        read("x.py", source)
+    assert "daily" in str(caught.value) and "weekly" in str(caught.value)
+
+
+def test_one_decorated_function_beside_undecorated_ones_is_not_two() -> None:
+    """A repository holds helpers, and the rule is about *declarations* rather
+    than about how many functions a file has. A version of this check that
+    counted functions would refuse every transform with a helper beside it -
+    which is most of them."""
+    source = (
+        "def clean(df): return df\n\n"
+        "@transform(output='daily', inputs={'t': 'raw'})\n"
+        "def build(t): return clean(t)\n\n"
+        "def unused(): ...\n"
+    )
+    found = read("x.py", source)
+    assert found is not None and found.output == "daily"
+
+
+def test_a_function_carrying_the_decorator_twice_is_one_transform() -> None:
+    """Stacked decorators on **one** function are one declaration, however
+    odd. The count that matters is functions that declare, not decorators
+    seen - a loop that counted the inner one twice would refuse a file with
+    one transform in it."""
+    source = (
+        "@transform(output='a')\n@transform(output='a')\ndef build(): ...\n"
+    )
+    found = read("x.py", source)
+    assert found is not None and found.output == "a"

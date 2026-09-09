@@ -68,6 +68,16 @@ def _read_python(source: str) -> Declaration | None:
             f"this file does not parse as Python (line {exc.lineno}): {exc.msg}"
         ) from exc
 
+    # **Every decorated function, not the first one** (§272). `_read_sql`
+    # refuses a file with two `-- output:` lines, and this returned the first
+    # of two `@transform` functions and dropped the second silently - so the
+    # module docstring's "same question, same answer shape, so a reader does
+    # not have to know which language a repository is written in" was true of
+    # the syntax and false of the answer. It matters more than a tidiness
+    # point: the second transform is invisible to the publisher, so it is
+    # never built, never scheduled, and its author has no way to find out
+    # except by noticing the dataset is stale.
+    found: list[tuple[str, Declaration]] = []
     for node in tree.body:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -76,8 +86,17 @@ def _read_python(source: str) -> Declaration | None:
                 continue
             if _decorator_name(decorator.func) != DECORATOR_NAME:
                 continue
-            return _from_call(decorator, node.lineno)
-    return None
+            found.append((node.name, _from_call(decorator, node.lineno)))
+            break
+    if len(found) > 1:
+        # Named, both of them, because the fix is to split the file and the
+        # author needs to know which two things to split.
+        names = ", ".join(name for name, _ in found)
+        raise DeclarationError(
+            f"this file declares more than one transform ({names}) - one file "
+            "produces one dataset, so put each in its own"
+        )
+    return found[0][1] if found else None
 
 
 def _decorator_name(func: ast.expr) -> str | None:
