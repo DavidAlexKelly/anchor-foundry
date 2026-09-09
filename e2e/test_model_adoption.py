@@ -191,3 +191,45 @@ def test_the_two_read_only_reasons_are_not_the_same_sentence(page, api) -> None:
     row(page, name).get_by_role("button", name="Edit").click()
     expect(page.get_by_text(f"src/{name}.sql", exact=False).first).to_be_visible()
     expect(page.get_by_text("requires code review", exact=False)).to_have_count(0)
+
+
+# ---- the project's transform history (§280) ----------------------------------
+def test_the_projects_change_history_is_not_the_page_b1_deletes(page, api) -> None:
+    """§278 found `codeApi.history` living only on the Code pillar page.
+
+    **Three different histories, and this is the one nothing else shows.** A
+    model's own History dialog is `model_versions` for that model; the
+    repository application's History tab is commits in one repository; this is
+    every transform in the project, with the change sets that group them —
+    decision 0001's "one genuinely new concept".
+    """
+    mod = project(api, "History project")
+    first = f"one_{uuid.uuid4().hex[:6]}"
+    second = f"two_{uuid.uuid4().hex[:6]}"
+    make_model(mod, name=first)
+    make_model(mod, name=second)
+
+    models_screen(page, mod)
+    page.get_by_test_id("project-history").click()
+
+    entries = page.get_by_test_id("project-history-list")
+    expect(entries).to_be_visible()
+    # Both transforms' creations are in it, as ungrouped versions — a single
+    # save is still an edit and belongs in the log.
+    expect(entries).to_contain_text(first)
+    expect(entries).to_contain_text(second)
+    expect(entries).to_contain_text("v1")
+
+
+def test_an_empty_history_tells_the_two_empties_apart(page, api) -> None:
+    """A project whose transforms have never been saved has no history; so does
+    a project with no transforms. Only the second is a reason to go somewhere
+    else, and the reader is the one who knows which they are looking at."""
+    mod = project(api, "History empty")
+    # No models at all. `models_screen` waits for a row, so go straight there.
+    page.goto(f"http://localhost:3100/{mod.workspace_slug}/{mod.project_slug}/models")
+    page.get_by_test_id("project-history").click()
+
+    expect(page.get_by_test_id("project-history-empty")).to_contain_text(
+        "No transforms in this project"
+    )

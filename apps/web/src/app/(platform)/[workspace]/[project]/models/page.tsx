@@ -14,6 +14,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { Model } from "@/lib/types";
 import { authoredInRepository, canAdopt, pathProblem, readOnlyReason } from "@/lib/model-authoring";
+import { attribution, emptyNote, isChangeSet, scopeLabel } from "@/lib/transform-history";
 
 const DEFAULT_SQL = "SELECT *\n  FROM orders\n LIMIT 100";
 const DEFAULT_PYTHON = "output = orders.copy()\n";
@@ -738,6 +739,7 @@ export default function ModelsPage() {
   const { workspace } = useWorkspaceBySlug(params.workspace);
   const { project } = useProjectBySlug(workspace?.id, params.project);
   const [creating, setCreating] = useState(false);
+  const [showProjectHistory, setShowProjectHistory] = useState(false);
 
   const list = useQuery({
     queryKey: ["models", project?.id],
@@ -754,12 +756,34 @@ export default function ModelsPage() {
           <p className="eyebrow">project · models</p>
           <h1>Models</h1>
         </div>
-        {canEdit && (
-          <button className="btn" onClick={() => setCreating(true)}>
-            New model
+        <div className="row-actions">
+          {/* **The project's transform history, not one model's** (§280). The
+              per-model History button in each row is `model_versions` for that
+              model; this is every transform in the project, with the change
+              sets that group them — decision 0001's "one genuinely new
+              concept", which §278 found lived only on the page B.1 deletes. */}
+          <button
+            className="btn quiet"
+            data-testid="project-history"
+            onClick={() => setShowProjectHistory(true)}
+          >
+            Change history
           </button>
-        )}
+          {canEdit && (
+            <button className="btn" onClick={() => setCreating(true)}>
+              New model
+            </button>
+          )}
+        </div>
       </div>
+      {showProjectHistory && workspace && project && (
+        <ProjectHistoryDialog
+          workspaceId={workspace.id}
+          projectId={project.id}
+          modelCount={list.data?.length ?? 0}
+          onClose={() => setShowProjectHistory(false)}
+        />
+      )}
 
       {list.isPending && <div className="state">Loading models…</div>}
       {list.isError && (
@@ -811,5 +835,97 @@ export default function ModelsPage() {
         />
       )}
     </main>
+  );
+}
+
+/**
+ * The project's transform history (§280).
+ *
+ * **Not the same list as a model's History**, which is `model_versions` for one
+ * model, and not the same as the repository application's History tab, which is
+ * commits in one repository. This is every transform in the project — including
+ * ones in no repository at all — with the **change sets** that group them.
+ *
+ * §278 found it living only on the Code pillar page B.1 deletes. Decision 0001
+ * called the change set "the one genuinely new concept": before it, *"these
+ * three transforms changed together, for one reason"* could not be said.
+ */
+function ProjectHistoryDialog({
+  workspaceId,
+  projectId,
+  modelCount,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  modelCount: number;
+  onClose: () => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+
+  const history = useQuery({
+    queryKey: ["code-history", projectId],
+    queryFn: () => codeApi.history(workspaceId, projectId),
+  });
+  const detail = useQuery({
+    queryKey: ["code-change-set", open],
+    queryFn: () => codeApi.changeSet(workspaceId, projectId, open!),
+    enabled: Boolean(open),
+  });
+
+  const entries = history.data ?? [];
+
+  return (
+    <Dialog open wide title="Transform change history" onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        Every saved transform definition in this project, newest first. A
+        change set is several transforms saved together for one reason; a
+        single save is still an edit and is listed the same way, without a
+        message.
+      </p>
+      {history.isPending && <div className="state">Loading history…</div>}
+      {history.isSuccess && entries.length === 0 && (
+        <p className="login-note" data-testid="project-history-empty">
+          {emptyNote(modelCount)}
+        </p>
+      )}
+      <ul className="code-log" data-testid="project-history-list">
+        {entries.map((entry) => (
+          <li key={`${entry.kind}-${entry.id}`}>
+            <button
+              type="button"
+              className="code-log-entry"
+              data-testid={`history-${entry.id}`}
+              // Only a change set has contents to open; a version row is
+              // already the whole entry, and a button that expanded to nothing
+              // would be a control that looks like it works.
+              disabled={!isChangeSet(entry)}
+              onClick={() => setOpen(open === entry.id ? null : entry.id)}
+            >
+              <span className="code-log-summary">{entry.summary}</span>
+              <span className="code-log-meta">
+                <span className="chip brass">{scopeLabel(entry)}</span>
+                {attribution(entry)} · {new Date(entry.created_at).toLocaleString()}
+              </span>
+            </button>
+            {open === entry.id && (
+              <div className="slug" data-testid={`history-${entry.id}-detail`}>
+                {detail.isPending && "Loading…"}
+                {detail.data?.models.map((m) => (
+                  <div key={m.model_id}>
+                    {m.model_name} → v{m.version_number}
+                  </div>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="form-actions">
+        <button className="btn quiet" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </Dialog>
   );
 }

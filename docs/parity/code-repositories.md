@@ -14,13 +14,13 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 > |---|---|
 > | ~~`setReviewPolicy`~~ | **no way to turn code review on or off.** `require_code_review` was *read* in `models/page.tsx` and `repository-app.tsx` and *set* here alone. **Re-homed by §279** into the Settings tab this file has wanted since it was written |
 > | `saveChangeSet` | decision 0001's "one genuinely new concept" — several transforms saved as one change — becomes unexpressible |
-> | `codeApi.history` | the project's change-set history. The repository app's History tab is *commits in one repository*, which is a different list |
-> | `changeSet` + `diff` | reading what a change set contained, and its diffs |
+> | ~~`codeApi.history`~~ | the project's change-set history. The repository app's History tab is *commits in one repository*, a different list. **Re-homed by §280** onto the Models screen, where the transforms it describes are listed |
+> | `changeSet` + `diff` | reading what a change set contained (**§280**, in the same dialog) — its *diffs* are still only here |
 > | `codeApi.tree` | the project-wide transform tree, across repositories and directly-authored models alike |
 >
 > Plus creation of the *typed-changes* proposal shape (`code/page.tsx:179`), which §276 could not re-home because it names no repository.
 >
-> So "mostly deletion" is wrong: the page has to be **emptied before it is removed**. The first row was the one that mattered — a security-relevant setting whose only control would have gone with it — and §279 moved it. **Four left**, plus the typed-changes proposal shape. Adoption (§274–§275) makes the editor half redundant, which was the blocker this row originally named; the rest is a separate piece of work and is not blocked by anything.
+> So "mostly deletion" is wrong: the page has to be **emptied before it is removed**. The first row was the one that mattered — a security-relevant setting whose only control would have gone with it — and §279 moved it; §280 moved the history and the change-set contents. **What is left: `saveChangeSet`, version *diffs*, `codeApi.tree`, and creation of the typed-changes proposal shape.** Two of those four are made redundant rather than moved by adoption — a multi-transform change becomes a commit, and a change to a file becomes a commit proposal — so the honest remaining work is smaller than the row count suggests. Adoption (§274–§275) makes the editor half redundant, which was the blocker this row originally named; the rest is a separate piece of work and is not blocked by anything.
 
 ---
 
