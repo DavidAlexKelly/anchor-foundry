@@ -26,6 +26,8 @@ browser.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from playwright.sync_api import expect
 
@@ -191,9 +193,14 @@ def test_the_builder_can_open_the_child_with_the_values_it_was_given(page, modul
 
     link = page.get_by_test_id("embed-open-child")
     expect(link).to_be_visible(timeout=30000)
+    # **Waited for, not snapshotted** (§271). The link renders as soon as the
+    # embed does, and its query string is appended once the host's interface
+    # values resolve — so `get_attribute` straight after `to_be_visible` reads
+    # the bare `/r/{id}` and the test reports a missing value that is about to
+    # arrive. `to_have_attribute` retries.
+    expect(link).to_have_attribute("href", re.compile("region=south"))
     href = link.get_attribute("href")
     assert f"/r/{child.resource_id}" in href, href
-    assert "region=south" in href, href
 
     with page.context.expect_page() as opened:
         link.click()

@@ -64,6 +64,13 @@ def source_module(api, name: str, target: Module, *, values=None) -> Module:
         "layout": layout({
             "ctl": {"resolvedName": "CanvasParameterControl",
                     "props": {"name": "v_pick", "label": "Pick", "control": "text"}},
+            # **A readout of the source's own variable** (§271). The control is
+            # a filter box and shows nothing, so without this there is no way to
+            # tell "the module has drawn" from "the variable has its default" -
+            # and clicking between those two sends an empty value. The target
+            # then shows `unset`, correctly, and the test blames the event.
+            "say": {"resolvedName": "CanvasText",
+                    "props": {"tag": "p", "text": "PICK={{v_pick}}"}},
             "btn": {"resolvedName": "CanvasButton", "props": {"label": "Open it"}},
         }),
         "variables": {
@@ -114,6 +121,13 @@ def test_the_event_opens_the_module_with_the_value_in_its_url(page, api) -> None
     source = source_module(api, "Open source", target)
     open_module(page, source)
     settled(page)
+    # **Wait for the default to be resolved before pressing the button**
+    # (§271). `settled` waits for a canvas block to exist, which happens before
+    # the variable has its default — so a click in between sends an empty
+    # `region` and the target shows `unset`, correctly, while the test blames
+    # the event. The sibling test below never hit this because it *types* a
+    # value, which is itself the wait.
+    expect(page.get_by_text("PICK=north", exact=True)).to_be_visible()
 
     with page.context.expect_page() as opened:
         page.get_by_role("button", name="Open it").click()
