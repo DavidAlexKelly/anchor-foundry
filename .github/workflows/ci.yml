@@ -251,3 +251,19 @@ jobs:
         # test names are the last thing pytest prints. A diagnostic has to fit
         # in the window somebody will actually read it through.
         run: tail -n 40 /tmp/anchor-dev/api.log /tmp/anchor-dev/web.log || true
+      # **The artefact that does not depend on a log window at all** (§275).
+      # Three fixes to the step above and a failure still could not be read,
+      # because the runner appends the service container's log after every
+      # step. A screenshot and the DOM of each failing test are written by
+      # `e2e/conftest.py` on failure only, and land here as a file somebody can
+      # open. `if-no-files-found: ignore` because a job can fail before any
+      # test runs, and a red X on the upload would say the wrong thing about
+      # why the job is red.
+      - name: Failing pages on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failures
+          path: /tmp/anchor-e2e-failures
+          if-no-files-found: ignore
+          retention-days: 7
