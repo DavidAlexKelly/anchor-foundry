@@ -3,10 +3,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { ApiError, datasets as dsApi, models as modelApi } from "@/lib/api";
+import {
+  ApiError,
+  datasets as dsApi,
+  models as modelApi,
+  repositories as repoApi,
+} from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { Model } from "@/lib/types";
+import { authoredInRepository, canAdopt, pathProblem, readOnlyReason } from "@/lib/model-authoring";
 
 const DEFAULT_SQL = "SELECT *\n  FROM orders\n LIMIT 100";
 const DEFAULT_PYTHON = "output = orders.copy()\n";
@@ -171,6 +177,10 @@ function ModelDialog({
   existing: Model | null;
   onClose: () => void;
 }) {
+  // Null when this screen may edit the body. A sentence naming the file when
+  // it may not - the reader's next move is to open it, so the message says
+  // where it is rather than only that this is read-only.
+  const locked = existing ? readOnlyReason(existing) : null;
   const [name, setName] = useState(existing?.name ?? "");
   const [language, setLanguage] = useState<"sql" | "python">(existing?.language ?? "sql");
   const [code, setCode] = useState(existing?.code ?? DEFAULT_SQL);
@@ -322,9 +332,16 @@ function ModelDialog({
         <Field
           label={(existing?.language ?? language) === "python" ? "Python" : "SQL"}
           hint={
-            (existing?.language ?? language) === "python"
-              ? "Each input alias is a pandas DataFrame; set an `output` DataFrame with the result"
-              : "Query the inputs by their aliases; the result becomes the output dataset"
+            // **The reason, when there is one.** `models.update` refuses a body
+            // edit to a repository-authored transform (db 0038), and until §275
+            // this page offered the edit anyway - `source_repo_id` was on the
+            // wire from §94 and absent from the shared type, so no screen could
+            // read it. A control that looks like it works is §214's shape.
+            locked
+              ? locked
+              : (existing?.language ?? language) === "python"
+                ? "Each input alias is a pandas DataFrame; set an `output` DataFrame with the result"
+                : "Query the inputs by their aliases; the result becomes the output dataset"
           }
         >
           <textarea
@@ -333,6 +350,8 @@ function ModelDialog({
             value={code}
             onChange={(e) => setCode(e.target.value)}
             spellCheck={false}
+            readOnly={Boolean(locked)}
+            data-testid="model-code"
           />
         </Field>
         {existing && (
@@ -399,6 +418,7 @@ function ModelDialog({
             className="btn"
             disabled={
               save.isPending ||
+              Boolean(locked) ||
               !name.trim() ||
               !code.trim() ||
               // An upstream model with nothing to watch would never fire;
@@ -407,6 +427,133 @@ function ModelDialog({
             }
           >
             {save.isPending ? "Saving…" : existing ? "Save changes" : "Create model"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function AdoptDialog({
+  workspaceId,
+  projectId,
+  model,
+  onClose,
+}: {
+  workspaceId: string;
+  projectId: string;
+  model: Model;
+  onClose: () => void;
+}) {
+  const [repositoryId, setRepositoryId] = useState("");
+  const [branch, setBranch] = useState("main");
+  const [path, setPath] = useState("");
+  const queryClient = useQueryClient();
+
+  const repositories = useQuery({
+    queryKey: ["repositories", projectId],
+    queryFn: () => repoApi.list(workspaceId, projectId),
+  });
+
+  const adopt = useMutation({
+    mutationFn: () =>
+      modelApi.adopt(workspaceId, projectId, model.id, {
+        repository_id: repositoryId,
+        branch,
+        // **Empty means "you choose".** The server derives a path from the
+        // model's name through `datasets.slugify`; deriving it here would be a
+        // second copy of that rule, and the disagreement would be a file
+        // written where this screen did not predict (§191).
+        path: path.trim() || null,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
+      onClose();
+    },
+  });
+
+  const problem = pathProblem(path, model.language);
+  const noRepositories = repositories.isSuccess && repositories.data.length === 0;
+
+  return (
+    <Dialog open title={`Move ${model.name} into a repository`} onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        The transform is written to a file with a declaration above it, and
+        edited there from now on. Its code is copied through unchanged, so
+        nothing about what it computes changes — but a direct edit here will be
+        refused afterwards, because the repository would otherwise describe a
+        pipeline that is not the one running.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          adopt.mutate();
+        }}
+      >
+        <Field label="Repository">
+          {noRepositories ? (
+            // Not an empty picker: a control with nothing in it reads as
+            // broken, and the thing to do about it is elsewhere.
+            <p className="login-note" data-testid="adopt-no-repositories">
+              This project has no repositories yet. Create one on the Code
+              screen, then move this transform into it.
+            </p>
+          ) : (
+            <select
+              value={repositoryId}
+              data-testid="adopt-repository"
+              onChange={(e) => setRepositoryId(e.target.value)}
+              required
+            >
+              <option value="">Choose a repository…</option>
+              {repositories.data?.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+        <Field label="Branch" hint="The commit lands here; publish it when you are ready.">
+          <input
+            type="text"
+            value={branch}
+            data-testid="adopt-branch"
+            onChange={(e) => setBranch(e.target.value)}
+            required
+          />
+        </Field>
+        <Field
+          label="Path"
+          hint={problem ?? "Leave empty to derive one from the transform's name."}
+        >
+          <input
+            type="text"
+            value={path}
+            data-testid="adopt-path"
+            placeholder={`src/… ${model.language === "python" ? ".py" : ".sql"}`}
+            onChange={(e) => setPath(e.target.value)}
+          />
+        </Field>
+        {adopt.isError && (
+          // The server's sentence, not a summary of it. Its refusals name the
+          // value that cannot be written, and a screen that replaced them with
+          // "could not move" would throw away the only part that helps.
+          <div className="form-error" data-testid="adopt-error">
+            {adopt.error instanceof ApiError ? adopt.error.message : "Couldn't move it."}
+          </div>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn quiet" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="btn"
+            data-testid="adopt-confirm"
+            disabled={adopt.isPending || !repositoryId || Boolean(problem)}
+          >
+            {adopt.isPending ? "Moving…" : "Move it"}
           </button>
         </div>
       </form>
@@ -426,6 +573,7 @@ function ModelRow({
   canEdit: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  const [adopting, setAdopting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const queryClient = useQueryClient();
   const refresh = async () => {
@@ -453,6 +601,13 @@ function ModelRow({
           {model.inputs.map((i) => i.input_alias).join(", ") || "no inputs"} →{" "}
           {model.output_dataset_id ? "output dataset" : "not yet run"}
         </div>
+        {authoredInRepository(model) && (
+          // Said on the row rather than only inside the dialog, because the
+          // question "why can I not edit this one" is asked from out here.
+          <div className="slug" data-testid="model-authored-in">
+            authored in a repository · {model.source_path}
+          </div>
+        )}
         {result && result.status === "queued" && (
           <p className="login-note" style={{ margin: "6px 0 0" }}>
             Queued - Python models run on the background worker. Check back for the result.
@@ -511,6 +666,16 @@ function ModelRow({
             >
               History
             </button>
+            {canAdopt(model) && (
+              <button
+                className="btn quiet"
+                style={{ padding: "3px 9px", fontSize: 12 }}
+                data-testid="model-adopt"
+                onClick={() => setAdopting(true)}
+              >
+                Move into a repository
+              </button>
+            )}
             <button
               className="btn danger"
               style={{ padding: "3px 9px", fontSize: 12 }}
@@ -540,6 +705,14 @@ function ModelRow({
             projectId={projectId}
             existing={model}
             onClose={() => setEditing(false)}
+          />
+        )}
+        {adopting && (
+          <AdoptDialog
+            workspaceId={workspaceId}
+            projectId={projectId}
+            model={model}
+            onClose={() => setAdopting(false)}
           />
         )}
       </td>

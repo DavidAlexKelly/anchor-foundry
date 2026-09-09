@@ -688,6 +688,22 @@ export const models = {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
+  /** Move a directly-authored transform into a repository (§274).
+   *
+   * `path` omitted means "derive one from the name" — deliberately, rather
+   * than the browser deriving it: the server's rule runs the name through
+   * `datasets.slugify`, and a second copy here is the mirrored-list problem
+   * §191 found. The answer comes back in the response. */
+  adopt: (
+    wid: string,
+    pid: string,
+    mid: string,
+    input: { repository_id: string; branch?: string; path?: string | null },
+  ) =>
+    request<import("./types").ModelAdoption>(
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/adopt`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   run: (wid: string, pid: string, mid: string) =>
     request<import("./types").ModelRunResult>(
       `/workspaces/${wid}/projects/${pid}/models/${mid}/run`,
