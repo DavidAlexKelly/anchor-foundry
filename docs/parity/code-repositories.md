@@ -2,7 +2,7 @@
 
 **Source:** `docs/pal/foundry_code-repositories.pdf`, 140 pages. Citations are `(p.13)`.
 
-**Today:** `apps/web/src/components/applications/repository-app.tsx`, 1173 lines, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, Publish. Proposals and checks exist but live on the project's Code pillar page, not in the application.
+**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, **Pull requests** (§276), Publish. Checks still live on the project's Code pillar page, as does creation of the typed-changes proposal shape — the one that names no repository.
 
 Foundry's own summary of the product: "a web-based integrated development environment (IDE) for writing and collaborating on production-ready code", with all common Git tasks through the web UI, integrated pull-request review, and "IntelliSense, code linting and error checking, and rich help dialogs" (p.2).
 
@@ -16,7 +16,7 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 |---|---|---|
 | **Code** | ✅ | ours is called Files |
 | **Branches** | ✅ | create, list, delete, fast-forward, merge |
-| **Pull requests** | ◑ | exists as *proposals*, on a different page |
+| **Pull requests** | ◑ | the tab exists (§276) and shows this repository's commit proposals, reviewed in place. Still ◑ because the *typed-changes* shape belongs to no repository (db 0039's `source_repo_id` is null for it) and so cannot be shown here honestly — it stays on the Code page until adoption (§274) makes it unnecessary rather than moved |
 | **Checks** | ◑ | checks run and block, no tab |
 | **Settings** | ○ | |
 
@@ -117,7 +117,7 @@ The docs add a note we should honour: "You should not delete any branches that y
 
 | Feature | Status | Notes |
 |---|---|---|
-| List PRs; switch Open / Closed | ◑ | proposals, elsewhere |
+| List PRs; switch Open / Closed | ◑ | §276: this repository's open proposals, in the tab. Open-only so far; and an empty tab says *where the others are* — three absences with three remedies (nothing anywhere, typed changes reviewed on the Code screen, another repository's) |
 | Search by title or author | ○ | |
 | Create a PR, choosing the base branch | ◑ | |
 | **Line-by-line review with comments** | ◑ | §52 built a review surface; verify it is line-level, not file-level |
@@ -200,7 +200,7 @@ Foundry supports several; two matter here (p.3):
 
 ## 9. Build order
 
-1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **Was blocked; the blocker is now two-thirds cleared.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file; what remains before the deletion is moving typed-changes proposal creation into the application.
+1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **Was blocked; the blocker is now two-thirds cleared.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
 2. **Draft persistence**, then **multi-file tabs**.
 3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
 4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful.

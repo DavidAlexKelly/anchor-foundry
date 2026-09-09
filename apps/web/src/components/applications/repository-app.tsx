@@ -21,7 +21,8 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
 import { ApiError, code as codeApi, repositories as repoApi } from "@/lib/api";
-import { DESCRIPTION_TEMPLATE } from "@/components/code/review-surface";
+import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
+import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
 import type {
   PublishPlan,
   RepositoryBranch,
@@ -37,13 +38,16 @@ const CodeEditor = dynamic(
   { ssr: false, loading: () => <div className="code-editor-loading">Loading editor…</div> },
 );
 
-const TABS = ["files", "history", "branches", "publish"] as const;
+// **`pulls` before `publish`, because that is the order the work happens in**
+// and `code-repositories.md` §1 lists Pull requests before anything of ours.
+const TABS = ["files", "history", "branches", "pulls", "publish"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   files: "Files",
   history: "History",
   branches: "Branches",
+  pulls: "Pull requests",
   publish: "Publish",
 };
 
@@ -111,7 +115,7 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
 
         <div className="spacer" />
         <nav className="ds-tabs repo-tabs">
-          {(["files", "history", "branches", "publish"] as Tab[]).map((t) => (
+          {(TABS as readonly Tab[]).map((t) => (
             <button
               key={t}
               type="button"
@@ -146,6 +150,16 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           rid={rid}
           branch={current}
           onOpenCommit={(id) => setParams({ commit: id, tab: "files", file: undefined })}
+        />
+      )}
+      {tab === "pulls" && (
+        <PullRequestsTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          openId={url.get("proposal") ?? undefined}
+          onOpen={(id) => setParams({ proposal: id })}
+          onClose={() => setParams({ proposal: undefined })}
         />
       )}
       {tab === "publish" && (
@@ -1168,6 +1182,108 @@ function PreviewPanel({
           )}
         </>
       )}
+    </section>
+  );
+}
+
+/**
+ * p.18–19's Pull requests tab (§276; `code-repositories.md` §1, §4).
+ *
+ * The review *surface* is not new — `ReviewSurface` has been a shared
+ * component since §60, which is why it takes a proposal id and nothing else.
+ * What is new is that it is reachable from the repository the proposal is
+ * about, rather than only from the project's Code pillar page, which B.1
+ * deletes.
+ *
+ * **Deep-linkable, because a review is a thing people send each other.** The
+ * open proposal lives in the URL beside the tab, so a link opens on the
+ * proposal rather than on a list somebody then has to search.
+ */
+function PullRequestsTab({
+  wid,
+  pid,
+  rid,
+  openId,
+  onOpen,
+  onClose,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  openId?: string;
+  onOpen: (id: string) => void;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const proposals = useQuery({
+    queryKey: ["code-proposals", pid],
+    queryFn: () => codeApi.proposals(wid, pid, "open"),
+  });
+
+  // Asked of the project and filtered here rather than asked of the
+  // repository, because the endpoint is project-scoped (db 0039 hangs a
+  // proposal off a project and *optionally* off a repository) - and because
+  // the count of what is elsewhere is what makes an empty tab legible.
+  const all = proposals.data ?? [];
+  const ours = forRepository(all, rid);
+  const empty = proposals.isSuccess ? emptyReason(all, rid) : null;
+
+  if (openId) {
+    return (
+      <div className="code-review-mode">
+        <div className="canvas-settings-head">
+          <strong>Reviewing a proposal</strong>
+          <button
+            type="button"
+            className="btn quiet"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            data-testid="pulls-back"
+            onClick={onClose}
+          >
+            Back to pull requests
+          </button>
+        </div>
+        <ReviewSurface
+          workspaceId={wid}
+          projectId={pid}
+          proposalId={openId}
+          canReview
+          onChanged={() => {
+            queryClient.invalidateQueries({ queryKey: ["code-proposals", pid] });
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <section className="code-open-proposals" data-testid="pulls-list">
+      {proposals.isPending && <div className="state">Loading proposals…</div>}
+      {empty && (
+        // **Says where the others are rather than looking like nothing is
+        // happening.** A reviewer sent a link, finding an empty tab, needs to
+        // tell "already dealt with" from "not here" - and the typed-changes
+        // shape belongs to no repository, so it genuinely is somewhere else.
+        <p className="login-note" data-testid="pulls-empty">{empty}</p>
+      )}
+      <ul className="code-log">
+        {ours.map((p) => (
+          <li key={p.id}>
+            <button
+              type="button"
+              className="code-log-entry"
+              data-testid={`pull-${p.id}`}
+              onClick={() => onOpen(p.id)}
+            >
+              <span className="code-log-summary">{p.summary}</span>
+              <span className="code-log-meta">
+                <span className="chip brass">{describeProposal(p)}</span>
+                {p.created_by_email ?? "unknown"}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
