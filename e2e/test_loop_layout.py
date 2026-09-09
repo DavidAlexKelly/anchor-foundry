@@ -25,7 +25,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import eventually, no_console_errors, open_builder, open_module
+from conftest import eventually, no_console_errors, open_builder, open_module, option_values
 
 NAMES = ["Alpha", "Beta", "Gamma"]
 
@@ -185,7 +185,9 @@ def test_the_loop_sort_offers_only_properties_the_stores_agree_on(page, modules)
     page.locator(".canvas-tree-row").first.click()
     picker = page.get_by_test_id("loop-sort")
     expect(picker).to_be_visible()
-    values = picker.locator("option").evaluate_all("nodes => nodes.map(n => n.value)")
+    # Six, waited for rather than read once: the two property options arrive
+    # when the object type resolves, not when the select mounts (§271).
+    values = option_values(picker, count=6)
     assert values == ["key", "-key", "recent", "oldest", "rank", "-rank"], values
 
 

@@ -26,6 +26,7 @@ import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -61,6 +62,15 @@ class ExportOut(BaseModel):
     mode: str | None
     destination: dict[str, Any]
     last_version: int | None
+    #: p.205's schedule, and when the worker will next consider it. Both on the
+    #: row rather than behind another request, because p.205's own use for them
+    #: is "view any schedules that trigger a specific export" — a list.
+    schedule: str | None
+    next_run_at: datetime | None
+    #: p.202's switch, read from the source. On the export because a schedule
+    #: that cannot fire is the thing somebody needs told, and the answer lives
+    #: one table over.
+    exports_enabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -76,6 +86,18 @@ class ExportCreate(BaseModel):
     name: str = Field(min_length=1, max_length=exports_service.MAX_NAME)
     mode: str | None = None
     destination: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScheduleIn(BaseModel):
+    """A cron expression, or null to clear it (db 0070; decision 0016).
+
+    Validated by `lib.cron.next_run_after` rather than by a regex here: the
+    expression has to be one `croniter` accepts, because croniter is what the
+    worker will run it through, and a pattern that agreed with a regex and not
+    with the library would be a schedule that saved and never fired.
+    """
+
+    schedule: str | None = None
 
 
 class RunOut(BaseModel):
@@ -182,6 +204,64 @@ async def delete_export(
             user_agent=request.headers.get("user-agent"),
         )
         await conn.commit()
+
+
+@router.put("/{export_id}/schedule", response_model=ExportOut)
+async def set_schedule(
+    export_id: UUID,
+    body: ScheduleIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ExportOut:
+    """p.205: "Exports should be scheduled to run regularly."
+
+    **Editor, the same floor as running it**, because that is what a schedule
+    is: a run somebody will not be present for. Setting one is not a smaller
+    act than pressing the button, and if anything it is a larger one.
+
+    A `null` schedule clears it. There is no separate off switch, for db 0070's
+    reason: an export with no schedule and one whose schedule is switched off
+    are the same state, and two columns able to disagree about it is how a row
+    ends up meaning something nobody can read.
+    """
+    cron = (body.schedule or "").strip() or None
+    # Parsed here so an invalid expression is a 422 at the moment somebody
+    # types it rather than a worker that quietly never fires. `next_run_after`
+    # is also the seed the worker recomputes from — one of the two places in
+    # this platform that interpret a cron at all (`lib/cron`'s docstring).
+    next_run = next_run_after(cron) if cron else None
+
+    async with user_connection(access.auth.user_id) as conn:
+        # **The switch is checked here too, not only at create.** p.202 makes
+        # exporting to a source an admin's decision, and setting a schedule on
+        # an export whose source has been turned off would look like it worked
+        # and never run — `list_due_exports()` refuses it. Saying so now beats
+        # a schedule that is silently inert.
+        existing = await export_store.get(conn, access.project_id, export_id)
+        if cron and not existing.get("exports_enabled"):
+            raise ConflictError(
+                f"exports to {existing['connection_name']} are turned off, so a "
+                "schedule on this export would never run - a workspace admin "
+                "enables them in the source's settings (p.202)"
+            )
+        updated = await export_store.set_schedule(
+            conn, access.project_id, export_id, schedule=cron, next_run_at=next_run
+        )
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="export.schedule",
+            resource_type="export",
+            resource_id=export_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"name": existing["name"], "schedule": cron},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        await conn.commit()
+    return ExportOut(**updated)
 
 
 @router.post("/{export_id}/run", response_model=RunOut)

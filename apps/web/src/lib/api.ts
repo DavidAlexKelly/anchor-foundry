@@ -344,6 +344,21 @@ export const connections = {
       `/workspaces/${wid}/projects/${pid}/connections/${cid}/discover`,
       { method: "POST", body: JSON.stringify({}) },
     ),
+  /** A sample of one table (`data-connection` p.142-143; decision 0015).
+   *
+   * A POST rather than a GET despite reading nothing: the schema and table are
+   * arbitrary text from the source, and putting them in a path or a query
+   * string would put a customer's table names into every access log between
+   * here and the API. `discover` is a POST for the same reason.
+   */
+  preview: (wid: string, pid: string, cid: string, table: { schema: string; name: string }) =>
+    request<import("./types").SourcePreview>(
+      `/workspaces/${wid}/projects/${pid}/connections/${cid}/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({ source_schema: table.schema, source_table: table.name }),
+      },
+    ),
   remove: (wid: string, pid: string, cid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/connections/${cid}`, { method: "DELETE" }),
 };

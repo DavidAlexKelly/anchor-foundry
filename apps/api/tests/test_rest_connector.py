@@ -356,3 +356,99 @@ def test_the_api_appears_in_the_source_type_catalog(client: TestClient, fx: Fixt
     # The enum fields render as pickers in the wizard rather than free text.
     assert rest["config_schema"]["properties"]["auth_type"]["enum"]
     assert rest["config_schema"]["properties"]["pagination"]["enum"]
+
+
+# ---- preview (`data-connection` p.142-143; decision 0015; §268) ---------------
+def test_a_preview_returns_the_first_page_as_a_table(api_base: str) -> None:
+    sample = RestConnector().preview(
+        cfg(api_base, "/records"), {}, source_schema="", source_table="records"
+    )
+    assert sample.columns == ["id", "name", "score", "active", "tags"]
+    assert [row[1] for row in sample.rows] == ["ada", "grace", "alan"]
+    assert sample.more is False
+
+
+def test_a_preview_takes_the_union_of_every_records_keys(api_base: str) -> None:
+    """**A header from record one would hide the interesting half.**
+
+    A JSON collection whose objects disagree about their keys is the ordinary
+    case, and it is exactly the shape somebody opens a preview to notice — a
+    field that only some records carry is a field the sync will store as mostly
+    null. `/ragged`'s second and third records each add a key the first lacks.
+    """
+    sample = RestConnector().preview(
+        cfg(api_base, "/ragged"), {}, source_schema="", source_table="records"
+    )
+    assert sample.columns == ["id", "name", "nickname", "note"]
+    by_id = {row[0]: row for row in sample.rows}
+    # Present-and-absent read the same way a SQL null does, which is what
+    # `Preview` promises rather than an empty string.
+    assert by_id["1"][2] is None
+    assert by_id["2"][2] == "amazing grace"
+    assert by_id["1"][3] is None
+
+
+def test_a_nested_value_reaches_the_screen_as_the_json_a_sync_would_write(
+    api_base: str,
+) -> None:
+    """A REST snapshot writes JSONL, so a nested object lands as JSON. A
+    preview that showed Python's `{'seen': True}` repr would be showing a value
+    that is not what the sync stores - single quotes and a capitalised `True`
+    are not JSON, and somebody comparing the two would be comparing the wrong
+    things."""
+    import json
+
+    sample = RestConnector().preview(
+        cfg(api_base, "/ragged"), {}, source_schema="", source_table="records"
+    )
+    note = {row[0]: row[3] for row in sample.rows}["3"]
+    assert json.loads(note) == {"seen": True, "where": ["bletchley"]}
+    sample_tags = RestConnector().preview(
+        cfg(api_base, "/records"), {}, source_schema="", source_table="records"
+    )
+    assert json.loads(sample_tags.rows[0][4]) == ["x", "y"]
+
+
+def test_a_preview_reads_one_page_and_not_the_collection(api_base: str) -> None:
+    """`/paged` serves two records per page and three pages. A preview that
+    walked the pagination would return more than two, and would be doing the
+    work `snapshot` exists to do - the whole point of this screen is that it is
+    cheap enough to press before committing to a sync."""
+    sample = RestConnector().preview(
+        cfg(api_base, "/paged", records_path="results",
+            pagination="page_number", page_param="page"),
+        {}, source_schema="", source_table="records",
+    )
+    assert len(sample.rows) == 2
+
+
+def test_an_empty_collection_previews_as_no_rows(api_base: str) -> None:
+    sample = RestConnector().preview(
+        cfg(api_base, "/empty"), {}, source_schema="", source_table="records"
+    )
+    assert sample.rows == []
+    assert sample.columns == []
+
+
+def test_a_rest_preview_describes_the_sample_and_not_the_whole_page(
+    api_base: str,
+) -> None:
+    """**The columns belong to the rows on screen.**
+
+    `/many` serves sixty records in one page and the fifty-fifth carries a key
+    none of the others do. A preview that scanned the whole page would offer
+    `late_only` as a header with fifty empty cells under it — a column somebody
+    can see and cannot explain. `discover` is where the collection's full shape
+    is answered; a sample answers for the sample.
+
+    It is also the only assertion that can see the slice at all: `build_preview`
+    caps the rows again, so the row count is identical either way.
+    """
+    from src.services.connectors import PREVIEW_ROWS
+
+    sample = RestConnector().preview(
+        cfg(api_base, "/many"), {}, source_schema="", source_table="records"
+    )
+    assert len(sample.rows) == PREVIEW_ROWS
+    assert sample.more is True
+    assert sample.columns == ["id", "name"]

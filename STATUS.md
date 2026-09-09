@@ -4388,6 +4388,432 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 271. Twenty-eight failures nobody had read (this session)
+
+Not a unit. `docs/parity/README.md`'s Stage 0 row says "All three jobs now
+green. Every 'at parity' claim below now means something", and that sentence
+had stopped being true **ten merges earlier**. The browser job was red on
+`main` at every one of them, with the same 28 failures each time, and every
+one of those merges was made by reading three green ticks and a fourth that
+had been red long enough to look like scenery.
+
+**The first thing to fix was not a test.** The workflow's failure step is
+`tail -100 api.log web.log`, and with two files GNU tail refuses the
+obsolescent form: `tail: option used in invalid context -- 1`. So the one step
+whose entire job is to explain a red run had printed that message and nothing
+else on every red run since it was written. Ten failures produced zero server
+logs. It is `-n 100` now.
+
+**The first diagnosis was wrong, and the way it was wrong is the useful part.**
+The failures all looked like races, so the hypothesis was that an ontology
+request was arriving late — and the probe for it delayed `GET
+/object-types/**` by two seconds and ran the suite. Control and delayed both
+passed. That is not a weak signal, it is a *refutation*: the tests already wait
+longer than the delay, so lateness alone cannot be the mechanism. What actually
+reproduced it was **a fresh database**. The dev Postgres here has been
+accumulating since §248 — 28,500 modules — and its ontology queries are warm
+in a way a database created ninety seconds ago is not. CI builds one every run.
+Locally, `platform_ci271`, created and migrated for the purpose, produced all
+28 immediately.
+
+**Then all 28 turn out to be one bug written 28 times.** Every failure is a
+*one-shot read of a collection that starts empty* — `text_content()`,
+`all_text_contents()`, `evaluate_all`, `get_attribute`, `.all()`. None of these
+retry. `expect()` does. So a table read straight after `settled()` finds no
+header row and fails with `'Name' is not in list`: a message about a missing
+column, from a table that had not drawn yet. That message is why these sat
+unfixed — each one names something plausible and specific and wrong.
+`test_prominent_terms.py` has carried a comment about this exact hazard since
+§202 and §231, and five other files read raw anyway, which is §263's lesson
+about where a lesson gets written arriving again.
+
+The fix is the same shape everywhere: put a wait in front of the read, and put
+it **in the helper** so the next test gets it for free. `conftest.py` gained
+`option_values(select, count=N)` and `option_labels(...)`, which assert the
+count before reading; `column()` in the table-sort file waits for the row count
+before finding the header; `titles()` in the timeline file holds its own wait.
+
+Three of the 28 were not that, and each needed its own answer:
+
+* **A control that shows nothing cannot be waited on.** `test_open_module_event`
+  clicked a button that passes a variable's current value, after `settled()`.
+  The obvious wait — read the parameter control — fails, because that control
+  is a *filter box* (`<input type="search" placeholder="Type to filter…">`) and
+  never displays the value. So the fixture grew a readout widget rendering
+  `PICK={{v_pick}}`, and the test waits for that. Clicking in the gap sent an
+  empty value, the target module correctly showed its own default, and the
+  assertion blamed the event.
+* **One testid, two elements.** `table-sort-property-N` names a `<select>` once
+  the type's properties arrive and an `<input type="text">` while they have
+  not — §231's deliberate fallback for a table configured before an object type
+  is chosen. Playwright retries `select_option` for visibility and enabledness
+  but **not for element kind**, so a call in the gap fails outright with
+  "Element is not a `<select>` element". Waiting for the options is what waits
+  for the picker.
+* **A computed colour is only meaningful once the state is settled.**
+  `test_stepper` now waits on `data-state` before reading a colour, which is
+  §78's rule about asserting computed colours meeting §271's about when.
+
+Twenty-eight fixed, verified against a database created for the run — and
+**`scripts/fresh-e2e.sh` is that run, as a command**. It creates a database
+nothing has touched, migrates it, brings the stack up on it, runs the suite,
+then drops it and puts the developer's stack back. `check.sh e2e` deliberately
+still does not do this: it drives a stack somebody else started and must not
+take it away from them, which is the split, and it now says so in its own
+header. §263's rule about a lesson recorded where it was learned applies
+squarely here — the paragraph above is worth nothing without the command
+underneath it.
+
+**No mutation harness, and the reason is not that this was tidying.** §271
+changed no production source: every edit is a test, a document, or a script.
+A harness answers "would the tests notice if this line were wrong", and there
+is no new line here for it to ask about — the *tests* are the change, and what
+proves them is that all 28 failed before and pass after against the
+environment that produced them. The one piece of new logic that could rot is
+`fresh-e2e.sh` itself, and the check on that is the same one this repo's CI
+header already makes about inlined commands: it is run, not read.
+
+### 270. Export schedules, and a copy that did not have to be one (this session)
+
+p.205, and the last piece `data-connection.md`'s exports row still named as
+owed: §265 built the export, the runner and the manual button, and left the
+trigger. Decision 0016 records the design.
+
+**p.205's scheduling is not an export feature in Foundry**, which is the
+sentence that shapes this. It says to "select Add schedule to open the export
+in Data Lineage… and **configure as you would for any other job**" — the
+platform's build scheduler, reached through lineage, pointed at an export the
+way it is pointed at anything else. The export half of it is one line: exports
+have an Overview page and the schedules that trigger them are listed there.
+
+This platform has no general job scheduler. It has a cron column per
+schedulable resource, and db 0014 established the shape for two of them. So
+this is the **third instance of an existing shape**, not the first use of a
+general one.
+
+**What that costs, and why it is small.** Foundry's schedules can fire on an
+upstream event; a cron fires on the clock whether anything changed or not, so
+the destination is stale for up to one interval. The gap is small because of a
+decision already made: p.192 says an export with nothing new is a **success**,
+and §265 implemented it — so an hourly cron against a daily dataset is
+twenty-three cheap skips and one export, and §267's history says
+`nothing new (v7)` rather than a column of ticks that mean nothing.
+
+**The copy that did not have to be one.** A cron fires in the worker, which is
+where every scheduled thing here runs — and the worker is a separate image with
+no shared Python package, so it already carries trimmed copies of `connectors`,
+`dataset_engine` and `storage`. The instinct was to add two more.
+
+`services/exports.py` imports `re` and `typing` and nothing else. No database,
+no driver, no framework. **So it is the same file**, held byte-for-byte by a
+test, exactly as `egress.py` has been since §263 — and that is the module where
+it matters most, because `should_skip` is the one function whose divergence
+would be invisible: p.192 makes "nothing new" a success, so a worker that
+computed the skip differently would report green whether it stopped writing or
+rewrote every poll. The general form is worth keeping: **before copying a
+module into the worker, check what it imports** — a pure rule can be shared by
+a test, and only what touches a driver has to be duplicated.
+
+What genuinely had to be copied is the runner's orchestration, `export_csv`,
+and three connectors' export methods. Those get the weaker guard — a test that
+asserts the methods exist by name, and the worker's own suite running one
+export end to end — and decision 0016 §2 says so rather than letting the two
+kinds of protection look equivalent.
+
+**p.202's switch is re-read every time the schedule comes due**, not only when
+the export was made. `list_due_exports()` joins `connections.exports_enabled`,
+so turning exports off stops the schedule without touching it. That is decision
+0013 §3's send-time-versus-save-time argument, which exists because two of its
+four original outbound paths had been reasoned about the same way and were
+wrong. The API refuses to *set* a schedule on a disabled source too, with a
+sentence naming who can change it — and the pair for that test is the one that
+matters: **clearing** a schedule still works on a disabled source, because a
+guard refusing every write to the column would trap the row in the state it is
+complaining about.
+
+**A guard that was untestable is not any more.** `export_store.record` guards
+its version mark with `GREATEST`, and §265 recorded that its harness could not
+kill a mutant removing it — every test there makes one request at a time, so
+two runs finishing out of order never happens. That note was right and is now
+out of date: a schedule makes the interleaving reachable, because a manual run
+and a scheduled one can genuinely overlap. The line does not change; the reason
+it exists stopped being hypothetical. §213's shelf-life rule, applied to a
+comment saying "the tests cannot construct this" rather than to one saying "the
+platform cannot express this".
+
+**The worker's test exports what a sync just read**, which is
+`data-connection.md`'s own acceptance line — *"an export writes what a sync of
+the same dataset would read back"* — with nobody pressing anything. A fixture
+that hand-wrote a parquet would have proved the runner works against a file
+this suite invented.
+
+**13 API tests, 9 worker tests**; 2204 API tests passing, 87 worker.
+
+### 269. The Explore screen, and what a table of rows does not say (this session)
+
+§268 built `preview()` on every connector and left it reachable only by posting
+JSON — the shape §252 named, closed here as it was for notify rules (§258),
+webhooks (§261), egress policies (§264) and exports (§267). p.142 says where it
+goes and what it is for: "explore the source and the data it contains to
+preview syncs before they bring data into Foundry", reached from the source.
+
+This replaces the Schema dialog, which showed `discover`'s catalogue and
+nothing else. It is now three of p.143's four panels: the tree with its
+free-text search, the sample, and p.145's path straight into a sync.
+
+**The finding here is smaller than §268's and worth keeping: most of what this
+screen does is say what the sample *is*.**
+
+A table of fifty rows with no caption is a table somebody reads as the data,
+and every wrong conclusion available from that is one they will carry into a
+decision about a sync. So four sentences exist that a naive screen would not
+have, and each answers a specific misreading:
+
+- **"all 12 rows" or "50 of more than 50 rows"**, never a bare count. A bare
+  "50 rows" beside fifty rows reads as the table having fifty rows.
+- **The non-determinism, said only where there is a subset to be
+  non-deterministic about.** There is no `ORDER BY` (decision 0015 §5), so a
+  capped sample is not the first rows and may differ next press — but with
+  every row on screen there is no sample, and a caveat that is always there is
+  one nobody reads by the third time.
+- **A count of shortened cells.** Decision 0015 §4's one inexactness is that a
+  truncated value and a real one ending in an ellipsis are indistinguishable;
+  the count is the only thing that says shortening happened at all.
+- **`null` as a word.** The server takes care to send `null` rather than `""`
+  precisely so an empty column can be told from a missing one, and rendering
+  both as a blank cell would throw that away at the last step. That is the
+  whole chain wasted at its last link, which is the shape worth watching for.
+
+**The search covers column names, and says when it did.** p.143 asks for a
+helper that finds "specific tables"; "which table has `customer_email`" is the
+question people actually arrive with, and a name-only search cannot answer it.
+But a table appearing under a query that is nowhere in its name looks like a
+bug, so the match carries its reason — and a table whose *name* matches is
+never reported as a column match, which would be true and useless.
+
+**A view is previewed and not offered a sync**, which is not an inconsistency:
+p.143 says exploration covers "tables and views", this platform has always
+synced tables, and a view is exactly the thing somebody wants to look at before
+finding out they cannot sync it. §214's rule decides the button — its only
+outcome would be a refusal — and the sentence stays because "why not this one"
+is the next question.
+
+**`tableKey` was about to exist twice.** The page had its own copy of the
+(schema, name) encoding and the new screen needed the same one. It is an
+*identity* function, so two versions that disagreed would mean a table picked
+on one screen resolving to a different row — or none — on the other, with
+nothing failing anywhere. Moved to `lib/source-explorer` and imported by both.
+The same move took `.discover-tree`'s CSS off the dead-code list: the dialog
+that used it is gone, and the styling is what the new tree wants.
+
+**The sample is fetched on request rather than on selection.** A preview is a
+real read of somebody else's system with their credentials, and clicking
+through a tree of forty tables should not be forty queries against a production
+database. p.18 makes this the check people press deliberately.
+
+**43 mutants attacked, 43 caught — and two of them by deleting the line rather
+than testing it**, which is the part worth keeping.
+
+- `search` had an early return for an empty query. There is no special case to
+  make: `"orders".includes("")` is true, so the name branch already matches
+  every table and returns exactly what the early return returned. §264's rule —
+  a line that cannot change the answer still reads as a guarantee the function
+  makes, and the next person needing that guarantee copies a call that was
+  never doing the work.
+- The panel's render gate was `preview.data && wanted === key`. The query is
+  keyed by the table, so `preview.data` is already undefined for a table nobody
+  asked about. §213's question — who else refuses this — and the answer was the
+  query key.
+
+**The third survivor was real, and the obvious test for it would have raced.**
+Nothing checked that *selecting* a table costs no query, and the natural
+assertion — that the sample is not on screen yet — is also exactly what an
+auto-fetch looks like for its first few hundred milliseconds. §266's rule is
+not to race an intermittent signal: the test **counts requests** to `/preview`
+instead. None on selection, exactly one on the button. The claim underneath is
+worth stating plainly, because it is about somebody else's production database:
+a preview is a real read with the customer's credentials, and clicking through
+a tree of forty tables must not be forty queries.
+
+**1765 unit tests** (25 new); `tsc` clean; **6 browser tests**, green first run.
+
+### 268. Source preview, and a suite that had never run (this session)
+
+`data-connection.md`'s build order item 4 — "browse tables and files before
+configuring a sync". Decision 0015 records the design; this is the server half.
+
+**The section that decides what to build is not the section about the
+feature.** *Sources / Source exploration* is p.142-143, two pages that are
+mostly the numbered callouts of a screenshot, and read alone it is a tree, a
+graph and a preview pane. The sentence that matters is three chapters earlier:
+
+> "Exploration is most commonly used to check that a connection is working as
+> intended and that **the correct permissions and credentials are being used to
+> connect**." (p.18)
+
+The most common use of the data browser is not browsing data. And a handful of
+real rows is the sharpest possible answer to "does this work, as this user?" —
+a row that arrives proves the host, the port, the credential, the privilege and
+the table name at once, and no test button proves the last two. So preview is
+not a convenience laid over discovery; it is the only check in the platform
+that exercises the read path a sync will actually take, and the
+credential-refusal cases are the feature rather than its error path.
+
+**Half of item 4 already existed, and saying which half was most of the
+design.** `discover()` has been on the connector interface since §2 and the
+tree is on screen, so p.143's callout 1 was done. What was missing was the
+sample — the only one of p.143's six items that needs a connector method rather
+than a screen.
+
+**What a preview must not become.** It takes a schema and a table and nothing
+else, checked as identifiers. The moment a caller can shape the read — SQL, a
+filter, a column list — an editor's ability to see fifty rows becomes an
+ability to run statements as the connection's user, which is a much larger
+grant than the sync it stands in for. That bound is the whole permission
+argument: **preview is bounded above by what a sync could already do, and by
+nothing else**, which is why it is editor and not viewer, and what to revisit
+if a credential ever reads more than a sync would.
+
+**The pair that keeps p.18's answer from becoming a false alarm.** `test` and
+`discover` both mark the connection failed when they cannot reach the source,
+and copying that here would have been the obvious thing. It is wrong: "this
+credential cannot read that table" is the check *working*. A source that went
+red every time somebody previewed the wrong table would be a status nobody
+could trust. Two tests, and neither is optional on its own.
+
+**`more` needed two tables, not one.** A connector that asked for exactly the
+cap and inferred "there is more" from a full page passes a test with fifty-one
+rows and fails one with exactly fifty. So every connector asks for one row past
+the cap and `more` is something the source said. Both tables exist.
+
+**The one place a preview is allowed to be inexact, stated rather than
+buried.** A cell over 500 characters is shortened with an ellipsis, and a real
+value that is exactly the cap long and ends in an ellipsis cannot be told from
+a truncated one. Mitigated rather than solved: the response carries an exact
+count of how many cells were shortened, and the columns and row count are never
+approximate. `size_cap_error`'s refuse-rather-than-lie is still the rule
+wherever the result is a source of record — which is why an object over the
+download cap is **refused** instead of sampled: DuckDB's readers want a whole
+file, and a truncated CSV parses into rows that are not in the source.
+
+**The sixth outbound path, and the first one where decision 0013's distrust
+changed the tests rather than only the wording.** A database preview reaches
+`_conninfo`, so the construction argument that covered exports covers it. A
+REST preview does not — it goes through `_fetch_page`'s `_check_url`, a
+different chokepoint. "Preview is guarded" was two claims wearing one sentence,
+and one fixture would have proved half while reading as though it proved both.
+Two paired refusals, two paired allows.
+
+**A suite that skips everywhere has never run.**
+
+`test_mysql_connector.py` is the file that proves the connector interface
+generalises rather than being a rename of the Postgres path. It skipped on
+every developer machine, because nothing provisions a MariaDB — and it skipped
+in CI, because the `api` job had only a Postgres service. Roughly twenty tests
+had not executed since they were written, and `pytest` reported that as a clean
+pass every time. Writing three more preview tests into it is what surfaced it:
+they passed, instantly, without running.
+
+This is §267's finding one level up. There, a *layer* of a mutation harness had
+not run and seven mutants came back as survivors. Here a whole *suite* has not
+run since it was authored, and nothing came back at all — which is worse,
+because a survivor at least gets looked at. The fix is the one the browser
+suite already had: `ANCHOR_E2E_REQUIRED` turns its skip into a failure because
+in CI a missing stack *is* the bug. `ANCHOR_MYSQL_REQUIRED` now does the same,
+and CI gained the MariaDB service that makes it meaningful. Locally the skip
+stays, so a Postgres-only checkout still runs everything else.
+
+**The narrowing that has now appeared twice, which is worth more than either
+appearance.** p.143's file-import filter is defined by p.160-161 in terms of
+`SNAPSHOT`, `APPEND` and `UPDATE` transactions — the same transaction log
+decision 0014 §2 found `dataset_versions` does not keep. Two chapters of the
+same document have now been narrowed by one missing concept. The gap is in the
+dataset model, not in exports or in exploration, and it will keep surfacing.
+
+Also left out and recorded rather than forgotten: p.143's relationship graph,
+which Foundry says of its own feature "is not always available", and which
+needs foreign keys `ColumnInfo` does not carry.
+
+**34 mutants attacked, 32 runnable, 32 caught.** The two that are not runnable
+are the MySQL pair, and the harness prints them as `NOT RUN` rather than
+counting them either way — a mutant whose only possible killer is a skipped
+suite would come back a survivor for a reason that has nothing to do with the
+tests, which is §267's confusion one mutant at a time instead of one layer at a
+time.
+
+**Three of the first run's nine problems were the harness's own**, and the
+cause is worth keeping: `S3Connector.snapshot` opens with the same six lines as
+its `preview`, so every anchor taken from those lines matched twice and came
+back a NO-OP. The harness gained a `within` scope — a substitution applied only
+inside the method containing a marker unique to it — and the marker has to be
+unique or it is an error, because silently picking the first occurrence is the
+same failure the NO-OP check exists to catch.
+
+**Three survivors were one shape, and it is the most useful finding here: a cap
+applied twice is a cap the outer one hides.** `build_preview` limits the rows
+on the way out, so the `LIMIT` in the query, the slice on the REST page and the
+limit in `sample_file` were all invisible to any assertion on the response — a
+connector that pulled a billion-row table and then kept fifty would pass every
+test in the file. §265's rule is to ask whether the state a guard defends can
+be built by hand, and all three could be:
+
+- **Postgres**: a view whose rows past the cap divide by zero. The query with a
+  `LIMIT` never evaluates them; the one without fails.
+- **REST**: a page of sixty records where the fifty-fifth carries a key none of
+  the others do. A preview that scanned the whole page offers a column with
+  fifty empty cells under it — so the assertion is about the *columns*, which
+  is the only thing the outer cap does not flatten.
+- **The file sampler**: tested at the sampler, which is the only place its own
+  limit is visible.
+
+**Two survivors were the caps themselves, and the reason nothing caught them is
+a habit that is otherwise right.** Every fixture is built from `PREVIEW_ROWS`,
+because a table hard-coded to fifty goes stale the day the cap moves — and the
+cost is that the value is measured against itself, so changing it changes the
+fixture with it. They are checked against **decision 0015 §4** instead: not a
+copy of the number, but the place a reviewer would go to argue about it. Same
+move as §267's `export-form.ts` mirror, one layer further out.
+
+**The last one was ordinary and real**: an egress refusal marks the connection
+down, and only the message had been asserted.
+
+**One more needed §213's question rather than a test.** The S3 extension check
+survived because `dataset_engine` refuses an unreadable type too — so deleting
+it changed *when* the refusal happens, not whether, and the same words arrived
+from one layer in. The answer to "who else already refuses this" was "somebody,
+but only after downloading the object", which is a difference worth keeping and
+one that is observable: ask for a file that is not there. With the check the
+answer is about the type and the bucket is never touched; without it the
+connector goes to S3 and reports a missing object.
+
+**Turning the suite on found two things in its first run**, which is the part
+of this worth remembering. CI went from 2191 local to **2204 tests, and two
+red** — both in the file that had never executed:
+
+- **A test whose premise had quietly stopped being true.**
+  `test_tls_required_against_a_non_tls_server_fails_loudly` opens *"this
+  MariaDB has no TLS"*, and MariaDB 11.4 started generating a self-signed
+  certificate at first start. So `ssl_mode='required'` genuinely encrypts, the
+  connector is completely correct, and the assertion fails. Nothing had noticed
+  because nothing had run. **A test that needs its fixture to have a property
+  should assert that property in the sentence that fails**, not state it in a
+  docstring — the failure now names `have_ssl` and says what to point the port
+  at.
+  And the fix is the pairing this file was missing anyway: `ssl_mode` has two
+  halves, and **one server cannot show both**. A refusal alone passes against a
+  connector that refuses `required` always, which is §263's rule about a
+  refusal needing an allowed call beside it. CI now runs two MariaDBs — 10.11
+  without certificates for the refusal, 11 with them for the assertion that
+  `required` actually encrypts, checked on `Ssl_cipher`, the same signal the
+  connector's own guard reads.
+- **A test of mine that asserted the row count of a shared table.** The preview
+  test compared an exact set of three emails; an incremental-sync test earlier
+  in the same module-scoped file appends a fourth. §122 again, in its quiet
+  form — the leftovers are a later valid state of the same table, not noise.
+
+**39 new API tests** (22 in `test_source_preview.py`, 4 egress, 6 REST, 7
+object storage), plus 4 MySQL ones that finally have somewhere to run.
+
 ### 267. The export panel, and the question a green tick stopped answering (this session)
 
 §265 built exports and left every part reachable only by posting JSON — the
@@ -9504,7 +9930,37 @@ The rule: **match a noise filter to the message, never to its source.** A source
 
 - **A skip is not a pass: before believing a survivor, check that the layer which let it through can fail at all.** §267's harness reported seven survivors and six were phantoms — the dev stack had gone down, every browser test **skipped**, and `pytest` exits `0` on a skip, which the harness read as "the tests passed against the mutant". The tell was the *shape* of the report rather than any single line: all seven survivors were browser mutants and none of the thirty unit ones survived, and a whole layer catching nothing is almost never what a real coverage gap looks like. This is the third member of a family — §189's NO-OP (a mutation that never landed looks like a survivor) and the standing rule that a HANG is not a catch — and it is the most dangerous of the three, because a hang is slow enough to notice and a no-op is reported, while a skipped layer produces a clean, fast, entirely wrong report. Every harness runner should treat "nothing ran" as an error rather than as success.
 
+- **Before copying a module into the worker, look at what it imports — a pure rule can be shared as a file, and only what touches a driver has to be duplicated.** §270 needed the export rule in the worker and the reflex was to port the three functions a scheduled run uses. `services/exports.py` imports `re` and `typing`: no database, no driver, no framework. So it is the *same file*, held byte-for-byte by a test, as `egress.py` has been since §263 — and that is where it mattered most, because `should_skip` is the one function whose divergence would be invisible (p.192 makes "nothing new" a success, so a copy that computed the skip differently would report green whether it stopped writing or rewrote every poll). The general test is cheap: **if a module's imports are all standard library, a copy is a choice rather than a constraint**, and the byte-for-byte guard is strictly stronger than any behavioural comparison of two implementations. What is left over — anything touching a driver — gets the weaker guard, and the difference should be *said* rather than left to look equivalent.
+
+- **A comment saying "the tests cannot construct this" has the same shelf life as one saying "the platform cannot express this", and a new caller is what expires it.** §265 could not kill a mutant removing `GREATEST` from the export version mark, and wrote down why: every test there makes one request at a time, so two runs finishing out of order never occurs. §270 added a schedule, and a manual run and a scheduled one can now genuinely overlap — the note was correct and is now wrong, and nothing pointed at it. §213 recorded the grep for the other kind ("cannot", "no way to", "nothing that could"); this kind reads "the harness cannot", "no test can construct", "does not occur here", and the moment to grep for it is **when a second caller appears for something that had one**.
+
+- **A suite that skips in every environment has never run, and nothing will ever tell you.** §268 wrote three tests into `test_mysql_connector.py` and they passed instantly, because the whole file had skipped since it was written — no MariaDB on any developer machine, and none in CI either, where the `api` job had only a Postgres service. Twenty-odd tests proving the connector interface generalises had never executed, reported as a clean pass every time. This is the skip-is-not-a-pass family one level above §267's: there, a *layer* of a harness had not run and seven mutants came back as phantom survivors; here a *suite* had not run and nothing came back at all, which is worse, because a survivor at least gets looked at. **A skip is only honest where the dependency is genuinely optional, and CI is never that place** — so every suite with an external dependency needs a required-mode switch that turns its skip into a failure, and the environment that sets it needs the dependency. The tell is a test you just wrote passing faster than it possibly could. And the first green run is not the end of it: turning this one on immediately found a test whose fixture assumption had expired and one of mine that assumed a shared table's row count — **a suite that has not run is not merely unproven, it has been rotting**, because everything around it moved and nothing pulled on it.
+
+- **"It has not happened yet" and "it will never happen" look identical for the first few hundred milliseconds, so count the requests instead.** §269's Explore screen fetches a sample only when asked, because a preview is a real read of somebody else's production database with their credentials and a tree of forty tables must not be forty queries. The obvious test — assert the sample is not on screen after selecting a table — passes against a screen that fetches on every click, because the request has not come back yet. Two mutants proved it. The fix is §266's rule applied to absence rather than to flakiness: **assert the network, not the DOM**, via `page.on("request", …)` and a wait long enough that an eager fetch would certainly have been issued. Paired with a count of exactly one after the button, since "no requests ever" would otherwise pass too. The general shape: whenever the claim is *that something did not happen*, find the place it would have left a trace and assert on that.
+
+- **A chain of careful distinctions is only as good as its last link, and the last link is usually the render.** §268's connectors go out of their way to send `null` rather than `""`, because "this column is empty" and "this column is missing" are the two answers a preview is read to tell apart, and there is a test for it at the route. §269's screen could have rendered both as an empty cell and thrown the whole thing away one step later, with every test still green — the server test asserts the wire, and a screen test that only checked the visible rows would not have noticed. The habit: when a layer takes trouble to preserve a distinction, **write down what the next layer has to do with it**, and test that too. The tell is a value the API is careful about arriving somewhere that treats it as a formatting detail.
+
+- **A test that needs its fixture to have a property should assert that property in the sentence that fails.** §268's TLS test opened "this MariaDB has no TLS" — true when written, false from MariaDB 11.4, which generates a self-signed certificate at first start. The connector was correct and the test was red, and the failure said `assert True is False`, which points at the code. Stating the premise as an assertion (`have_ssl(port) == "DISABLED"`, with a message naming what to point the port at) turns a confusing failure into an instruction. This is the same shelf-life problem §213 recorded for comments claiming something is inexpressible: **a fact about the environment written as prose is a fact nobody re-checks**, and a test is the one place it can be written so that it re-checks itself.
+
+- **When a document's own section is thin, the sentence that decides the design is usually in the overview chapter.** §268's *Source exploration* is two pages, mostly screenshot callouts, and reads as a tree plus a preview pane. p.18, three chapters earlier, says exploration "is most commonly used to check that a connection is working as intended and that the correct permissions and credentials are being used to connect" — which reframes the whole feature: the most common use of the data browser is not browsing data, and the credential-refusal path is the product rather than the error handling. A build designed from the feature section alone would have got the code right and the *emphasis* wrong, which is the kind of wrong that no test catches. The habit: before building from a short section, read what the overview says the capability is **for**.
+
+- **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
+
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **A red job stops being read after about the third time you see it red.** §271 found the browser job failing on `main` at ten consecutive merges with an identical 28-failure set, while `docs/parity/README.md` went on saying "all three jobs now green, every parity claim below now means something". Nobody decided to ignore it; it just moved from *signal* to *scenery*, and each merge was made by checking the three ticks that still moved. The structural fix is not discipline, it is **making the count visible**: a failure set that is the same 28 every run is a different fact from one that changes, and only the second is news. Until a check exists that says "this job has been red since <date>", treat any long-red job as an unread bug report and read it before merging past it again.
+
+- **The step that explains a failure has to be tested by a failure.** The browser job's diagnostic was `tail -100 api.log web.log`, which GNU tail refuses with two files — `tail: option used in invalid context -- 1`. It ran on ten red runs and printed that message and nothing else, so the one artefact that would have made the 28 legible never existed. Diagnostics are `if: failure()`, which means they run **only** in the situation nobody rehearses. Every one of them needs to be forced to run once on purpose, the same way §198's console filter did.
+
+- **Warm data hides races; a fresh database is a test environment, not a detail.** All 28 failures reproduce on a database created ninety seconds ago and none on this repo's dev Postgres, which has been accumulating since §248. The local gate runs against the accumulated one, which is exactly why it stayed green through ten red CI runs. **Where a suite's timing depends on the server being slow enough to lose a race, the state of the database is part of the test environment** — and "it passes locally" means "it passes against my warm data" until proven otherwise.
+
+- **A failing probe that refutes the hypothesis is worth more than a passing one that confirms it.** §271's first theory was a late ontology request, and the probe delayed that request by two seconds. Control and delayed both passed — which is not an inconclusive result, it is a proof that lateness alone is not the mechanism, because the tests already wait longer than the injected delay. The instinct on a both-passed probe is to conclude the probe was bad; the useful move is to ask what the passing result *rules out*, which here pointed straight at the difference between the two environments rather than at the timing within one.
+
+- **A one-shot read is an assertion with no wait attached, and its failure message describes the wrong thing.** `text_content()`, `all_text_contents()`, `evaluate_all`, `get_attribute` and `.all()` return whatever is there *now*; `expect()` retries. Read a table before it draws and `.index()` raises `'Name' is not in list` — a precise, plausible complaint about a missing column, from a table that had not rendered. Twenty-eight tests failed this way and none of them said so. **Any raw read of a collection needs an `expect(...).to_have_count(n)` in front of it**, and the place to put it is the helper, so the next test inherits the wait instead of the bug.
+
+- **A control that shows nothing cannot be the thing you wait on.** The natural wait before clicking a button that sends a variable's current value is "read the variable's control" — and that control is a filter box with a placeholder, which never displays the value at all. The wait timed out, looked like a product bug, and the correct fix was to give the *fixture* a readout widget to wait on. When a wait needs a value that no widget renders, add the widget: **a test can only wait for something the page actually says.**
+
+- **One testid on two different elements is a wait that cannot be written.** `table-sort-property-N` is a `<select>` once the ontology arrives and an `<input>` before it — a deliberate fallback, and a reasonable one. But Playwright retries `select_option` for visibility and enabledness and **not for element kind**, so a call in the gap fails immediately with "Element is not a `<select>` element". Where a testid can name two kinds of control, the retry mechanism silently stops covering the switch, and the test has to wait for the *contents* (`option` count) rather than for the element.
 
 - **Before A/B-testing a fix against an intermittent failure, build something that fails most of the time.** §266 judged two candidate fixes by running a test file and reading pass/fail. The underlying failure happened on roughly four openings in five, so a single run could not tell a bad fix from a good fix landing on a bad run — and one correct fix was discarded as a regression on exactly that evidence. What broke the deadlock was a fifteen-iteration probe reporting a *count*: 1/5 before, 5/5 after, unambiguous in one run. **An intermittent bug has to be turned into a measurement before any change to it can be evaluated**, and the measurement is usually cheaper to build than the second wrong conclusion is to undo.
 
@@ -9565,4 +10021,4 @@ From a fresh checkout to a stack you can sign into. It asks before anything slow
 
 **`docs/local-setup.md` is the guide** — the same steps by hand, what each one is for, how to seed a test client or user, and the failures worth recognising by sight (the DSN form `migrate.py` refuses, the `PLATFORM_APP_PASSWORD` the schema needs, why a token stops working when the API restarts).
 
-Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own; `scripts/dev-down.sh` stops the two servers again and leaves Postgres alone, because it is not this repo's to stop. `scripts/check.sh` runs every check the repo has — types, unit, worker, API, browser — and `apps/api/tests/test_dependency_pins.py` is what makes that sentence true rather than aspirational: it counts the test directories on disk against the script, and §263 added it because the worker's 78 tests had been absent from that list since the app was written.
+Underneath: `scripts/dev-up.sh` starts Postgres, the API on 8300 and Next on 3100, seeding a dev org with four users at each role level and writing their tokens to `/tmp/anchor-dev-tokens.json`; `apps/api/dev_server.py --extra-user` adds your own; `scripts/dev-down.sh` stops the two servers again and leaves Postgres alone, because it is not this repo's to stop. `scripts/check.sh` runs every check the repo has — types, unit, worker, API, browser — and `apps/api/tests/test_dependency_pins.py` is what makes that sentence true rather than aspirational: it counts the test directories on disk against the script, and §263 added it because the worker's 78 tests had been absent from that list since the app was written. `scripts/fresh-e2e.sh` runs the browser suite against a database it creates for the run and drops afterwards — §271's addition, because `check.sh e2e` runs against the accumulated dev database and that difference hid 28 failures through ten red CI runs; run it before merging anything the browser suite covers.

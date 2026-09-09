@@ -12,6 +12,7 @@ leaves the service layer.
 """
 from __future__ import annotations
 
+import functools
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -127,6 +128,28 @@ class TableOut(BaseModel):
     name: str
     kind: str
     columns: list[ColumnOut]
+
+
+class PreviewIn(BaseModel):
+    """A schema and a table, and nothing that could shape the read.
+
+    Decision 0015 §3: no SQL, no filter, no column list. The moment one of
+    those appears, an editor's ability to see a sample becomes an ability to
+    run statements as the connection's user - a much larger grant than the
+    sync this stands in for.
+    """
+
+    source_schema: str = ""
+    source_table: str
+
+
+class PreviewOut(BaseModel):
+    columns: list[str]
+    rows: list[list[str | None]]
+    #: The source had at least one row past the sample - its answer, not an
+    #: inference from a full page (decision 0015 §4).
+    more: bool
+    truncated_cells: int
 
 
 def _out(row: dict[str, Any]) -> ConnectionOut:
@@ -567,6 +590,89 @@ async def discover_schema(
         )
         for t in tables
     ]
+
+
+@router.post("/{connection_id}/preview", response_model=PreviewOut)
+async def preview_table(
+    connection_id: UUID,
+    body: PreviewIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> PreviewOut:
+    """A sample of one table from the source (`data-connection` p.142-143).
+
+    **Editor, matching `discover`, and the reason is a bound rather than a
+    convention** (decision 0015 §2): a project editor can already run a sync
+    against this connection, which pulls the whole table into a dataset they
+    can read. Someone who can take all of it may be shown fifty rows of it.
+    Not viewer - a dataset that exists has been through somebody's decision to
+    bring it in, and the source behind it has not.
+
+    Unlike a sync, this returns data no platform permission covers, because the
+    data is not in the platform yet. The two things between a caller and the
+    source's contents are the connection's credential and this role.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
+        policies = await egress_store.for_connection(conn, connection_id)
+
+    connector = get_connector(str(row["source_type"]))
+    config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
+    try:
+        secret = conn_service.secret_values_for(_secrets, row)
+        with egress.restricted_to(policies):
+            sample = await anyio.to_thread.run_sync(
+                functools.partial(
+                    connector.preview,
+                    config,
+                    secret,
+                    source_schema=body.source_schema,
+                    source_table=body.source_table,
+                )
+            )
+    except egress.EgressRefused as exc:
+        # Recorded on the connection like `test` and `discover`, for the reason
+        # those two give: a refused destination is a configuration answer, and
+        # a preview that cannot reach the source is the same signal a failed
+        # test is.
+        async with user_connection(access.auth.user_id) as conn:
+            await conn_service.record_test_result(conn, connection_id, ok=False, error=str(exc))
+        raise ConnectorConfigError(str(exc)) from exc
+    except ConnectorOperationError as exc:
+        # `SourceReadError` arrives here too, and deliberately does **not**
+        # mark the connection failed: "this credential cannot read that table"
+        # is p.18's answer working, not the source being unreachable. Marking
+        # it down would turn the check into its own false alarm.
+        raise ConnectorConfigError(str(exc)) from exc
+
+    async with user_connection(access.auth.user_id) as conn:
+        await conn_service.record_test_result(conn, connection_id, ok=True, error=None)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="connection.preview",
+            resource_type="connection",
+            resource_id=connection_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            # The table, never the rows. An audit log that recorded what was
+            # previewed would be a second copy of the source's data, kept
+            # somewhere with different retention and no owner.
+            metadata={
+                "source_schema": body.source_schema,
+                "source_table": body.source_table,
+                "rows": len(sample.rows),
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return PreviewOut(
+        columns=sample.columns,
+        rows=sample.rows,
+        more=sample.more,
+        truncated_cells=sample.truncated_cells,
+    )
 
 
 def _parse(raw: Any) -> dict[str, Any]:

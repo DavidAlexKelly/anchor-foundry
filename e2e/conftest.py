@@ -294,6 +294,34 @@ def stays(read, matches, *, what: str, for_ms: int = 5000):
     return last
 
 
+def option_values(select_locator, *, count: int) -> list[str]:
+    """A `<select>`'s option *values*, once there are `count` of them.
+
+    **The wait is the whole helper.** `evaluate_all` and `all_text_contents`
+    are one-shot reads, and every property picker in this suite is empty until
+    the object type resolves — so a read taken straight after `to_be_visible()`
+    catches the built-in options and nothing else. `expect(...).to_have_count`
+    retries; the read after it is then safe.
+
+    §202 and §231 found this, and `test_prominent_terms.py` has done it
+    correctly ever since — which did not stop five other call sites reading the
+    list raw. §271 is what that cost: those tests passed against a long-lived
+    development database, where the ontology query is warm, and failed against
+    every fresh one. CI has a fresh database on every run, so the browser job
+    was red for ten merges while nobody could reproduce it locally.
+    """
+    options = select_locator.locator("option")
+    expect(options).to_have_count(count)
+    return options.evaluate_all("nodes => nodes.map(n => n.value)")
+
+
+def option_labels(select_locator, *, count: int) -> list[str]:
+    """The same, for the text a person reads rather than the stored value."""
+    options = select_locator.locator("option")
+    expect(options).to_have_count(count)
+    return options.all_text_contents()
+
+
 def settled(page, locator_or_none=None) -> None:
     """Wait for the module to have rendered *something* before asserting.
 

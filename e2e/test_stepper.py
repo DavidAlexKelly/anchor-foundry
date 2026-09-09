@@ -387,6 +387,17 @@ def test_a_document_with_no_colours_still_tells_the_states_apart(page, api) -> N
     open_module(page, mod)
     settled(page)
 
+    # **Wait for the states before reading the colours** (§271). The completion
+    # variables resolve after the first paint, so a computed style read straight
+    # after `settled` can catch step 1 already completed and step 2 not yet
+    # active — two whites, and an assertion that the defaults do not differ.
+    # `data-state` is the widget's own answer to "which state is this", so
+    # waiting on it waits for exactly the thing the colours are derived from.
+    steps = page.locator(".canvas-step")
+    expect(steps.nth(0)).to_have_attribute("data-state", "completed")
+    expect(steps.nth(1)).to_have_attribute("data-state", "active")
+    expect(steps.nth(2)).to_have_attribute("data-state", "upcoming")
+
     marks = page.get_by_test_id("step-mark")
     completed = marks.nth(0).evaluate("el => getComputedStyle(el).backgroundColor")
     active = marks.nth(1).evaluate("el => getComputedStyle(el).backgroundColor")

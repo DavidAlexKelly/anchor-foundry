@@ -164,6 +164,37 @@ def describe_file(src_path: str, extension: str) -> list[ColumnSchema]:
         con.close()
 
 
+def sample_file(
+    src_path: str, extension: str, limit: int
+) -> tuple[list[ColumnSchema], list[list[Any]]]:
+    """The first `limit` rows of a source file, without converting it.
+
+    `describe_file`'s argument one step further along (decision 0015): a file a
+    connector is previewing is read through the same readers the ingest would
+    use, so the rows on the screen are the rows that would land - a preview
+    that parsed the file its own way could show a clean table for a file the
+    sync would then refuse.
+
+    Returns exactly what `LIMIT` gave and says nothing about whether there is
+    more, deliberately: `TabularResult.truncated` would have to be inferred
+    from a full page here, and a caller that wants the answer asks for one row
+    past its own cap (which is what `connectors.build_preview` does). Counting
+    the file's rows would mean reading all of it - the cost a preview exists to
+    avoid.
+    """
+    reader = _reader_expr(src_path, extension)
+    con = duckdb.connect()
+    try:
+        try:
+            cursor = con.execute(f"SELECT * FROM {reader} LIMIT {max(1, int(limit))}")
+        except duckdb.Error as exc:
+            raise DatasetEngineError(_clean(exc)) from exc
+        columns = [ColumnSchema(name=d[0], data_type=str(d[1])) for d in cursor.description]
+        return columns, [[json_safe(v) for v in row] for row in cursor.fetchall()]
+    finally:
+        con.close()
+
+
 def profile_columns(parquet_path: str) -> list[dict[str, Any]]:
     """Per-column statistics for a dataset version (migration 0019).
 

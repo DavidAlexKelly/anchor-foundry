@@ -227,9 +227,25 @@ scripts/check.sh worker   # the worker suite, against a database of its own
 scripts/check.sh types    # tsc --noEmit
 scripts/check.sh unit     # the TypeScript unit tests
 scripts/check.sh e2e      # the browser suite, against the running stack
+scripts/fresh-e2e.sh      # the browser suite, against a database made for it
 ```
 
 Ordered cheapest-first and exits on the first failure.
+
+**Run `fresh-e2e.sh` before merging anything the browser suite covers, and
+know why.** §271 found the browser job red on `main` at ten consecutive merges
+with the same 28 failures, none of which reproduced on any developer machine.
+The difference was the *database*: CI creates one at the top of every run, and
+the dev Postgres here has been accumulating since §248, so its ontology queries
+come back warm. Every one of the 28 was a one-shot read of a collection that
+starts empty — `all_text_contents`, `evaluate_all`, `get_attribute`, `.all()`,
+none of which retry — and against warm data the collection was always already
+there. `check.sh e2e` runs against whatever the stack is up on and cannot fix
+this, because it drives a stack somebody else started and must not take it
+away from them. `fresh-e2e.sh` owns the whole thing: it creates a database,
+migrates it, brings the stack up on it, runs the suite, drops it, and puts your
+stack back on the default. It takes arguments through to pytest, and
+`ANCHOR_KEEP_DB=1` leaves the database behind if you want to look at it.
 
 **The worker target creates and migrates its own database** (`platform_worker_test`
 by default, `ANCHOR_WORKER_DB` to change it) and that is not a nicety: the
@@ -242,6 +258,33 @@ that reason and goes red if a new suite appears without one. The browser suite i
 skipped when the stack is down rather than failing — set
 `ANCHOR_E2E_REQUIRED=1` to make a missing stack an error, which is what CI
 wants, since there it is the bug.
+
+**`apps/api/tests/test_mysql_connector.py` needs a MariaDB and nothing here
+provisions one**, so on a plain checkout it skips. That is fine locally and was
+not fine in CI, where it also skipped and therefore had never run at all (§268)
+— roughly twenty tests reported as a clean pass without executing. CI now
+starts a MariaDB service and sets `ANCHOR_MYSQL_REQUIRED=1`, which turns the
+skip into a failure, the same arrangement `ANCHOR_E2E_REQUIRED` gives the
+browser suite. To run it here, point it at any MariaDB or MySQL you have:
+
+```bash
+# 10.11 has no certificates; 11.4+ generates a self-signed pair at first start.
+docker run -d --name anchor-mariadb -p 3306:3306 \
+  -e MARIADB_ROOT_PASSWORD=devpass -e MARIADB_ROOT_HOST='%' mariadb:10.11
+docker run -d --name anchor-mariadb-tls -p 3307:3306 \
+  -e MARIADB_ROOT_PASSWORD=devpass -e MARIADB_ROOT_HOST='%' mariadb:11
+TEST_MYSQL_ADMIN_USER=root TEST_MYSQL_ADMIN_PASSWORD=devpass \
+  TEST_MYSQL_TLS_PORT=3307 ANCHOR_MYSQL_REQUIRED=1 scripts/check.sh api
+```
+
+The suite creates its own database and login role, so root is what it wants;
+`TEST_MYSQL_HOST` and `TEST_MYSQL_PORT` move it off `127.0.0.1:3306`.
+
+**Two servers, because `ssl_mode` has two halves and one server cannot show
+both.** The connector has to refuse a session that finished in plaintext, which
+needs a build with no certificates, and it has to actually encrypt one where
+the server can, which needs a build that has them. Running only the first is
+allowed and the second test says so out loud rather than skipping.
 
 ---
 
@@ -259,6 +302,10 @@ Environment variables, all read by `dev-up.sh` and `check.sh`:
 | `ANCHOR_LOG_DIR` | `/tmp/anchor-dev` |
 | `ANCHOR_PYTHON` | `.venv-api/bin/python` |
 | `ANCHOR_WORKER_DB` | `platform_worker_test`, created and migrated by `check.sh worker` |
+| `TEST_MYSQL_HOST` / `TEST_MYSQL_PORT` | `127.0.0.1` / `3306` |
+| `TEST_MYSQL_ADMIN_USER` / `TEST_MYSQL_ADMIN_PASSWORD` | `platform_test` / `devpass` |
+| `TEST_MYSQL_TLS_PORT` | unset; a **second** MariaDB that has TLS, for the half of `ssl_mode` the plaintext one cannot show |
+| `ANCHOR_MYSQL_REQUIRED` | unset; `1` turns the MySQL suite's skip into a failure |
 | `PLAYWRIGHT_CHROMIUM` | `/opt/pw-browsers/chromium`, used only when the path exists |
 
 `DATABASE_URL` connects as `platform_app`, which **is** subject to row-level

@@ -20,7 +20,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, option_values, settled
 
 # The capacities are 100, 10 and 25 for §231's reason: as *text* they order 10,
 # 100, 25 and as *numbers* 10, 25, 100, so a property sort that reached the
@@ -439,9 +439,10 @@ def test_the_sort_picker_offers_only_properties_the_stores_agree_on(
     page.locator(".canvas-tree-row").filter(has_text="Object selector").first.click()
     picker = page.get_by_test_id("selector-sort")
     expect(picker).to_be_visible()
-    values = picker.locator("option").evaluate_all(
-        "nodes => nodes.map(n => n.value)"
-    )
+    # Waited for, not snapshotted: `capacity` appears when the ontology
+    # resolves, and reading straight after `to_be_visible` catches only the
+    # four built-ins (§271).
+    values = option_values(picker, count=6)
     assert values == ["key", "-key", "recent", "oldest", "capacity", "-capacity"], values
     # The sentence beneath comes from `ORDERABLE_HINT`, so there is one place to
     # change it when the server's list changes — which it did not, for the ten

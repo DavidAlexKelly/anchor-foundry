@@ -29,11 +29,56 @@ jobs:
         options: >-
           --health-cmd pg_isready --health-interval 5s
           --health-timeout 5s --health-retries 20
+      # §268. `test_mysql_connector.py` is the file that proves the connector
+      # interface generalises rather than being a rename of the Postgres path,
+      # and it had skipped in every environment this project runs - locally
+      # because nothing provisions a MariaDB, here because this job had only a
+      # Postgres service. Twenty-odd tests reported as a clean pass without
+      # executing. Root rather than a named user because the suite creates its
+      # own database and login role, which is the arrangement that lets it hold
+      # the credential boundary it exists to hold.
+      #
+      # **Two servers, because `ssl_mode` has two halves and one server cannot
+      # show both.** The connector must refuse a session that finished in
+      # plaintext, which needs a build with no certificates, and it must
+      # actually encrypt one where the server can, which needs a build that
+      # has them. MariaDB 11.4 started generating a self-signed pair at first
+      # start, which is what turned the first test red the moment this job
+      # began running it - the assertion had been written against an image
+      # without them and nothing re-checked for as long as it never ran.
+      mariadb:
+        # Pinned below 11.4 deliberately: this is the plaintext server.
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: devpass
+          MARIADB_ROOT_HOST: "%"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      mariadb_tls:
+        # 11.4+ generates certificates at first start, so this one has TLS.
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: devpass
+          MARIADB_ROOT_HOST: "%"
+        ports: ["3307:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 30
     env:
       DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
       TEST_ADMIN_DSN: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
       STORAGE_ROOT: /tmp/anchor-storage
       ANCHOR_PYTHON: python
+      TEST_MYSQL_ADMIN_USER: root
+      TEST_MYSQL_ADMIN_PASSWORD: devpass
+      TEST_MYSQL_TLS_PORT: "3307"
+      # A missing MariaDB is the bug here, not a reason to skip - the same
+      # sentence the browser job makes with ANCHOR_E2E_REQUIRED, and for the
+      # same reason: without it, a service that failed to start would put the
+      # suite back to reporting a pass it never earned.
+      ANCHOR_MYSQL_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -176,4 +221,10 @@ jobs:
       - run: scripts/check.sh e2e
       - name: Server logs on failure
         if: failure()
-        run: tail -100 /tmp/anchor-dev/api.log /tmp/anchor-dev/web.log || true
+        # **`-n 100`, not `-100`.** With two files GNU tail refuses the
+        # obsolescent form — `tail: option used in invalid context -- 1` — so
+        # this step has printed that message and nothing else on every red run
+        # since it was written. §271 found it while trying to read the logs of a
+        # browser job that had been failing for ten merges: the one step whose
+        # whole job is to explain a failure had never explained one.
+        run: tail -n 100 /tmp/anchor-dev/api.log /tmp/anchor-dev/web.log || true

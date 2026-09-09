@@ -30,7 +30,7 @@ PAGE = 50
 _COLUMNS = """
     e.id, e.project_id, e.connection_id, e.dataset_id, e.name, e.kind,
     e.mode, e.destination, e.last_version, e.created_by, e.created_at,
-    e.updated_at,
+    e.updated_at, e.schedule, e.next_run_at,
     c.name AS connection_name, c.source_type AS connection_source_type,
     c.exports_enabled,
     d.name AS dataset_name, d.current_version AS dataset_version
@@ -169,6 +169,43 @@ async def delete(conn: AsyncConnection, project_id: UUID, export_id: UUID) -> No
     )
     if row is None:
         raise NotFoundError("export not found")
+
+
+async def set_schedule(
+    conn: AsyncConnection,
+    project_id: UUID,
+    export_id: UUID,
+    *,
+    schedule: str | None,
+    next_run_at: Any,
+) -> dict[str, Any]:
+    """Set or clear an export's cron (db 0070; decision 0016; p.205).
+
+    **Both columns move together and one of them is derived**, which is why
+    this is a single statement rather than two: a `schedule` with a stale
+    `next_run_at` would fire at whatever the old cron said, and a cleared
+    schedule leaving a timestamp behind would leave a row that reads as due to
+    anyone querying it directly. `list_due_exports()` keys on `schedule IS NOT
+    NULL`, so a leftover timestamp would not actually fire — which is exactly
+    the sort of thing that stops being true when somebody writes the second
+    query.
+    """
+    row = await fetch_one(
+        conn,
+        """UPDATE exports
+              SET schedule = :cron, next_run_at = :next
+            WHERE id = :eid AND project_id = :pid
+        RETURNING id""",
+        {
+            "cron": schedule,
+            "next": next_run_at,
+            "eid": str(export_id),
+            "pid": str(project_id),
+        },
+    )
+    if row is None:
+        raise NotFoundError("export not found")
+    return await get(conn, project_id, export_id)
 
 
 async def record(

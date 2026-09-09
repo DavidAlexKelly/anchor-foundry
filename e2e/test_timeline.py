@@ -137,7 +137,21 @@ def events(page):
     return page.get_by_test_id("timeline-event")
 
 
-def titles(page) -> list[str]:
+def titles(page, *, count: int | None = None) -> list[str]:
+    """The event titles on screen, optionally waiting for `count` of them.
+
+    **The wait is why this takes a count** (§271). `all_text_contents` is a
+    one-shot read and a timeline draws its events when the object set resolves,
+    not when the block mounts — so a read taken straight after `settled` comes
+    back `[]` and the assertion compares an empty list to four names.
+
+    `test_events_come_back_in_date_order_not_sync_order` has always waited via
+    `expect(events(page)).to_have_count(4)`; the rest of this file read the DOM
+    raw and passed only against a development database warm enough to have
+    answered already.
+    """
+    if count is not None:
+        expect(page.locator(".canvas-timeline-title")).to_have_count(count)
     return [t.strip() for t in page.locator(".canvas-timeline-title").all_text_contents()]
 
 
@@ -160,7 +174,7 @@ def test_events_come_back_in_date_order_not_sync_order(page, api, ontology) -> N
     settled(page)
 
     expect(events(page)).to_have_count(4)
-    assert titles(page) == ["Delta", "Charlie", "Bravo", "Alpha"]
+    assert titles(page, count=4) == ["Delta", "Charlie", "Bravo", "Alpha"]
 
 
 def test_oldest_first_reverses_it(page, api, ontology) -> None:
@@ -171,7 +185,7 @@ def test_oldest_first_reverses_it(page, api, ontology) -> None:
     open_module(page, mod)
     settled(page)
 
-    assert titles(page) == ["Alpha", "Bravo", "Charlie", "Delta"]
+    assert titles(page, count=4) == ["Alpha", "Bravo", "Charlie", "Delta"]
 
 
 def test_the_date_of_each_event_is_shown(page, api, ontology) -> None:
@@ -179,6 +193,8 @@ def test_the_date_of_each_event_is_shown(page, api, ontology) -> None:
     open_module(page, mod)
     settled(page)
 
+    # Waited for, then read (§271): the stamps arrive with the events.
+    expect(page.get_by_test_id("timeline-when")).to_have_count(4)
     stamps = [t.strip() for t in page.get_by_test_id("timeline-when").all_text_contents()]
     assert stamps == ["2026-01-05", "2026-03-01", "2026-06-15", "2026-11-30"]
 
@@ -206,7 +222,7 @@ def test_the_page_is_the_earliest_by_date_not_the_earliest_by_key(
     # Alpha and Bravo are the two earliest by date. By key - which is where the
     # default sort lands, every row sharing one sync timestamp - they would be
     # Bravo and Delta.
-    assert titles(page) == ["Alpha", "Bravo"]
+    assert titles(page, count=2) == ["Alpha", "Bravo"]
 
 
 def test_the_newest_page_is_the_other_end(page, api, ontology) -> None:
@@ -217,7 +233,7 @@ def test_the_newest_page_is_the_other_end(page, api, ontology) -> None:
     open_module(page, mod)
     settled(page)
 
-    assert titles(page) == ["Delta", "Charlie"]
+    assert titles(page, count=2) == ["Delta", "Charlie"]
 
 
 # ---- p.348's layers ----------------------------------------------------------
@@ -237,7 +253,7 @@ def test_two_layers_interleave_rather_than_concatenate(page, api, ontology) -> N
     settled(page)
 
     expect(events(page)).to_have_count(6)
-    assert titles(page) == ["Alpha", "O1", "Bravo", "Charlie", "O2", "Delta"]
+    assert titles(page, count=6) == ["Alpha", "O1", "Bravo", "Charlie", "O2", "Delta"]
 
 
 def test_each_layer_reads_its_own_date_property(page, api, ontology) -> None:
@@ -251,6 +267,10 @@ def test_each_layer_reads_its_own_date_property(page, api, ontology) -> None:
     open_module(page, mod)
     settled(page)
 
+    # `.all()` enumerates once (§271), so a layer that has not drawn yet is a
+    # layer this set simply does not contain — which is exactly the failure the
+    # test exists to catch, reported against a page that was about to be right.
+    expect(events(page)).to_have_count(6)
     layers = {e.get_attribute("data-layer") for e in events(page).all()}
     assert layers == {"0", "1"}
 
@@ -357,7 +377,7 @@ def test_a_property_title_replaces_the_object_title(page, api, ontology) -> None
     open_module(page, mod)
     settled(page)
 
-    assert set(titles(page)) == {"north", "south", "east"}
+    assert set(titles(page, count=4)) == {"north", "south", "east"}
 
 
 def test_a_custom_title_is_the_same_on_every_event(page, api, ontology) -> None:
@@ -368,7 +388,7 @@ def test_a_custom_title_is_the_same_on_every_event(page, api, ontology) -> None:
     open_module(page, mod)
     settled(page)
 
-    assert titles(page) == ["Visit"] * 4
+    assert titles(page, count=4) == ["Visit"] * 4
 
 
 def test_prominent_properties_are_the_ontology_s_choice(page, api, ontology) -> None:
@@ -379,6 +399,10 @@ def test_prominent_properties_are_the_ontology_s_choice(page, api, ontology) -> 
     open_module(page, mod)
     settled(page)
 
+    # One `dt` per event, and they arrive with the events (§271). Waiting on
+    # the event count rather than the `dt` count keeps the assertion about
+    # *which* properties are shown rather than how many.
+    expect(events(page)).to_have_count(4)
     keys = [t.strip() for t in page.locator(".canvas-timeline-props dt").all_text_contents()]
     assert set(keys) == {"region"}, keys
 
@@ -391,7 +415,9 @@ def test_specific_properties_are_the_author_s_choice(page, api, ontology) -> Non
     open_module(page, mod)
     settled(page)
 
+    expect(events(page)).to_have_count(4)
     first = page.get_by_test_id("timeline-props").first
+    expect(first.locator("dt")).to_have_count(2)
     keys = [t.strip() for t in first.locator("dt").all_text_contents()]
     assert keys == ["name", "region"], "the author's order, not the ontology's"
 
@@ -427,6 +453,7 @@ def test_the_time_between_events_can_be_shown(page, api, ontology) -> None:
     on = build(api, ontology, "Timeline gaps", {"showGaps": True, "order": "oldest_first"})
     open_module(page, on)
     settled(page)
+    expect(page.get_by_test_id("timeline-gap")).to_have_count(3)
     gaps = [t.strip() for t in page.get_by_test_id("timeline-gap").all_text_contents()]
     # Three gaps for four events, and the first is 5 Jan to 1 Mar.
     assert len(gaps) == 3, gaps

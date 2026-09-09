@@ -37,6 +37,26 @@ RECORDS = [
     {"id": 3, "name": "alan", "score": 7.0, "active": True, "tags": ["z"]},
 ]
 
+#: A collection whose objects disagree about their keys, which is the ordinary
+#: shape of a real JSON API and the one a preview is read to notice (§268). The
+#: second record carries `nickname`, which the first omits; the third carries
+#: `note`, which neither of the others has. A header taken from record one
+#: would hide both.
+RAGGED = [
+    {"id": 1, "name": "ada"},
+    {"id": 2, "name": "grace", "nickname": "amazing grace"},
+    {"id": 3, "name": "alan", "note": {"seen": True, "where": ["bletchley"]}},
+]
+
+#: One page holding more records than a preview shows, with a key that appears
+#: only *past* the cap (§268). It is what makes "the columns describe the
+#: sample" testable: a preview that scanned the whole page would offer
+#: `late_only` as a header with fifty empty cells under it.
+MANY = [
+    {"id": n, "name": f"row-{n}", **({"late_only": "surprise"} if n == 55 else {})}
+    for n in range(1, 61)
+]
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep pytest output clean
@@ -72,6 +92,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/records":
             self._send(200, RECORDS)
+        elif path == "/ragged":
+            self._send(200, RAGGED)
+        elif path == "/many":
+            self._send(200, MANY)
         elif path == "/wrapped":
             self._send(200, {"data": {"items": RECORDS}, "meta": {"total": len(RECORDS)}})
         elif path == "/paged":

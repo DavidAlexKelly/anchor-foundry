@@ -23,7 +23,7 @@ from playwright.sync_api import expect
 
 from api import Module, layout, object_set
 
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, option_values, settled
 
 # `priority` ties three ways on purpose, and `stamp` breaks the tie in an order
 # that is **not** the primary key's - which is the whole point of a second sort.
@@ -90,14 +90,43 @@ def sort_prop(mod):
     return mod.definition()["layout"]["tbl"]["props"]["sort"]
 
 
-def column(page, header: str = "Name") -> list[str]:
+def pick_property(page, index: int, api_name: str) -> None:
+    """Choose a property, once the control **is** the picker (§271).
+
+    `table-sort-property-N` names two different controls: a `<select>` once the
+    type's properties have arrived and a text box while they have not, which is
+    §231's deliberate fallback for a table configured before an object type is
+    chosen. Playwright retries `select_option` for visibility and enabledness
+    but not for element *kind*, so a call made in the gap fails outright with
+    "Element is not a `<select>` element" - a complaint about the control, from
+    a panel whose ontology had not resolved. Waiting for the options is waiting
+    for the picker to be the one of the two that can be selected from.
+    """
+    field = page.get_by_test_id(f"table-sort-property-{index}")
+    # The placeholder plus this fixture's two orderable properties. Every row's
+    # picker is the same list, and a blank row adds no "no longer sortable"
+    # entry, so the count is the same wherever this is called.
+    expect(field.locator("option")).to_have_count(3)
+    field.select_option(api_name)
+
+
+def column(page, header: str = "Name", *, rows: int = len(ROWS)) -> list[str]:
     """The rendered values of one column, top to bottom, **found by its header**.
 
     Not `nth-child(1)`: the table renders a Key column of its own before the
     configured ones, so a positional locator reads the primary key and every
     assertion about ordering passes or fails for the wrong reason. §207's
     lesson, in the same widget.
+
+    **And waited for, not snapshotted** (§271). `all_text_contents` reads once;
+    a table draws its head and body when the object set resolves, so a read
+    taken straight after `settled` finds no headers at all and `.index()` fails
+    with `'Name' is not in list` — a message about a missing column, from a
+    table that had not drawn yet. Ten tests in this file failed that way on
+    every fresh database, which is what CI has and a developer's machine does
+    not.
     """
+    expect(page.locator(".data-grid tbody tr")).to_have_count(rows)
     headers = page.locator(".data-grid thead th").all_text_contents()
     index = [h.strip() for h in headers].index(header)
     return [
@@ -250,7 +279,7 @@ def test_a_sort_can_be_added_and_removed_in_the_panel(page, api) -> None:
 
     page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
     page.get_by_test_id("table-sort-add").click()
-    page.get_by_test_id("table-sort-property-1").select_option("stamp")
+    pick_property(page, 1, "stamp")
     # Two rows, and the summary says what the order means in words.
     expect(page.get_by_test_id("table-sorts-summary")).to_contain_text("then")
 
@@ -295,12 +324,12 @@ def test_one_sort_is_saved_as_a_string_and_several_as_a_list(page, api) -> None:
     page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
     # Touch the row so the panel writes the prop rather than leaving the
     # fixture's value in place - otherwise this asserts what `build` wrote.
-    page.get_by_test_id("table-sort-property-0").select_option("stamp")
+    pick_property(page, 0, "stamp")
     save(page)
     assert sort_prop(mod) == "stamp"
 
     page.get_by_test_id("table-sort-add").click()
-    page.get_by_test_id("table-sort-property-1").select_option("priority")
+    pick_property(page, 1, "priority")
     save(page)
     assert sort_prop(mod) == ["stamp", "priority"]
 
@@ -336,7 +365,9 @@ def test_the_property_control_is_a_picker_over_the_orderable_properties(
 
     page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
     picker = page.get_by_test_id("table-sort-property-0")
-    values = picker.locator("option").evaluate_all("nodes => nodes.map(n => n.value)")
+    # Three, waited for: the orderable properties arrive with the object type
+    # rather than with the select (§271).
+    values = option_values(picker, count=3)
     assert values == ["", "priority", "stamp"], values
 
 

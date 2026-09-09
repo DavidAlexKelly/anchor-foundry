@@ -7,6 +7,7 @@ knows which driver is in play:
     validate_config(config)   -> the cleaned, non-secret config to store
     test(config, secret)      -> None; raises ConnectorOperationError
     discover(config, secret)  -> [TableInfo]
+    preview(...)              -> a Preview: a capped sample of one table
     snapshot(...)             -> an Extract: a file on disk, byte-capped
     max_cursor_value(...)     -> the source's current high-water mark
 
@@ -50,6 +51,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -124,6 +126,94 @@ class Extract:
     empty: bool = False
 
 
+# ---- source preview (decision 0015; `data-connection` p.142-143) -------------
+#
+# Not to be confused with `dataset_engine.PREVIEW_ROWS`, which samples a dataset
+# this platform already holds. These bound a read of a system we do not own,
+# whose result travels in a JSON response rather than into a file - so the
+# limits are tighter and they exist for a different reason (decision 0015 §4).
+
+#: p.143's "sample of the selected table". Enough rows to see shape and to
+#: notice a column that is entirely null, which is the failure p.18 says people
+#: actually open this screen to find.
+PREVIEW_ROWS = 50
+
+#: A single text column can hold megabytes, and fifty of them would be a denial
+#: of service the platform performs on itself.
+PREVIEW_CELL = 500
+
+
+@dataclass(frozen=True)
+class Preview:
+    """A sample of what a sync would read, from a source, before it reads it.
+
+    **Everything is a string, and `None` is not.** The connectors already
+    stringify for CSV and a preview that tried to preserve types would be a
+    second type system that could disagree with `dataset_engine`'s - the screen
+    would show a number the sync would later store as text. But a null stays
+    null rather than becoming `""`, because "this column is empty" and "this
+    column is missing" are the two answers somebody is reading a preview to
+    tell apart (decision 0015 §4).
+
+    `more` is exact rather than inferred: every connector asks for one row past
+    the cap, so "there are more" is something the source said and not something
+    a full sample was taken to mean.
+    """
+
+    columns: list[str]
+    rows: list[list[str | None]]
+    more: bool = False
+    #: How many cells were shortened to `PREVIEW_CELL`. Decision 0015 §4 keeps
+    #: this because the shortening itself is the one place a preview is
+    #: allowed to be inexact - a real value that is exactly the cap long and
+    #: ends in an ellipsis cannot be told from a truncated one, so the count
+    #: is what lets a screen say that shortening happened at all.
+    truncated_cells: int = 0
+
+
+def build_preview(columns: Iterable[str], rows: Iterable[Sequence[Any]]) -> Preview:
+    """Apply decision 0015 §4's caps, once, for every connector.
+
+    One place rather than four, because four copies of "take fifty and shorten
+    the long ones" are four chances to disagree about what fifty means - and
+    because a cap each connector implemented for itself is a cap no single
+    test could kill.
+    """
+    kept: list[list[str | None]] = []
+    shortened = 0
+    more = False
+    for row in rows:
+        if len(kept) >= PREVIEW_ROWS:
+            more = True
+            break
+        cells: list[str | None] = []
+        for value in row:
+            if value is None:
+                cells.append(None)
+                continue
+            text = value if isinstance(value, str) else str(dataset_engine_safe(value))
+            if len(text) > PREVIEW_CELL:
+                text = text[:PREVIEW_CELL] + "…"
+                shortened += 1
+            cells.append(text)
+        kept.append(cells)
+    return Preview(columns=list(columns), rows=kept, more=more, truncated_cells=shortened)
+
+
+def dataset_engine_safe(value: Any) -> Any:
+    """`json_safe`, reached lazily.
+
+    A date must reach the screen as the ISO string the sync would write, and
+    bytes must not reach it at all - both of which `dataset_engine.json_safe`
+    already decides. Importing it at call time keeps `connectors` free of a
+    module-level dependency on duckdb, which is the arrangement every other
+    crossing in this file uses.
+    """
+    from . import dataset_engine as _engine
+
+    return _engine.json_safe(value)
+
+
 class SourceConnector(Protocol):
     """What a source type must implement to be registered.
 
@@ -145,6 +235,30 @@ class SourceConnector(Protocol):
 
     def discover(self, config: dict[str, Any], secret: dict[str, str]) -> list[TableInfo]:
         """Every table/view the connection's user can see, with columns."""
+
+    def preview(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+    ) -> Preview:
+        """A capped sample of one table, read the way a sync would read it
+        (decision 0015; p.142-143).
+
+        **Never a query.** The arguments are a schema and a table and nothing
+        else, and they are checked as identifiers - the moment a caller could
+        shape the read, "an editor may see fifty rows" would become "an editor
+        may run statements as the connection's user", which is a much larger
+        grant than the sync this preview is standing in for.
+
+        The sample is unordered and so is not the *first* rows: p.161 calls the
+        equivalent choice on the file side "a non-deterministic subset", and an
+        ORDER BY would need a key the source may not have and would turn the
+        cheapest check in the platform into a full sort. Raises SourceReadError
+        when the table is absent or the credential cannot read it - which is
+        p.18's most common use of this screen rather than a failure of it."""
 
     def snapshot(
         self,
@@ -321,6 +435,45 @@ class PostgresConnector:
                 ColumnInfo(name=col, data_type=dtype, nullable=bool(nullable), is_primary_key=bool(is_pk))
             )
         return list(tables.values())
+
+    def preview(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+    ) -> Preview:
+        import psycopg
+        from psycopg import sql
+
+        # PREVIEW_ROWS + 1: `Preview.more` is then something the source said
+        # rather than something a full page was taken to imply.
+        query = sql.SQL("SELECT * FROM {}.{} LIMIT {}").format(
+            sql.Identifier(check_identifier(source_schema)),
+            sql.Identifier(check_identifier(source_table)),
+            sql.Literal(PREVIEW_ROWS + 1),
+        )
+        try:
+            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query)
+                    columns = [d.name for d in cur.description or []]
+                    rows = cur.fetchall()
+        except psycopg.errors.UndefinedTable as exc:
+            raise SourceReadError(
+                f"table {source_schema}.{source_table} does not exist"
+            ) from exc
+        except psycopg.errors.InsufficientPrivilege as exc:
+            # p.18 says checking "the correct permissions and credentials are
+            # being used" is the most common reason to open this screen, so
+            # this sentence is the feature rather than an error path.
+            raise SourceReadError(
+                f"the connection's user cannot read {source_schema}.{source_table}"
+            ) from exc
+        except psycopg.OperationalError as exc:
+            raise self._operational(exc) from exc
+        return build_preview(columns, rows)
 
     def snapshot(
         self,
@@ -707,6 +860,30 @@ class MySQLConnector:
                 )
             )
         return list(tables.values())
+
+    def preview(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+    ) -> Preview:
+        import pymysql
+
+        qualified = f"{_quote_mysql(source_schema)}.{_quote_mysql(source_table)}"
+        try:
+            with self._connect(config, secret) as conn:
+                with conn.cursor() as cur:
+                    # The limit is a bound parameter, not interpolated, because
+                    # every other value in this file that reaches SQL is - the
+                    # identifiers are quoted precisely because they cannot be.
+                    cur.execute(f"SELECT * FROM {qualified} LIMIT %s", (PREVIEW_ROWS + 1,))
+                    columns = [d[0] for d in cur.description or []]
+                    rows = cur.fetchall()
+        except pymysql.MySQLError as exc:
+            raise self._translate(exc, source_schema, source_table) from exc
+        return build_preview(columns, rows)
 
     def snapshot(
         self,
@@ -1106,6 +1283,61 @@ class S3Connector:
                         columns = []
             tables.append(TableInfo(schema=folder, name=name, kind="file", columns=columns))
         return tables
+
+    def preview(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+    ) -> Preview:
+        import tempfile
+
+        from . import dataset_engine as _engine
+
+        cfg = S3Config(**config)
+        client = self._client(config, secret)
+        key = self._resolve_key(cfg.prefix, source_schema, source_table)
+        extension = os.path.splitext(source_table)[1].lower()
+        if extension not in SUPPORTED_FILE_EXTENSIONS:
+            supported = ", ".join(sorted(SUPPORTED_FILE_EXTENSIONS))
+            raise SourceReadError(
+                f"unsupported file type {extension or source_table!r} (supported: {supported})"
+            )
+
+        try:
+            head = client.head_object(Bucket=cfg.bucket, Key=key)
+        except Exception as exc:
+            raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
+
+        # **The object is downloaded whole, so it is refused rather than
+        # sampled past the cap.** DuckDB's readers want a file, not a prefix of
+        # one, and a truncated CSV would parse into rows that are not in the
+        # source. `discover` makes the same call with the same constant and
+        # degrades to no columns; here there is nothing to degrade to, so the
+        # limit is said out loud instead.
+        size = int(head.get("ContentLength", 0))
+        if size > _MAX_INSPECT_BYTES:
+            raise SourceReadError(
+                f"{source_table} is too large to preview "
+                f"({size // (1024 * 1024)}MB, limit {_MAX_INSPECT_BYTES // (1024 * 1024)}MB) - "
+                "sync it and preview the dataset instead"
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            local = os.path.join(tmp, f"preview{extension}")
+            try:
+                client.download_file(cfg.bucket, key, local)
+            except Exception as exc:
+                raise self._translate(exc, f"{cfg.bucket}/{key}") from exc
+            try:
+                # One past the cap, so `Preview.more` is the file's answer
+                # rather than an inference from a full page.
+                columns, rows = _engine.sample_file(local, extension, PREVIEW_ROWS + 1)
+            except _engine.DatasetEngineError as exc:
+                raise SourceReadError(f"could not read {source_table}: {exc}") from exc
+        return build_preview([c.name for c in columns], rows)
 
     def snapshot(
         self,
@@ -1541,6 +1773,56 @@ class RestConnector:
                 ],
             )
         ]
+
+    def preview(
+        self,
+        config: dict[str, Any],
+        secret: dict[str, str],
+        *,
+        source_schema: str,
+        source_table: str,
+    ) -> Preview:
+        """The first page's records, as a table.
+
+        `source_schema` and `source_table` are ignored, because a REST source
+        has exactly one collection and `discover` reports it as the only entry
+        - the same reason `max_cursor_value` ignores its cursor column. They
+        stay in the signature because the interface is one interface; a
+        connector that quietly took different arguments would be a second one.
+
+        **This is the row decision 0015 §6 says must be tested separately.** A
+        REST preview does not reach `_client` or `_conninfo`, so the egress
+        argument that covers the other three - "they share a chokepoint" - is a
+        different claim here, made about `_fetch_page` and `_check_url`.
+        """
+        import json
+
+        payload = self._fetch_page(config, secret, {})
+        records = self._records(payload, config)[: PREVIEW_ROWS + 1]
+
+        # A union rather than the first record's keys: a collection whose
+        # second object carries a field the first one omits is exactly the
+        # shape a preview is being read to notice, and a header taken from row
+        # one would hide it.
+        columns: list[str] = []
+        for record in records:
+            for key in record:
+                if key not in columns:
+                    columns.append(key)
+
+        rows: list[list[Any]] = []
+        for record in records:
+            row: list[Any] = []
+            for key in columns:
+                value = record.get(key)
+                # A nested object reaches the screen as the JSON a `.jsonl`
+                # snapshot would write, not as Python's `{'a': 1}` repr - the
+                # preview's job is to show what would land.
+                if isinstance(value, (dict, list)):
+                    value = json.dumps(value, default=str)
+                row.append(value)
+            rows.append(row)
+        return build_preview(columns, rows)
 
     def snapshot(
         self,
