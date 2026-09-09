@@ -25,7 +25,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, option_labels, settled
 
 # Three open, one closed — so the two slices are *different sizes* and a chart
 # that divided the circle evenly would be visibly wrong rather than plausibly
@@ -537,4 +537,4 @@ def test_the_property_picker_appears_only_for_an_aggregation_that_needs_one(
     # `status` and `region` are strings and `object_sets` refuses them, so
     # offering them would produce a sentence about arithmetic in place of a
     # chart. A narrower list than Group by's, deliberately.
-    assert picker.locator("option").all_text_contents() == ["Choose…", "Capacity"]
+    assert option_labels(picker, count=2) == ["Choose…", "Capacity"]

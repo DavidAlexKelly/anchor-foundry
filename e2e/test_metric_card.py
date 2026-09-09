@@ -27,7 +27,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, option_labels, settled
 
 # `capacity` is what the numeric aggregations run over; `region` is what a
 # distinct count counts. The numbers are chosen so the six answers are six
@@ -213,11 +213,13 @@ def test_the_property_picker_narrows_for_arithmetic(page, api, sites) -> None:
     expect(page.get_by_test_id("metric-property")).to_have_count(0)
 
     page.get_by_test_id("metric-aggregation").select_option("count_distinct")
-    assert page.get_by_test_id("metric-property").locator("option").all_text_contents() == [
+    # Waited for rather than read once: the properties arrive with the object
+    # type, and a snapshot taken before that catches only "Choose…" (§271).
+    assert option_labels(page.get_by_test_id("metric-property"), count=4) == [
         "Choose…", "id", "region", "capacity",
     ]
 
     page.get_by_test_id("metric-aggregation").select_option("sum")
-    assert page.get_by_test_id("metric-property").locator("option").all_text_contents() == [
+    assert option_labels(page.get_by_test_id("metric-property"), count=2) == [
         "Choose…", "capacity",
     ]

@@ -23,7 +23,7 @@ from playwright.sync_api import expect
 
 from api import Module, layout, object_set
 
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, option_values, settled
 
 # `priority` ties three ways on purpose, and `stamp` breaks the tie in an order
 # that is **not** the primary key's - which is the whole point of a second sort.
@@ -336,7 +336,9 @@ def test_the_property_control_is_a_picker_over_the_orderable_properties(
 
     page.locator(".canvas-tree-row").filter(has_text="Object table").first.click()
     picker = page.get_by_test_id("table-sort-property-0")
-    values = picker.locator("option").evaluate_all("nodes => nodes.map(n => n.value)")
+    # Three, waited for: the orderable properties arrive with the object type
+    # rather than with the select (§271).
+    values = option_values(picker, count=3)
     assert values == ["", "priority", "stamp"], values
 
 

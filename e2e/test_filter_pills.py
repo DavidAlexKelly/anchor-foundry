@@ -397,10 +397,18 @@ def test_the_object_type_pill_names_the_type(page, api, sites) -> None:
     on = build(api, sites, "Pills type", {"showTypePill": True})
     open_module(page, on)
     settled(page)
-    expect(page.get_by_test_id("filter-pill-type")).to_be_visible()
-    assert (page.get_by_test_id("filter-pill-type").text_content() or "").strip() not in (
-        "", "Object type",
-    )
+    # **A retrying assertion, and a positive one** (§271). This read
+    # `text_content()` after `to_be_visible()`, which is a snapshot: the pill
+    # renders immediately with its fallback while the ontology query is still
+    # out, so the read caught `"Object type"` and the test failed on a page
+    # that was about to be right. It passed on a long-lived development
+    # database and failed on every fresh one, which is why CI had it red for
+    # ten merges and nobody could reproduce it locally.
+    #
+    # Naming the type is also strictly stronger than refusing the fallback: it
+    # asserts the pill is named *from the ontology*, which is what p.471's line
+    # is about, rather than that it is not one particular wrong string.
+    expect(page.get_by_test_id("filter-pill-type")).to_have_text(f"Seed {sites.tag}")
 
 
 def test_the_pills_are_inert_in_the_builder(page, api, sites) -> None:
