@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import {
   ApiError,
+  code as codeApi,
   datasets as dsApi,
   models as modelApi,
   repositories as repoApi,
@@ -177,10 +178,22 @@ function ModelDialog({
   existing: Model | null;
   onClose: () => void;
 }) {
+  // **The project's gate is the second reason a body can be read-only** (§277),
+  // and it is a different sentence from the first: db 0038 sends the reader to
+  // a file, `require_code_review` sends them to make one. Queried here rather
+  // than passed in, because every dialog wants it and the answer is cached.
+  const policy = useQuery({
+    queryKey: ["code-review-policy", projectId],
+    queryFn: () => codeApi.reviewPolicy(workspaceId, projectId),
+  });
   // Null when this screen may edit the body. A sentence naming the file when
   // it may not - the reader's next move is to open it, so the message says
   // where it is rather than only that this is read-only.
-  const locked = existing ? readOnlyReason(existing) : null;
+  const locked = existing
+    ? readOnlyReason(existing, {
+        reviewRequired: policy.data?.require_code_review ?? false,
+      })
+    : null;
   const [name, setName] = useState(existing?.name ?? "");
   const [language, setLanguage] = useState<"sql" | "python">(existing?.language ?? "sql");
   const [code, setCode] = useState(existing?.code ?? DEFAULT_SQL);

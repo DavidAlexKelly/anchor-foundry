@@ -84,3 +84,39 @@ describe("the path box", () => {
     expect(pathProblem("transforms/daily/orders.sql", "sql")).toBeNull();
   });
 });
+
+describe("a project that requires review (§277)", () => {
+  it("refuses a direct edit and points at the path that will still exist", () => {
+    // Until B.1 the answer was "open a proposal", which was true while the
+    // Code pillar page existed to open one on — and that is the page being
+    // deleted. For a transform that is not yet a file there is now one path.
+    const reason = readOnlyReason(direct, { reviewRequired: true });
+    expect(reason).toContain("requires code review");
+    expect(reason).toContain("Move it into a repository");
+    expect(canEditBody(direct)).toBe(true); // the field is about authoring, not the gate
+  });
+
+  it("**keeps the two refusals apart**, because they send the reader to different places", () => {
+    // A repository-authored transform in a review-required project is still
+    // "go to the file" — saying "your project requires review" there would
+    // send somebody to propose a change to a definition they cannot edit
+    // anyway, and saying "this lives elsewhere" for the gate would send them
+    // looking for a file that does not exist.
+    const both = readOnlyReason(adopted, { reviewRequired: true });
+    expect(both).toContain("src/daily.sql");
+    expect(both).not.toContain("requires code review");
+  });
+
+  it("says nothing when the project has no gate and the transform is local", () => {
+    expect(readOnlyReason(direct, { reviewRequired: false })).toBeNull();
+    expect(readOnlyReason(direct)).toBeNull();
+  });
+
+  it("still offers adoption under the gate, because adoption is not a code change", () => {
+    // `models.update` gates what a transform *computes*; adoption copies the
+    // code through unchanged. A gate that also blocked the move would leave
+    // the transform with no editable path at all — the exact state B.1 exists
+    // to remove.
+    expect(canAdopt(direct)).toBe(true);
+  });
+});

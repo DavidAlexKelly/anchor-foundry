@@ -4388,6 +4388,30 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 277. The second reason a transform is read-only (this session)
+
+Small, and it is the piece that makes B.1's deletion survivable rather than
+merely possible.
+
+`models.update` refuses a direct edit when a project sets
+`require_code_review`, and the refusal says *"open a proposal instead"*. That
+was true while the Code pillar page existed to open one on — and that page is
+what B.1 deletes. So the Models screen now says the thing that will still be
+true: **move it into a repository, then propose the commit there.**
+
+**Two refusals, deliberately not one sentence.** Whether a definition is
+authored elsewhere is db 0038's rule and the answer is "go to the file";
+whether the project requires review is the gate and the answer is "make a
+file". Collapsing them would send a reader looking for a file that does not
+exist, or send them to propose a change to a definition they cannot edit
+anyway. The unit test that matters is the one asserting a repository-authored
+transform in a review-required project says **only** the first.
+
+**And the move is still offered under the gate**, because adoption copies the
+code through unchanged and so is not what the gate is about. A gate that also
+blocked it would leave the transform with no editable path at all — precisely
+the state B.1 exists to remove, arrived at from the other direction.
+
 ### 276. The Pull requests tab (this session)
 
 `code-repositories.md` §1 wants five tabs and calls proposals *Pull requests*;
