@@ -17,7 +17,7 @@ import uuid
 from playwright.sync_api import expect
 
 from api import Module
-from conftest import WEB_BASE
+from conftest import WEB_BASE, eventually
 
 
 def project(api, name: str) -> Module:
@@ -140,3 +140,77 @@ def test_an_empty_tab_with_nothing_anywhere_says_only_that(page, api) -> None:
     expect(page.get_by_test_id("pulls-empty")).to_have_text(
         "No open proposals for this repository."
     )
+
+
+# ---- the Settings tab (§279) -------------------------------------------------
+def test_the_review_gate_has_a_home_that_is_not_the_page_b1_deletes(page, api) -> None:
+    """**Why this tab exists at all.**
+
+    §278 found `setReviewPolicy` had exactly one control in the product, on the
+    Code pillar page B.1 removes. Nothing would have errored when that page
+    went; a project would simply have lost the ability to require review of its
+    transforms, which is governance rather than convenience.
+    """
+    mod = project(api, "Settings gate")
+    repo = repository(mod, f"Transforms {mod.tag}")
+
+    open_tab(page, repo, tab="settings")
+    box = page.get_by_test_id("settings-require-review")
+    expect(box).to_be_visible()
+    expect(box).not_to_be_checked()
+    # What it does, said in terms of what happens to a change rather than as a
+    # flag - this is the sentence somebody deciding actually reads.
+    expect(page.get_by_test_id("settings-review-effect")).to_contain_text(
+        "changed directly"
+    )
+
+    # **`click`, not `check`.** Playwright's `check` clicks and then re-reads
+    # the element to confirm the state took - and this box is controlled by the
+    # server's answer, so during the round trip `check` can re-read a value it
+    # does not expect and report "clicking the checkbox did not change its
+    # state" about a click that worked. Clicking and then asserting what the
+    # reader sees is both more robust and a better description of the act.
+    box.click()
+    expect(box).to_be_checked()
+    expect(page.get_by_test_id("settings-review-effect")).to_contain_text(
+        "other than their author"
+    )
+
+    # **And it is the real setting, not a checkbox that only looks checked.**
+    # Polled rather than read once: the box shows what was asked for while the
+    # request is in flight, which is right for a reader and means the screen no
+    # longer marks the moment the server agreed. This caller is a second client
+    # and has no reason to see the first one's write until it lands.
+    eventually(
+        lambda: mod.api.call("GET", f"{mod.base}/code/review-policy")["require_code_review"],
+        lambda got: got is True,
+        what="the review gate to be on at the server",
+    )
+
+    box.click()
+    expect(box).not_to_be_checked()
+    expect(page.get_by_test_id("settings-review-effect")).to_contain_text("optional")
+    eventually(
+        lambda: mod.api.call("GET", f"{mod.base}/code/review-policy")["require_code_review"],
+        lambda got: got is False,
+        what="the review gate to be off at the server",
+    )
+
+
+def test_the_tab_says_the_setting_is_the_projects_not_this_repositorys(
+    page, api
+) -> None:
+    """The divergence, said out loud. Foundry sets required review per
+    repository (`repoSettings.json`, p.20); ours is per project, because the
+    gate has to cover transforms no repository holds. Somebody who discovered
+    that by flipping it in one repository and finding it flipped in another
+    would be right to be annoyed."""
+    mod = project(api, "Settings scope")
+    one = repository(mod, f"One {mod.tag}")
+    repository(mod, f"Two {mod.tag}")
+
+    open_tab(page, one, tab="settings")
+    scope = page.get_by_test_id("settings-review-scope")
+    expect(scope).to_contain_text("whole project")
+    expect(scope).to_contain_text("all 2 repositories")
+    expect(scope).to_contain_text("Foundry sets this per repository")

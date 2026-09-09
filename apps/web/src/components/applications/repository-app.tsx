@@ -20,9 +20,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
-import { ApiError, code as codeApi, repositories as repoApi } from "@/lib/api";
+import {
+  ApiError,
+  api as platformApi,
+  code as codeApi,
+  repositories as repoApi,
+} from "@/lib/api";
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
+import {
+  canChangeReviewPolicy,
+  reviewPolicyEffect,
+  reviewPolicyLockedReason,
+  reviewPolicyScopeNote,
+} from "@/lib/repo-settings";
 import type {
   PublishPlan,
   RepositoryBranch,
@@ -40,7 +51,7 @@ const CodeEditor = dynamic(
 
 // **`pulls` before `publish`, because that is the order the work happens in**
 // and `code-repositories.md` §1 lists Pull requests before anything of ours.
-const TABS = ["files", "history", "branches", "pulls", "publish"] as const;
+const TABS = ["files", "history", "branches", "pulls", "publish", "settings"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -49,6 +60,7 @@ const TAB_LABELS: Record<Tab, string> = {
   branches: "Branches",
   pulls: "Pull requests",
   publish: "Publish",
+  settings: "Settings",
 };
 
 export function RepositoryApplication({ resource }: { resource: ResolvedResource }) {
@@ -152,6 +164,7 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           onOpenCommit={(id) => setParams({ commit: id, tab: "files", file: undefined })}
         />
       )}
+      {tab === "settings" && <SettingsTab wid={wid} pid={pid} />}
       {tab === "pulls" && (
         <PullRequestsTab
           wid={wid}
@@ -1284,6 +1297,102 @@ function PullRequestsTab({
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * p.20's Settings tab (§279; `code-repositories.md` §1, §6).
+ *
+ * **It exists because of what §278 found**: `setReviewPolicy` had exactly one
+ * control in the product, on the Code pillar page B.1 deletes. Nothing would
+ * have errored when that page went — a project would simply have lost the
+ * ability to require review of its transforms, which is a governance setting
+ * rather than a convenience.
+ *
+ * One setting so far, and the tab is worth having for that one. p.20's other
+ * groups — personal editor preferences, compute usage, ontology imports —
+ * are `code-repositories.md` §6's ○ rows and are not built.
+ */
+function SettingsTab({ wid, pid }: { wid: string; pid: string }) {
+  const queryClient = useQueryClient();
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const project = useQuery({
+    queryKey: ["project", wid, pid],
+    queryFn: () => platformApi.project(wid, pid),
+  });
+  const policy = useQuery({
+    queryKey: ["code-review-policy", pid],
+    queryFn: () => codeApi.reviewPolicy(wid, pid),
+  });
+  const repositories = useQuery({
+    queryKey: ["repositories", pid],
+    queryFn: () => repoApi.list(wid, pid),
+  });
+
+  const set = useMutation({
+    mutationFn: (required: boolean) => codeApi.setReviewPolicy(wid, pid, required),
+    onSuccess: (next) => {
+      setFailure(null);
+      queryClient.setQueryData(["code-review-policy", pid], next);
+      // The Models screen reads this to decide whether a transform's body is
+      // editable (§277), so it has to hear about the change.
+      queryClient.invalidateQueries({ queryKey: ["models", pid] });
+    },
+    onError: (e: Error) =>
+      setFailure(e instanceof ApiError ? e.message : "Couldn't change it."),
+  });
+
+  const role = project.data?.effective_role ?? "viewer";
+  const locked = reviewPolicyLockedReason(role);
+  // **What was asked for while it is in flight, what the server says after.**
+  // The box is controlled by the server's answer, which is right - this is a
+  // governance setting and the screen should not claim it changed until it
+  // did. But between the click and the response React resets the input to the
+  // old value, so a reader sees it flick back and then forward again, and
+  // Playwright's `check()` reports that the click did not take. Showing the
+  // requested value *only while the mutation is pending* keeps the honesty and
+  // loses the flicker: on failure it snaps back, which is the truth.
+  const required = set.isPending
+    ? (set.variables as boolean)
+    : policy.data?.require_code_review ?? false;
+
+  return (
+    <section className="repo-settings" data-testid="settings-tab">
+      <p className="field-label">Code review</p>
+      <label className="row-actions" style={{ alignItems: "center", gap: 8 }}>
+        <input
+          type="checkbox"
+          data-testid="settings-require-review"
+          checked={required}
+          // **Not disabled while the mutation is in flight.** A PUT of a
+          // boolean is idempotent, so guarding against a second click buys
+          // nothing - and the box going disabled for the ~50ms of the round
+          // trip is long enough for a reader to see it grey out, and long
+          // enough that Playwright's `check()` re-reads it mid-flight and
+          // reports "clicking the checkbox did not change its state". A guard
+          // whose only effect is a flicker is not a guard.
+          disabled={!canChangeReviewPolicy(role) || policy.isPending}
+          onChange={(e) => set.mutate(e.target.checked)}
+        />
+        <span>Require review before a transform changes</span>
+      </label>
+      <p className="login-note" data-testid="settings-review-effect">
+        {reviewPolicyEffect(required)}
+      </p>
+      {/* **The divergence, said out loud.** Foundry sets this per repository;
+          ours is per project, because the gate has to cover transforms no
+          repository holds. Somebody who discovered that by flipping it in one
+          repository and finding it flipped in another would be right to be
+          annoyed. */}
+      <p className="login-note" data-testid="settings-review-scope">
+        {reviewPolicyScopeNote(repositories.data?.length ?? 1)}
+      </p>
+      {locked && (
+        <p className="login-note" data-testid="settings-review-locked">{locked}</p>
+      )}
+      {failure && <div className="form-error">{failure}</div>}
     </section>
   );
 }

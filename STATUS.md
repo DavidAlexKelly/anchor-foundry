@@ -4388,6 +4388,56 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 279. The Settings tab, and a checkbox that argued back (this session)
+
+§278 found five capabilities living only on the page B.1 deletes. This gives
+the first of them a home, and it is the one that mattered: **`setReviewPolicy`
+had exactly one control in the entire product.** Nothing would have errored
+when that page went; a project would simply have lost the ability to require
+review of its transforms.
+
+`code-repositories.md` §1 has wanted a Settings tab since it was written (p.20:
+"repository administrators can control the repository's behavior and
+policies"), so the gate lands in the tab it was always going to need. Owner
+only, matching `PUT /code/review-policy` — and the browser's copy of that rule
+is a *display* decision, not a security one: the endpoint refuses an editor
+whatever the screen does. What it buys is not offering a switch that answers
+403.
+
+**The divergence the tab has to state out loud.** Foundry sets required review
+per *repository* (`repoSettings.json`, p.20); ours is per *project*, because
+the gate has to cover transforms that are in no repository — and until §274,
+none of them could be. So the same switch shown in two repositories of one
+project is one switch, and a tab that let somebody discover that by flipping it
+would be a worse tab than one that says so. The note counts the repositories,
+because "all 3 repositories" is a sharper warning than "the whole project".
+
+**Then the checkbox argued with the test four times, and each round was a real
+thing rather than a test artefact.** Worth recording as a sequence because
+every step looked like the last one:
+
+1. **Disabled while the mutation was in flight.** The box greyed out for the
+   ~50ms of the round trip. A PUT of a boolean is idempotent, so guarding
+   against a second click bought nothing — *a guard whose only effect is a
+   flicker is not a guard.*
+2. **Controlled by the server's answer**, so between the click and the response
+   React reset it and a reader saw it flick back and forward. Fixed by showing
+   the requested value **only while the mutation is pending**: honest, because
+   on failure it snaps back to what the server says.
+3. **`check()` re-reads the element** to confirm the click took, and against a
+   server-controlled input it can re-read mid-flight and report *"clicking the
+   checkbox did not change its state"* about a click that worked. `click()`
+   plus an explicit `to_be_checked()` is both more robust and a better
+   description of the act.
+4. **A direct API read raced the browser's PUT.** Once the display is
+   optimistic, the screen no longer marks the moment the server agreed — so the
+   test polls. The test process is a second client and has no reason to see the
+   first one's write until it lands.
+
+The diagnosis came from a probe printing `checked` and `disabled` at five
+moments after a click, rather than from four more guesses — the same move §278
+used a grep for, and §266 wrote the rule for.
+
 ### 278. The page B.1 was going to delete is not a duplicate (this session)
 
 Nothing built. §216's rule — open what a line cites before building on it —

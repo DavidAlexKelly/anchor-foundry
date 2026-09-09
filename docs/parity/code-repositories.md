@@ -32,7 +32,7 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 | **Branches** | ✅ | create, list, delete, fast-forward, merge |
 | **Pull requests** | ◑ | the tab exists (§276) and shows this repository's commit proposals, reviewed in place. Still ◑ because the *typed-changes* shape belongs to no repository (db 0039's `source_repo_id` is null for it) and so cannot be shown here honestly — it stays on the Code page until adoption (§274) makes it unnecessary rather than moved |
 | **Checks** | ◑ | checks run and block, no tab |
-| **Settings** | ○ | |
+| **Settings** | ◑ | §279: the tab exists and holds the code-review gate, which §278 found had exactly one control in the product — on the page B.1 deletes. p.20's other groups are §6's ○ rows |
 
 Ours has **History** and **Publish**, which have no Foundry counterpart at tab level. History belongs in the File Changes helper; Publish belongs on the branch. Keep both until their replacements land, then fold them in.
 
@@ -183,7 +183,7 @@ Two limits Palantir states plainly and we should copy rather than discover: the 
 | Setting group | Status | Source |
 |---|---|---|
 | Personal editor preferences | ○ | p.20 |
-| Branch settings — protection, required reviews | ◑ scattered | TOC §28 |
+| Branch settings — protection, required reviews | ◑ | required reviews are in the tab (§279); protection is §2.1's ○. **A divergence stated on the screen:** Foundry sets required review per repository (`repoSettings.json`), ours per project — the gate has to cover transforms that are in no repository | TOC §28 |
 | Repository settings | ○ | TOC §29 |
 | Compute usage | ○ | TOC §35 |
 | Ontology imports | ○ | TOC §33 |
