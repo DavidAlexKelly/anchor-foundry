@@ -826,3 +826,180 @@ def test_a_python_file_declaring_both_ways_is_refused_at_publish(
     r = do_publish(client, fx, repo["id"])
     assert r.status_code == 422, r.text
     assert "declares a transform twice" in r.json()["detail"], r.text
+
+
+# ---- adoption: the other direction (B.1; §274) --------------------------------
+def make_model(client, fx, *, name, code, language="sql", inputs=None):
+    r = client.post(
+        f"{pbase(fx)}/models", headers=hdr(fx.editor_sub),
+        json={"name": name, "language": language, "code": code,
+              "inputs": inputs or []},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def adopt(client, fx, model_id, repo_id, **kw):
+    return client.post(
+        f"{pbase(fx)}/models/{model_id}/adopt", headers=hdr(fx.editor_sub),
+        json={"repository_id": repo_id, **kw},
+    )
+
+
+def dataset_id(client, fx, name: str) -> str:
+    rows = client.get(f"{pbase(fx)}/datasets", headers=hdr(fx.viewer_sub)).json()
+    rows = rows["items"] if isinstance(rows, dict) else rows
+    return next(str(d["id"]) for d in rows if d["name"] == name)
+
+
+def test_adopting_writes_the_file_and_points_the_model_at_it(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**The whole of B.1's blocker, in one test.**
+
+    Before this, a model that had never been in a repository could only be
+    edited on `code/page.tsx` — the page B.1 deletes — and in a review-required
+    project it could not be edited at all. Adoption is what gives it a file.
+    """
+    name = f"adopted_{uuid.uuid4().hex[:8]}"
+    model = make_model(
+        client, fx, name=name, code="SELECT id, total FROM raw",
+        inputs=[{"dataset_id": dataset_id(client, fx, source), "input_alias": "raw"}],
+    )
+
+    r = adopt(client, fx, model["id"], repo["id"])
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["path"] == f"src/{name}.sql"
+
+    # The model now names the file...
+    after = client.get(
+        f"{pbase(fx)}/models/{model['id']}", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert after["source_repo_id"] == repo["id"]
+    assert after["source_path"] == out["path"]
+
+    # ...and the file resolves back to *this* model rather than declaring a
+    # second one. That is the round trip that matters: identity is
+    # `(repository, path)` (db 0038), so a file whose declaration named
+    # something else would publish alongside the model instead of into it.
+    plan = do_plan(client, fx, repo["id"]).json()
+    step = next(s for s in plan["steps"] if s["path"] == out["path"])
+    assert step["output"] == name
+    assert step["model_id"] == model["id"], "adoption created a second model"
+    assert [i["dataset"] for i in step["inputs"]] == [source]
+
+    # **The file is not byte-identical to `models.code`, and should not be.**
+    # It is the code with a declaration above it, so the plan honestly reports
+    # a change. Publishing writes that header in as a version and the two agree
+    # from then on - one model throughout, and the code below the header is
+    # still exactly what was written in the editor.
+    assert step["unchanged"] is False
+    published = do_publish(client, fx, repo["id"]).json()["steps"]
+    assert [s["model_id"] for s in published] == [model["id"]]
+
+    final = client.get(
+        f"{pbase(fx)}/models/{model['id']}", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert final["code"].endswith("SELECT id, total FROM raw")
+    assert final["code"].startswith(f"-- output: {name}")
+
+
+def test_an_adopted_model_refuses_a_direct_edit(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """db 0038's refusal, now reachable by adoption rather than only by publish.
+    This is the point of the whole exercise: after adoption the file is where
+    the transform is edited, and a direct edit would make the repository
+    describe a pipeline that is not the one running."""
+    name = f"locked_{uuid.uuid4().hex[:8]}"
+    model = make_model(client, fx, name=name, code="SELECT 1")
+    assert adopt(client, fx, model["id"], repo["id"]).status_code == 200
+
+    r = client.patch(
+        f"{pbase(fx)}/models/{model['id']}", headers=hdr(fx.editor_sub),
+        json={"code": "SELECT 2"},
+    )
+    assert r.status_code in (409, 422), r.text
+    assert "repository" in r.text
+
+
+def test_a_model_whose_name_cannot_be_declared_is_refused_naming_it(
+    client: TestClient, fx: Fixture, repo: dict
+) -> None:
+    """Model names are constrained only by length (db 0001), so a name can
+    exist that the declaration syntax cannot write. Written straight through,
+    the reader's own message for this is "declares inputs but no output" —
+    which sends the author to look at their inputs. So the check happens before
+    the file exists and says which value is wrong."""
+    model = make_model(client, fx, name=f"Daily Totals {uuid.uuid4().hex[:6]}",
+                       code="SELECT 1")
+    r = adopt(client, fx, model["id"], repo["id"])
+    assert r.status_code in (409, 422), r.text
+    assert "Daily Totals" in r.text, r.text
+
+
+def test_a_model_whose_code_absorbs_the_declaration_is_refused(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**The measured hazard, at the layer that would suffer it.**
+
+    The reader takes the leading comment block only, so a model whose own code
+    begins with `-- input: ...` produces a file whose declaration silently
+    gains an input the model never had. It does not fail — it parses — so only
+    reading the composed file back catches it, and only by exact equality.
+    """
+    name = f"absorb_{uuid.uuid4().hex[:8]}"
+    model = make_model(
+        client, fx, name=name,
+        code="-- input: sneaky = somewhere_else\nSELECT id FROM raw",
+        inputs=[{"dataset_id": dataset_id(client, fx, source), "input_alias": "raw"}],
+    )
+    r = adopt(client, fx, model["id"], repo["id"])
+    assert r.status_code in (409, 422), r.text
+    assert "sneaky" in r.text, r.text
+
+
+def test_a_model_cannot_be_adopted_twice(
+    client: TestClient, fx: Fixture, repo: dict
+) -> None:
+    """The second adoption would write a second file declaring the same output,
+    which `plan` refuses anyway — but it would already have committed it, so
+    the repository would carry a file that can never be published."""
+    model = make_model(client, fx, name=f"once_{uuid.uuid4().hex[:8]}", code="SELECT 1")
+    assert adopt(client, fx, model["id"], repo["id"]).status_code == 200
+    r = adopt(client, fx, model["id"], repo["id"])
+    assert r.status_code in (409, 422), r.text
+    assert "already authored" in r.text
+
+
+def test_the_path_extension_has_to_match_the_language(
+    client: TestClient, fx: Fixture, repo: dict
+) -> None:
+    """`transform_publish` reads a file's language off its path, so a Python
+    model written to a `.sql` file would publish back as SQL and be handed to
+    DuckDB. Refused rather than corrected: a caller that asked for the wrong one
+    is confused about something, and a silent rename hides it."""
+    model = make_model(client, fx, name=f"pymodel_{uuid.uuid4().hex[:8]}",
+                       language="python", code="output = 1")
+    r = adopt(client, fx, model["id"], repo["id"], path="src/thing.sql")
+    assert r.status_code in (409, 422), r.text
+    assert ".py" in r.text
+
+
+def test_adopting_into_a_taken_path_is_refused_before_it_commits(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    out = f"taken_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/taken.sql": sql(out, source)})
+    model = make_model(client, fx, name=f"other_{uuid.uuid4().hex[:8]}", code="SELECT 1")
+
+    r = adopt(client, fx, model["id"], repo["id"], path="src/taken.sql")
+    assert r.status_code in (409, 422), r.text
+    assert "already exists" in r.text
+
+    # And nothing moved: the model is still directly authored.
+    after = client.get(
+        f"{pbase(fx)}/models/{model['id']}", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert after["source_repo_id"] is None

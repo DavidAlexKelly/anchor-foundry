@@ -17,10 +17,14 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.services.transform_declarations import (  # noqa: E402
+    COMMENT_PREFIX,
     DeclarationError,
+    UnwritableDeclaration,
     _block_patterns,
     read,
     read_repository,
+    render,
+    unwritable,
 )
 
 
@@ -364,3 +368,132 @@ def test_a_comment_prefix_is_matched_literally_and_not_as_a_pattern() -> None:
     # because `/*` would have meant "zero or more slashes".
     assert pattern_output.match(" output: daily_orders") is None
     assert pattern_input.match(" input: orders = raw_orders") is None
+
+
+# ---- writing one, which is why `render` lives beside `read` (§274) -----------
+# The round trip is the whole reason these two functions share a module. §272
+# was two things that had to agree kept in different files and each verified
+# alone; a writer of this syntax and a reader of it is exactly that shape.
+ROUND_TRIPS = [
+    ("the plain case", "daily_orders", {"orders": "raw_orders"}),
+    ("no inputs at all", "daily_orders", {}),
+    ("several inputs", "daily", {"a": "raw_a", "b": "raw_b", "c": "raw_c"}),
+    ("dots and hyphens in names", "team.daily-orders", {"o": "raw.orders-v2"}),
+    ("digits and underscores", "d2", {"_x9": "_raw9"}),
+]
+
+
+@pytest.mark.parametrize("suffix", sorted(COMMENT_PREFIX))
+@pytest.mark.parametrize("label,output,inputs", ROUND_TRIPS,
+                         ids=[c[0] for c in ROUND_TRIPS])
+def test_a_declaration_survives_being_written_and_read_back(
+    suffix: str, label: str, output: str, inputs: dict[str, str]
+) -> None:
+    """**Exact equality, not "the header survived".**
+
+    Measured before this was written: prepending a header to a model whose own
+    code begins with `-- input: x = y` produces a parse that *succeeds* and
+    silently gains an input the model never had. A containment check passes
+    that; equality does not.
+
+    Run against both languages from one table, so a rule added to one has to be
+    answered for the other.
+    """
+    body = "SELECT 1\n" if suffix == ".sql" else "output = 1\n"
+    source = render(output, inputs, prefix=COMMENT_PREFIX[suffix]) + body
+
+    found = read(f"src/thing{suffix}", source)
+    assert found is not None, source
+    assert (found.output, found.inputs) == (output, inputs), source
+
+
+# ---- what cannot be written, and why it has to be refused -------------------
+# Model and dataset names are constrained only by length (db 0001: 1-200
+# characters, any of them), so a name can exist that this syntax cannot write.
+# Each case below was measured against the reader first; the comment says what
+# the reader actually did with it, because two of them do not fail - they lose
+# data and carry on.
+UNWRITABLE = [
+    # (label, output, inputs, the fragment the refusal must name)
+    ("a space in the output name",
+     "Daily Totals", {"orders": "raw_orders"}, "Daily Totals"),
+    # Measured: parses fine with `inputs={}`. The file would publish as a
+    # transform that reads nothing.
+    ("a space in an input's dataset name",
+     "daily_orders", {"orders": "Raw Orders"}, "Raw Orders"),
+    # Measured: the same silent loss.
+    ("an alias that is not a usable variable name",
+     "daily_orders", {"raw orders": "raw_orders"}, "raw orders"),
+    ("a slash in the output name",
+     "team/daily", {"orders": "raw_orders"}, "team/daily"),
+    ("an empty alias, which the schema still permits",
+     "daily_orders", {"": "raw_orders"}, "''"),
+]
+
+
+@pytest.mark.parametrize("label,output,inputs,named", UNWRITABLE,
+                         ids=[c[0] for c in UNWRITABLE])
+def test_a_name_the_syntax_cannot_write_is_refused_and_named(
+    label: str, output: str, inputs: dict[str, str], named: str
+) -> None:
+    """**Refused up front rather than left to the round trip**, because the
+    round trip's own message blames the wrong thing.
+
+    Written straight through, a space in the *output* raises "this file
+    declares inputs but no output" — which sends the author looking at their
+    inputs. A space in an input's *dataset* raises nothing at all. Neither
+    message mentions the name that is actually wrong, so the check has to
+    happen before the file exists and has to say which value it is about.
+    """
+    with pytest.raises(UnwritableDeclaration) as caught:
+        render(output, inputs, prefix="--")
+    assert named in str(caught.value), caught.value
+
+
+def test_the_silent_cases_really_are_silent_without_the_check() -> None:
+    """**The premise of the test above, asserted rather than assumed.**
+
+    A refusal is only worth having if the thing it prevents is bad, and here
+    the claim is specifically that these two lose data *quietly*. If the reader
+    ever starts raising on them, this test fails and the docstrings above stop
+    being true — which is the point, because they would then be describing a
+    hazard that no longer exists.
+    """
+    # Written by hand, bypassing `render`, exactly as a naive adoption would.
+    lost = "-- output: daily_orders\n-- input: orders = Raw Orders\nSELECT 1\n"
+    found = read("x.sql", lost)
+    assert found is not None
+    assert found.inputs == {}, "the reader started refusing this; update §274's note"
+
+    lost_alias = "-- output: daily_orders\n-- input: raw orders = raw_orders\nSELECT 1\n"
+    found = read("x.sql", lost_alias)
+    assert found is not None and found.inputs == {}
+
+
+def test_every_reason_is_reported_not_just_the_first() -> None:
+    """A model with two unwritable names would otherwise be two round trips
+    through the same refusal, and the second arrives after the author thinks
+    they have finished."""
+    problems = unwritable("Daily Totals", {"raw orders": "Raw Orders"})
+    assert len(problems) == 3, problems
+    joined = " ".join(problems)
+    assert "Daily Totals" in joined and "raw orders" in joined and "Raw Orders" in joined
+
+
+def test_inputs_are_written_in_a_stable_order() -> None:
+    """Adopting the same model twice produces the same bytes, so an unchanged
+    declaration has an empty diff. Dict order is insertion order in Python, and
+    `list_inputs` orders by alias today — a caller that built the mapping some
+    other way would otherwise produce a spurious commit."""
+    a = render("daily", {"b": "raw_b", "a": "raw_a"}, prefix="--")
+    b = render("daily", {"a": "raw_a", "b": "raw_b"}, prefix="--")
+    assert a == b
+    assert a.index("input: a") < a.index("input: b")
+
+
+def test_an_unwritable_declaration_is_a_declaration_error() -> None:
+    """So a caller that only knows about `DeclarationError` still catches it,
+    while one that wants to offer a rename can ask for the subclass. Renaming
+    and editing are different fixes and a screen wants to offer different
+    things."""
+    assert issubclass(UnwritableDeclaration, DeclarationError)

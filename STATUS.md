@@ -4388,6 +4388,87 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 274. Adoption — a model becomes a file (this session)
+
+The second third of **B.1**. §273 gave a script a way to declare; this is the
+operation that uses it: take a transform that has never been in a repository,
+write it into one, and point the model at the file. `transform_publish.py` was
+the direction that already existed — a file becomes a model. This is the one
+that did not, and it is what B.1's deletion is blocked on: delete
+`code/page.tsx` and every model that has never been published loses its only
+editor, and in a review-required project loses every editor.
+
+**What adoption is not, and why it is not review-gated.** The code is copied
+through byte for byte and the declaration is written from what the model
+already says it produces and reads. Nothing about what runs changes. The gate
+exists for changes to what runs; this is a change to *where the definition is
+edited from*, which is an editor's decision.
+
+**`render` lives beside `read`, and the placement is the unit's main design
+choice.** It is the inverse function — the writer of the syntax that module
+reads — and §272 was precisely two things that had to agree kept in different
+files and each verified alone. A writer over there and a reader over here is
+that shape, and it drifts the first time either changes. So: same module, and
+`test_a_declaration_survives_being_written_and_read_back` parameterised over
+both languages and five shapes, rather than a promise that they match.
+
+**The refusals are the feature, and each one was measured before it was
+written.** Model and dataset names are constrained only by length (db 0001:
+1–200 characters, any of them), so a name can exist that the declaration syntax
+cannot write down — and the failures are not equally loud:
+
+* a space in the **output** name raises *"this file declares inputs but no
+  output"*, which sends the author to look at their inputs;
+* a space in an input's **dataset** name raises **nothing at all** — the parse
+  succeeds with `inputs={}`, so the file publishes as a transform that reads
+  nothing and fails much later against missing inputs, or simply produces a
+  wrong answer;
+* an alias that is not an identifier is lost the same silent way.
+
+So the check happens before the file exists, names the offending value, and
+reports **every** reason rather than the first — two unwritable names would
+otherwise be two round trips through the same refusal, the second arriving
+after the author thinks they have finished.
+
+**And the round trip is the backstop, compared by exact equality.** The reader
+takes the leading comment block only, so a model whose own code begins with
+comments produces a longer block than the header alone, and a `-- input: x = y`
+sitting in those comments is *absorbed*: the parse succeeds and the transform
+silently gains an input the model never had. A containment check passes that.
+Equality does not. Expressibility is a claim about a regex and the round trip
+is a claim about the actual reader, and §272's whole lesson is that two things
+which ought to agree get checked against each other rather than each verified
+alone.
+
+**An alias is a variable name, which is why its rule is stricter than a
+name's.** The sandbox does `_namespace[alias] = <DataFrame>`, so the alias
+becomes a module-level name the file refers to. `[A-Za-z0-9_]+` is therefore
+what a usable Python name is rather than an arbitrary restriction — and it
+means a directly-authored Python model with a space in an alias is **broken
+today at run time**, with nothing catching it earlier, since the route only
+length-checks and the column is `text DEFAULT ''`. Adoption's check does double
+duty there. Whether the same check belongs at model-save time is adjacent to
+B.1 rather than part of it, so it is named here and not built.
+
+**One transaction, and one way.** The commit and the model's pointer land
+together, because a model naming a path no commit holds has no editor at all —
+the state this unit exists to remove. And nothing hands a model back to direct
+editing: that is the intended end state rather than a gap, because B.1 removes
+direct editing, so a "release" would hand the model back to a surface being
+deleted. Worth knowing alongside it: `transform_publish.orphaned()` reports
+models whose file a later commit dropped and deliberately does not delete them,
+so such a model is stranded until the file returns — pre-existing, recoverable
+by restoring the file, and named rather than quietly closed with a feature that
+contradicts the plan.
+
+**The file is not byte-identical to `models.code`, and should not be.** It is
+the code with a declaration above it, so the publish plan honestly reports a
+change; publishing writes the header in as a version and the two agree from
+then on. The first version of this unit's test asserted `unchanged is True` and
+was wrong about the design rather than finding a bug — the test now publishes
+and asserts the outcome, which is the stronger claim anyway: one model
+throughout, and the code below the header still exactly what was written.
+
 ### 273. How a script declares (this session)
 
 Decision 0017, and the first third of **B.1** — "models live in repositories",
@@ -10115,6 +10196,12 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **A reader and a writer of the same syntax belong in one file, and the round trip belongs in the test suite.** §274 put `render` next to `read` rather than in the adoption service that calls it. The alternative is the exact shape §272 had just spent a unit on: two things that must agree, kept apart, each thoroughly tested against itself and never against the other. The property — `read(render(x)) == x`, over a table, in every language the syntax supports — is what makes them agree; a comment saying they are inverses is what makes them *look* like they agree. This applies to every encode/decode pair a codebase owns: serialisers, URL builders, path encoders, the lot.
+
+- **Two validators for the same value are not the same validator, and the looser one loses data quietly.** §274 needed names writable into a declaration, and there are two rules, not one: a dataset name may hold dots and hyphens, an *alias* may not — because an alias becomes a module-level variable the transform refers to. Collapsing them would have been the obvious tidy-up and it would have produced files whose inputs silently vanish. The tell that they are genuinely different rules is that each one has a *reason* rooted in what the value is used for; when two validators differ only by accident of history, that is a different finding and the fix is the opposite one.
+
+- **Check what a value can be written as before writing it, not after reading it back.** §274 has both, deliberately, and they answer different questions: the up-front check knows *which name* is unwritable and can say so, while the round trip only knows the file came back wrong — and its natural message blames whatever the reader tripped over, which in the measured cases was the author's inputs when the problem was the output, or nothing at all. **A validation whose failure message points at the wrong thing is worse than one layer further out that points at the right thing**, and the round trip earns its place as a backstop rather than as the primary check.
 
 - **"Prints nothing" and "prints a hundred lines of the wrong thing" are the same bug wearing different clothes.** §271 fixed the browser job's failure diagnostic, which had emitted `tail: option used in invalid context -- 1` and nothing else for ten red runs. §272 then hit a red run it *still* could not diagnose: the fixed step printed a hundred very long Next.js request lines after pytest finished, GitHub's log API truncates by size rather than by line, and the tracebacks and summary fell outside anything retrievable — with the raw log on a host the egress policy blocks, so there was no second route either. **A diagnostic is only as good as the window it will be read through**, and that window is usually the last few kilobytes of something. Put the identifying line — the failing test's name, the failing assertion — closest to the end, and keep the context that follows it short enough not to push it out.
 
