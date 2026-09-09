@@ -4388,6 +4388,49 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 276. The Pull requests tab (this session)
+
+`code-repositories.md` §1 wants five tabs and calls proposals *Pull requests*;
+ours lived on the project's Code pillar page — the page B.1 deletes. This
+re-homes the review surface into the repository application, which is the
+"move proposal creation into the application" half of build-order item 1.
+
+**Most of it was already portable, and that is the finding rather than a
+convenience.** `ReviewSurface` has been a shared component since §60 and takes
+a proposal id and nothing else, so it needed no change at all. What was missing
+was *reachability*: a proposal about this repository could only be opened from
+a page about the project. A component extracted for re-use, sitting in one
+place for fifteen units, is a fair description of how this gap survived.
+
+**The modelling question the tab forced, which is why there is a pure module
+for a filter.** A proposal is project-level and a repository is one of several:
+db 0039 gave a proposal an *optional* `source_repo_id`, set when it publishes a
+commit and null when it carries typed changes to named transforms. So "this
+project's proposals" and "this repository's proposals" are different lists, and
+a tab showing the first would put another repository's review in front of
+somebody looking at this one.
+
+**And the typed-changes ones belong to no repository at all**, so they cannot
+be shown here honestly. They stay on the Code page. That is the honest state of
+B.1: the *review* half is re-homed, the *creation* half of the typed-changes
+shape is not, and it is what still stands between here and deleting
+`code/page.tsx`. Adoption (§274) is what will make it unnecessary rather than
+moved.
+
+**An empty tab says where the others are.** Three different absences with three
+different remedies: nothing open anywhere; open proposals that change
+transforms directly and are reviewed on another screen; open proposals
+belonging to another repository. A reviewer sent a link, finding an empty tab,
+needs to tell "already dealt with" from "not here" — and saying "Code screen"
+for the third case would send them somewhere it is not. `emptyReason` is four
+lines of branching and the test that matters is the one asserting it does *not*
+say "Code screen" when the answer is a different repository.
+
+**The open proposal is in the URL, and the test reloads rather than reading the
+address bar.** A review is a thing people send each other, so it has to be a
+link — and a URL that is written but not read is one that looks right and does
+nothing.
+
 ### 275. The adoption screen, and the edit it should never have offered (this session)
 
 §274's other half, and the half that turned out to carry a defect of its own.
