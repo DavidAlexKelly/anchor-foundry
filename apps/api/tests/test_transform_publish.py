@@ -1003,3 +1003,41 @@ def test_adopting_into_a_taken_path_is_refused_before_it_commits(
         f"{pbase(fx)}/models/{model['id']}", headers=hdr(fx.viewer_sub)
     ).json()
     assert after["source_repo_id"] is None
+
+
+def test_adopting_keeps_every_file_the_repository_already_had(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**A commit is a snapshot, not a patch** (decision 0003), so adoption has
+    to send the whole tree back with one file added. Sending only the new file
+    is a commit that *deletes the repository* — and it is one character of
+    difference, `{**files, target: source}` against `{target: source}`.
+
+    Every other adoption test here used an empty repository or collided on the
+    path it was adopting to, so all of them passed against that mutant. §212's
+    rule in its most expensive form: a fixture that never crosses the boundary
+    cannot see the boundary, and here the boundary is "the repository already
+    contains something".
+    """
+    kept = f"kept_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/existing.sql": sql(kept, source),
+        "README.md": "# transforms\n",
+    })
+
+    model = make_model(client, fx, name=f"added_{uuid.uuid4().hex[:8]}", code="SELECT 1")
+    r = adopt(client, fx, model["id"], repo["id"])
+    assert r.status_code == 200, r.text
+    added = r.json()["path"]
+
+    tree = client.get(f"{rbase(fx)}/{repo['id']}/tree", headers=hdr(fx.viewer_sub))
+    assert tree.status_code == 200, tree.text
+    files = tree.json()["files"]
+
+    assert "src/existing.sql" in files, sorted(files)
+    assert "README.md" in files, sorted(files)
+    assert added in files, sorted(files)
+    # And byte-identical, not merely present: a commit that rewrote the tree
+    # would be as wrong as one that dropped it.
+    assert files["README.md"] == "# transforms\n"
+    assert files["src/existing.sql"] == sql(kept, source)

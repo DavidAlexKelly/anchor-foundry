@@ -424,6 +424,16 @@ UNWRITABLE = [
     # Measured: the same silent loss.
     ("an alias that is not a usable variable name",
      "daily_orders", {"raw orders": "raw_orders"}, "raw orders"),
+    # **The case that separates the two rules.** A *name* may hold dots and
+    # hyphens; an alias may not, because it becomes a variable the transform
+    # refers to and `raw-orders` is not a name Python can bind. Without this the
+    # alias check could be done with the looser name rule and every test still
+    # passes — the fixtures above are rejected by both (§212's family: a fixture
+    # that never crosses the boundary cannot see it).
+    ("a hyphen in an alias, which a dataset name may have",
+     "daily_orders", {"raw-orders": "raw-orders"}, "raw-orders"),
+    ("a dot in an alias, likewise",
+     "daily_orders", {"raw.orders": "raw_orders"}, "raw.orders"),
     ("a slash in the output name",
      "team/daily", {"orders": "raw_orders"}, "team/daily"),
     ("an empty alias, which the schema still permits",
@@ -497,3 +507,17 @@ def test_an_unwritable_declaration_is_a_declaration_error() -> None:
     and editing are different fixes and a screen wants to offer different
     things."""
     assert issubclass(UnwritableDeclaration, DeclarationError)
+
+
+def test_an_alias_is_held_to_a_stricter_rule_than_a_dataset_name() -> None:
+    """Stated directly, because the two rules look interchangeable and are not.
+
+    A dataset may legitimately be called `raw-orders`; an *alias* of that name
+    would be a module-level variable the transform can never refer to, because
+    `raw-orders` is not something Python can bind. So the same string is
+    writable in one position and refused in the other, which is the sort of
+    asymmetry that gets tidied away by somebody reading only one of them.
+    """
+    assert unwritable("daily", {"orders": "raw-orders"}) == []
+    problems = unwritable("daily", {"raw-orders": "raw_orders"})
+    assert len(problems) == 1 and "variable" in problems[0], problems
