@@ -31,8 +31,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.routes.code import ProposalSummary  # noqa: E402
 from src.routes.datasets import DatasetOut  # noqa: E402
-from src.routes.models import ModelOut  # noqa: E402
+from src.routes.models import ModelInputOut, ModelOut  # noqa: E402
 from src.routes.repositories import RepositoryOut  # noqa: E402
 
 # Four levels: tests -> api -> apps -> the repository root. §270 got this one
@@ -48,8 +49,10 @@ TYPES = os.path.join(ROOT, "packages", "types", "src", "index.ts")
 #: model that a screen consumes belongs here on the day it is written.
 PAIRS = [
     (ModelOut, "Model"),
+    (ModelInputOut, "ModelInput"),
     (DatasetOut, "Dataset"),
     (RepositoryOut, "Repository"),
+    (ProposalSummary, "CodeProposal"),
 ]
 
 
