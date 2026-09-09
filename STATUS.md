@@ -4666,6 +4666,19 @@ error left out.
 
 Harness: **15/15**, no survivors, no no-ops.
 
+**One transient worth naming, because it is not the flake and looks like it.**
+A later browser run went red before a single test ran: `playwright install
+--with-deps` runs `apt-get update`, and Google's Chrome repository index was
+regenerated between the download and the hash check (`Last modification
+09:41`, `Release file created at 17:16`) — `E: Failed to fetch … Hash Sum
+mismatch`. Upstream, not ours, and logged rather than fixed on one occurrence,
+which is the same treatment §244 gave its unexplained migration transient.
+
+Small validation in it: the diagnostics behaved correctly under a failure they
+were not designed for. `tail` said the server logs did not exist, because the
+stack never came up, and the artifact step said no files were found. Neither
+pretended to have something.
+
 **The flake this postscript left open is now found, and the four diagnostic
 fixes are what found it.** `test_an_insert_button_writes_the_reference_name_not_its_label`,
 one failure in 807, roughly one CI run in four and never locally. It clicks the
@@ -10270,6 +10283,10 @@ The rule: **match a noise filter to the message, never to its source.** A source
 - **A guard's obvious sibling can be the wrong thing to copy.** §268's preview sits beside `test` and `discover`, both of which mark the connection failed when they cannot reach the source. Copying that would have been one line and completely wrong: "this credential cannot read that table" is p.18's check *working*, and a source that went red every time somebody previewed the wrong table is a status nobody can trust. The pair that holds it — a failed read followed by an assertion that the connection is still `ok` — exists only because the question was asked. **Consistency with the neighbouring endpoint is a hypothesis, not a requirement**; the test to write is the one that fails if the neighbour's behaviour is adopted wholesale.
 
 - **A form rendered before its data has arrived is a form that discards what you type.** §266's interface editor opened at React's `useState` defaults — an empty name, `status` at `"experimental"` — and looked completely ready. Anything changed before the fetch returned was overwritten when it did, and Save wrote back the value the person had just replaced: HTTP 200, dialog closed, nothing changed. **Every visible signal said it worked**, which is why it took a browser test to find and would never have arrived as a bug report: a person is rarely faster than the request, and a test always is. The fix is a ternary — render a loading state until the data exists — and the same shape is worth checking wherever a `useQuery` feeds a `useEffect` that calls setters. Two of this repo's three such dialogs already did it correctly, which is the other half of the lesson: a pattern applied correctly twice does not apply itself the third time.
+
+- **A mechanism can be proved without reproducing the failure, and sometimes that is the only route.** §266's rule is to turn an intermittent bug into a measurement before evaluating any fix, and the browser flake refused: ten runs of the failing ordering passed locally, six more at 20× CPU throttling. What settled it was not a better reproduction but a *direct observation of the intermediate state* — reading `document.activeElement` around the click showed focus moving from the body to the subject, deterministically, every time. The race is only whether that move lands inside Playwright's `fill`; the move itself is not a race at all. **When a failure will not reproduce, look for the deterministic half of it** — the state change that always happens, of which the failure is one interleaving. That is testable on a machine where the bug never fires.
+
+- **The usual finding is that the product is wrong; occasionally the test is, and the tell is that the product's behaviour is deliberate and documented.** The flake blamed an Insert button that had put exactly the right text in exactly the right place. The `requestAnimationFrame` that made it look guilty is three lines of comment explaining why the caret goes back where the author was typing. Before changing product code to make a test pass, read what the code says it is doing — if it is doing that, on purpose, with a reason, the test is the thing that is wrong.
 
 - **A diagnostic competes for the end of the log with things you do not control.** §271 fixed this repo's browser-failure step from printing *nothing*; §272 shortened it from printing *too much*; and §275 still could not read one, because GitHub prints the **service container's** log after every job's own steps — and Postgres was logging `FATAL: role "root" does not exist` every five seconds, roughly three hundred lines, because `pg_isready` with no `-U` defaults to the invoking OS user. The probe worked the whole time (it reports "accepting connections" either way), which is exactly why nobody looked at it. **Noise that is harmless to the thing it comes from is not harmless to the log**, and the last few kilobytes of a CI log are a shared resource: anything that writes there on a timer eventually owns it. Three fixes to one diagnostic, and only the third was about something the workflow itself did not print.
 
