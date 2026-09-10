@@ -38,6 +38,7 @@ from ..services import code_test_runs as test_run_service
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
+from ..services import scratchpad
 from ..services import transform_declarations as declarations
 from ..services import transform_problems as problem_service
 from ..services import transform_publish as publish_service
@@ -1213,6 +1214,132 @@ async def publish_transforms(
         commit_id=ref,
         steps=[PublishStepOut(**{**s, "model_id": s["model_id"]}) for s in steps],
         orphaned=[OrphanOut(**{k: o[k] for k in ("id", "name", "source_path")}) for o in left],
+    )
+
+
+# ---- SQL Scratchpad (§305; p.15) ---------------------------------------------
+class ScratchpadIn(BaseModel):
+    sql: str
+
+
+class ScratchpadOut(BaseModel):
+    columns: list[dict[str, str]]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+    sampled: bool
+    inputs: list[PreviewedInputOut]
+    #: What the query was rewritten to. Shown rather than hidden: backticks are
+    #: Foundry's engine and not ours, so somebody who typed p.15's syntax and
+    #: got an error from DuckDB should be able to see what DuckDB was given.
+    ran: str
+
+
+@router.post("/{repo_id}/scratchpad", response_model=ScratchpadOut)
+async def run_scratchpad(
+    repo_id: UUID,
+    body: ScratchpadIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ScratchpadOut:
+    """p.15's SQL helper: run an ad-hoc query over this project's datasets.
+
+    **The difference from Preview, one route below, is where the inputs come
+    from.** A transform declares its inputs and gets aliases; a scratchpad
+    query has no declaration, so the names *in the query* are the references —
+    which is why `scratchpad.py` exists and why the query is rewritten before
+    it reaches the engine.
+
+    Editor for the same reason Preview is: this executes SQL the caller
+    supplied against datasets in the project, and the floor matches who may
+    write rather than who may read.
+
+    Sampled, like Preview, and it says so. A scratchpad is for finding out
+    what is in a dataset, and running the real thing over every row of a large
+    one is a way to make the panel unusable rather than accurate.
+    """
+    try:
+        rewritten, found = scratchpad.bind(body.sql)
+    except scratchpad.ScratchpadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await ds_service.list_for_project(conn, access.project_id)
+        by_name = {str(row["name"]): row for row in rows}
+
+    missing = scratchpad.unresolved(found, set(by_name))
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "this query reads "
+                + ", ".join(missing)
+                + ", which this project does not have"
+            ),
+        )
+    if not found:
+        # A query that names no dataset runs against nothing, and DuckDB would
+        # answer `SELECT 1` happily. Refused instead, because a scratchpad with
+        # no inputs is almost always a query whose references did not parse -
+        # and returning 1 teaches somebody their backticks worked.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "this query names no dataset. A scratchpad query reads one "
+                "between backticks, as in SELECT * FROM `/path/to/dataset`"
+            ),
+        )
+
+    storage = _dataset_storage()
+    paths: dict[str, str] = {}
+    for reference in found:
+        if reference.name in paths:
+            continue
+        paths[reference.name] = await anyio.to_thread.run_sync(
+            storage.local_path, str(by_name[reference.name]["s3_location"])
+        )
+
+    try:
+        result, previewed = await anyio.to_thread.run_sync(
+            engine.preview_transform, paths, rewritten
+        )
+    except DatasetEngineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except FileNotFoundError as exc:
+        raise ConflictError(
+            "one of the datasets this query reads has no stored data yet, so "
+            "there is nothing to run against"
+        ) from exc
+
+    return ScratchpadOut(
+        columns=[c.as_dict() for c in result.columns],
+        rows=result.rows,
+        row_count=result.total_rows,
+        truncated=result.truncated,
+        sampled=any(p.sampled for p in previewed),
+        inputs=[
+            PreviewedInputOut(
+                # **Alias and dataset are the same word here, and that is the
+                # syntax rather than a shortcut.** A transform aliases its
+                # inputs because it declares them; a scratchpad query names
+                # the dataset in the query, so there is nothing else it could
+                # be called.
+                alias=p.alias,
+                dataset=p.alias,
+                dataset_id=by_name[p.alias]["id"],
+                rows_available=p.rows_available,
+                rows_used=p.rows_used,
+                sampled=p.sampled,
+            )
+            for p in previewed
+        ],
+        ran=rewritten,
     )
 
 

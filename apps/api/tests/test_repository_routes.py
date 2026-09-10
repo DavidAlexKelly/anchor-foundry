@@ -1216,3 +1216,78 @@ def test_a_repository_in_another_project_is_not_reachable_through_this_route(
     )
     assert answer.status_code == 404, answer.text
     assert repo["id"] not in answer.text
+
+
+# --- The SQL Scratchpad (§305; p.15) ----------------------------------------
+#
+# The refusals only. A query that reaches the engine needs a dataset with
+# parquet behind it, which is what the browser suite has and this fixture does
+# not — the same division `preview_transform` already takes.
+
+
+def scratchpad(client, fx, repo_id, sql, *, sub=None):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo_id}/scratchpad",
+        headers=hdr(sub or fx.editor_sub),
+        json={"sql": sql},
+    )
+
+
+def test_a_branch_qualifier_is_refused_before_anything_runs(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.15's syntax, and the decision about it.
+
+    Ignoring the qualifier would return a table, so nobody would check it — it
+    answers a question nobody asked. Datasets here are versioned rather than
+    branched (db 0025).
+    """
+    repo = make_repo(client, fx)
+    answer = scratchpad(client, fx, repo["id"], "SELECT * FROM `branch_A`.`/orders`")
+    assert answer.status_code == 422, answer.text
+    detail = answer.json()["detail"]
+    assert "branch_A" in detail and "versioned" in detail
+
+
+def test_a_dataset_this_project_does_not_have_is_named_in_the_refusal(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The answer to the question the author is actually asking."""
+    repo = make_repo(client, fx)
+    missing = f"nosuch_{uuid.uuid4().hex[:8]}"
+    answer = scratchpad(client, fx, repo["id"], f"SELECT * FROM `{missing}`")
+    assert answer.status_code == 422, answer.text
+    assert missing in answer.json()["detail"]
+
+
+def test_a_query_naming_no_dataset_is_refused_rather_than_answered(
+    client: TestClient, fx: Fixture
+) -> None:
+    """DuckDB would answer `SELECT 1` happily, and that is the problem: a
+    scratchpad query with no inputs is almost always one whose references did
+    not parse, and returning 1 teaches somebody their backticks worked."""
+    repo = make_repo(client, fx)
+    answer = scratchpad(client, fx, repo["id"], "SELECT 1")
+    assert answer.status_code == 422, answer.text
+    assert "names no dataset" in answer.json()["detail"]
+
+
+def test_an_unterminated_backtick_is_refused_by_us_not_by_duckdb(
+    client: TestClient, fx: Fixture
+) -> None:
+    repo = make_repo(client, fx)
+    answer = scratchpad(client, fx, repo["id"], "SELECT * FROM `orders")
+    assert answer.status_code == 422, answer.text
+    assert "closing" in answer.json()["detail"]
+
+
+def test_a_viewer_may_not_run_a_scratchpad_query(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The floor Preview draws: this *executes* SQL the caller supplied
+    against datasets in the project, so it matches who may write."""
+    repo = make_repo(client, fx)
+    answer = scratchpad(client, fx, repo["id"], "SELECT * FROM `orders`",
+                        sub=fx.viewer_sub)
+    assert answer.status_code == 403, answer.text
