@@ -95,7 +95,7 @@ The protected-branch rule is the one to take seriously. It is what makes the Pul
 | **Debugger** | ○ | defer — assumes Foundry's transform debugging model |
 | **Preview** | ◑ | SQL only; extend to Python |
 | **Tests** | ○ | the runner already executes customer Python in an isolated container with an empty task role (`docs/decisions/0004-running-customer-code.md`). A test job is the same mechanism with a different entrypoint. |
-| **File Changes** | ○ | uncommitted changes to the current file, and comparison with previous versions. The diff machinery exists for commits (§60); point it at uncommitted state. |
+| **File Changes** | ✅ §287 | both halves. The diff is built by `code.side_by_side` — the same aligner the review surface uses, because "what changed" is the one question a repository must not have two answers to. The version picker offers the commits that *changed* this file, compared by content address rather than by whether the commit touched anything |
 | **Build** | ○ | defer — assumes Foundry's build orchestration, which is not our worker |
 | **Docs** | ○ | language references in-product |
 | **SQL Scratchpad** | ◑ | we have query-and-preview; missing the **favourites** and **history** tabs, and the branch-qualified syntax `` SELECT * FROM `branch_A`.`/path/to/dataset` `` (p.15) |
@@ -222,7 +222,7 @@ Foundry supports several; two matter here (p.3):
 2. ~~**Draft persistence**, then **multi-file tabs**~~ — **done (§281, §282)**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
 3. ~~**The five tabs**~~ — **done (§276, §279, §285)**. Pull requests and Checks re-homed, Settings created. All five of p.10's tabs now exist, and the two that diverge say so on the screen: review policy is per project rather than per repository (§279), and checks attach to a proposal rather than to a commit (§285).
 4. ~~**Protected branches and the sandbox rule.**~~ — **done (§283, §284)**. §283 cleared the prerequisite it would otherwise have broken: applying a proposal lands the commit on the default branch. Protect `main` without that and the first person to use the review path as intended leaves `main` behind forever — the branch everybody opens the repository on would stop describing the repository.
-5. ~~**Problems**~~ — **done (§286)** — then **File Changes**. These two make the editor feel like an IDE more than anything else here.
+5. ~~**Problems**, then **File Changes**~~ — **done (§286, §287)**. These two make the editor feel like an IDE more than anything else here, and both turned out to be re-pointings rather than new machinery: Problems runs the readers the publish already runs, and File Changes runs the aligner the review already runs.
 6. **Unit tests**, then the **Tests panel**, then test output in the Checks tab.
 7. **Tags**, branch checks column, PR column.
 8. **Foundry Explorer equivalent**, SQL Scratchpad history and favourites.
@@ -239,7 +239,7 @@ Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types,
 - **Protected branches** — committing directly to a protected branch is refused, and the refusal names the branch. Mutation: remove the check, and the test goes red. **✅ §284**, and the refusal names the route as well as the branch — a rule that only says no teaches people the product is broken.
 - **Tabs** — each of the five is reachable by URL and by click, and a deep link survives a reload.
 - **Problems** — a file with a deliberate syntax error produces a diagnostic at the right line; clicking it moves the cursor there. Fix the error, and the panel empties. **✅ §286**, and the panel reads the *working set* rather than the commit, which is the whole reason it is earlier than a publish.
-- **File Changes** — an uncommitted edit shows as a diff against the committed version; committing empties the panel.
+- **File Changes** — an uncommitted edit shows as a diff against the committed version; committing empties the panel. **✅ §287**, and the version picker adds p.14's other half.
 - **Tests panel** — a failing test is reported as failing. A test suite that cannot fail is the exact thing this repo does not accept.
 - **Checks** — a check that fails blocks the merge, and the block names the check.
 - **Tags** — a tag pinned to a commit still resolves to that commit after the branch moves on.

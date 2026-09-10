@@ -1862,3 +1862,191 @@ def test_a_clash_is_reported_even_when_one_of_the_files_is_also_broken(
     # being left to discover it when the other one is fixed.
     assert [p["source"] for p in by_path["src/fine.sql"]] == ["declaration"], found
     assert out in by_path["src/fine.sql"][0]["message"]
+
+
+# ---- file changes (§287; code-repositories.md §2.4, p.14) --------------------
+# "The File Changes helper can be used to view any uncommitted changes to the
+# current file, as well as compare previous versions of the file."
+def file_changes(client: TestClient, fx: Fixture, repo_id: str, path: str, **kw):
+    return client.post(
+        f"{rbase(fx)}/{repo_id}/file-changes", headers=hdr(fx.viewer_sub),
+        json={"path": path, **kw},
+    )
+
+
+def file_history(client: TestClient, fx: Fixture, repo_id: str, path: str, **kw):
+    q = "&".join(f"{k}={v}" for k, v in kw.items())
+    return client.get(
+        f"{rbase(fx)}/{repo_id}/file-history?path={path}" + (f"&{q}" if q else ""),
+        headers=hdr(fx.viewer_sub),
+    )
+
+
+def test_an_uncommitted_edit_reads_as_a_side_by_side_diff(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**The half the spec asks for by name**: "point it at uncommitted state".
+
+    The same builder the review surface uses, so the panel and the review
+    cannot disagree about what changed - a second alignment would be a second
+    answer the first time either was improved.
+    """
+    out = f"fc_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    typed = sql(out, source, body="SELECT id FROM raw")
+    r = file_changes(client, fx, repo["id"], "src/t.sql", content=typed)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["state"] == "modified"
+    assert body["added"] == 1 and body["removed"] == 1, body
+    changed = [row for row in body["rows"] if row["kind"] == "changed"]
+    assert len(changed) == 1
+    assert "SELECT id, total FROM raw" in changed[0]["live_text"]
+    assert "SELECT id FROM raw" in changed[0]["proposed_text"]
+
+
+def test_a_file_with_no_edit_says_unchanged_rather_than_showing_nothing(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """"Nothing has changed" and "there is nothing here" are different answers,
+    and the panel is read for the first."""
+    out = f"same_{uuid.uuid4().hex[:8]}"
+    code = sql(out, source)
+    commit(client, fx, repo["id"], {"src/t.sql": code})
+
+    body = file_changes(client, fx, repo["id"], "src/t.sql", content=code).json()
+    assert body["state"] == "unchanged"
+    assert body["added"] == 0 and body["removed"] == 0
+    assert body["rows"], "an unchanged file still has lines to show"
+    assert all(row["kind"] == "same" for row in body["rows"])
+
+
+def test_a_new_file_and_a_deleted_one_are_each_named(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    out = f"newdel_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    added = file_changes(client, fx, repo["id"], "src/new.sql", content="SELECT 1\n").json()
+    assert added["state"] == "added"
+    assert added["added"] == 1 and added["removed"] == 0
+
+    # `content: null` is a deletion in the working set, which is a change worth
+    # showing rather than an absence.
+    deleted = file_changes(client, fx, repo["id"], "src/t.sql", content=None).json()
+    assert deleted["state"] == "deleted"
+    assert deleted["removed"] == 3 and deleted["added"] == 0, deleted
+
+
+def test_a_file_absent_on_both_sides_is_unchanged_not_deleted(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A path nobody has ever committed and nobody is editing has not been
+    deleted, and saying so would invent a change."""
+    commit(client, fx, repo["id"], {"src/t.sql": sql(f"n_{uuid.uuid4().hex[:6]}", source)})
+    body = file_changes(client, fx, repo["id"], "src/never.sql", content=None).json()
+    assert body["state"] == "unchanged"
+    assert body["rows"] == []
+
+
+def test_comparing_against_an_older_commit(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """p.14's second half: "compare previous versions of the file"."""
+    out = f"older_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    latest = sql(out, source, body="SELECT id FROM raw")
+    commit(client, fx, repo["id"], {"src/t.sql": latest})
+
+    # Against the head: nothing has been typed, so nothing has changed.
+    assert file_changes(client, fx, repo["id"], "src/t.sql",
+                        content=latest).json()["state"] == "unchanged"
+    # Against the first commit: the change that landed in between.
+    older = file_changes(client, fx, repo["id"], "src/t.sql",
+                         content=latest, against_commit_id=first["id"]).json()
+    assert older["state"] == "modified"
+    assert older["added"] == 1 and older["removed"] == 1
+
+
+def test_the_file_history_is_the_commits_that_changed_this_file(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**Not every commit on the branch.** The version list somebody means is
+    the one where the file changed, and most commits said nothing about it -
+    compared by content address, which is what a manifest is for."""
+    out = f"hist_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    # Touches another file entirely: this must not appear.
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source), "README.md": "# a\n"})
+    second = commit(client, fx, repo["id"], {
+        "src/t.sql": sql(out, source, body="SELECT id FROM raw"),
+        "README.md": "# a\n",
+    })
+
+    rows = file_history(client, fx, repo["id"], "src/t.sql").json()
+    assert [r["id"] for r in rows] == [second["id"], first["id"]], rows
+    assert rows[0]["state"] == "modified"
+    assert rows[1]["state"] == "added"
+    assert rows[0]["sha"] != rows[1]["sha"]
+
+
+def test_a_deletion_appears_in_the_file_history(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A file that was removed is a version of its history, and the commit that
+    removed it is the one somebody is looking for."""
+    out = f"gone_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/t.sql": sql(out, source),
+        "src/keep.sql": sql(f"k_{uuid.uuid4().hex[:6]}", source),
+    })
+    removed = commit(client, fx, repo["id"], {
+        "src/keep.sql": sql(f"k_{uuid.uuid4().hex[:6]}", source),
+    })
+
+    rows = file_history(client, fx, repo["id"], "src/t.sql").json()
+    assert rows[0]["id"] == removed["id"]
+    assert rows[0]["state"] == "deleted"
+    assert rows[0]["sha"] is None
+
+
+def test_the_file_history_of_a_path_nobody_committed_is_empty(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    commit(client, fx, repo["id"], {"src/t.sql": sql(f"e_{uuid.uuid4().hex[:6]}", source)})
+    assert file_history(client, fx, repo["id"], "src/never.sql").json() == []
+
+
+def test_the_file_history_is_this_branchs_history(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A branch's history is *its* history, which is what `history` already
+    promises and what this has to keep promising once it filters."""
+    out = f"branchy_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    sandbox(client, fx, repo["id"], "side")
+    on_side = commit(client, fx, repo["id"],
+                     {"src/t.sql": sql(out, source, body="SELECT id FROM raw")},
+                     branch="side")
+
+    on_main = file_history(client, fx, repo["id"], "src/t.sql", branch="main").json()
+    assert [r["id"] for r in on_main] == [first["id"]], on_main
+    on_branch = file_history(client, fx, repo["id"], "src/t.sql", branch="side").json()
+    assert [r["id"] for r in on_branch] == [on_side["id"], first["id"]], on_branch
+
+
+def test_a_path_is_normalised_before_it_is_looked_up(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A path is normalised everywhere else it is used - `commit` does it, and
+    a manifest key is always the normalised form. A reader that skipped it
+    would answer "this file has no history" for a leading slash somebody typed
+    or a link built by hand, which is the least helpful way to be wrong."""
+    out = f"norm_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    rows = file_history(client, fx, repo["id"], "/src/t.sql").json()
+    assert [r["id"] for r in rows] == [made["id"]], rows
+    assert file_changes(client, fx, repo["id"], "./src/t.sql",
+                        content=sql(out, source)).json()["state"] == "unchanged"

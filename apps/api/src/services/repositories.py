@@ -720,6 +720,84 @@ async def history(
     return [dict(r) for r in rows]
 
 
+async def touching(
+    conn: AsyncConnection, *, repo_id: UUID, branch: str, path: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """The commits on this branch that **changed** this file (§287).
+
+    p.14's File Changes helper asks for "comparison with previous versions",
+    and the version list a person means is the one where the file changed -
+    not every commit in the repository, most of which said nothing about it.
+
+    Compared by *content address*, which is what a manifest is for: a commit
+    whose sha for this path differs from its parent's changed the file, and one
+    that matches did not, however much else it touched. A commit with no parent
+    changed it if it holds it at all.
+
+    One query for the whole chain rather than one per commit. A repository here
+    is tens of files and hundreds of commits (decision 0003), so the manifests
+    fit in memory - and a walk that costs a round trip per commit is a walk
+    that gets slower every day the repository is used, which `ancestors` says
+    about itself for the same reason.
+    """
+    normalised = normalise_path(path)
+    head = await branch_head(conn, repo_id=repo_id, name=branch)
+    if head is None or head["head_commit_id"] is None:
+        return []
+    # **`ancestors`, not `history`** - the walk, not the clock. `history`
+    # finishes with `ORDER BY created_at DESC`, and two commits made in one
+    # transaction share a timestamp exactly, so the order it returns for them
+    # is whatever the database felt like. `_commit_rows` says this about itself
+    # two hundred lines up - "two commits made in the same second have an order
+    # in the history and no order in the clock, and the history is the one that
+    # is true" - and a version list that reordered itself between reads would
+    # be the most confusing possible way to be wrong.
+    #
+    # The window is wider than the limit because most commits change nothing
+    # about this file, so a page of *versions* costs several pages of commits.
+    chain_ids = [UUID(str(c)) for c in await ancestors(conn, head["head_commit_id"])]
+    chain_ids = chain_ids[: limit * 4]
+    rows = await fetch_all(
+        conn,
+        "SELECT id, parent_id, manifest, message, created_by, created_at "
+        "FROM code_commits WHERE id = ANY(CAST(:ids AS uuid[]))",
+        {"ids": [str(c) for c in chain_ids]},
+    )
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        data = dict(row)
+        if isinstance(data["manifest"], str):
+            data["manifest"] = json.loads(data["manifest"])
+        by_id[str(data["id"])] = data
+
+    out: list[dict[str, Any]] = []
+    for commit_id in chain_ids:
+        commit_row = by_id.get(str(commit_id))
+        if commit_row is None:  # pragma: no cover - the ids came from this table
+            continue
+        here = commit_row["manifest"].get(normalised)
+        parent_id = commit_row["parent_id"]
+        parent = by_id.get(str(parent_id)) if parent_id else None
+        # **A parent outside the fetched window is not "no parent".** Beyond
+        # the limit the answer is unknown, and treating unknown as absent would
+        # report the oldest commit in the page as having added the file every
+        # time somebody scrolled.
+        if parent_id is not None and parent is None:
+            break
+        before = parent["manifest"].get(normalised) if parent else None
+        if here == before:
+            continue
+        out.append({
+            **{k: commit_row[k] for k in
+               ("id", "parent_id", "message", "created_by", "created_at")},
+            "sha": here,
+            "state": "deleted" if here is None else ("added" if before is None else "modified"),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def resolve_ref(
     conn: AsyncConnection,
     *,

@@ -4388,6 +4388,57 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 287. File Changes, and a diff with one author (this session)
+
+p.14: *"The File Changes helper can be used to view any uncommitted changes to
+the current file, as well as compare previous versions of the file."* The second
+half of `code-repositories.md` build-order item 5, and the pair with §286 that
+the spec calls the two things that make the editor feel like an IDE.
+
+**Both halves turned out to be re-pointings rather than new machinery**, which
+is the shape §286 had too. The diff is `code.side_by_side` — the aligner the
+review surface already uses — pointed at the working file instead of at a
+proposal. A second alignment would be a second answer the first time either was
+improved, and *"what changed"* is the one question a repository must not have
+two answers to.
+
+Three decisions worth keeping:
+
+* **only the working side travels.** The committed side is already on the
+  server; posting both would pay twice for the half it wrote. Same reasoning as
+  §286's overrides;
+* **the version picker offers the commits that *changed* this file**, compared
+  by content address. A commit that touched forty other files and left this one
+  alone is not a version of it, and listing it would bury the two that are. A
+  parent outside the fetched window is *unknown* rather than absent — treating
+  it as absent would report the oldest commit in the page as having added the
+  file, differently on every scroll;
+* **an unchanged file has rows and they are all `same`.** So "is there a diff"
+  asks the *state* rather than the row count: rendering them would put a whole
+  file in a panel sized for a hunk.
+
+Context is three lines either side, which is what `difflib` itself defaults to —
+matching it means the panel and a unified diff of the same file agree about what
+is worth showing. Overlapping context merges rather than repeating, and an
+elided gap says "…", because a diff that silently skips two hundred lines and
+shows the next change flush against the last one reads as one hunk.
+
+**A browser test was wrong and the code was right**, again: typing `\n` before a
+comment at `Control+End` adds a blank line as well, because the committed file
+already ends with a newline and the caret is on an empty last line. `+2` was the
+honest count; the test meant to type one line and had typed two.
+
+**And a real bug, found by a test that failed for a reason I had not guessed.**
+`touching` read its chain from `history`, which finishes with
+`ORDER BY created_at DESC` — and every commit made in one transaction shares a
+timestamp *exactly*, because `now()` is the transaction's start time. So the
+order was whatever the database felt like, and the version list would have
+reordered itself between reads. It walks `ancestors` now. `_commit_rows` says
+this about itself two hundred lines up — "two commits made in the same second
+have an order in the history and no order in the clock, and the history is the
+one that is true" — which is the second time this session that a comment already
+in the file described the bug about to be written.
+
 ### 286. The Problems panel, and telling somebody in time (this session)
 
 p.14: *"The Problems helper tells you about any issues detected in your code.
