@@ -318,6 +318,25 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** The Explorer's Insert (§304): this file with one more input declared.
+   *
+   * **A round trip for what looks like string manipulation, and that is the
+   * point.** The declaration syntax has exactly one writer — `render` in
+   * `transform_declarations.py`, which sits beside the reader because §272 was
+   * two things that had to agree kept in separate files. Doing it here would
+   * make this a second writer, in a different language, that disagrees the
+   * first time the format changes. Nothing is stored: the content is the
+   * editor's own unsaved working set. */
+  insertReference: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { path: string; content: string; alias: string; dataset: string },
+  ) =>
+    request<{ content: string }>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/reference`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   testRun: (wid: string, pid: string, rid: string, runId: string) =>
     request<import("./types").CodeTestRun>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests/${runId}`,

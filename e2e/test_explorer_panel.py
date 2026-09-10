@@ -156,3 +156,114 @@ def test_one_character_is_not_a_search(page, api) -> None:
     page.get_by_test_id("explorer-search").fill("z")
     expect(page.get_by_test_id("explorer-dataset")).to_contain_text(f"seed_{mod.tag}")
     expect(page.get_by_test_id("explorer-empty")).to_have_count(0)
+
+
+# --- Inserting a reference (§304; the row's other half) ----------------------
+
+
+def commit(mod: Module, repo: dict, files: dict[str, str]) -> dict:
+    return mod.api.call(
+        "POST", f"{mod.base}/repositories/{repo['id']}/commits",
+        {"branch": "main", "files": files, "message": "a transform"},
+    )
+
+
+def open_file(page, repo: dict, path: str) -> None:
+    page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=files&file={path}")
+    expect(page.locator(".code-editor-loading")).to_have_count(0, timeout=30000)
+    page.get_by_test_id("explorer-toggle").click()
+
+
+def test_insert_writes_the_declaration_into_the_open_file(page, api) -> None:
+    """`code-repositories.md` §2.4's other half: *"insert a reference"*.
+
+    **The line is written by the server**, and this asserts what lands in the
+    editor. The declaration syntax has exactly one writer — `render`, which
+    lives beside the reader — so the button sends the file and gets it back
+    rather than growing a second writer in another language.
+    """
+    mod = project(api, "Explorer insert")
+    seed(mod)
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"src/daily.sql": "-- output: daily\nSELECT 1\n"})
+
+    open_file(page, repo, "src/daily.sql")
+    page.get_by_test_id(f"explorer-insert-seed_{mod.tag}").click()
+    # The commit bar is the proof it landed in the *working set* rather than
+    # somewhere the editor merely drew.
+    expect(page.locator(".repo-dirty")).to_contain_text("1 file changed", timeout=30000)
+
+    # And this is the proof of *what* landed. Read back through the API rather
+    # than off the screen, because Monaco renders leading and inter-token
+    # whitespace as non-breaking spaces, which `to_contain_text` does not
+    # normalise - an assertion on the rendered text fails on a file that is
+    # exactly right, which is how the first version of this test failed.
+    page.get_by_placeholder("What changed, and why").fill("Read the seed")
+    page.get_by_role("button", name="Commit to main").click()
+    expect(page.locator(".repo-dirty")).to_have_count(0, timeout=30000)
+
+    tree = mod.api.call(
+        "GET", f"{mod.base}/repositories/{repo['id']}/tree?branch=main")
+    content = tree["files"]["src/daily.sql"]
+    assert content == (
+        f"-- output: daily\n"
+        f"-- input: seed_{mod.tag} = seed_{mod.tag}\n"
+        f"SELECT 1\n"
+    ), content
+
+
+def test_a_refusal_is_shown_rather_than_predicted(page, api) -> None:
+    """A file that declares no output yet cannot read anything.
+
+    **The button is offered and the refusal is shown**, deliberately: knowing
+    in advance would mean reading the declaration in the browser, which is a
+    second parser disagreeing with the one that matters. A sentence saying what
+    to do beats a control that is quietly not there.
+    """
+    mod = project(api, "Explorer refusal")
+    seed(mod)
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"src/nothing.sql": "SELECT 1\n"})
+
+    open_file(page, repo, "src/nothing.sql")
+    page.get_by_test_id(f"explorer-insert-seed_{mod.tag}").click()
+    refused = page.get_by_test_id("explorer-refused")
+    expect(refused).to_be_visible(timeout=30000)
+    # It names what comes first rather than saying no.
+    expect(refused).to_contain_text("output")
+
+
+def test_insert_is_not_offered_for_a_file_that_cannot_declare(page, api) -> None:
+    """§214: a control that looks like it works is worse than one absent.
+
+    The suffix is the *only* thing predicted here — the server refuses
+    everything else, and it is the one refusal that needs no parser.
+    """
+    mod = project(api, "Explorer not sql")
+    seed(mod)
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"README.md": "# Notes\n"})
+
+    open_file(page, repo, "README.md")
+    # The row is there, so this is the button's absence rather than the
+    # panel's.
+    expect(page.get_by_test_id(f"explorer-open-seed_{mod.tag}")).to_be_visible(
+        timeout=30000)
+    expect(page.get_by_test_id(f"explorer-insert-seed_{mod.tag}")).to_have_count(0)
+
+
+def test_insert_is_not_offered_for_an_object_type(page, api) -> None:
+    """p.13's Explorer opens a dataset; a transform declares the datasets it
+    reads. An object type is what a dataset *becomes* once the ontology is
+    pointed at it, and no declaration syntax names one."""
+    mod = project(api, "Explorer object type")
+    seed(mod)
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"src/daily.sql": "-- output: daily\nSELECT 1\n"})
+
+    open_file(page, repo, "src/daily.sql")
+    expect(page.get_by_test_id(f"explorer-insert-seed_{mod.tag}")).to_be_visible(
+        timeout=30000)
+    # The object type's row is drawn, and carries Open and not Insert.
+    expect(page.get_by_test_id(f"explorer-open-Seed {mod.tag}")).to_be_visible()
+    expect(page.get_by_test_id(f"explorer-insert-Seed {mod.tag}")).to_have_count(0)

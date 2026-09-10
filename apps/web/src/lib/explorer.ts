@@ -155,3 +155,54 @@ export function sections(
     rows: ofKind(resources, kind),
   }));
 }
+
+/**
+ * Whether Insert is offered for this file at all (§304; p.13).
+ *
+ * **Only the two languages that declare.** The server refuses anything else,
+ * and this is the browser not offering a button whose only outcome is that
+ * refusal — §214's rule, that a control which looks like it works is worse
+ * than one that is absent.
+ *
+ * Everything *else* the server refuses — a file that declares no output yet, a
+ * decorator whose inputs are code, an alias already taken — is deliberately
+ * **not** predicted here. Each needs the file's declaration read, and reading
+ * it here would be a second parser disagreeing with the one that matters. The
+ * button is offered and the refusal is shown, which is a sentence explaining
+ * what to do rather than a control that quietly is not there.
+ */
+export function canInsert(path: string | undefined): boolean {
+  if (!path) return false;
+  return path.endsWith(".sql") || path.endsWith(".py");
+}
+
+/**
+ * The alias to offer for a dataset, before anybody edits it.
+ *
+ * **An alias is a name the transform refers to**, so it is narrower than a
+ * dataset name: `raw-orders` is a fine dataset and `raw-orders` is not a fine
+ * variable. The server refuses the difference (`unwritable`); suggesting a
+ * name that will be refused would make the common case an error message.
+ *
+ * A leading digit is prefixed rather than dropped: `2024_totals` is a dataset
+ * somebody named on purpose, and `024_totals` would be a different thing that
+ * looks like a typo.
+ */
+export function suggestedAlias(datasetName: string): string {
+  const cleaned = datasetName.trim().replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  if (cleaned === "") return "input";
+  return /^[0-9]/.test(cleaned) ? `d_${cleaned}` : cleaned;
+}
+
+/**
+ * What the Insert button says it will do, before it does it.
+ *
+ * Named with both halves, because the alias is the part being *chosen* — the
+ * dataset was chosen by clicking the row — and it is the name the query will
+ * use. A button saying only "Insert" would be asking somebody to accept a
+ * variable name they never saw.
+ */
+export function insertLabel(alias: string, path: string | undefined): string {
+  const language = path?.endsWith(".py") ? "#" : "--";
+  return `Insert ${language} input: ${alias}`;
+}

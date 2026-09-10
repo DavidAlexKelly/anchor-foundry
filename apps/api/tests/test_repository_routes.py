@@ -1124,3 +1124,95 @@ def test_a_withdrawn_proposal_is_not_the_branchs_pull_request(
 
     row = summary(client, fx, repo["id"])["main"]
     assert row["proposal_id"] is None, "a withdrawn proposal is not under review"
+
+
+# --- The Explorer's Insert (§304) -------------------------------------------
+
+
+def reference(client, fx, repo_id, *, path, content, alias, dataset, sub=None):
+    return client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo_id}/reference",
+        headers=hdr(sub or fx.editor_sub),
+        json={"path": path, "content": content, "alias": alias, "dataset": dataset},
+    )
+
+
+def test_the_reference_route_hands_back_a_file_the_reader_accepts(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The seam, and the reason there is a round trip for a pure function.**
+
+    The declaration syntax has exactly one writer, which lives beside the
+    reader; a copy in the browser would be a second writer that disagrees the
+    first time the format changes. This asserts the route's answer *reads
+    back*, rather than that it contains a particular line.
+    """
+    repo = make_repo(client, fx)
+    answer = reference(
+        client, fx, repo["id"],
+        path="src/a.sql", content="-- output: daily\nSELECT 1\n",
+        alias="o", dataset="orders",
+    )
+    assert answer.status_code == 200, answer.text
+    content = answer.json()["content"]
+    assert content == "-- output: daily\n-- input: o = orders\nSELECT 1\n"
+
+
+def test_the_reference_route_stores_nothing(client: TestClient, fx: Fixture) -> None:
+    """The content is the caller's unsaved working set. Writing it here would
+    be committing on their behalf, which is a different button entirely."""
+    repo = make_repo(client, fx)
+    before = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/commits",
+        headers=hdr(fx.editor_sub),
+    ).json()
+    reference(client, fx, repo["id"], path="src/a.sql",
+              content="-- output: daily\nSELECT 1\n", alias="o", dataset="orders")
+    after = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/commits",
+        headers=hdr(fx.editor_sub),
+    ).json()
+    assert before == after
+
+
+def test_a_refusal_comes_back_as_422_with_the_reason_on_it(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The file is the request body and it is the thing that is wrong, so the
+    message is already phrased for whoever wrote it — the same answer the
+    preview route gives one route over."""
+    repo = make_repo(client, fx)
+    answer = reference(client, fx, repo["id"], path="src/a.sql",
+                       content="SELECT 1\n", alias="o", dataset="orders")
+    assert answer.status_code == 422, answer.text
+    assert "output" in answer.json()["detail"]
+
+
+def test_a_viewer_is_not_offered_it(client: TestClient, fx: Fixture) -> None:
+    """§214: a viewer cannot save what this hands back, and a control offered
+    to somebody who would be refused is worse than one that is absent."""
+    repo = make_repo(client, fx)
+    answer = reference(client, fx, repo["id"], path="src/a.sql",
+                       content="-- output: daily\nSELECT 1\n",
+                       alias="o", dataset="orders", sub=fx.viewer_sub)
+    assert answer.status_code == 403, answer.text
+
+
+def test_a_repository_in_another_project_is_not_reachable_through_this_route(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The role is about the project, so the repository has to be in it — a
+    check the pure function itself cannot make, which is why it is here."""
+    repo = make_repo(client, fx)
+    answer = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{uuid.uuid4()}/reference",
+        headers=hdr(fx.editor_sub),
+        json={"path": "src/a.sql", "content": "-- output: daily\nSELECT 1\n",
+              "alias": "o", "dataset": "orders"},
+    )
+    assert answer.status_code == 404, answer.text
+    assert repo["id"] not in answer.text

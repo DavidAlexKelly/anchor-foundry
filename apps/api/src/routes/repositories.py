@@ -678,6 +678,58 @@ async def run_tests(
     return _run_out(row)
 
 
+class ReferenceIn(BaseModel):
+    """The file as it stands, and the dataset to add to it."""
+
+    path: str
+    content: str
+    alias: str
+    dataset: str
+
+
+class ReferenceOut(BaseModel):
+    content: str
+
+
+@router.post("/{repo_id}/reference", response_model=ReferenceOut)
+async def insert_reference(
+    repo_id: UUID,
+    body: ReferenceIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> ReferenceOut:
+    """The Explorer's Insert (§304): this file, with one more input declared.
+
+    **A round trip for a pure function, deliberately.** The declaration syntax
+    has exactly one writer - `transform_declarations.render`, which lives
+    beside the reader for §272's reason - and a copy of it in the browser,
+    where the button is, would be a second writer that disagrees the first time
+    the format changes. The file goes there and comes back.
+
+    Nothing is stored. The content is the caller's own working set, which the
+    editor holds unsaved; writing it here would be committing on their behalf.
+    Editor rather than viewer for §214's reason: a viewer cannot save what this
+    hands back, and a control offered to somebody who would be refused is worse
+    than one that is absent. `repo_id` is in the path and checked, because the
+    project is what the role is about.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+    try:
+        content = declarations.with_input(
+            body.path, body.content, alias=body.alias, dataset=body.dataset
+        )
+    except declarations.DeclarationError as exc:
+        # 422 for the reason the preview route gives one route over: the file
+        # is the request body and it is the thing that is wrong. The message is
+        # already phrased for whoever wrote it.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return ReferenceOut(content=content)
+
+
 @router.get("/{repo_id}/tests/{run_id}", response_model=TestRunOut)
 async def read_test_run(
     repo_id: UUID,

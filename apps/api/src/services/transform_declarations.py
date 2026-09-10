@@ -382,3 +382,135 @@ def read_repository(files: dict[str, str]) -> dict[str, Declaration]:
         producers[declaration.output] = path
         found[path] = declaration
     return found
+
+
+class InsertRefused(DeclarationError):
+    """The reference cannot be added to this file, and the message says why."""
+
+
+def with_input(path: str, source: str, *, alias: str, dataset: str) -> str:
+    """`source` with one more input declared — the Explorer's Insert (§304).
+
+    **The third function in this module, and it is here for the second one's
+    reason.** `render` sits beside `read` because §272 was exactly two things
+    that had to agree kept in different files and each verified alone. A
+    *splicer* is the same hazard one step further out: it has to produce text
+    `read` accepts, and a copy of the syntax living in the browser — where the
+    Insert button is — would be a third writer that disagrees with both the
+    first time anybody changes the format. So the button sends the file here
+    and gets the file back.
+
+    **The whole declaration block is re-rendered, not one line appended.** That
+    is what keeps `render` the only writer, and it has a consequence worth
+    stating rather than discovering: a block written out of order comes back in
+    `render`'s canonical order — output first, inputs sorted by alias. Which is
+    the order everything else in this platform writes, so an inserted reference
+    and an adopted model produce the same bytes.
+
+    Comments in the leading block that are not declarations are kept, in place.
+    """
+    prefix = COMMENT_PREFIX.get(_suffix(path))
+    if prefix is None:
+        raise InsertRefused(
+            f"{path} is not a transform - a reference can be added to a .sql or "
+            ".py file, which are the two that declare what they read"
+        )
+
+    # **The decorator form is refused rather than edited**, and this is a real
+    # boundary rather than a missing case. A `@transform(...)` call's inputs are
+    # *code*: rewriting them means editing an AST and printing it back, which
+    # reformats a file somebody wrote. A one-line comment can be inserted
+    # without touching anything else; a decorator cannot.
+    if _suffix(path) == ".py" and _decorated(source):
+        raise InsertRefused(
+            "this file declares its transform with a @transform decorator, so "
+            f"its inputs are code - add {alias} = {dataset!r} to the decorator's "
+            "inputs yourself, and the Explorer will stay out of the way"
+        )
+
+    declaration = read(path, source)
+    if declaration is None:
+        raise InsertRefused(
+            f"{path} does not declare a transform yet. A transform names what it "
+            f"builds first - add a `{prefix} output: ...` line, and then it has "
+            "somewhere to read from"
+        )
+
+    if alias in declaration.inputs:
+        already = declaration.inputs[alias]
+        raise InsertRefused(
+            f"this file already reads {already!r} as {alias!r}"
+            if already != dataset
+            else f"this file already reads {dataset!r} as {alias!r}"
+        )
+    # **By dataset as well as by alias.** Two aliases for one dataset is legal
+    # SQL and almost always a mistake made by clicking Insert twice, and the
+    # refusal names the alias that already exists so the fix is to use it.
+    for existing_alias, existing in declaration.inputs.items():
+        if existing == dataset:
+            raise InsertRefused(
+                f"this file already reads {dataset!r}, as {existing_alias!r}"
+            )
+
+    block = render(
+        declaration.output, {**declaration.inputs, alias: dataset}, prefix=prefix
+    )
+    return _splice(source, block, prefix)
+
+
+def _suffix(path: str) -> str:
+    dot = path.rfind(".")
+    return path[dot:] if dot != -1 else ""
+
+
+def _decorated(source: str) -> bool:
+    """Whether a Python file declares through `@transform(...)`.
+
+    Parsed rather than searched for, because `# @transform` in a comment and
+    `"@transform"` in a string are both text that a search would find and
+    neither is a declaration.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # Not this function's refusal to make: `read` raises the message that
+        # names the line, and it is called immediately after.
+        return False
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call) and _decorator_name(
+                decorator.func
+            ) == DECORATOR_NAME:
+                return True
+    return False
+
+
+def _splice(source: str, block: str, prefix: str) -> str:
+    """Put `block` where the old declaration lines were.
+
+    The old lines are dropped wherever they sat in the leading comment block
+    and the new block goes in at the position of the first of them, so a file
+    whose declaration was under a comment keeps the comment above it.
+    """
+    pattern_output, pattern_input = _block_patterns(prefix)
+    lines = source.splitlines(keepends=True)
+    kept: list[str] = []
+    at: int | None = None
+    for index, raw in enumerate(lines):
+        line = raw.strip()
+        # The same stopping rule the reader uses, and it has to be the same
+        # one: a `-- output:` inside the body of a query is somebody explaining
+        # a column, and removing it would edit the query.
+        if line and not line.startswith(prefix):
+            kept.extend(lines[index:])
+            break
+        if line and (pattern_output.match(line) or pattern_input.match(line)):
+            if at is None:
+                at = len(kept)
+            continue
+        kept.append(raw)
+    # `read` returned a declaration, so the block held an output line.
+    assert at is not None
+    return "".join(kept[:at]) + block + "".join(kept[at:])

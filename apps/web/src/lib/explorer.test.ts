@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   EXPLORER_KINDS,
+  canInsert,
   emptyReason,
+  insertLabel,
+  suggestedAlias,
   kindLabel,
   needsWorkspaceLevel,
   ofKind,
@@ -180,5 +183,73 @@ describe("the sections", () => {
       resource({ name: "some-app", kind: "canvas_app" as ResourceKind }),
     ]);
     expect(drawn.flatMap((s) => s.rows).map((r) => r.name)).toEqual(["orders"]);
+  });
+});
+
+describe("offering Insert", () => {
+  it("offers it for the two languages that declare", () => {
+    expect(canInsert("src/daily.sql")).toBe(true);
+    expect(canInsert("src/daily.py")).toBe(true);
+  });
+
+  it("does not offer it where the server would only refuse", () => {
+    // §214: a control that looks like it works is worse than one that is
+    // absent.
+    expect(canInsert("README.md")).toBe(false);
+    expect(canInsert("repoSettings.json")).toBe(false);
+  });
+
+  it("does not offer it when no file is open", () => {
+    expect(canInsert(undefined)).toBe(false);
+  });
+
+  it("is not fooled by the suffix appearing inside the name", () => {
+    expect(canInsert("src/py.notes")).toBe(false);
+    expect(canInsert("src/sql.txt")).toBe(false);
+  });
+});
+
+describe("the alias suggested for a dataset", () => {
+  it("passes a name that is already a usable variable through", () => {
+    expect(suggestedAlias("orders")).toBe("orders");
+    expect(suggestedAlias("raw_orders_2024")).toBe("raw_orders_2024");
+  });
+
+  it("replaces what an alias may not hold, because the server refuses it", () => {
+    // `_WRITABLE_ALIAS` is letters, digits and underscore; a dataset name may
+    // also hold dots and dashes. Suggesting one that will be refused would
+    // make the common case an error message.
+    expect(suggestedAlias("raw-orders")).toBe("raw_orders");
+    expect(suggestedAlias("sales.daily")).toBe("sales_daily");
+  });
+
+  it("prefixes a leading digit rather than dropping it", () => {
+    // `024_totals` is a different thing that looks like a typo.
+    expect(suggestedAlias("2024_totals")).toBe("d_2024_totals");
+  });
+
+  it("trims the separators off the ends", () => {
+    expect(suggestedAlias("-orders-")).toBe("orders");
+  });
+
+  it("always suggests something usable", () => {
+    // A name made entirely of characters an alias may not hold would leave
+    // nothing, and an empty alias is refused by the server.
+    expect(suggestedAlias("---")).toBe("input");
+    expect(suggestedAlias("")).toBe("input");
+  });
+});
+
+describe("what the Insert button says", () => {
+  it("names the line it will write, in the file's own comment prefix", () => {
+    expect(insertLabel("orders", "src/daily.sql")).toBe("Insert -- input: orders");
+    expect(insertLabel("orders", "src/daily.py")).toBe("Insert # input: orders");
+  });
+
+  it("names the alias, which is the half being chosen", () => {
+    // The dataset was chosen by clicking the row; the alias is the name the
+    // query will use, and a button saying only "Insert" would be asking
+    // somebody to accept a variable name they never saw.
+    expect(insertLabel("o", "src/daily.sql")).toContain("o");
   });
 });

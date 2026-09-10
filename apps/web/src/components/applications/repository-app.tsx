@@ -78,12 +78,15 @@ import {
 } from "@/lib/branch-columns";
 import {
   EXPLORER_KINDS,
+  canInsert,
   emptyReason as explorerEmptyReason,
+  insertLabel,
   needsWorkspaceLevel,
   openHref as explorerHref,
   sections as explorerSections,
   shouldSearch,
   subtitle as explorerSubtitle,
+  suggestedAlias,
 } from "@/lib/explorer";
 import {
   canCreate as canCreateTag,
@@ -742,7 +745,18 @@ function FilesTab({
               Offered to a viewer too, unlike Problems, Tests and File Changes:
               it reads a listing and writes nothing, so there is no control
               here that a viewer would be refused (§214). */}
-          <ExplorerPanel wid={wid} pid={pid} />
+          <ExplorerPanel
+            wid={wid}
+            pid={pid}
+            rid={rid}
+            path={selected}
+            content={source}
+            readOnly={readOnly}
+            onInsert={(next) =>
+              selected !== undefined &&
+              setEdits((c) => ({ ...c, [selected]: next }))
+            }
+          />
         </div>
       </div>
 
@@ -2424,9 +2438,47 @@ function TestsPanel({
  * Collapsed until asked for, like every panel in this column. It is a round
  * trip, and this one is over a listing that does not change while you type.
  */
-function ExplorerPanel({ wid, pid }: { wid: string; pid: string }) {
+function ExplorerPanel({
+  wid,
+  pid,
+  rid,
+  path,
+  content,
+  readOnly,
+  onInsert,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  /** The open file, or undefined when there is none. */
+  path?: string;
+  content?: string;
+  readOnly: boolean;
+  onInsert: (next: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // **The refusal is shown, not predicted.** Everything the server refuses
+  // beyond the file's suffix — no output declared yet, a decorator whose
+  // inputs are code, an alias already taken — needs the declaration read, and
+  // reading it here would be a second parser disagreeing with the one that
+  // matters (§304).
+  const [refused, setRefused] = useState<string | null>(null);
+
+  const insert = useMutation({
+    mutationFn: (row: { name: string }) =>
+      repoApi.insertReference(wid, pid, rid, {
+        path: path!,
+        content: content!,
+        alias: suggestedAlias(row.name),
+        dataset: row.name,
+      }),
+    onSuccess: (answer) => {
+      setRefused(null);
+      onInsert(answer.content);
+    },
+    onError: (error) => setRefused((error as Error).message),
+  });
 
   // **The query is part of the key, but only once it is a query.** Below the
   // threshold `shouldSearch` sends nothing, so keying on the raw text would
@@ -2472,6 +2524,11 @@ function ExplorerPanel({ wid, pid }: { wid: string; pid: string }) {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search"
           />
+          {refused && (
+            <p className="state error" data-testid="explorer-refused">
+              {refused}
+            </p>
+          )}
           {listing.isPending ? (
             <p className="state">Looking…</p>
           ) : listing.error ? (
@@ -2497,6 +2554,26 @@ function ExplorerPanel({ wid, pid }: { wid: string; pid: string }) {
                         {explorerSubtitle(row) && (
                           <span className="soft">{explorerSubtitle(row)}</span>
                         )}
+                        {/* **Datasets only.** p.13's Explorer is about
+                            opening a dataset; a transform declares the
+                            datasets it reads, and an object type is not one
+                            of those — it is what a dataset becomes after the
+                            ontology is pointed at it, and there is no
+                            declaration syntax that names one. */}
+                        {section.kind === "dataset" &&
+                          canInsert(path) &&
+                          !readOnly && (
+                            <button
+                              type="button"
+                              className="btn quiet"
+                              data-testid={`explorer-insert-${row.name}`}
+                              title={insertLabel(suggestedAlias(row.name), path)}
+                              disabled={insert.isPending}
+                              onClick={() => insert.mutate({ name: row.name })}
+                            >
+                              {insertLabel(suggestedAlias(row.name), path)}
+                            </button>
+                          )}
                         <Link href={explorerHref(row)} data-testid={`explorer-open-${row.name}`}>
                           Open
                         </Link>
