@@ -173,25 +173,46 @@ def test_our_own_suite_is_not_collected_into_a_customers(monkeypatch) -> None:
     can perfectly well live inside a checkout of this repository - at which
     point pytest finds *our* `pytest.ini` and applies it to a customer's run.
 
-    **A survivor is why this test looks like this.** It used to run the tests
-    in the default temp location, which is `/tmp` and therefore under no
-    repository at all, so the guard could be deleted with nothing noticing - a
-    check on a branch the test could not reach. Pointing `tempfile` inside this
-    repository is the configuration that makes it reachable, and it is one a
-    real machine can have.
+    **Two survivors are why this test looks like this**, and the second one
+    found the guard was the wrong guard. It first ran in the default temp
+    location - `/tmp`, under no repository at all - so nothing was above it to
+    inherit and the check could not fire. Given a config file above it, the
+    original `--rootdir` still failed: pytest settles its *rootdir* and its
+    *inifile* separately and `--rootdir` moves only the first, so it walked up
+    and applied the config anyway. `-c` is what pins it.
     """
     import tempfile as tempfile_module
 
-    nested = os.path.join(REPO_ROOT, ".tmp-rootdir-check")
+    nested = os.path.join(REPO_ROOT, ".tmp-config-check")
     os.makedirs(nested, exist_ok=True)
+    # A configuration above the run that would change what it does. `addopts`
+    # rather than something exotic, because it is the setting most likely to be
+    # in a real repository's ini and the easiest to see the effect of.
+    with open(os.path.join(nested, "pytest.ini"), "w") as handle:
+        handle.write("[pytest]\naddopts = -k __never_matches__\n")
     monkeypatch.setattr(tempfile_module, "tempdir", nested)
     try:
         report = run_python_tests({"tests/test_one.py": "def test_it():\n    assert 1\n"})
     finally:
         monkeypatch.undo()
     assert [o.id for o in report.outcomes] == ["tests/test_one.py::test_it"], (
-        "this repository's own configuration reached a customer's run"
+        "a configuration above the run reached a customer's tests"
     )
+
+
+def test_a_repository_that_brings_its_own_config_keeps_it() -> None:
+    """The other half, and the reason the pinning is not just "ignore all
+    configuration": a repository with a `pytest.ini` means it, and a checkout
+    would honour it. Overwriting theirs would be this platform quietly
+    disagreeing with a file they wrote."""
+    report = run_python_tests({
+        "pytest.ini": "[pytest]\naddopts = -k keep_me\n",
+        "tests/test_two.py": (
+            "def test_keep_me():\n    assert 1\n\n\n"
+            "def test_other():\n    assert 1\n"
+        ),
+    })
+    assert [o.id for o in report.outcomes] == ["tests/test_two.py::test_keep_me"]
 
 
 def test_a_run_that_wrote_no_report_is_not_an_empty_pass() -> None:

@@ -24,6 +24,8 @@ from __future__ import annotations
 import os
 import re
 
+import pytest
+
 #: The repo root: this file is `<root>/apps/api/tests/`, so four levels up.
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
@@ -100,6 +102,24 @@ def requirement_lines(path: str) -> list[str]:
     return requirement_lines_in(_text(path))
 
 
+def assert_fully_pinned(label: str, text: str) -> None:
+    """Every requirement in this text is pinned, and the parser can see them.
+
+    **A function rather than an inline assertion**, so the rule can be checked
+    against text as well as against the files (§293). Every requirements file
+    in this repository is correctly pinned, so inlined here the comparison had
+    no case in the tree that would fail it - a mutation loosened `==` to `<=`
+    and nothing noticed.
+    """
+    asked = requirement_lines_in(text)
+    assert asked, f"{label} asks for nothing at all - is it still a requirements file?"
+    found = pins_in(text)
+    assert len(found) == len(asked), (
+        f"{label} has {len(asked)} requirements and {len(found)} parsed as pinned - "
+        "either something is unpinned or the regex has gone stale"
+    )
+
+
 def test_every_requirements_file_pins_everything_it_asks_for() -> None:
     """The presence half, and not a formality.
 
@@ -117,12 +137,7 @@ def test_every_requirements_file_pins_everything_it_asks_for() -> None:
     here, where before it could hide behind two that parsed.
     """
     for path in SHARED:
-        asked = requirement_lines(path)
-        assert asked, f"{path} asks for nothing at all - is it still a requirements file?"
-        assert len(pins(path)) == len(asked), (
-            f"{path} has {len(asked)} requirements and {len(pins(path))} parsed as pinned - "
-            "either something is unpinned or the regex has gone stale"
-        )
+        assert_fully_pinned(path, _text(path))
 
 
 def test_the_shared_venv_is_possible() -> None:
@@ -231,13 +246,16 @@ def test_an_unpinned_requirement_is_caught() -> None:
     with nothing noticing. A mutation survived exactly that way (§293). These
     are the same two functions, over text.
     """
-    good = "pytest==8.3.3\nmoto[server]==5.0.13\n"
-    assert len(pins_in(good)) == len(requirement_lines_in(good)) == 2
+    assert_fully_pinned("a good file", "pytest==8.3.3\nmoto[server]==5.0.13\n")
 
-    # A range, the ordinary way a pin stops being one.
-    loose = "pytest==8.3.3\nrequests>=2.0\n"
-    assert len(requirement_lines_in(loose)) == 2
-    assert len(pins_in(loose)) == 1, "a range is not a pin"
+    # A range, the ordinary way a pin stops being one - and the case the real
+    # files cannot supply, which is the whole reason this test exists.
+    with pytest.raises(AssertionError, match="unpinned or the regex"):
+        assert_fully_pinned("a loose file", "pytest==8.3.3\nrequests>=2.0\n")
+
+    # And an empty file is its own answer, not a vacuous pass.
+    with pytest.raises(AssertionError, match="asks for nothing at all"):
+        assert_fully_pinned("an empty file", "# only a comment\n")
 
     # Comments and includes are not requirements and must not be counted as
     # unpinned ones, or the guard fails on every file that has either.

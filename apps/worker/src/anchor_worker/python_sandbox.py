@@ -239,6 +239,22 @@ def run_python_tests(
             with open(target, "w") as handle:
                 handle.write(content)
 
+        # **The configuration this run obeys, pinned to this directory.**
+        # Written only when the repository did not bring its own: a repository
+        # with a `pytest.ini` means it, and a checkout would honour it.
+        #
+        # `--rootdir` was here first and did not do this, which a surviving
+        # mutant is what proved (§293). pytest determines its *rootdir* and its
+        # *inifile* separately, and `--rootdir` moves only the first - so it
+        # still walked upwards, found whatever config was above the working
+        # directory, and applied it. `TMPDIR` is the user's to set, so "above
+        # the working directory" can perfectly well be a checkout of this
+        # repository. `-c` is what pins it.
+        config_path = os.path.join(tmp, "pytest.ini")
+        if not os.path.exists(config_path):
+            with open(config_path, "w") as handle:
+                handle.write("[pytest]\n")
+
         report_path = os.path.join(tmp, "_report.xml")
         # **No `PYTHONPATH`, and a mutant is why.** It used to be set to `tmp`
         # so that a test could import the transform under test by its
@@ -260,10 +276,7 @@ def run_python_tests(
                  # whose job is to open the failing test needs the file it is
                  # in, so ask for the format that says.
                  "-o", "junit_family=xunit1",
-                 # **Rooted here, so nothing of ours is collected.** Without it
-                 # pytest walks upwards looking for a config file and can find
-                 # this repository's own - which would run our suite inside a
-                 # customer's, an outcome no message would explain.
+                 "-c", config_path,
                  "--rootdir", tmp, f"--junitxml={report_path}", tmp],
                 # **Load-bearing, not tidiness.** `python -m pytest` prepends
                 # the invocation directory to `sys.path`, so this is what makes
