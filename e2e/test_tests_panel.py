@@ -219,6 +219,11 @@ def test_the_button_does_not_invite_a_second_press_while_a_run_is_in_flight(
 def open_checks(page, repo: dict, branch: str = "main") -> None:
     page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=checks&branch={branch}")
     expect(page.get_by_test_id("checks-tab")).to_be_visible(timeout=30000)
+    # **Visible, not merely present**, and a survivor is why. `to_contain_text`
+    # matches an element nobody can see, so every assertion below passed with
+    # the whole row hidden - a check that could not fail for the one failure
+    # that matters most here, the tests not being on the tab at all.
+    expect(page.get_by_test_id("checks-tests")).to_be_visible()
 
 
 def test_the_checks_tab_says_what_the_unit_tests_did(page, api) -> None:
