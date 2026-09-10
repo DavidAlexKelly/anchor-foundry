@@ -186,3 +186,97 @@ def run_python_transform(
         )
     schema = [ColumnSchema(name=c["name"], data_type=c["data_type"]) for c in payload["schema"]]
     return schema, row_count
+
+
+# ---- unit tests (§293; code-repositories.md §8, p.13-14) ---------------------
+TEST_TIMEOUT_S = 300
+
+#: pytest's own discovery rule, and deliberately not a new one. A repository's
+#: authors already know it, `--junitxml` reports against it, and a second rule
+#: here would mean a file this platform called a test and pytest did not - or
+#: the reverse, which is worse, because it runs.
+TEST_FILE_PREFIX = "test_"
+TEST_FILE_SUFFIX = "_test.py"
+
+
+def is_test_file(path: str) -> bool:
+    """Whether pytest would collect this file, by pytest's rule."""
+    if not path.endswith(".py"):
+        return False
+    name = path.rsplit("/", 1)[-1]
+    return name.startswith(TEST_FILE_PREFIX) or name.endswith(TEST_FILE_SUFFIX)
+
+
+def run_python_tests(
+    files: dict[str, str],
+    timeout_s: int = TEST_TIMEOUT_S,
+) -> "unit_test_report.TestReport":
+    """Run a repository's unit tests over the files it was given.
+
+    **The working set, not a commit** - the same choice §286's Problems panel
+    made, and for the same reason: the question an author asks is "does what I
+    just typed pass", and a runner that could only answer for committed code
+    would be answering a different one.
+
+    The directory holds the repository's files, `anchor.py`, and nothing else.
+    `PYTHONPATH` is that directory, so a test imports the transform under test
+    by the path it has in the repository - `from src.daily import build` - which
+    is what the author would write and what a checkout would do.
+
+    Failures of the *tests* come back in the report. Failures of the *run* -
+    pytest missing, a timeout, an unreadable report - are raised, because a
+    caller that showed them as "your tests failed" would send the wrong person
+    looking. That is `transform_runner.py`'s result-file distinction, in the
+    shape this function has.
+    """
+    from . import unit_test_report
+
+    with tempfile.TemporaryDirectory() as tmp:
+        user_api.write_into(tmp)
+        for path, content in files.items():
+            target = os.path.join(tmp, path)
+            os.makedirs(os.path.dirname(target) or tmp, exist_ok=True)
+            with open(target, "w") as handle:
+                handle.write(content)
+
+        report_path = os.path.join(tmp, "_report.xml")
+        env = {"PATH": "/usr/bin:/bin", "HOME": tmp, "PYTHONPATH": tmp,
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "--no-header",
+                 "-p", "no:cacheprovider",
+                 # **`xunit1`, for `file` and `line`.** pytest 8's default
+                 # family writes a dotted `classname` and nothing else, so the
+                 # only way back to a path is to guess that dots are slashes -
+                 # which is wrong the moment a test lives in a class. A panel
+                 # whose job is to open the failing test needs the file it is
+                 # in, so ask for the format that says.
+                 "-o", "junit_family=xunit1",
+                 # **Rooted here, so nothing of ours is collected.** Without it
+                 # pytest walks upwards looking for a config file and can find
+                 # this repository's own - which would run our suite inside a
+                 # customer's, an outcome no message would explain.
+                 "--rootdir", tmp, f"--junitxml={report_path}", tmp],
+                cwd=tmp,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                preexec_fn=_limit_resources if os.name == "posix" else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise DatasetEngineError(
+                f"the tests exceeded the {timeout_s}s time limit"
+            ) from exc
+
+        if not os.path.exists(report_path):
+            # pytest itself could not run, or died before writing. Its own
+            # stderr is the useful sentence - "No module named pytest" names
+            # the problem and "your tests failed" does not.
+            tail = (result.stderr or result.stdout or "").strip().splitlines()
+            raise DatasetEngineError(
+                "the test run produced no report: " + (tail[-1] if tail else "no output")
+            )
+        with open(report_path) as handle:
+            return unit_test_report.parse_junit(handle.read())

@@ -66,16 +66,45 @@ def pins(path: str) -> dict[str, str]:
     return found
 
 
-def test_every_requirements_file_pins_something() -> None:
+def requirement_lines(path: str) -> list[str]:
+    """Every line in the file that is asking for a package.
+
+    Comments, blank lines and `-r` includes are not requirements; anything else
+    is, whether or not `PIN` can read it.
+    """
+    lines = []
+    with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.split("#")[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            lines.append(line)
+    return lines
+
+
+def test_every_requirements_file_pins_everything_it_asks_for() -> None:
     """The presence half, and not a formality.
 
     Every assertion below compares parsed files, and a comparison between two
     empty dicts passes. A regex gone stale — a reformatted file, a switch to
     `>=` — would make this module vacuous while it reported green, which is
     §198's shape exactly.
+
+    **Counted exactly, rather than "at least two" (§293).** That was the
+    original guard and it was a heuristic standing in for "the regex still
+    works": it broke the moment a file honestly had one requirement, when
+    `pytest` moved out of the worker's dev pins and into its runtime ones. A
+    count against the requirement lines actually in the file says the same
+    thing without the guess, and says more — a *single* unpinned line now fails
+    here, where before it could hide behind two that parsed.
     """
     for path in SHARED:
-        assert len(pins(path)) >= 2, f"{path} parsed to no pins - the regex has gone stale"
+        asked = requirement_lines(path)
+        assert asked, f"{path} asks for nothing at all - is it still a requirements file?"
+        assert len(pins(path)) == len(asked), (
+            f"{path} has {len(asked)} requirements and {len(pins(path))} parsed as pinned - "
+            "either something is unpinned or the regex has gone stale"
+        )
 
 
 def test_the_shared_venv_is_possible() -> None:

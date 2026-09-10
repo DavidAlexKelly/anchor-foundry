@@ -4388,6 +4388,59 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 293. Running a repository's unit tests (this session)
+
+Item 6's first part, on the mechanism §292 unblocked. `run_python_tests` takes
+the **working set** — the same choice §286's Problems panel made, because the
+question an author asks is "does what I just typed pass", and a runner that
+could only answer for committed code would answer a different one — writes the
+files and `anchor.py` into a directory, runs pytest over it, and reads the
+result out of pytest's own `--junitxml` report.
+
+**A run with no tests is not a pass**, and that is the assertion the rest hangs
+off. "Nothing failed" and "everything passed" are the same number, and
+`code-repositories.md` §10 names this feature specifically: *"a failing test is
+reported as failing. A test suite that cannot fail is the exact thing this repo
+does not accept."* `TestReport.ok` is `bool(outcomes) and failed == 0`, so a
+repository nobody has written a test in reads as what it is.
+
+**A failing test and a broken run are different problems**, and only the first
+is the author's. Failures come back in the report; pytest missing, a timeout, a
+report that will not parse — those are raised. Same distinction
+`transform_runner.py` keeps with `result.json`, and it decides who goes looking.
+
+**`xunit1`, for `file` and `line`.** pytest 8's default report family writes a
+dotted `classname` and nothing else, so the only route back to a path is to
+guess that dots are slashes — wrong the moment a test lives in a class. A panel
+whose job is to open the failing test needs the file, so the run asks for the
+format that says. The line is converted to 1-based at the parse, because every
+editor counts from 1 and pytest's report does not; converting at the boundary
+means the panel is not a second place that knows.
+
+**`--rootdir`, which is not decoration.** Without it pytest walks upwards
+looking for a config file, and a temp directory on a developer machine sits
+under this repository — so it can find *our* `pytest.ini` and run our suite
+inside a customer's, an outcome no message would explain.
+
+**And pytest moved into the worker's runtime pins.** The Dockerfile installs
+`requirements.txt` alone and the transform runner task uses that same image
+(`infra/cdk/src/constructs/services.ts`), so left in `requirements-dev.txt` this
+would have worked in every development run and failed in every deployment with
+"No module named pytest" — the exact shape §292 had just finished fixing one
+floor down.
+
+That move broke `test_dependency_pins.py`, and the break was worth having:
+its presence check was `len(pins(path)) >= 2`, a heuristic standing in for "the
+regex still works", and the worker's dev file honestly has one requirement now.
+Counting pins against the requirement *lines* in the file says the same thing
+exactly, and says more — a single unpinned line now fails there, where before it
+could hide behind two that parsed.
+
+**One naming fix worth recording**, because it was our own suite doing the thing
+this unit is about: the parser was `test_report.py`, so pytest collected our
+*source module* as a test file and warned that it could not collect
+`TestOutcome`. Renamed `unit_test_report.py`.
+
 ### 292. The module customer code imports, and the runner that could not run it (this session)
 
 Build-order item 6 is "unit tests, then the Tests panel, then test output in the
