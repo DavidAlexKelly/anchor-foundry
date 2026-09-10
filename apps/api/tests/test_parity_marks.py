@@ -78,10 +78,15 @@ QUOTED_PATH = re.compile(r"`([^`\s]+(?:" + "|".join(
 
 PDF_NAME = re.compile(r"foundry_[a-z0-9-]+\.pdf")
 
-#: `foundry_ontology.pdf` (172 pp)` and `foundry_workshop.pdf`, 718 pages` -
-#: both forms are in use, in headers written a month apart.
+#: `foundry_ontology.pdf` (172 pp)` and `docs/pal/foundry_workshop.pdf`, 718
+#: pages` — both forms are in use, in headers written a month apart, and the
+#: **optional directory prefix is not cosmetic**: without it this pattern read
+#: only the bare-name form, which is the one the two multi-source documents
+#: happen to use. All four `**Source:**` headers write the path, so the check
+#: silently covered none of them. Found by mutation — nudging a declared count
+#: in `code-repositories.md` changed nothing.
 DECLARED_PAGES = re.compile(
-    r"`(foundry_[a-z0-9-]+\.pdf)`[^\n]{0,4}?\(?(\d+)\s*(?:pp|pages)\b")
+    r"`(?:[\w./-]*/)?(foundry_[a-z0-9-]+\.pdf)`[^\n]{0,4}?\(?(\d+)\s*(?:pp|pages)\b")
 
 #: A page citation, optionally qualified by the source's slug the way
 #: `ontology.md`'s own header asks for: "Citations name the file:
@@ -342,6 +347,12 @@ def test_the_checks_say_no_when_a_citation_is_wrong() -> None:
     # Two on one line are two problems, not one.
     assert len(unresolved_paths(
         "| ✅ | `e2e/no_such.py` and `apps/api/no_such.py` |", files)) == 2
+    # A citation that is a *fragment* of a real name does not pass by ending
+    # inside it. `ags.py` is `tags.py` with the first character lost, which is
+    # what a bad edit looks like, and matching on a bare suffix would resolve
+    # it against `e2e/test_tags.py` and report nothing. Found by mutation:
+    # dropping the path-separator anchor from `resolves` broke nothing.
+    assert len(unresolved_paths("| ✅ | `ags.py` |", files)) == 1
 
     # A page past the end of the single source this fragment names.
     over = unreachable_pages(
