@@ -1392,7 +1392,7 @@ button { font: inherit; cursor: pointer; }
 .repo-explorer-body h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
 .repo-explorer-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .repo-explorer-list li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
-.repo-explorer-name { font-family: var(--mono, monospace); }
+.repo-explorer-name { font-family: var(--font-mono); }
 .repo-explorer-list li a { margin-left: auto; }
 .repo-problems-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
 .repo-problem-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; }
