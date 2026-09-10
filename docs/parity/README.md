@@ -241,3 +241,19 @@ Each spec ends with the acceptance tests for its area. Two rules for all of them
 
 - A widget is not done because it renders. It is done when its **documented configuration options** work, and when a test drives one of them and fails if it is removed.
 - A feature that Foundry documents as refusing something is not done until **our version refuses it too**, with a test that removes the refusal and goes red.
+
+### And the same standard applied to these documents (§302)
+
+The rule above was held over the code and not over the pages holding the code to it. Five specifications, 204 rows marked ✅, 837 page citations into `docs/pal/` — and **nothing had ever opened one**. A test could be renamed, a PDF replaced with a longer edition, a page number mistyped, and every table would go on saying exactly what it said before.
+
+`apps/api/tests/test_parity_marks.py` resolves what is resolvable, on every run of the API suite:
+
+- a backticked path on a ✅ row is a file that exists;
+- the page counts these headers declare are the PDFs' real lengths;
+- every cited page exists in a source the citing document names.
+
+It found one: `ontology.md` cited p.582 and p.583 against a source set whose longest PDF is 274 pages. The pages are real and the sentence about them is right — they are `foundry_workshop.pdf`'s, and they do name Map, Metric Card and Object Table — but a reader following the citation as written would have opened a 274-page PDF and found nothing. Qualified, and the source named in the header so it resolves.
+
+**Three limits, stated rather than discovered later.** It checks *names*, not behaviour: a row citing `e2e/test_tags.py` is checked as far as the file being there, and whether it tests tags was §299's mutation run to answer. An unqualified citation in a multi-source document only has to fit that document's *longest* source, which is why the qualified form exists and why `ontology.md`'s header asks for it. And **`§NNN` is deliberately not checked** — a section number is a reference into a narrative, eleven of the ones cited by finished rows appear in no source file and eight in no commit message either, and enforcing it would mean grandfathering those eight. A grandfather list is the thing a check rots into before someone deletes it.
+
+A ✅ row should say what made it true. Not every one does — the earliest predate the convention — so the rule is a floor rather than a requirement, and the floor is what stops the habit quietly ending.
