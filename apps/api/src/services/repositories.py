@@ -841,3 +841,84 @@ def _slugify(name: str) -> str:
     if not re.match(r"^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$", slug):
         raise ValueError(f"cannot derive a repository slug from {name!r}")
     return slug
+
+
+# ---- the Branches tab's two columns (§300; p.16) -------------------------------
+#: How a branch's checks are summarised for the list. Deliberately the words the
+#: Checks tab already uses on a *row*, because somebody reading the list and
+#: then opening the tab should not have to translate.
+CHECKS_PASSED = "passed"
+CHECKS_FAILED = "failed"
+CHECKS_NONE = "none"
+
+
+async def branch_summary(
+    conn: AsyncConnection, *, repo_id: UUID
+) -> list[dict[str, Any]]:
+    """Every branch, with what p.16's two columns need.
+
+        "The 'Checks' column indicates whether or not the automatic code checks
+         have passed for a branch. The 'Pull request' column tells you about any
+         existing Pull requests in a branch and lets you create new Pull
+         requests." (p.16)
+
+    **Both columns are about the branch's *head commit*, and that is a
+    divergence worth stating.** Foundry's pull request tracks a branch; ours
+    names an immutable commit (db 0039, and §285 recorded the same difference
+    about checks). So "this branch's pull request" means *a proposal over the
+    commit this branch is currently on* — which is exactly what "Propose
+    changes" would create, and which stops being the branch's PR the moment
+    somebody commits again. That is the honest reading of our model rather than
+    an approximation of Foundry's: a proposal here is a review of a snapshot,
+    and a branch that has moved is a different snapshot.
+
+    **One query, not one per branch.** A repository with twenty branches would
+    otherwise open the tab with twenty round trips, which is how a column
+    becomes something people wait for rather than glance at.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT b.id, b.name, b.head_commit_id,
+               p.id            AS proposal_id,
+               CAST(p.state AS text) AS proposal_state,
+               p.summary       AS proposal_summary,
+               -- The worst check wins, and `fail` and `error` are both worst:
+               -- a check that could not run says as little about the branch as
+               -- one that ran and failed, and a column that showed the second
+               -- as a pass would be the quietest way to merge broken code.
+               bool_or(c.status IN ('fail', 'error')) AS any_failed,
+               count(c.id)     AS check_count
+          FROM code_branches b
+          LEFT JOIN code_proposals p
+                 ON p.source_commit_id = b.head_commit_id
+                AND p.state = 'open'
+          LEFT JOIN code_proposal_checks c ON c.proposal_id = p.id
+         WHERE b.repo_id = :rid
+         GROUP BY b.id, b.name, b.head_commit_id, p.id, p.state, p.summary
+         ORDER BY b.name
+        """,
+        {"rid": str(repo_id)},
+    )
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        checked = int(row["check_count"])
+        out.append({
+            "id": row["id"],
+            "name": row["name"],
+            "head_commit_id": row["head_commit_id"],
+            # **No checks is `none`, never `passed`.** "Nothing failed" and
+            # "everything passed" are the same number, and a green tick over a
+            # branch nothing has run against is the same lie §295 refuses about
+            # a test suite that ran nothing.
+            "checks": (
+                CHECKS_NONE if checked == 0
+                else CHECKS_FAILED if row["any_failed"]
+                else CHECKS_PASSED
+            ),
+            "proposal_id": row["proposal_id"],
+            "proposal_state": row["proposal_state"],
+            "proposal_summary": row["proposal_summary"],
+        })
+    return out

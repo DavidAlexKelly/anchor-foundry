@@ -68,6 +68,13 @@ import {
 // Aliased where they collide with this file's other vocabulary: `subtitle` and
 // `emptyReason` are words several of these modules use about their own subject.
 import {
+  checksAreAProblem,
+  checksLabel,
+  proposalStateLabel,
+  proposeProblem,
+  pullRequestSlot,
+} from "@/lib/branch-columns";
+import {
   canCreate as canCreateTag,
   deleteQuestion as tagDeleteQuestion,
   emptyReason as tagsEmptyReason,
@@ -115,6 +122,7 @@ import {
 import type {
   PublishPlan,
   RepositoryBranch,
+  RepositoryBranchSummary,
   RepositoryComparison,
   RepositoryFileChanges,
   RepositoryFileVersion,
@@ -292,6 +300,15 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           pending={branches.isPending}
           onSwitch={(name) =>
             setParams({ branch: name, commit: undefined, file: undefined, tab: "files" })
+          }
+          onOpenProposal={(id) => setParams({ tab: "pulls", proposal: id })}
+          onSwitchToPublish={(name) =>
+            // p.16's "Propose changes". The publish tab is where a proposal is
+            // made here, so the button takes you there on that branch rather
+            // than creating one from a list row - a proposal needs a summary,
+            // and a button that made one without asking would put an empty
+            // review in front of somebody.
+            setParams({ branch: name, tab: "publish", commit: undefined })
           }
         />
       )}
@@ -1026,6 +1043,8 @@ function BranchesTab({
   branches,
   pending,
   onSwitch,
+  onOpenProposal,
+  onSwitchToPublish,
 }: {
   wid: string;
   pid: string;
@@ -1035,6 +1054,8 @@ function BranchesTab({
   branches: RepositoryBranch[] | undefined;
   pending: boolean;
   onSwitch: (name: string) => void;
+  onOpenProposal: (id: string) => void;
+  onSwitchToPublish: (name: string) => void;
 }) {
   const queryClient = useQueryClient();
   const known = useMemo(() => branches ?? [], [branches]);
@@ -1045,6 +1066,15 @@ function BranchesTab({
   // of this tab's state that describes a *question* rather than a form being
   // filled in. The branch being created is not - a half-typed name is not
   // something to share, and neither is a note about what just happened.
+  const summaries = useQuery({
+    queryKey: ["repo-branch-summary", rid],
+    queryFn: () => repoApi.branchSummary(wid, pid, rid),
+  });
+  const columns = useMemo(
+    () => new Map((summaries.data ?? []).map((row) => [row.name, row])),
+    [summaries.data],
+  );
+
   const url = useUrlState();
   const base = url.get("base") ?? defaultBranch;
   const head = url.get("head") ?? "";
@@ -1139,6 +1169,16 @@ function BranchesTab({
               <code className="repo-sha">
                 {b.head_commit_id ? b.head_commit_id.slice(0, 8) : "no commits"}
               </code>
+              {/* p.16's two columns. Rendered from one request rather than one
+                  per branch - twenty branches would otherwise be twenty round
+                  trips, which is how a column becomes something people wait for
+                  rather than glance at. */}
+              <BranchColumns
+                summary={columns.get(b.name)}
+                defaultBranch={defaultBranch}
+                onOpenProposal={onOpenProposal}
+                onPropose={onSwitchToPublish}
+              />
               <button
                 type="button"
                 className="repo-branch-delete"
@@ -1291,6 +1331,76 @@ function BranchesTab({
       {note && <p className="state">{note}</p>}
       {failure && <p className="state error">{failure}</p>}
     </div>
+  );
+}
+
+
+/** p.16's Checks and Pull request columns, for one branch row (§300).
+ *
+ *     "If you don't see the button to create a new Pull request, it means that
+ *      a Pull request already exists for a branch." (p.16-17)
+ *
+ * That is a rule rather than a description: the button and the state occupy the
+ * same slot, and which one is there says which situation you are in. The
+ * wording rules are in `lib/branch-columns.ts`.
+ */
+function BranchColumns({
+  summary,
+  defaultBranch,
+  onOpenProposal,
+  onPropose,
+}: {
+  summary: RepositoryBranchSummary | undefined;
+  defaultBranch: string;
+  onOpenProposal: (id: string) => void;
+  onPropose: (branch: string) => void;
+}) {
+  // Absent while the one request is in flight, and nothing is drawn: a column
+  // that guessed "not run" and then corrected itself would be worse than one
+  // that arrives a moment later, because the guess is the answer somebody acts
+  // on.
+  if (summary === undefined) return null;
+
+  const slot = pullRequestSlot(summary);
+  const blocked = proposeProblem(summary, defaultBranch);
+  return (
+    <>
+      <span
+        className={checksAreAProblem(summary) ? "chip brass" : "soft"}
+        data-testid={`branch-checks-${summary.name}`}
+      >
+        {checksLabel(summary)}
+      </span>
+      {slot.kind === "open" && (
+        <button
+          type="button"
+          className="btn quiet"
+          style={{ padding: "2px 8px", fontSize: 11 }}
+          data-testid={`branch-pr-${summary.name}`}
+          title={slot.summary}
+          onClick={() => onOpenProposal(slot.id)}
+        >
+          {proposalStateLabel(slot.state)}
+        </button>
+      )}
+      {slot.kind === "propose" && (
+        <button
+          type="button"
+          className="btn quiet"
+          style={{ padding: "2px 8px", fontSize: 11 }}
+          data-testid={`branch-propose-${summary.name}`}
+          // Titled rather than hidden: p.16 makes the *absence* of this button
+          // mean "a pull request already exists", so hiding it for a second
+          // reason would make that sentence untrue. Disabled with the reason on
+          // it says no and says why.
+          title={blocked ?? undefined}
+          disabled={blocked !== null}
+          onClick={() => onPropose(summary.name)}
+        >
+          Propose changes
+        </button>
+      )}
+    </>
   );
 }
 

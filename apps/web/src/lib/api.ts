@@ -268,6 +268,13 @@ export const repositories = {
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,
     ),
+  /** Every branch with p.16's two columns, in one request (§300). Twenty
+   * branches would otherwise be twenty round trips, which is how a column
+   * becomes something people wait for rather than glance at. */
+  branchSummary: (wid: string, pid: string, rid: string) =>
+    request<import("./types").RepositoryBranchSummary[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/branch-summary`,
+    ),
   /** This repository's tags, newest first (§299; p.17). */
   tags: (wid: string, pid: string, rid: string) =>
     request<import("./types").RepositoryTag[]>(

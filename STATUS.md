@@ -4441,6 +4441,50 @@ this unit is about: the parser was `test_report.py`, so pytest collected our
 *source module* as a test file and warned that it could not collect
 `TestOutcome`. Renamed `unit_test_report.py`.
 
+### 300. The Branches tab's two columns, and item 7 closed (this session)
+
+p.16's Checks and Pull request columns.
+
+**The Pull request column is a rule, not a display.** p.16–17: *"If you don't
+see the button to create a new Pull request, it means that a Pull request
+already exists for a branch."* The button and the state occupy one slot, and
+which of them is there is how you know which situation you are in — so a screen
+showing both would be answering a question the reader did not have to ask.
+
+That has a consequence worth stating: the default branch's button is **disabled
+with the reason on it rather than hidden**. Applying a proposal lands its commit
+on the default branch (§283), so proposing that branch into itself is a review
+of nothing — but hiding the button for that second reason would make p.16's
+sentence untrue.
+
+**Both columns are about the branch's head commit, which is a divergence.**
+Foundry's pull request tracks a branch; ours names an immutable commit (db
+0039), and §285 already recorded the same difference about checks. So "this
+branch's pull request" means a proposal over the commit the branch is currently
+on — exactly what "Propose changes" would create — and it stops being the
+branch's PR the moment somebody commits again. That is the honest reading of our
+model rather than an approximation of Foundry's, and an API test asserts the
+disappearance rather than leaving it described.
+
+**Our three states are translated into p.17's three**: `applied` shows as
+**Merged**, `withdrawn` as **Closed**. Renaming rather than showing ours,
+because on a screen whose shape is borrowed from p.17 the platform's own
+vocabulary would make the two harder to compare, not easier.
+
+**`not run` is never a tick**, which is the third screen this session to need
+that sentence — after the Tests panel and the Checks tab. It is the column
+somebody glances at before merging, and it is the one most likely to be trusted
+without opening anything.
+
+**One request for every branch.** A repository with twenty branches would
+otherwise open the tab with twenty round trips, which is how a column becomes
+something people wait for rather than glance at. And nothing is drawn while it
+is in flight: a column that guessed "not run" and corrected itself would be
+worse than one that arrives a moment later, because the guess is what somebody
+acts on.
+
+Build-order item 7 is closed.
+
 ### 299. Tags, and the first reading of repoSettings.json (this session)
 
 Item 7's largest piece. p.17: tags are *"like immutable branches"*, marking a

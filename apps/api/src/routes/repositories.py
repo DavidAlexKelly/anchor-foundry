@@ -709,6 +709,41 @@ async def list_test_runs(
     return [_run_out(r) for r in rows]
 
 
+class BranchSummaryOut(BaseModel):
+    id: UUID
+    name: str
+    head_commit_id: UUID | None = None
+    #: passed | failed | none. **`none` is not `passed`** - "nothing failed" and
+    #: "everything passed" are the same number, and a green tick over a branch
+    #: nothing has run against is the lie §295 refuses about a test suite.
+    checks: str
+    #: The open proposal over this branch's *head commit*, if there is one.
+    #: p.16 puts a "Propose changes" button where there is not - the browser
+    #: draws that from the absence rather than from a second field.
+    proposal_id: UUID | None = None
+    proposal_state: str | None = None
+    proposal_summary: str | None = None
+
+
+@router.get("/{repo_id}/branch-summary", response_model=list[BranchSummaryOut])
+async def branch_summary(
+    repo_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[BranchSummaryOut]:
+    """p.16's Checks and Pull request columns, in one request.
+
+    A repository with twenty branches would otherwise open the tab with twenty
+    round trips, which is how a column becomes something people wait for rather
+    than glance at.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await repo_service.branch_summary(conn, repo_id=repo_id)
+    return [BranchSummaryOut(**r) for r in rows]
+
+
 class TagIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     #: p.17: "from the current version of a branch, or from any arbitrary

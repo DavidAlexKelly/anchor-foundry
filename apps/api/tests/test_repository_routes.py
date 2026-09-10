@@ -960,3 +960,105 @@ def test_a_regex_long_enough_to_be_a_weapon_is_not_run(
         json={"name": "2.2.2"},
     )
     assert made.status_code == 201, made.text
+
+
+# ---- p.16's Checks and Pull request columns (§300) -----------------------------
+#: A file that actually declares, because a proposal cannot be made over a
+#: commit with nothing to publish - the publish path refuses it, which is right
+#: and which a fixture of `SELECT 1` walks straight into.
+def declaring(name: str) -> str:
+    return f"-- output: {name}\nSELECT 1 AS id\n"
+
+
+def summary(client: TestClient, fx: Fixture, repo_id: str) -> dict:
+    r = client.get(f"{base(fx)}/{repo_id}/branch-summary", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return {row["name"]: row for row in r.json()}
+
+
+def test_a_branch_with_nothing_run_against_it_is_not_reported_as_passing(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**`none`, never `passed`.** "Nothing failed" and "everything passed" are
+    the same number, and a green tick over a branch nothing has run against is
+    the same lie §295 refuses about a test suite that ran nothing — arriving on
+    the column somebody glances at before merging."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"})
+
+    rows = summary(client, fx, repo["id"])
+    assert rows["main"]["checks"] == "none"
+    assert rows["main"]["proposal_id"] is None
+
+
+def test_the_pull_request_column_finds_the_proposal_over_the_branchs_head(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.16: "tells you about any existing Pull requests in a branch".
+
+    **Ours names an immutable commit rather than a branch** (db 0039), so "this
+    branch's pull request" means a proposal over the commit the branch is
+    currently on — exactly what "Propose changes" would create. §285 recorded
+    the same divergence about checks; this is it on the other column.
+    """
+    repo = make_repo(client, fx)
+    made = commit(client, fx, repo["id"],
+                  {"src/a.sql": declaring(f"daily_{uuid.uuid4().hex[:8]}")})
+    proposal = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/code/proposals",
+        headers=hdr(fx.editor_sub),
+        json={"summary": "Publish it", "description": "",
+              "source_repo_id": repo["id"], "source_commit_id": made["id"]},
+    )
+    assert proposal.status_code == 201, proposal.text
+
+    rows = summary(client, fx, repo["id"])
+    assert rows["main"]["proposal_id"] == proposal.json()["id"]
+    assert rows["main"]["proposal_state"] == "open"
+    assert rows["main"]["proposal_summary"] == "Publish it"
+
+
+def test_a_branch_that_has_moved_on_no_longer_carries_that_proposal(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The divergence, made visible rather than described.**
+
+    A proposal here is a review of a snapshot. Commit again and the branch is a
+    different snapshot, so the column stops claiming a pull request that no
+    longer covers what is on the branch — which is more honest than Foundry's
+    branch-tracking PR would be about our model, and would be wrong about
+    Foundry's.
+    """
+    repo = make_repo(client, fx)
+    output = f"daily_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/a.sql": declaring(output)})
+    client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/code/proposals",
+        headers=hdr(fx.editor_sub),
+        json={"summary": "Publish the first", "description": "",
+              "source_repo_id": repo["id"], "source_commit_id": first["id"]},
+    )
+    assert summary(client, fx, repo["id"])["main"]["proposal_id"] is not None
+
+    commit(client, fx, repo["id"],
+           {"src/a.sql": declaring(output) + "-- and again\n"})
+    assert summary(client, fx, repo["id"])["main"]["proposal_id"] is None
+
+
+def test_every_branch_comes_back_in_one_request(client: TestClient, fx: Fixture) -> None:
+    """A repository with twenty branches would otherwise open the tab with
+    twenty round trips, which is how a column becomes something people wait for
+    rather than glance at."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"})
+    for name in ("alpha", "beta"):
+        client.post(f"{base(fx)}/{repo['id']}/branches", headers=hdr(fx.editor_sub),
+                    json={"name": name, "from_branch": "main"})
+
+    rows = summary(client, fx, repo["id"])
+    assert set(rows) == {"main", "alpha", "beta"}
+    # Ordered by name, so the list does not reshuffle between visits.
+    listed = client.get(
+        f"{base(fx)}/{repo['id']}/branch-summary", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert [r["name"] for r in listed] == ["alpha", "beta", "main"]

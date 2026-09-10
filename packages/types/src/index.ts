@@ -2625,3 +2625,24 @@ export interface RepositoryTag {
    * read. */
   commit_message: string | null;
 }
+
+/** A branch, with what p.16's Checks and Pull request columns need (§300).
+ *
+ * **Both columns are about the branch's *head commit*.** Foundry's pull request
+ * tracks a branch; ours names an immutable commit (db 0039), so "this branch's
+ * pull request" means a proposal over the commit it is currently on — which is
+ * exactly what "Propose changes" would create, and which stops being the
+ * branch's PR the moment somebody commits again.
+ */
+export interface RepositoryBranchSummary {
+  id: string;
+  name: string;
+  head_commit_id: string | null;
+  /** passed | failed | none. **`none` is not `passed`**: a green tick over a
+   * branch nothing has run against is the lie §295 refuses about a test suite
+   * that ran nothing. */
+  checks: string;
+  proposal_id: string | null;
+  proposal_state: string | null;
+  proposal_summary: string | null;
+}
