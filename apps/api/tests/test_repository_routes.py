@@ -881,3 +881,82 @@ def test_a_tag_from_another_repository_is_not_deletable_here(
     assert client.delete(
         f"{base(fx)}/{theirs['id']}/tags/{tag['id']}", headers=hdr(fx.editor_sub)
     ).status_code == 204
+
+
+def test_an_unanchored_convention_still_has_to_match_the_whole_name(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**`fullmatch`, not `search`**, and a survivor found this untested.
+
+    p.17's example regex is anchored with `^` and `$` and most people's will be,
+    so the two agree on it — which is why every other test here passed either
+    way. One that is *not* anchored would, under `search`, accept
+    `1.4-DO-NOT-USE` because `1.4` appears inside it: the opposite of what
+    somebody writing a convention meant, and silently, on the one name they most
+    wanted to keep out.
+    """
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {
+        "repoSettings.json": json.dumps({
+            "tagNameValidation": {"regex": r"\d+\.\d+", "errorMessage": "x.y please"}
+        }),
+        "src/a.sql": "SELECT 1\n",
+    })
+
+    sneaky = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "1.4-DO-NOT-USE"},
+    )
+    assert sneaky.status_code == 422, sneaky.text
+    assert client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "1.4"},
+    ).status_code == 201
+
+
+def test_a_regex_that_will_not_compile_does_not_block_every_tag(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The same reason an unparseable settings file does not: it is a
+    convention, not a permission. Failing closed would stop every tag in the
+    repository while the person who can fix the regex is elsewhere.
+
+    Untested until a survivor said so — the JSON case was covered and this one,
+    one line below it in the same module, was not.
+    """
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {
+        "repoSettings.json": json.dumps({"tagNameValidation": {"regex": "([unclosed"}}),
+        "src/a.sql": "SELECT 1\n",
+    })
+    made = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "anything-at-all"},
+    )
+    assert made.status_code == 201, made.text
+
+
+def test_a_regex_long_enough_to_be_a_weapon_is_not_run(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A regex is code**, and one assembled to be pathological is the ordinary
+    way a validator becomes a denial of service — here, code from a customer's
+    file, run on every tag anybody makes.
+
+    Length is a blunt guard and the test has to be blunt with it: the regex
+    below is valid and *would* refuse this name, so the tag being accepted is
+    the guard having fired. Asserting a refusal would have passed whether or not
+    the guard existed.
+    """
+    repo = make_repo(client, fx)
+    long_enough = "^(?:1\\.0\\.0)$" + ("|(?:x)" * 60)
+    assert len(long_enough) > 200
+    commit(client, fx, repo["id"], {
+        "repoSettings.json": json.dumps({"tagNameValidation": {"regex": long_enough}}),
+        "src/a.sql": "SELECT 1\n",
+    })
+    made = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "2.2.2"},
+    )
+    assert made.status_code == 201, made.text
