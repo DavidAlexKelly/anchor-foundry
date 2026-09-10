@@ -272,3 +272,34 @@ def test_the_checks_tab_does_not_call_an_empty_run_passed(page, api) -> None:
     expect(page.get_by_test_id("checks-tests-summary")).to_contain_text(
         "No unit tests in this repository"
     )
+
+
+def test_the_checks_tab_asks_about_the_branch_it_is_showing(page, api) -> None:
+    """**A survivor found this untested.** A tab that listed every branch's
+    runs would put a sandbox's failures under `main` - and the Checks tab is
+    where somebody decides whether a branch is in a state to merge, so a wrong
+    answer here is a wrong answer at the worst moment."""
+    mod = project(api, "Checks tests branch")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"tests/test_ok.py": PASSING_TEST})
+    mod.api.call("POST", f"{mod.base}/repositories/{repo['id']}/branches",
+                 {"name": "sandbox", "from_branch": "main"})
+
+    # A failing run on the sandbox only.
+    mod.api.call(
+        "POST", f"{mod.base}/repositories/{repo['id']}/tests",
+        {"branch": "sandbox", "overrides": {"tests/test_ok.py": FAILING_TEST}},
+    )
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the run up")
+
+    open_checks(page, repo, "sandbox")
+    expect(page.get_by_test_id("checks-tests-summary")).to_contain_text(
+        "1 failed", timeout=30000
+    )
+
+    # `main` has had no run at all, and must say so rather than borrowing the
+    # sandbox's answer.
+    open_checks(page, repo, "main")
+    expect(page.get_by_test_id("checks-tests-summary")).to_contain_text(
+        "No unit tests have been run", timeout=30000
+    )
