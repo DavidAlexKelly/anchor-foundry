@@ -96,7 +96,7 @@ Per-side display names and self-links are both small and both currently impossib
 | Open an instance into its Object View | ✅ | §122, §144 — the generated view, or a configured module if the type has one |
 | **Favourite an individual object** — star next to its title, added to the sidebar | ○ | `getting-started` p.34 |
 | Direct object edit from the Explorer | ○ | `ontology-manager` p.32 lists it as a write source |
-| Save and share a search | ○ | |
+| Save and share a search | ◑ | **A third row that said ○ for work that exists** (§307's audit; the two others were in `code-repositories.md`). It is built: db 0040, `apps/api/src/services/object_searches.py`, and the Save this search dialog in `apps/web/src/components/object-explorer.tsx`, with 18 tests in `apps/api/tests/test_saved_searches.py` — including the one the schema comment argues for, that a saved search stores the question and never the answer. Its empty Notes cell is the tell: nobody revisited it. ◑ rather than ✅ because **nothing drives the screen**: there is no browser test that saves a search and finds it again, and this document's own standard is that a feature is done when a test drives it and fails if it is removed. The section that built it is not recoverable — history is squashed per pull request — which is the same evidence §302 used when it declined to check `§NNN` citations at all |
 
 ---
 
