@@ -1062,3 +1062,65 @@ def test_every_branch_comes_back_in_one_request(client: TestClient, fx: Fixture)
         f"{base(fx)}/{repo['id']}/branch-summary", headers=hdr(fx.viewer_sub)
     ).json()
     assert [r["name"] for r in listed] == ["alpha", "beta", "main"]
+
+
+def test_a_check_that_could_not_run_is_not_a_pass_in_the_column(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A survivor found this untested.** `fail` and `error` are both worst: a
+    check that could not run says as little about the branch as one that ran and
+    failed, and a column showing the second as a pass is the quietest way to
+    merge broken code.
+
+    Written through the database because the API has no way to make a check
+    error on demand — and inventing one would be building a hook for a test.
+    """
+    repo = make_repo(client, fx)
+    made = commit(client, fx, repo["id"],
+                  {"src/a.sql": declaring(f"daily_{uuid.uuid4().hex[:8]}")})
+    proposal = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/code/proposals",
+        headers=hdr(fx.editor_sub),
+        json={"summary": "Publish it", "description": "",
+              "source_repo_id": repo["id"], "source_commit_id": made["id"]},
+    ).json()
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO code_proposal_checks
+                   (proposal_id, name, status, summary, anchored_at)
+               VALUES (%s, 'schema', 'error', 'the checker fell over', now())""",
+            (proposal["id"],),
+        )
+
+    assert summary(client, fx, repo["id"])["main"]["checks"] == "failed"
+
+
+def test_a_withdrawn_proposal_is_not_the_branchs_pull_request(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A survivor found this too.** p.16's column is about *existing* pull
+    requests, and a withdrawn one is a decision somebody already made. Showing
+    it would leave a branch looking as though it were under review when nobody
+    is reviewing it — and, worse, would hide the Propose changes button, which
+    p.16 says means a pull request exists.
+    """
+    repo = make_repo(client, fx)
+    made = commit(client, fx, repo["id"],
+                  {"src/a.sql": declaring(f"daily_{uuid.uuid4().hex[:8]}")})
+    proposal = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/code/proposals",
+        headers=hdr(fx.editor_sub),
+        json={"summary": "Publish it", "description": "",
+              "source_repo_id": repo["id"], "source_commit_id": made["id"]},
+    ).json()
+    assert summary(client, fx, repo["id"])["main"]["proposal_id"] == proposal["id"]
+
+    assert client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/code/proposals/{proposal['id']}/withdraw",
+        headers=hdr(fx.editor_sub),
+    ).status_code == 200
+
+    row = summary(client, fx, repo["id"])["main"]
+    assert row["proposal_id"] is None, "a withdrawn proposal is not under review"
