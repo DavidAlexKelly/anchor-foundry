@@ -790,6 +790,15 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--line); border-left: 3px solid var(--brass, #b07d2b);
   border-radius: var(--radius); color: var(--ink-soft); font-size: 12.5px; }
 .code-detail input[type="text"] { width: 100%; margin: 6px 0; }
+/* Where applying puts the code (§283). Quiet by default: a fast-forward and a
+   commit already on the branch are the system working, and styling them as
+   problems would train people past the one that is. */
+.review-landing { margin: 8px 0; font-size: 12.5px; color: var(--ink-soft); }
+.review-landing.problem {
+  padding: 8px 10px; border: 1px solid var(--line);
+  border-left: 3px solid var(--brass, #b07d2b);
+  border-radius: var(--radius); color: var(--ink-2);
+}
 
 /* ---- first-run checklist (deployment item 3) ----------------------------- */
 .first-run { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
@@ -1286,6 +1295,52 @@ button { font: inherit; cursor: pointer; }
   height: 100%; color: var(--ink-soft); font-size: 13px;
 }
 .repo-file.edited::after { content: " •"; color: var(--brass); }
+
+/* ---- open files, with tabs (§282, code-repositories.md §2.3) --------------- */
+.repo-tabs-strip {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.repo-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: none;
+}
+.repo-tab button {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  padding: 5px 4px 5px 9px;
+  white-space: nowrap;
+}
+.repo-tab .repo-tab-close {
+  padding: 5px 8px 5px 4px;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+}
+.repo-tab .repo-tab-close:hover { color: var(--danger); }
+.repo-tab:hover { background: var(--paper); }
+.repo-tab.on {
+  background: var(--accent-wash);
+  border-color: var(--line);
+}
+.repo-tab.on button { color: var(--accent-deep); font-weight: 600; }
+/* The same brass dot the tree uses, so "this has unsaved work" reads the same
+   in both places. */
+.repo-tab.edited > button:first-child::after { content: " •"; color: var(--brass); }
 .repo-tree-actions { display: flex; gap: 8px; margin-top: 10px; }
 .repo-tree-actions button {
   font: inherit; font-size: 12px; padding: 4px 9px;
@@ -1293,6 +1348,37 @@ button { font: inherit; cursor: pointer; }
   background: #fff; cursor: pointer;
 }
 .repo-tree-actions button:hover { border-color: var(--accent); }
+/* p.19's Checks tab (§285). */
+.repo-checks { display: grid; gap: 10px; }
+.repo-checks-verdict { margin: 0; font-size: 13px; }
+.repo-checks-verdict .chip { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10.5px; }
+.repo-checks-verdict.failing .chip { background: var(--danger-wash, #fdeceb); color: var(--danger); }
+.repo-checks-verdict.unknown .chip,
+.repo-checks-verdict.warning .chip { background: var(--brass-wash); color: var(--brass, #b07d2b); }
+.repo-check-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.repo-check {
+  border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: var(--radius); padding: 9px 12px;
+}
+.repo-check.fail { border-left-color: var(--danger); }
+.repo-check.error, .repo-check.warn { border-left-color: var(--brass, #b07d2b); }
+.repo-check.pass { border-left-color: var(--accent); }
+.repo-check-head { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; }
+.repo-check-head code { font-family: var(--font-mono); font-weight: 600; }
+.repo-check-summary { margin: 5px 0; font-size: 12.5px; color: var(--ink-2); }
+.repo-check-open {
+  font: inherit; font-size: 12.5px; font-weight: 600; border: none; background: none;
+  color: var(--accent-deep); cursor: pointer; padding: 0; text-align: left;
+}
+.repo-check-open:hover { text-decoration: underline; }
+
+/* The protected-branch note (§284). Brass rather than red: it is a rule
+   somebody is being told about, not a mistake they made. */
+.repo-protected {
+  border: 1px solid var(--brass, #b07d2b); border-left-width: 3px;
+  background: var(--brass-wash); border-radius: var(--radius);
+  padding: 9px 12px; margin: 0;
+}
 .repo-commit-bar {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border: 1px solid var(--brass);

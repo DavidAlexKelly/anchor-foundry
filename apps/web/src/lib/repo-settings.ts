@@ -68,9 +68,16 @@ export function reviewPolicyScopeNote(repositoryCount: number): string {
   );
 }
 
-/** What the gate does, said once, where somebody deciding can read it. */
+/** What the gate does, said once, where somebody deciding can read it.
+ *
+ * **It gained a second consequence in §284 and this sentence had to gain one
+ * too.** The gate is now also what protects a repository's default branch —
+ * one switch rather than two that must agree, which is the choice this whole
+ * file exists to state out loud. A description that still said only "a
+ * transform cannot be changed directly" would leave somebody discovering the
+ * branch rule by being refused by it. */
 export function reviewPolicyEffect(required: boolean): string {
   return required
-    ? "A transform cannot be changed directly. Changes arrive as a proposal and need an approving review from somebody other than their author."
-    : "A transform can be changed directly by anyone who may edit this project. Proposals still work, and are optional.";
+    ? "A transform cannot be changed directly. Changes arrive as a proposal and need an approving review from somebody other than their author. Each repository's default branch is protected too: commits go to a sandbox branch and land when the pull request is applied."
+    : "A transform can be changed directly by anyone who may edit this project, and every repository's default branch takes commits directly. Proposals still work, and are optional.";
 }

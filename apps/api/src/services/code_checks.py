@@ -428,3 +428,73 @@ def blockers(checks: list[dict[str, Any]]) -> list[str]:
         for c in checks
         if not c["stale"] and c["status"] in BLOCKING_STATUSES
     ]
+
+
+# ---- checks on a branch (§285; code-repositories.md §5, p.19) -----------------
+# "In the Checks tab, you can view a summary of running and completed checks on
+# each branch. Use the dropdown branch menu to select a different branch."
+#
+# **A divergence, and it is the one this whole file rests on.** Foundry runs
+# checks on a *commit*: you commit to a sandbox and checks start. Ours run on a
+# *proposal*, because the second check - schema compatibility - is a question
+# about what the code would do to the project's datasets, and a commit that
+# nobody has proposed has not said which project state it means to change. So
+# "the checks on this branch" is the checks of the proposals made over commits
+# on it, and the tab says so rather than implying a per-commit runner exists.
+#
+# It is not a fudge: since §284 a sandbox is where work happens and a proposal
+# is how it lands, so every commit that matters is on its way to being one.
+async def for_branch(
+    conn: AsyncConnection, *, project_id: UUID, repo_id: UUID, commit_ids: list[UUID]
+) -> list[dict[str, Any]]:
+    """Every check belonging to a proposal over one of these commits.
+
+    The commits are passed in rather than resolved here: walking a branch is
+    `repositories.ancestors`, and a checks service that also knew how to walk a
+    history would be a second answer to a question that already has one.
+
+    **There is no `source_repo_id` filter, and that is deliberate** (§213). A
+    commit id already names its repository - the commits handed in are this
+    repository's history - and since §285 a proposal cannot name a commit that
+    is not in the repository it claims. The filter could therefore never
+    exclude a row the commit list included, which is exactly why a mutant that
+    removed it survived. `project_id` stays: it is this query's tenancy scope,
+    and a scope that rests on a uniqueness argument two joins away is one
+    refactor from being wrong.
+
+    Each row carries its proposal, because a check without the change it is
+    about is a verdict on nothing.
+
+    **No staleness flag, unlike `list_checks`.** That one earns it: a
+    typed-changes proposal's files can be edited, so a result can end up
+    describing code nobody will apply. A commit-backed proposal's cannot - the
+    commit is immutable, which is what db 0039 chose it for - so
+    `files_updated_at` never moves and the flag would be `false` on every row
+    this can return.
+    """
+    # A short-circuit rather than a rule: `= ANY('{}')` is false for every row,
+    # so the query below returns the same answer. It is here because a branch
+    # with no commits is the *common* empty case - a repository somebody just
+    # created - and it deserves no round trip. Nothing can tell the two paths
+    # apart, which is why a mutant that removes it survives (§285).
+    if not commit_ids:
+        return []
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT c.id, c.model_id, c.source_path, c.name,
+               CAST(c.status AS text) AS status,
+               c.summary, c.detail, c.ran_at, c.ran_by, c.anchored_at,
+               (SELECT u.email FROM users u WHERE u.id = c.ran_by) AS ran_by_email,
+               p.id AS proposal_id, p.summary AS proposal_summary,
+               CAST(p.state AS text) AS proposal_state,
+               p.source_commit_id
+          FROM code_proposal_checks c
+          JOIN code_proposals p ON p.id = c.proposal_id
+         WHERE p.project_id = :pid
+           AND p.source_commit_id = ANY(CAST(:commits AS uuid[]))
+         ORDER BY c.ran_at DESC, c.name
+        """,
+        {"pid": str(project_id), "commits": [str(c) for c in commit_ids]},
+    )
+    return [dict(r) for r in rows]

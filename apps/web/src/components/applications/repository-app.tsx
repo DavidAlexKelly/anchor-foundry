@@ -20,6 +20,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
+import { draftKey, readDrafts, saveWarning, writeDrafts } from "@/lib/editor-drafts";
+import {
+  activeTab,
+  closeLabel,
+  closeTab,
+  emptyViewerNote,
+  initialTabs,
+  isDirty,
+  openTab,
+  pruneTabs,
+  tabLabel,
+} from "@/lib/editor-tabs";
 import {
   ApiError,
   api as platformApi,
@@ -28,6 +40,18 @@ import {
 } from "@/lib/api";
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
+import {
+  checkTarget,
+  emptyReason as checksEmptyReason,
+  verdict,
+  verdictNote,
+  worstFirst,
+} from "@/lib/branch-checks";
+import {
+  isProtected,
+  protectedReason,
+  suggestedSandboxName,
+} from "@/lib/protected-branches";
 import {
   canChangeReviewPolicy,
   reviewPolicyEffect,
@@ -51,7 +75,9 @@ const CodeEditor = dynamic(
 
 // **`pulls` before `publish`, because that is the order the work happens in**
 // and `code-repositories.md` §1 lists Pull requests before anything of ours.
-const TABS = ["files", "history", "branches", "pulls", "publish", "settings"] as const;
+// **`checks` beside `pulls`**, which is the order `code-repositories.md` §1
+// lists them and the order the work happens in: propose, then see what ran.
+const TABS = ["files", "history", "branches", "pulls", "checks", "publish", "settings"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -59,6 +85,7 @@ const TAB_LABELS: Record<Tab, string> = {
   history: "History",
   branches: "Branches",
   pulls: "Pull requests",
+  checks: "Checks",
   publish: "Publish",
   settings: "Settings",
 };
@@ -153,6 +180,9 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           error={tree.error as Error | null}
           openPath={openPath}
           onOpen={(path) => setParams({ file: path })}
+          defaultBranch={repo.data?.default_branch ?? "main"}
+          branches={branches.data}
+          onSwitchBranch={(name) => setParams({ branch: name, commit: undefined })}
         />
       )}
       {tab === "history" && (
@@ -165,6 +195,16 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
         />
       )}
       {tab === "settings" && <SettingsTab wid={wid} pid={pid} />}
+      {tab === "checks" && (
+        <ChecksTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          branch={current}
+          defaultBranch={repo.data?.default_branch ?? "main"}
+          onOpenProposal={(id) => setParams({ tab: "pulls", proposal: id })}
+        />
+      )}
       {tab === "pulls" && (
         <PullRequestsTab
           wid={wid}
@@ -213,6 +253,9 @@ function FilesTab({
   error,
   openPath,
   onOpen,
+  defaultBranch,
+  branches,
+  onSwitchBranch,
 }: {
   wid: string;
   pid: string;
@@ -223,7 +266,10 @@ function FilesTab({
   pending: boolean;
   error: Error | null;
   openPath: string | undefined;
-  onOpen: (path: string) => void;
+  onOpen: (path: string | undefined) => void;
+  defaultBranch: string;
+  branches: RepositoryBranch[] | undefined;
+  onSwitchBranch: (name: string) => void;
 }) {
   const queryClient = useQueryClient();
   // The working set: the committed tree with unsaved edits laid over it. Kept
@@ -233,10 +279,75 @@ function FilesTab({
   const [edits, setEdits] = useState<Record<string, string | null>>({});
   const [message, setMessage] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
+  const [draftWarning, setDraftWarning] = useState<string | null>(null);
+
+  // **Persisted, keyed by repository and branch** (§281). This state was the
+  // only home for uncommitted work, so a reload lost it - and
+  // `code-repositories.md` §2.3 asks for persistence *before* multi-file tabs
+  // for exactly that reason: tabs are what make the loss expensive.
+  const key = draftKey(rid, branch);
+
+  // **Loaded on the branch, not on the commit.** This effect used to clear
+  // `edits` whenever `tree.commit_id` changed, which is also what happens when
+  // *somebody else* commits and the tree refetches - so a colleague landing a
+  // change silently discarded your typing. Keying it to the branch keeps that
+  // from happening, and losing edits on a deliberate branch switch is still
+  // the branch switch's doing. Your own commit clears them explicitly below,
+  // which is the only case that should.
+  // **`loaded` is not bookkeeping - without it the save destroys the draft.**
+  // `setEdits` is batched, so on the first commit the save effect below runs
+  // with `edits` still `{}` - and writing an empty map *removes the key*. The
+  // draft was being deleted on mount, before the load it was waiting for could
+  // apply. A ref would not fix it either: a ref assigned in the load effect is
+  // visible to the save effect in the same commit, which is exactly the pass
+  // that must not write. It has to be state, so the two land together.
+  const [loaded, setLoaded] = useState<string | null>(null);
+  // **The open set is rebuilt, not restored** (§282). Everything expensive in
+  // the strip is already persisted - the drafts - so a tab for every file with
+  // uncommitted work, plus the one the link names, gets the session back
+  // without a second store that can return disagreeing with the first.
+  const [tabs, setTabs] = useState<string[]>([]);
   useEffect(() => {
-    setEdits({});
+    const drafts = readDrafts(key);
+    setEdits(drafts);
+    setTabs(initialTabs(drafts, openPath));
+    setLoaded(key);
     setMessage("");
-  }, [tree?.commit_id, branch]);
+    setDraftWarning(null);
+    // `openPath` is deliberately not a dependency: this seeds the strip when
+    // the *branch* changes, and a later file change is the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  // **There is no effect on `openPath` here, and that is deliberate** (§213).
+  //
+  // The obvious one to write: a deep link, the back button and a jump from the
+  // History tab all move `?file=`, so the strip looks like it needs to follow
+  // the URL wherever it goes. It was written, and it was the *only* way a file
+  // opened - which is how §282 shipped a bug that took a browser test to find.
+  // An effect keyed on a value only fires when the value **changes**, and
+  // `router.replace` does not land synchronously: close the last tab and click
+  // the same file in the tree before the router catches up, and `openPath`
+  // reads `src/a.sql` the whole way through, cleared and set again inside a
+  // window React never observes. The tab never reopened while the address bar
+  // went on naming it.
+  //
+  // Once `openFile` below does its own opening, the effect had nothing left to
+  // catch. Every route that sets `?file=` to an actual path goes through it;
+  // the other three call sites (the branch select, `onOpenCommit`, `onSwitch`)
+  // only ever clear it, which the effect ignored anyway. And `useUrlState`
+  // replaces rather than pushes, so within this application there are no
+  // history entries to go back *to* - a fresh URL is a fresh mount, and the
+  // seed above handles that. Keeping it would have been a second mechanism
+  // that no test could reach, which is the shape §280 deleted too.
+
+  // Written on every change. `localStorage` is synchronous and these are small,
+  // and the alternative - debouncing - would mean a reload in the debounce
+  // window loses exactly the keystrokes somebody just typed.
+  useEffect(() => {
+    if (loaded !== key) return;
+    setDraftWarning(saveWarning(writeDrafts(key, edits)));
+  }, [key, edits, loaded]);
 
   const committed = tree?.files ?? {};
   const working = useMemo(() => {
@@ -252,10 +363,30 @@ function FilesTab({
     ([path, content]) => (committed[path] ?? null) !== content,
   );
 
+  // **The protected-branch rule** (§284; `code-repositories.md` §2.1, p.12).
+  // The server owns it (`assert_branch_is_writable`); this decides what to
+  // offer, which is §214's division. Shared query key with the Settings tab,
+  // so flipping the gate there changes this without a second fetch.
+  const policy = useQuery({
+    queryKey: ["code-review-policy", pid],
+    queryFn: () => codeApi.reviewPolicy(wid, pid),
+  });
+  const branchContext = {
+    branch,
+    defaultBranch,
+    reviewRequired: policy.data?.require_code_review ?? false,
+    // A branch with nothing on it is not protected: the first commit is how a
+    // repository starts, not an edit to one.
+    hasCommits: (tree?.commit_id ?? null) !== null,
+  };
+  const locked = !pinned && isProtected(branchContext);
+
   const commit = useMutation({
     mutationFn: () =>
       repoApi.commit(wid, pid, rid, { branch, files: working, message }),
     onSuccess: () => {
+      // The drafts are committed now, so they stop being drafts. `setEdits({})`
+      // is what removes the stored key, through the effect above.
       setEdits({});
       setMessage("");
       setFailure(null);
@@ -266,15 +397,70 @@ function FilesTab({
     onError: (e: Error) => setFailure(e.message),
   });
 
+  /** Commit this work to a new sandbox branch instead.
+   *
+   * **The alternative was a read-only editor, and it is worse.** People open a
+   * file, edit it, and think about branches afterwards; an editor that refused
+   * the typing would be right about the rule and wrong about the work. §214
+   * asks not to take typing you will refuse to keep - so the typing is kept,
+   * on a branch that can hold it, and §283 is what makes that not a detour:
+   * applying the pull request moves the default branch to this commit.
+   */
+  const commitToSandbox = useMutation({
+    mutationFn: async () => {
+      const name = suggestedSandboxName((branches ?? []).map((b) => b.name));
+      await repoApi.createBranch(wid, pid, rid, { name, from_branch: branch });
+      await repoApi.commit(wid, pid, rid, { branch: name, files: working, message });
+      return name;
+    },
+    onSuccess: (name) => {
+      // Cleared *before* the switch: these drafts are committed now, and they
+      // belong to the branch being left rather than the one being joined.
+      setEdits({});
+      setMessage("");
+      setFailure(null);
+      queryClient.invalidateQueries({ queryKey: ["repo-branches", rid] });
+      queryClient.invalidateQueries({ queryKey: ["repo-tree", rid] });
+      queryClient.invalidateQueries({ queryKey: ["repo-commits", rid] });
+      onSwitchBranch(name);
+    },
+    onError: (e: Error) => setFailure(e.message),
+  });
+
   if (pending) return <p className="state">Loading files…</p>;
   if (error) return <p className="state error">{error.message}</p>;
 
   const paths = Object.keys(working).sort();
-  const selected = openPath && paths.includes(openPath) ? openPath : paths[0];
+  // Pruned on the way out rather than in an effect: a file leaves the working
+  // set when it is deleted and when a branch switch brings a tree that never
+  // had it, and deriving means the strip cannot lag behind either.
+  const open = pruneTabs(tabs, paths);
+  const selected = activeTab(open, openPath);
   const source = selected === undefined ? undefined : working[selected];
   // Editing is against a branch. A pinned commit is history, and history that
   // could be typed into would stop being a record of what happened.
   const readOnly = pinned;
+
+  /** Open a file: in the strip and in the URL, in that order.
+   *
+   * Both, rather than letting the URL effect above do the opening, because the
+   * router is asynchronous and a file re-opened before a close has landed is a
+   * `?file=` that never changed - which an effect cannot see. */
+  function openFile(path: string) {
+    setTabs((current) => openTab(current, path));
+    onOpen(path);
+  }
+
+  /** Close a tab, and go wherever `closeTab` says.
+   *
+   * **This does not discard the edit**, which is why the button says so: the
+   * draft lives in the working set and in storage, not in the tab, so a file
+   * closed with unsaved changes is still going into the next commit. */
+  function close(path: string) {
+    const next = closeTab(open, path, selected);
+    setTabs(next.tabs);
+    if (next.active !== selected) onOpen(next.active);
+  }
 
   function addFile() {
     const path = window.prompt("New file path", "src/new.sql");
@@ -284,7 +470,18 @@ function FilesTab({
       return;
     }
     setEdits((c) => ({ ...c, [path]: "" }));
-    onOpen(path);
+    openFile(path);
+  }
+
+  /** Delete a file, and leave the strip where closing its tab would.
+   *
+   * Deleting is two things at once - the file goes and its tab goes - and the
+   * second is what makes the neighbour rule matter: without it the deletion
+   * drops you back on the first tab, which is rarely the one you were working
+   * through. */
+  function deleteFile(path: string) {
+    setEdits((c) => ({ ...c, [path]: null }));
+    close(path);
   }
 
   return (
@@ -307,7 +504,7 @@ function FilesTab({
                     : ""
                 }`}
                 aria-current={path === selected}
-                onClick={() => onOpen(path)}
+                onClick={() => openFile(path)}
               >
                 {path}
               </button>
@@ -319,10 +516,7 @@ function FilesTab({
                 New file
               </button>
               {selected !== undefined && (
-                <button
-                  type="button"
-                  onClick={() => setEdits((c) => ({ ...c, [selected]: null }))}
-                >
+                <button type="button" onClick={() => deleteFile(selected)}>
                   Delete file
                 </button>
               )}
@@ -331,6 +525,42 @@ function FilesTab({
         </div>
 
         <div className="repo-viewer">
+          {/* **The strip is above the editor and outside the empty branch**,
+              because tabs that vanished when the last one closed would leave
+              nothing to explain where the files went. */}
+          {open.length > 0 && (
+            <div className="repo-tabs-strip" role="tablist" aria-label="Open files">
+              {open.map((path) => {
+                const dirty = isDirty(path, committed, edits);
+                return (
+                  <span
+                    key={path}
+                    className={`repo-tab${path === selected ? " on" : ""}${
+                      dirty ? " edited" : ""
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={path === selected}
+                      title={path}
+                      onClick={() => openFile(path)}
+                    >
+                      {tabLabel(path, open)}
+                    </button>
+                    <button
+                      type="button"
+                      className="repo-tab-close"
+                      aria-label={closeLabel(path, dirty)}
+                      onClick={() => close(path)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
           {selected !== undefined && source !== undefined ? (
             <>
               <div className="repo-file-head">
@@ -354,19 +584,27 @@ function FilesTab({
               />
             </>
           ) : (
-            <p className="state">
-              {readOnly ? "This commit contains no files." : "No files yet."}
-            </p>
+            <p className="state">{emptyViewerNote(paths.length, readOnly)}</p>
           )}
         </div>
       </div>
+
+      {/* **Why this branch takes no commits, and the way through** (§284).
+          Above the commit bar rather than in place of the editor: the typing
+          is not refused, it just lands somewhere that can hold it. */}
+      {locked && (
+        <p className="state repo-protected" data-testid="protected-branch">
+          {protectedReason(branchContext)}
+        </p>
+      )}
 
       {!readOnly && dirty && (
         <form
           className="repo-commit-bar"
           onSubmit={(e) => {
             e.preventDefault();
-            commit.mutate();
+            if (locked) commitToSandbox.mutate();
+            else commit.mutate();
           }}
         >
           <span className="repo-dirty">
@@ -378,13 +616,33 @@ function FilesTab({
             placeholder="What changed, and why"
             aria-label="Commit message"
           />
-          <button className="btn" type="submit" disabled={commit.isPending}>
-            {commit.isPending ? "Committing…" : `Commit to ${branch}`}
-          </button>
+          {locked ? (
+            <button
+              className="btn"
+              type="submit"
+              disabled={commitToSandbox.isPending}
+              data-testid="commit-to-sandbox"
+            >
+              {commitToSandbox.isPending
+                ? "Creating the branch…"
+                : `Commit to a new branch from ${branch}`}
+            </button>
+          ) : (
+            <button className="btn" type="submit" disabled={commit.isPending}>
+              {commit.isPending ? "Committing…" : `Commit to ${branch}`}
+            </button>
+          )}
           <button type="button" className="repo-discard" onClick={() => setEdits({})}>
             Discard
           </button>
         </form>
+      )}
+      {/* **Only when work is at risk** (§281). A save and a clear are the
+          system working; narrating them would train people to ignore the line
+          that matters. This appears when the browser is not storing drafts at
+          all, or when these edits are too large to keep. */}
+      {draftWarning && (
+        <p className="state error" data-testid="draft-warning">{draftWarning}</p>
       )}
       {failure && <p className="state error">{failure}</p>}
     </div>
@@ -1393,6 +1651,98 @@ function SettingsTab({ wid, pid }: { wid: string; pid: string }) {
         <p className="login-note" data-testid="settings-review-locked">{locked}</p>
       )}
       {failure && <div className="form-error">{failure}</div>}
+    </section>
+  );
+}
+
+
+/** p.19's Checks tab (§285), the last of `code-repositories.md` §1's five.
+ *
+ * **A divergence stated on the screen rather than papered over.** Foundry runs
+ * checks on a *commit*: you commit to a sandbox and checks start. Ours run on a
+ * *proposal*, because the schema check asks what the code would do to the
+ * project's datasets and a commit nobody has proposed has not said which change
+ * it means to make. Since §284 a sandbox is where work happens and a proposal
+ * is how it lands, so every commit that matters is on its way to being one -
+ * but a tab that implied a per-commit runner exists would promise something the
+ * product does not do.
+ *
+ * The branch comes from the application's own selector rather than a second one
+ * inside the tab: p.19 says "use the dropdown branch menu", and there is one.
+ */
+function ChecksTab({
+  wid,
+  pid,
+  rid,
+  branch,
+  defaultBranch,
+  onOpenProposal,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  defaultBranch: string;
+  onOpenProposal: (id: string) => void;
+}) {
+  const checks = useQuery({
+    queryKey: ["repo-checks", rid, branch],
+    queryFn: () => repoApi.branchChecks(wid, pid, rid, branch),
+  });
+
+  if (checks.isPending) return <p className="state">Loading checks…</p>;
+  if (checks.error) return <p className="state error">{(checks.error as Error).message}</p>;
+
+  const data = checks.data!;
+  const rows = worstFirst(data.checks);
+  const state = verdict(rows);
+
+  return (
+    <section className="repo-checks" data-testid="checks-tab">
+      <p className={`repo-checks-verdict ${state}`} data-testid="checks-verdict">
+        <span className="chip">{state}</span> {verdictNote(rows)}
+      </p>
+      {/* Said once, where somebody reading a thin list would otherwise assume
+          the runner is broken rather than that it runs somewhere else. */}
+      <p className="soft" data-testid="checks-scope">
+        Checks run on a pull request rather than on every commit, so these are
+        the checks of the proposals made over commits on {branch}. Foundry runs
+        them per commit; ours ask what the code would do to this project&apos;s
+        datasets, which a commit nobody has proposed has not said.
+      </p>
+
+      {rows.length === 0 ? (
+        <p className="state">
+          {checksEmptyReason(data.head_commit_id !== null, branch === defaultBranch)}
+        </p>
+      ) : (
+        <ul className="repo-check-list">
+          {rows.map((c) => (
+            <li key={c.id} className={`repo-check ${c.status}`}>
+              <div className="repo-check-head">
+                <span className="chip">{c.status}</span>
+                <code>{c.name}</code>
+                <span className="soft">{checkTarget(c)}</span>
+                <span className="soft" style={{ marginLeft: "auto" }}>
+                  {new Date(c.ran_at).toLocaleString()}
+                </span>
+              </div>
+              <p className="repo-check-summary">{c.summary}</p>
+              {/* p.19: "Click on a specific check to view more detailed
+                  information." The detail a check has is the change it is
+                  about, so this opens that rather than a dialog of its own. */}
+              <button
+                type="button"
+                className="repo-check-open"
+                onClick={() => onOpenProposal(c.proposal_id)}
+              >
+                {c.proposal_summary}
+              </button>{" "}
+              <span className="soft">{c.proposal_state}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

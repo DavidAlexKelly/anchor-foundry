@@ -17,7 +17,7 @@ import uuid
 from playwright.sync_api import expect
 
 from api import Module
-from conftest import WEB_BASE, eventually
+from conftest import WEB_BASE, eventually, stays
 
 
 def project(api, name: str) -> Module:
@@ -214,3 +214,158 @@ def test_the_tab_says_the_setting_is_the_projects_not_this_repositorys(
     expect(scope).to_contain_text("whole project")
     expect(scope).to_contain_text("all 2 repositories")
     expect(scope).to_contain_text("Foundry sets this per repository")
+
+
+# ---- drafts survive a reload (§281) ------------------------------------------
+def open_file(page, repo: dict, path: str) -> None:
+    page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=files&file={path}")
+    expect(page.locator(".code-editor-loading")).to_have_count(0, timeout=30000)
+
+
+def type_into_editor(page, text: str) -> None:
+    """Put the caret in Monaco and type.
+
+    **Clicking `.monaco-editor textarea` does not work**: the textarea carries
+    the value but sits *under* the rendered text, so Playwright reports
+    `<span class="mtk8">…</span> … intercepts pointer events` and retries until
+    it gives up. `.view-lines` is the layer a person actually clicks on, and
+    clicking it is what moves the caret.
+    """
+    page.locator(".view-lines").first.click()
+    # `Control+End`, not `End`: the click leaves the caret wherever it landed,
+    # and appending to the document is what these tests mean.
+    page.keyboard.press("Control+End")
+    page.keyboard.type(text)
+
+
+def editor_text(page) -> str:
+    """What the editor shows, with **Monaco's non-breaking spaces normalised**.
+
+    Monaco renders every space as U+00A0, so `get_by_text("-- a thought I have
+    not committed")` matches nothing at all — the DOM holds
+    `--\xa0a\xa0thought\xa0…`. The failure reads as "the text is not there",
+    which is true of the string being searched for and false of the editor.
+    """
+    return page.locator(".view-lines").first.inner_text().replace("\xa0", " ")
+
+
+def test_an_uncommitted_draft_survives_a_reload(page, api) -> None:
+    """**`code-repositories.md` §2.3's warning, closed.**
+
+    "Uncommitted edits live in `useState` keyed by path with no persistence
+    anywhere. That survives switching files but not a page reload — so a
+    five-tab editor with unsaved work is five ways to lose work at once."
+
+    That is why persistence comes before tabs: tabs are what make the loss
+    expensive, and shipping them first would multiply a bug rather than find
+    it.
+    """
+    mod = project(api, "Draft reload")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    out = f"draft_{uuid.uuid4().hex[:6]}"
+    commit(mod, repo, {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+
+    open_file(page, repo, "src/t.sql")
+    type_into_editor(page, "\n-- a thought I have not committed")
+    eventually(lambda: editor_text(page),
+               lambda t: "-- a thought I have not committed" in t,
+               what="the typing to land in the editor")
+
+    page.reload()
+    open_file(page, repo, "src/t.sql")
+    # The whole unit, in one assertion: the typing is still there.
+    eventually(lambda: editor_text(page),
+               lambda t: "-- a thought I have not committed" in t,
+               what="the draft to survive the reload")
+
+
+def test_a_draft_does_not_follow_you_to_another_branch(page, api) -> None:
+    """**The one outcome worse than losing a draft**: pasting one branch's work
+    onto another's. The same path on two branches is two files, so the store is
+    keyed by both."""
+    mod = project(api, "Draft branch")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    out = f"br_{uuid.uuid4().hex[:6]}"
+    commit(mod, repo, {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+    mod.api.call("POST", f"{mod.base}/repositories/{repo['id']}/branches",
+                 {"name": "sandbox", "from_branch": "main"})
+
+    open_file(page, repo, "src/t.sql")
+    type_into_editor(page, "\n-- only on main")
+    eventually(lambda: editor_text(page), lambda t: "-- only on main" in t,
+               what="the typing to land")
+
+    page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=files&file=src/t.sql&branch=sandbox")
+    expect(page.locator(".code-editor-loading")).to_have_count(0, timeout=30000)
+    stays(lambda: editor_text(page), lambda t: "-- only on main" not in t,
+          what="the other branch staying clean")
+
+    # And it is still on main, rather than having been discarded by the trip.
+    page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=files&file=src/t.sql&branch=main")
+    expect(page.locator(".code-editor-loading")).to_have_count(0, timeout=30000)
+    eventually(lambda: editor_text(page), lambda t: "-- only on main" in t,
+               what="the draft still on the branch it was typed on")
+
+
+# ---- where applying puts the code (§283) -------------------------------------
+def test_the_review_surface_says_which_branch_applying_moves(page, api) -> None:
+    """**Applying a commit proposal publishes the code and moves the branch.**
+
+    That was invisible while everything was committed to the default branch
+    first: the branch was already at the commit, so "the branch does not move"
+    and "the branch is right" were the same picture. They come apart the moment
+    work happens on a sandbox, which is the whole point of a pull request - and
+    a screen that mentioned neither would leave "the branch will be updated" as
+    the thing people assume in every case, including the one where it will not.
+
+    The wording rules are in `apps/web/src/lib/proposal-landing.test.ts`; what
+    needs a browser is that the API's answer reaches the screen at all.
+    """
+    mod = project(api, "Landing line")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    commit(mod, repo, {"README.md": "# transforms\n"})
+    mod.api.call("POST", f"{mod.base}/repositories/{repo['id']}/branches",
+                 {"name": "work", "from_branch": "main"})
+    out = f"land_{uuid.uuid4().hex[:6]}"
+    made = commit(mod, repo, {
+        "README.md": "# transforms\n",
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    }, branch="work")
+    proposal = propose_commit(mod, repo, made["id"], "Land the transform")
+
+    page.goto(
+        f"{WEB_BASE}/r/{repo['resource_id']}?tab=pulls&proposal={proposal['id']}"
+    )
+    landing = page.get_by_test_id("proposal-landing")
+    expect(landing).to_be_visible(timeout=30000)
+    expect(landing).to_contain_text("moves main to this commit")
+
+
+def test_a_proposal_over_a_commit_the_branch_already_has_says_nothing_will_move(
+    page, api
+) -> None:
+    """The other half, and the reason the line is not silent here: "nothing
+    will happen to the branch" and "the branch will be updated" look identical
+    on a screen that mentions neither."""
+    mod = project(api, "Landing landed")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    out = f"already_{uuid.uuid4().hex[:6]}"
+    made = commit(mod, repo, {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+    proposal = propose_commit(mod, repo, made["id"], "Already on main")
+
+    page.goto(
+        f"{WEB_BASE}/r/{repo['resource_id']}?tab=pulls&proposal={proposal['id']}"
+    )
+    landing = page.get_by_test_id("proposal-landing")
+    expect(landing).to_be_visible(timeout=30000)
+    expect(landing).to_contain_text("already has this commit")

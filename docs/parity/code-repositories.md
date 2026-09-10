@@ -2,7 +2,7 @@
 
 **Source:** `docs/pal/foundry_code-repositories.pdf`, 140 pages. Citations are `(p.13)`.
 
-**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, **Pull requests** (§276), Publish, **Settings** (§279). Checks still live on the project's Code pillar page, as does creation of the typed-changes proposal shape — the one that names no repository.
+**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor, tabs and Preview), History, Branches, **Pull requests** (§276), **Checks** (§285), Publish, **Settings** (§279). Creation of the typed-changes proposal shape — the one that names no repository — still lives on the project's Code pillar page.
 
 Foundry's own summary of the product: "a web-based integrated development environment (IDE) for writing and collaborating on production-ready code", with all common Git tasks through the web UI, integrated pull-request review, and "IntelliSense, code linting and error checking, and rich help dialogs" (p.2).
 
@@ -31,7 +31,7 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 | **Code** | ✅ | ours is called Files |
 | **Branches** | ✅ | create, list, delete, fast-forward, merge |
 | **Pull requests** | ◑ | the tab exists (§276) and shows this repository's commit proposals, reviewed in place. Still ◑ because the *typed-changes* shape belongs to no repository (db 0039's `source_repo_id` is null for it) and so cannot be shown here honestly — it stays on the Code page until adoption (§274) makes it unnecessary rather than moved |
-| **Checks** | ◑ | checks run and block, no tab |
+| **Checks** | ◑ | §285: the tab exists, per branch, and a check opens the change it is about. Still ◑ because **ours run on a proposal rather than on a commit** — the schema check asks what the code would do to this project's datasets, and a commit nobody has proposed has not said which change it means. The tab says so rather than implying a per-commit runner. Unit-test output is §6's ○ row |
 | **Settings** | ◑ | §279: the tab exists and holds the code-review gate, which §278 found had exactly one control in the product — on the page B.1 deletes. p.20's other groups are §6's ○ rows |
 
 Ours has **History** and **Publish**, which have no Foundry counterpart at tab level. History belongs in the File Changes helper; Publish belongs on the branch. Keep both until their replacements land, then fold them in.
@@ -48,10 +48,12 @@ Six labelled regions (p.10–11): In-App Help, Branch Options, Code Editor Optio
 |---|---|---|
 | Branch dropdown | ✅ | |
 | Create a sandbox branch from an existing branch | ✅ | |
-| **Protected branches cannot be directly edited** | ○ | "To edit code in your repository, you must work in a sandbox branch" (p.12). We allow editing `main` directly. |
+| **Protected branches cannot be directly edited** | ✅ §284 | "To edit code in your repository, you must work in a sandbox branch" (p.12). **Protection is the review gate, not a second switch:** a repository's default branch is protected exactly when its project requires review. A divergence from Foundry, which protects `main` always — and the same choice §279's Settings tab already states out loud, for the reason §278 gives. A branch with no commits is not protected: the first commit is how a repository starts. §283 is what makes the sandbox not a detour |
 | Global branches | ○ | out of scope — see `README.md` on Global Branching |
 
 The protected-branch rule is the one to take seriously. It is what makes the Pull requests tab load-bearing rather than optional, and it is a refusal, so it is testable.
+
+> **§284 built it, and chose the editor over the rule where they disagreed.** The obvious reading is a read-only editor on a protected branch. People open a file, edit it, and think about branches afterwards — an editor that refused the typing would be right about the rule and wrong about the work. So the typing is kept and the commit bar offers a branch that can hold it: *Commit to a new branch from main*, which creates the sandbox, commits there, and switches to it. §214 asks not to take typing you will refuse to keep; nothing here is refused, it just lands somewhere else.
 
 ### 2.2 Code editor options (p.13)
 
@@ -73,14 +75,16 @@ The protected-branch rule is the one to take seriously. It is what makes the Pul
 |---|---|---|
 | Monaco-class editor, self-hosted | ✅ | deliberately not CDN-loaded |
 | File tree | ✅ | |
-| **Multiple open files with tabs** | ○ | the single biggest thing making ours feel unlike an IDE |
-| **Draft persistence across reload** | ○ | see the warning below |
+| **Multiple open files with tabs** | ✅ §282 | the open set is **rebuilt, not restored**: a tab for every file with uncommitted work plus the one the link names, so there is no second store to disagree with the drafts. A tab is a view, not a container — closing one keeps the edit, and the button says so |
+| **Draft persistence across reload** | ✅ | §281, `localStorage` keyed by repository *and branch* — the same path on two branches is two files |
 | IntelliSense over platform types | ○ | Monaco's built-ins only |
 | Linting and error checking | ○ | needs §2.4 Problems |
 | Command palette on F1 | ○ | (p.11) |
 | In-app help walkthrough | ○ | (p.11) |
 
 > **Do persistence before tabs.** Uncommitted edits live in `useState` keyed by path (`repository-app.tsx:206`) with no persistence anywhere. That survives switching files but not a page reload — so a five-tab editor with unsaved work is five ways to lose work at once. Tabs are what make the loss expensive; ship `localStorage` keyed by repository and branch first.
+>
+> **Both are done (§281, §282), and the order paid twice.** It found a bug tabs would have multiplied — a save effect that deleted the draft it was meant to keep — and it removed the need for a second store here: the strip is derived from the drafts, so it survives a reload without being persisted at all.
 
 ### 2.4 Helper panels — nine (p.13–15)
 
@@ -133,7 +137,7 @@ The docs add a note we should honour: "You should not delete any branches that y
 |---|---|---|
 | List PRs; switch Open / Closed | ◑ | §276: this repository's open proposals, in the tab. Open-only so far; and an empty tab says *where the others are* — three absences with three remedies (nothing anywhere, typed changes reviewed on the Code screen, another repository's) |
 | Search by title or author | ○ | |
-| Create a PR, choosing the base branch | ◑ | |
+| Create a PR, choosing the base branch | ◑ | the base is the repository's default branch and is not chosen. **Applying a proposal now lands the commit on it (§283)** — before that it published and stopped there, which was invisible while everything was committed to `main` first and would have made §2.1's protected-branch rule unworkable |
 | **Line-by-line review with comments** | ◑ | §52 built a review surface; verify it is line-level, not file-level |
 | Require at least one approving review before merge, per repository settings | ✅ | §28 review-gated promotion |
 | **See how changes affect datasets** when reviewing transform code | ○ | see §4.1 |
@@ -168,9 +172,9 @@ Two limits Palantir states plainly and we should copy rather than discover: the 
 
 | Feature | Status |
 |---|---|
-| Summary of running and completed checks per branch | ◑ (no tab) |
-| Branch selector | ○ |
-| Drill into a specific check | ◑ |
+| Summary of running and completed checks per branch | ✅ §285 |
+| Branch selector | ✅ §285 — the application's own, at the top of every tab. A second one inside this tab would be a second answer to "which branch am I looking at" |
+| Drill into a specific check | ✅ §285 — it opens the proposal the check belongs to, because that *is* the detail a check has |
 | **Unit test output included in checks** | ○ |
 | Custom checks (TOC §25) | ○ |
 
@@ -215,9 +219,9 @@ Foundry supports several; two matter here (p.3):
 ## 9. Build order
 
 1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **The original blocker is cleared and a larger one was found (§278): see the correction in the header — five capabilities live only on that page, including the only control for `require_code_review`. The editor half is now redundant; the page cannot go until the other five have somewhere to be.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
-2. **Draft persistence**, then **multi-file tabs**.
-3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
-4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful.
+2. ~~**Draft persistence**, then **multi-file tabs**~~ — **done (§281, §282)**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
+3. ~~**The five tabs**~~ — **done (§276, §279, §285)**. Pull requests and Checks re-homed, Settings created. All five of p.10's tabs now exist, and the two that diverge say so on the screen: review policy is per project rather than per repository (§279), and checks attach to a proposal rather than to a commit (§285).
+4. ~~**Protected branches and the sandbox rule.**~~ — **done (§283, §284)**. §283 cleared the prerequisite it would otherwise have broken: applying a proposal lands the commit on the default branch. Protect `main` without that and the first person to use the review path as intended leaves `main` behind forever — the branch everybody opens the repository on would stop describing the repository.
 5. **Problems**, then **File Changes**. These two make the editor feel like an IDE more than anything else here.
 6. **Unit tests**, then the **Tests panel**, then test output in the Checks tab.
 7. **Tags**, branch checks column, PR column.
@@ -232,7 +236,7 @@ Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types,
 
 - **One editor** — grep for `textarea` under `app/(platform)` and assert `code/page.tsx` is not in the results. Crude, and it cannot pass for the wrong reason.
 - **Draft persistence** — open three files, edit two, reload; both drafts survive and the third is clean.
-- **Protected branches** — committing directly to a protected branch is refused, and the refusal names the branch. Mutation: remove the check, and the test goes red.
+- **Protected branches** — committing directly to a protected branch is refused, and the refusal names the branch. Mutation: remove the check, and the test goes red. **✅ §284**, and the refusal names the route as well as the branch — a rule that only says no teaches people the product is broken.
 - **Tabs** — each of the five is reachable by URL and by click, and a deep link survives a reload.
 - **Problems** — a file with a deliberate syntax error produces a diagnostic at the right line; clicking it moves the cursor there. Fix the error, and the panel empties.
 - **File Changes** — an uncommitted edit shows as a diff against the committed version; committing empties the panel.

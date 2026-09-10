@@ -53,4 +53,14 @@ describe("what the gate does", () => {
     // it off reads as turning review off, which it is not.
     expect(reviewPolicyEffect(false)).toContain("optional");
   });
+
+  it("**says the gate also protects the default branch** (§284)", () => {
+    // The switch gained a second consequence, so its description had to gain
+    // one: one switch rather than two that must agree is the choice this file
+    // exists to state, and a description that named only the transform rule
+    // would leave somebody discovering the branch rule by being refused by it.
+    expect(reviewPolicyEffect(true)).toContain("default branch is protected");
+    expect(reviewPolicyEffect(true)).toContain("sandbox branch");
+    expect(reviewPolicyEffect(false)).toContain("takes commits directly");
+  });
 });

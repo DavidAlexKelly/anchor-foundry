@@ -37,6 +37,7 @@ from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
 from . import code_checks as check_service
 from . import models as model_service
+from . import repositories as repo_service
 
 _EXTENSIONS = {"sql": "sql", "python": "py"}
 _UNSAFE = re.compile(r"[^a-z0-9]+")
@@ -496,6 +497,8 @@ async def create_proposal(
         )
     if not commit_backed and not changes:
         raise ValueError("a proposal needs at least one file")
+    if commit_backed:
+        await _assert_commit_belongs(conn, project_id, source_repo_id, source_commit_id)
     row = await fetch_one(
         conn,
         """
@@ -525,6 +528,46 @@ async def create_proposal(
     return await get_proposal(conn, project_id, proposal_id)
 
 
+async def _assert_commit_belongs(
+    conn: AsyncConnection,
+    project_id: UUID,
+    repo_id: UUID | None,
+    commit_id: UUID | None,
+) -> None:
+    """A commit-backed proposal names a commit *in a repository in this project*.
+
+    **`_write_files` has always checked this for typed changes** - "so a
+    proposal cannot smuggle in a transform from somewhere else" - and the
+    commit path had no equivalent (§285). Both ids come from the caller, and
+    nothing joined them: a proposal could name repository A and a commit from
+    repository B, or a repository in another project the author happens to be a
+    member of. The review surface would then show one repository's code under
+    another repository's name, and applying it would publish it.
+
+    Refused rather than repaired, because there is no honest repair: which of
+    the two ids was the mistake is not knowable from here.
+    """
+    if repo_id is None:
+        raise ValueError(
+            "a proposal over a commit has to say which repository the commit is in"
+        )
+    row = await fetch_one(
+        conn,
+        """
+        SELECT c.id
+          FROM code_commits c
+          JOIN code_repos r ON r.id = c.repo_id
+         WHERE c.id = :cid AND r.id = :rid AND r.project_id = :pid
+        """,
+        {"cid": str(commit_id), "rid": str(repo_id), "pid": str(project_id)},
+    )
+    if row is None:
+        raise ValueError(
+            "that commit is not in that repository, or that repository is not in "
+            "this project - a proposal has to name a commit somebody here can read"
+        )
+
+
 async def update_proposal(
     conn: AsyncConnection,
     project_id: UUID,
@@ -548,6 +591,24 @@ async def update_proposal(
         raise ValueError("this proposal is closed")
     if str(proposal["created_by"]) != str(actor_id):
         raise ValueError("only the author can edit a proposal")
+    if changes is not None and proposal["source_commit_id"]:
+        # **Found in §285, and it was doing real damage quietly.** A
+        # commit-backed proposal's files come from the commit (db 0039), so
+        # `code_proposal_files` rows written here are never read - but the
+        # write still moves `files_updated_at`, which invalidates every
+        # approval and outdates every comment. A call that changes nothing
+        # about the code under review and drops the reviews of it is the worst
+        # combination available: the reviewer's work is gone and there is
+        # nothing new to review.
+        #
+        # The way to change what a commit-backed proposal proposes is another
+        # commit and another proposal, because the commit is immutable - which
+        # is the property it was chosen for.
+        raise ValueError(
+            "this proposal is over a commit, so its files cannot be edited here - "
+            "the commit is immutable, which is what makes the code under review "
+            "the code that was approved. Commit again and propose that."
+        )
     if changes is not None:
         await _write_files(conn, project_id, proposal_id, changes)
     await fetch_one(
@@ -825,6 +886,16 @@ async def _assemble_proposal(
         f["read_by"] = marks.get(key, [])
         f["checks"] = [c for c in checks if _anchor_of(c) == key]
     blockers = _blockers(proposal, files, reviews, checks)
+    lands_on, landing = await _landing(conn, proposal)
+    if landing == repo_service.DIVERGED:
+        # The same shape as `unpublishable`: the surface renders it without
+        # knowing it is special, and it is knowable before the button is
+        # pressed rather than after the publish has already happened.
+        blockers.append(
+            f"branch {lands_on!r} has moved on since this was proposed, so applying "
+            f"this could not move it without discarding commits. Merge {lands_on!r} "
+            "into the branch this was made on and propose again."
+        )
     if unpublishable:
         # Not an error: the commit is fine and has not moved. Something in the
         # project has, and this says which - the same shape every other blocker
@@ -843,7 +914,41 @@ async def _assemble_proposal(
         # have run" when in fact they have and the code moved.
         "checks": checks,
         "blockers": blockers,
+        # Where applying this puts the code, and whether it can go there
+        # (§283). Null for a typed-changes proposal, which names no repository
+        # and so lands on no branch - the one shape `code-repositories.md`'s
+        # header calls out as belonging to nothing.
+        "lands_on": lands_on,
+        "landing": landing,
     }
+
+
+async def _landing(
+    conn: AsyncConnection, proposal: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """Which branch this proposal lands on, and whether it still can (§283).
+
+    **Applying used to publish and stop there**, which was invisible while
+    everything was committed to the default branch first: the branch was
+    already at the commit, so "the branch does not move" and "the branch is
+    right" were the same picture. They come apart the moment work happens on a
+    sandbox - which is the whole point of a pull request, and what §2.1's
+    protected-branch rule will make the only way to work.
+
+    The branch is the repository's default. A proposal records a commit, not a
+    base (db 0039), and the branch it was made on may be deleted by the time it
+    is applied - so the target has to be a property of the repository rather
+    than of the proposal.
+    """
+    if not proposal["source_repo_id"] or not proposal["source_commit_id"]:
+        return None, None
+    repo_id = UUID(str(proposal["source_repo_id"]))
+    branch = await repo_service.default_branch(conn, repo_id)
+    state = await repo_service.landing_state(
+        conn, repo_id=repo_id, branch=branch,
+        commit_id=UUID(str(proposal["source_commit_id"])),
+    )
+    return branch, state
 
 
 async def review_proposal(
@@ -961,6 +1066,24 @@ async def _apply_publish(
         )
     except publish_service.PublishError as exc:
         raise ValueError(str(exc)) from exc
+    # **And the branch moves** (§283). Without this, applying a proposal made on
+    # a sandbox published the code and left the default branch where it was, so
+    # the branch every reader opens the repository on would go stale the first
+    # time anybody used the review path the way it is meant to be used. In the
+    # same transaction as the publish: a repository whose branch says one thing
+    # and whose transforms say another is worse than either failure alone.
+    #
+    # `land` refuses on a divergence, which `_landing` has already reported as a
+    # blocker above - this is the second half of that check, at the moment it
+    # is acted on, because the gap between the two is where the race lives.
+    await repo_service.land(
+        conn,
+        repo_id=UUID(str(detail["source_repo_id"])),
+        branch=await repo_service.default_branch(
+            conn, UUID(str(detail["source_repo_id"]))
+        ),
+        commit_id=UUID(str(detail["source_commit_id"])),
+    )
     await fetch_one(
         conn,
         """
