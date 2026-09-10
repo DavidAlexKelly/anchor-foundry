@@ -65,6 +65,16 @@ import {
 // `worstFirst` of its own. The two modules answer the same *shape* of question
 // about different things - a branch's checks, a run's tests - so the collision
 // is a sign the naming is right rather than a sign one of them should move.
+// Aliased where they collide with this file's other vocabulary: `subtitle` and
+// `emptyReason` are words several of these modules use about their own subject.
+import {
+  canCreate as canCreateTag,
+  deleteQuestion as tagDeleteQuestion,
+  emptyReason as tagsEmptyReason,
+  nameProblem as tagNameProblem,
+  subtitle as tagSubtitle,
+  willPin,
+} from "@/lib/tags";
 import {
   andMore,
   mostRecent,
@@ -1266,9 +1276,153 @@ function BranchesTab({
         )}
       </section>
 
+      {/* p.17: "The branches tab also lets you access a list of tags." Here
+          rather than as a tab of its own, because that is where the
+          specification puts it and because a tag is a name for a commit on one
+          of the branches above - the two are read together. */}
+      <TagsSection
+        wid={wid}
+        pid={pid}
+        rid={rid}
+        branch={current}
+        hasCommits={known.some((b) => b.head_commit_id !== null)}
+      />
+
       {note && <p className="state">{note}</p>}
       {failure && <p className="state error">{failure}</p>}
     </div>
+  );
+}
+
+
+/** p.17's tags: "like immutable branches".
+ *
+ *     "A tag can be used to mark a significant version of the code for future
+ *      reference by giving it a version number or name… A tag can be created
+ *      from the current version of a branch, or from any arbitrary commit."
+ *
+ * **The immutability is the database's** (db 0072's trigger), and the naming
+ * convention is the repository's own `repoSettings.json` read at the commit
+ * being tagged - so this offers, and refuses nothing the server would not.
+ * The wording rules are in `lib/tags.ts`.
+ */
+function TagsSection({
+  wid,
+  pid,
+  rid,
+  branch,
+  hasCommits,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  hasCommits: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [message, setMessage] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const tags = useQuery({
+    queryKey: ["repo-tags", rid],
+    queryFn: () => repoApi.tags(wid, pid, rid),
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      repoApi.createTag(wid, pid, rid, {
+        name: name.trim(),
+        branch,
+        message: message.trim() || undefined,
+      }),
+    onSuccess: () => {
+      setName("");
+      setMessage("");
+      setFailure(null);
+      queryClient.invalidateQueries({ queryKey: ["repo-tags", rid] });
+    },
+    // **The server's own sentence, unchanged.** When a repository set an
+    // `errorMessage` in `repoSettings.json` that is what arrives here, and it
+    // was written by somebody for their colleagues (p.17).
+    onError: (e: Error) => setFailure(e instanceof ApiError ? e.message : String(e)),
+  });
+
+  const remove = useMutation({
+    mutationFn: (tagId: string) => repoApi.deleteTag(wid, pid, rid, tagId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["repo-tags", rid] }),
+    onError: (e: Error) => setFailure(e instanceof ApiError ? e.message : String(e)),
+  });
+
+  const rows = tags.data ?? [];
+  const problem = tagNameProblem(name);
+  const empty = tags.isSuccess ? tagsEmptyReason(rows.length, hasCommits) : null;
+
+  return (
+    <section className="repo-branch-list" data-testid="tags-section">
+      <h3>Tags</h3>
+      {empty && <p className="state" data-testid="tags-empty">{empty}</p>}
+      {rows.length > 0 && (
+        <ul data-testid="tags-list">
+          {rows.map((t) => (
+            <li key={t.id}>
+              <span className="repo-branch-name" data-testid={`tag-${t.name}`}>{t.name}</span>
+              <code className="repo-sha">{tagSubtitle(t)}</code>
+              <button
+                type="button"
+                className="repo-branch-delete"
+                data-testid={`tag-delete-${t.name}`}
+                onClick={() => {
+                  // It asks, and it says what is *not* at risk: p.17 warns
+                  // about deleting branches because that can lose work, and a
+                  // tag cannot.
+                  if (window.confirm(tagDeleteQuestion(t))) remove.mutate(t.id);
+                }}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {hasCommits && (
+        <form
+          className="repo-branch-new"
+          onSubmit={(e) => {
+            e.preventDefault();
+            create.mutate();
+          }}
+        >
+          <input
+            type="text"
+            value={name}
+            placeholder="1.4.0"
+            data-testid="tag-name"
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            type="text"
+            value={message}
+            placeholder="why this version matters (optional)"
+            data-testid="tag-message"
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <button
+            type="submit"
+            data-testid="tag-create"
+            disabled={!canCreateTag(name) || create.isPending}
+          >
+            New Tag
+          </button>
+          {/* A tag can never be moved, so this is the one moment it can be got
+              right - a form that did not say which commit would be asking for
+              a permanent decision blind. */}
+          <span className="soft" data-testid="tag-will-pin">{willPin(branch, undefined)}</span>
+        </form>
+      )}
+      {problem && <p className="state error" data-testid="tag-name-problem">{problem}</p>}
+      {failure && <p className="state error" data-testid="tag-failure">{failure}</p>}
+    </section>
   );
 }
 

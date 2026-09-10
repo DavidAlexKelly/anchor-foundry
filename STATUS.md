@@ -4441,6 +4441,57 @@ this unit is about: the parser was `test_report.py`, so pytest collected our
 *source module* as a test file and warned that it could not collect
 `TestOutcome`. Renamed `unit_test_report.py`.
 
+### 299. Tags, and the first reading of repoSettings.json (this session)
+
+Item 7's largest piece. p.17: tags are *"like immutable branches"*, marking a
+significant version *"for future reference"*, created from a branch's current
+version or from any arbitrary commit.
+
+**"Immutable" is the whole design, and it is a trigger rather than a service
+rule.** A branch is a name whose commit moves; a tag is a name whose commit does
+not, and that is the entire difference. `code_tags.create` could have refused to
+move one — and the next writer of an UPDATE would not have met that refusal: a
+migration, a repair script, a feature nobody has thought of. A tag whose commit
+moved is a lie discovered by whoever resolves it, possibly a year later. So db
+0072 puts the check where every writer has to pass, and an API test drives a raw
+UPDATE from outside the service to prove it.
+
+The name is fixed too — renaming and re-creating are the same act from a
+reader's point of view, except that renaming silently breaks the references that
+already exist. `message` may be corrected: a sentence about *why* is not what
+anything resolves.
+
+**`repoSettings.json` is read for the first time here.** p.17 puts tag-name
+validation in that file, with a regex and the repository's own `errorMessage`,
+and implementing Foundry's mechanism was the right call over a settings table:
+the rule is about a repository's *contents*, so it travels with them — a branch
+that adds it, a commit that relaxes it, and a history that says who changed the
+convention and when. A column in `code_repos` would have none of that.
+
+Three decisions inside it, each written where it is made:
+
+- **The repository's sentence, not ours.** `"Tag name must have the format x.x.x
+  or x.x.x-rcx."` was written by somebody for their colleagues, and replacing it
+  with "invalid tag name" throws away the only part of the refusal that helps.
+- **A settings file that will not parse is ignored, not fatal.** It is a
+  convention, not a permission, and failing closed would stop every tag in the
+  repository until somebody fixed it — while the person blocked is rarely the
+  person who broke it. The same for a regex that will not compile.
+- **`fullmatch`, not `search`.** p.17's example is anchored and most people's
+  will be; one that is not would otherwise accept `v1.4.0-wip-DO-NOT-USE`
+  because `1.4.0` appears inside it, which is the opposite of what somebody
+  writing a convention meant.
+
+**And the browser does not carry a copy of that regex.** It refuses only the
+floor db 0072 puts on the column, so an impossible name costs no round trip —
+but the convention lives in a file the browser has not read, and a second copy
+would disagree with it the first time somebody edited the file.
+
+**Deleting a tag says what is *not* at risk.** p.17 warns about deleting
+branches because that can lose work; a tag cannot, since `ON DELETE RESTRICT`
+holds the commit. A confirmation that did not say so would borrow the branch
+warning's weight for a much smaller act.
+
 ### 298. The two runners, asked the same questions (this session)
 
 Borrowed from the Bun team's Zig-to-Rust rewrite, on the user's suggestion. The

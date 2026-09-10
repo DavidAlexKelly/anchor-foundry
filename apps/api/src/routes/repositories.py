@@ -33,6 +33,7 @@ from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import code as code_service
 from ..services import code_checks as check_service
+from ..services import code_tags as tag_service
 from ..services import code_test_runs as test_run_service
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
@@ -706,6 +707,136 @@ async def list_test_runs(
         )
         rows = await test_run_service.latest(conn, repo_id=repo_id, branch=branch)
     return [_run_out(r) for r in rows]
+
+
+class TagIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    #: p.17: "from the current version of a branch, or from any arbitrary
+    #: commit". Both, and never both at once - `resolve_ref` is what settles
+    #: that, and it already refuses the ambiguity for every other route here.
+    branch: str | None = None
+    commit_id: UUID | None = None
+    message: str | None = Field(default=None, max_length=1000)
+
+
+class TagOut(BaseModel):
+    id: UUID
+    repo_id: UUID
+    name: str
+    commit_id: UUID
+    message: str | None = None
+    created_at: datetime
+    created_by: UUID | None = None
+    created_by_email: str | None = None
+    #: The commit's own message, so a tags list says what was cut and not only
+    #: when. A list of version numbers and dates makes you open each one.
+    commit_message: str | None = None
+
+
+@router.get("/{repo_id}/tags", response_model=list[TagOut])
+async def list_tags(
+    repo_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[TagOut]:
+    """p.17's tags section of the Branches tab."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await tag_service.listing(conn, repo_id=repo_id)
+    return [TagOut(**r) for r in rows]
+
+
+@router.post("/{repo_id}/tags", response_model=TagOut, status_code=status.HTTP_201_CREATED)
+async def create_tag(
+    repo_id: UUID,
+    body: TagIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> TagOut:
+    """p.17: "A tag can be created from the current version of a branch, or from
+    any arbitrary commit."
+
+    **Editor, not owner.** A tag marks a version; it changes no code and moves
+    no branch, and `code_tags`' trigger means it cannot later be pointed
+    somewhere else. Whoever may commit may say which commit mattered.
+
+    The repository's own naming convention comes from `repoSettings.json` at the
+    commit being tagged - see `code_tags.check_name` and p.17's
+    `tagNameValidation`.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        ref = await repo_service.resolve_ref(
+            conn,
+            repo_id=repo_id,
+            branch=body.branch or (None if body.commit_id else str(repo["default_branch"])),
+            commit_id=body.commit_id,
+            allow_missing_branch=body.branch is None and body.commit_id is None,
+        )
+        if ref is None:
+            # A repository with no commits has no version to mark, and a tag
+            # pointing at nothing is the state db 0072 refuses outright.
+            raise ConflictError(
+                "there is nothing committed on this branch yet, so there is no "
+                "version to tag"
+            )
+        files = await repo_service.read_tree(
+            conn, workspace_id=access.workspace_id, commit_id=ref
+        )
+        try:
+            row = await tag_service.create(
+                conn,
+                repo_id=repo_id,
+                name=body.name,
+                commit_id=ref,
+                settings=tag_service.read_settings(files),
+                message=body.message,
+                created_by=access.auth.user_id,
+            )
+        except tag_service.TagNameRefused as exc:
+            # 422: the name is the request body and it is the thing that is
+            # wrong. The message is the repository's own where it set one.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="repository.tag",
+            resource_type="code_repo",
+            resource_id=repo_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"tag": body.name, "commit_id": str(ref)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    return TagOut(**row, created_by_email=None, commit_message=None)
+
+
+@router.delete("/{repo_id}/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT,
+               response_model=None)
+async def delete_tag(
+    repo_id: UUID,
+    tag_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> None:
+    """A mistyped name has to be removable.
+
+    Deleting takes nothing with it - db 0072 keeps `ON DELETE RESTRICT` on the
+    commit, so the code is exactly as safe afterwards. That is why p.17's
+    warning about deleting *branches* ("this can result in lost work for
+    others") has no counterpart here.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        await tag_service.remove(conn, repo_id=repo_id, tag_id=tag_id)
 
 
 @router.post("/{repo_id}/commits", response_model=CommitOut, status_code=status.HTTP_201_CREATED)

@@ -9,6 +9,7 @@ exists, and an empty repository reading as empty rather than as missing.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import uuid
@@ -644,3 +645,239 @@ def test_the_listing_can_be_asked_about_one_branch(client: TestClient, fx: Fixtu
         client.get(f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.viewer_sub)).json()
     ]
     assert on_main in everything and on_sandbox in everything
+
+
+# ---- tags (§299; p.17) --------------------------------------------------------
+SEMVER_SETTINGS = json.dumps({
+    "tagNameValidation": {
+        # p.17's own example, verbatim.
+        "regex": r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-rc\d+)?$",
+        "errorMessage": "Tag name must have the format x.x.x or x.x.x-rcx.",
+    }
+})
+
+
+def test_a_tag_can_be_made_from_a_branch_or_from_any_commit(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.17: "A tag can be created from the current version of a branch, or from
+    any arbitrary commit." Both, and the second is what makes a tag useful after
+    the fact - you rarely know at the time which version mattered."""
+    repo = make_repo(client, fx)
+    # A message on the first, because the list is asserted to carry it - the
+    # helper's default is empty, which is what a tags list would then show.
+    first = commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"},
+                   message="the first cut")
+    second = commit(client, fx, repo["id"], {"src/a.sql": "SELECT 2\n"})
+
+    from_branch = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "1.1.0"},
+    )
+    assert from_branch.status_code == 201, from_branch.text
+    assert from_branch.json()["commit_id"] == second["id"]
+
+    from_commit = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "1.0.0", "commit_id": first["id"], "message": "the first cut"},
+    )
+    assert from_commit.status_code == 201, from_commit.text
+    assert from_commit.json()["commit_id"] == first["id"]
+
+    listed = client.get(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.viewer_sub)
+    ).json()
+    # Newest first: a tags list is read to answer "what did we cut recently",
+    # and a version number sorts by neither of the orders people expect.
+    assert [t["name"] for t in listed] == ["1.0.0", "1.1.0"]
+    # The commit's own message travels, so the list says what was cut and not
+    # only when.
+    assert listed[0]["commit_message"] == "the first cut"
+
+
+def test_a_tag_never_moves(client: TestClient, fx: Fixture) -> None:
+    """**"Like immutable branches", and immutable is the whole difference.**
+
+    A branch is a name whose commit moves; a tag is a name whose commit does
+    not. Re-tagging is refused with what the name already points at, because
+    the reader's next question is always "the same commit, or a different one?"
+    """
+    repo = make_repo(client, fx)
+    first = commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"})
+    assert client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "2.0.0"},
+    ).status_code == 201
+
+    commit(client, fx, repo["id"], {"src/a.sql": "SELECT 2\n"})
+    again = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "2.0.0"},
+    )
+    assert again.status_code == 409, again.text
+    assert "never moves" in again.text
+    assert first["id"][:8] in again.text, "the refusal should say what it points at"
+
+
+def test_the_database_refuses_to_move_a_tag_even_from_outside_the_service(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The rule is a trigger, not a service check, and this is why.**
+
+    A refusal that lives only in `code_tags.create` is one the next writer of an
+    UPDATE does not meet - a migration, a repair script, a feature nobody has
+    thought of. A tag whose commit moved is a lie discovered by whoever resolves
+    it, possibly a year later. So the check is where every writer has to pass.
+    """
+    repo = make_repo(client, fx)
+    first = commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"})
+    second = commit(client, fx, repo["id"], {"src/a.sql": "SELECT 2\n"})
+    tag = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "3.0.0", "commit_id": first["id"]},
+    ).json()
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.RaiseException, match="a tag is immutable"):
+            conn.execute(
+                "UPDATE code_tags SET commit_id = %s WHERE id = %s",
+                (second["id"], tag["id"]),
+            )
+        with pytest.raises(psycopg.errors.RaiseException, match="cannot be renamed"):
+            conn.execute(
+                "UPDATE code_tags SET name = %s WHERE id = %s", ("3.0.1", tag["id"])
+            )
+        # The message may be corrected: a sentence about *why* is not what
+        # anything resolves.
+        conn.execute(
+            "UPDATE code_tags SET message = %s WHERE id = %s", ("clearer", tag["id"])
+        )
+
+
+def test_the_repositorys_own_naming_convention_is_enforced(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.17's `tagNameValidation` in `repoSettings.json`, which is **Foundry's
+    own mechanism and the first thing here to read that file**.
+
+    A settings table would have been easier and worse: the rule is about a
+    repository's contents, so it travels with them - a branch that adds it, a
+    commit that relaxes it, and a history that says who changed the convention
+    and when.
+    """
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {
+        "repoSettings.json": SEMVER_SETTINGS,
+        "src/a.sql": "SELECT 1\n",
+    })
+
+    refused = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "release-candidate"},
+    )
+    assert refused.status_code == 422, refused.text
+    # **The repository's own sentence**, not ours. p.17 shows the field for
+    # exactly this, and replacing it with "invalid tag name" would throw away
+    # the only part of the refusal that helps.
+    assert "Tag name must have the format x.x.x" in refused.text
+
+    accepted = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "1.4.0-rc2"},
+    )
+    assert accepted.status_code == 201, accepted.text
+
+
+def test_a_settings_file_that_will_not_parse_does_not_block_every_tag(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A convention, not a permission.** A syntax error in the settings file
+    would otherwise stop every tag in the repository until somebody fixed it -
+    and the person blocked is rarely the person who broke it. The convention
+    stops being enforced, which the next tag makes visible."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {
+        "repoSettings.json": "{ this is not json",
+        "src/a.sql": "SELECT 1\n",
+    })
+    made = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "anything-at-all"},
+    )
+    assert made.status_code == 201, made.text
+
+
+def test_an_empty_repository_has_no_version_to_tag(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A tag pointing at nothing is the state db 0072 refuses outright, so the
+    refusal happens here where it can say why."""
+    repo = make_repo(client, fx)
+    made = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "0.1.0"},
+    )
+    assert made.status_code == 409, made.text
+    assert "nothing committed" in made.text
+
+
+def test_a_tag_can_be_deleted_and_takes_nothing_with_it(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A mistyped name has to be removable, and deleting a tag is safe in a way
+    deleting a branch is not: `ON DELETE RESTRICT` on the commit means the code
+    is exactly as safe afterwards."""
+    repo = make_repo(client, fx)
+    made = commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"})
+    tag = client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "0.9.0"},
+    ).json()
+
+    assert client.delete(
+        f"{base(fx)}/{repo['id']}/tags/{tag['id']}", headers=hdr(fx.editor_sub)
+    ).status_code == 204
+    assert client.get(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.viewer_sub)
+    ).json() == []
+    # The commit it pointed at is still there and still readable.
+    tree = client.get(
+        f"{base(fx)}/{repo['id']}/tree?commit_id={made['id']}", headers=hdr(fx.viewer_sub)
+    )
+    assert tree.status_code == 200, tree.text
+
+
+def test_tagging_is_editor_and_reading_is_viewer(client: TestClient, fx: Fixture) -> None:
+    """A tag marks a version; it changes no code and moves no branch, and the
+    trigger means it cannot later be pointed elsewhere. Whoever may commit may
+    say which commit mattered."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {"src/a.sql": "SELECT 1\n"})
+    assert client.post(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.viewer_sub),
+        json={"name": "5.0.0"},
+    ).status_code == 403
+    assert client.get(
+        f"{base(fx)}/{repo['id']}/tags", headers=hdr(fx.viewer_sub)
+    ).status_code == 200
+
+
+def test_a_tag_from_another_repository_is_not_deletable_here(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Scoped to the repository as well as the id, the same three-legged check
+    every other route here makes."""
+    mine = make_repo(client, fx)
+    theirs = make_repo(client, fx)
+    commit(client, fx, theirs["id"], {"src/a.sql": "SELECT 1\n"})
+    tag = client.post(
+        f"{base(fx)}/{theirs['id']}/tags", headers=hdr(fx.editor_sub),
+        json={"name": "6.0.0"},
+    ).json()
+
+    assert client.delete(
+        f"{base(fx)}/{mine['id']}/tags/{tag['id']}", headers=hdr(fx.editor_sub)
+    ).status_code == 404
+    assert client.delete(
+        f"{base(fx)}/{theirs['id']}/tags/{tag['id']}", headers=hdr(fx.editor_sub)
+    ).status_code == 204

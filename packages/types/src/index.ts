@@ -2600,3 +2600,28 @@ export interface CodeTestRun {
   started_at: string | null;
   finished_at: string | null;
 }
+
+/** A name pinned to a commit that never moves (db 0072; §299; p.17).
+ *
+ * "Like immutable branches" — a branch is a name whose commit moves, a tag is
+ * a name whose commit does not, and that is the entire difference. The
+ * immutability is a database trigger rather than a service rule, so there is
+ * no shape of update this type could describe.
+ */
+export interface RepositoryTag {
+  id: string;
+  repo_id: string;
+  name: string;
+  commit_id: string;
+  /** Why this version mattered, or null. p.17's dialog has no such field; ours
+   * does because "1.4.0" says what it is and not why, and the one moment
+   * somebody knows why is the moment they type it. */
+  message: string | null;
+  created_at: string;
+  created_by: string | null;
+  created_by_email: string | null;
+  /** The tagged commit's own message, so a list says what was cut and not only
+   * when. Null on the row returned by creating one — the list is where it is
+   * read. */
+  commit_message: string | null;
+}

@@ -268,6 +268,30 @@ export const repositories = {
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,
     ),
+  /** This repository's tags, newest first (§299; p.17). */
+  tags: (wid: string, pid: string, rid: string) =>
+    request<import("./types").RepositoryTag[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tags`,
+    ),
+  /** Pin a name to a commit. p.17: "from the current version of a branch, or
+   * from any arbitrary commit" - so one of `branch` or `commitId`, never both,
+   * which the server settles through the same `resolve_ref` every other route
+   * here uses. */
+  createTag: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { name: string; branch?: string; commit_id?: string; message?: string },
+  ) =>
+    request<import("./types").RepositoryTag>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tags`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  deleteTag: (wid: string, pid: string, rid: string, tagId: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tags/${tagId}`,
+      { method: "DELETE" },
+    ),
   /** Ask for this repository's unit tests to be run over a working set (§294).
    *
    * **Returns a queued job, not a report.** Running unit tests is running
