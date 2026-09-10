@@ -280,3 +280,49 @@ def test_the_worker_image_carries_what_it_runs_customer_tests_with() -> None:
         "the runner task runs customer unit tests with pytest and installs "
         "requirements.txt only"
     )
+
+
+#: The CI workflow, read as text. Structural checks about what a job installs
+#: belong beside the ones about what a virtualenv can hold.
+WORKFLOW = ".github/workflows/ci.yml"
+
+#: Which app each `e2e/` import belongs to, and the requirements file the
+#: browser job must install to satisfy it.
+CROSS_APP_IMPORTS = {
+    "anchor_worker": "apps/worker/requirements.txt",
+}
+
+
+def test_the_browser_job_installs_what_the_browser_suite_imports() -> None:
+    """**A suite that cannot run in a fresh checkout is a suite that is not
+    run**, and this file exists because that happened twice already.
+
+    §295's browser tests drive the worker's own op — the dev stack runs no
+    Dagster daemon, so a queued test run would sit in the table for ever — and
+    the browser job installed only `apps/api`'s requirements. Eight tests went
+    red on CI with `No module named 'dagster'` after passing locally, because
+    the shared virtualenv had it installed by hand. That is word for word the
+    failure `apps/api/requirements-dev.txt`'s own comment describes about
+    playwright.
+
+    So: whatever `e2e/` imports across an app boundary, the browser job has to
+    install. Checked by reading both, rather than by remembering.
+    """
+    e2e = os.path.join(ROOT, "e2e")
+    workflow = open(os.path.join(ROOT, WORKFLOW), encoding="utf-8").read()
+
+    imported = set()
+    for name in os.listdir(e2e):
+        if not name.endswith(".py"):
+            continue
+        source = open(os.path.join(e2e, name), encoding="utf-8").read()
+        for package, requirement in CROSS_APP_IMPORTS.items():
+            if re.search(rf"^\s*(from|import)\s+{re.escape(package)}\b", source, re.M):
+                imported.add((package, requirement, name))
+
+    for package, requirement, name in sorted(imported):
+        assert requirement in workflow, (
+            f"e2e/{name} imports {package}, so the browser job in {WORKFLOW} has to "
+            f"install {requirement} - without it the suite fails on a fresh checkout "
+            "and passes on any machine whose virtualenv happens to have it"
+        )

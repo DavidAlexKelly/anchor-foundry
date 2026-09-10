@@ -1408,6 +1408,10 @@ button { font: inherit; cursor: pointer; }
 .repo-checks-verdict.unknown .chip,
 .repo-checks-verdict.warning .chip { background: var(--brass-wash); color: var(--brass, #b07d2b); }
 .repo-check-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+/* The unit-test row on the Checks tab (§296) looks like a check and is not one
+   - a check belongs to a proposal, a test run to a branch and a working set.
+   Same styling, its own class, so counting checks still counts checks. */
+.repo-check-tests,
 .repo-check {
   border: 1px solid var(--line); border-left-width: 3px;
   border-radius: var(--radius); padding: 9px 12px;
@@ -1415,6 +1419,13 @@ button { font: inherit; cursor: pointer; }
 .repo-check.fail { border-left-color: var(--danger); }
 .repo-check.error, .repo-check.warn { border-left-color: var(--brass, #b07d2b); }
 .repo-check.pass { border-left-color: var(--accent); }
+/* The unit-test row's own words (§296): `passed` / `failed` / `pending` /
+   `none`, which are the vocabulary the checks list uses in the *verdict* line
+   rather than in a row. Mapped to the same three colours so the tab reads as
+   one thing. */
+.repo-check-tests.failed { border-left-color: var(--danger); }
+.repo-check-tests.pending { border-left-color: var(--brass, #b07d2b); }
+.repo-check-tests.passed { border-left-color: var(--accent); }
 .repo-check-head { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; }
 .repo-check-head code { font-family: var(--font-mono); font-weight: 600; }
 .repo-check-summary { margin: 5px 0; font-size: 12.5px; color: var(--ink-2); }

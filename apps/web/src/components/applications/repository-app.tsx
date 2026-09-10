@@ -1847,7 +1847,14 @@ function ChecksTab({
           proposal checks because they are about this branch as it stands,
           which is the question somebody opening this tab has first - and they
           carry their own scope line for the same reason the checks do. */}
-      <div className={`repo-check ${testStatus}`} data-testid="checks-tests">
+      {/* **`repo-check-tests`, not `repo-check`.** The first version reused the
+          proposal check's class and three of §285's tests went red counting
+          `.repo-check`: they were right, and the class was the bug. A unit
+          test run is not a proposal check - different scope, different origin
+          (db 0071) - and sharing the class made "how many checks ran on this
+          branch" answer a different question by one. The styling is shared
+          deliberately; the identity is not. */}
+      <div className={`repo-check-tests ${testStatus}`} data-testid="checks-tests">
         <div className="repo-check-head">
           <span className="chip">{testStatus === "none" ? "not run" : testStatus}</span>
           <code>unit tests</code>

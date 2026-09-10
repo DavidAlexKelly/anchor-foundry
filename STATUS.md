@@ -4441,6 +4441,37 @@ this unit is about: the parser was `test_report.py`, so pytest collected our
 *source module* as a test file and warned that it could not collect
 `TestOutcome`. Renamed `unit_test_report.py`.
 
+### 297. The two things CI caught that the local suites could not (this session)
+
+The browser job went red on eleven tests. Both causes were mine, both are
+shapes this session has been finding all along, and neither could have been
+found by running the suites locally - which is the point of having CI at all.
+
+**Eight tests: `No module named 'dagster'`.** §295's browser suite drives the
+worker's own op, because the dev stack runs no Dagster daemon and a queued test
+run would otherwise sit in the table for ever. The browser job installs
+`apps/api`'s requirements and nothing else. It passed locally because the shared
+virtualenv had dagster installed by hand — which is, word for word, the failure
+`apps/api/requirements-dev.txt`'s own comment records about playwright: *"the
+suite ran locally because a venv had it installed by hand, and a fresh checkout
+could not have run it at all."*
+
+`work_the_queue`'s docstring even said it imported inside the function *"so a
+machine without the worker's dependencies fails on the test that needs them,
+naming the import"* — written in anticipation of exactly this and then not acted
+on. The job now installs the worker's runtime requirements, and
+`test_dependency_pins.py` asserts it: whatever `e2e/` imports across an app
+boundary, the browser job has to install. Checked by reading both files rather
+than by remembering.
+
+**Three tests: `.repo-check` counted three where two were expected.** §296's
+unit-test row on the Checks tab reused the proposal check's CSS class, so three
+of §285's tests started counting it. **They were right and the class was the
+bug**: a unit test run is not a proposal check — different scope, different
+origin (db 0071) — and sharing the class made "how many checks ran on this
+branch" answer a different question by one. It has `repo-check-tests` now, with
+the styling shared deliberately and the identity not.
+
 ### 296. Test output in the Checks tab, and item 6 closed (this session)
 
 p.19: *"The Checks tab will also include the output of any unit tests that have
