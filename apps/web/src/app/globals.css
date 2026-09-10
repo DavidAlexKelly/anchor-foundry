@@ -1348,6 +1348,17 @@ button { font: inherit; cursor: pointer; }
   background: #fff; cursor: pointer;
 }
 .repo-tree-actions button:hover { border-color: var(--accent); }
+/* Moving several transforms into a repository at once (§289). */
+.move-together {
+  border: 1px solid var(--accent); border-left-width: 3px;
+  background: var(--accent-wash); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.move-together select, .move-together input {
+  font: inherit; font-size: 12.5px; padding: 4px 8px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+}
+
 /* p.14's File Changes helper (§287). */
 .repo-changes { display: grid; gap: 8px; margin-top: 10px; }
 .repo-changes-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }

@@ -4388,6 +4388,50 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 289. Adopting several at once, and what a change set becomes (this session)
+
+Build-order item 1 has been blocked since §278 found five capabilities living
+only on the page B.1 deletes. Four are re-homed or redundant; this one is
+`saveChangeSet` — the row §278 called decision 0001's "one genuinely new
+concept": *"these three transforms changed together, for one reason."*
+
+**A commit says the same thing about a repository's files**, so the successor is
+*adopt them together, then commit together*. That is only a successor if
+adopting **is** together. Six adoptions are six commits and six unrelated moves
+in the history — and a migration costing six clicks per transform is one a
+project with forty of them will not do, which strands them in practice even
+though nothing refused. So the unit is bulk adoption, and the shape of it is the
+argument for it.
+
+**All of them or none.** A batch that adopted four and refused two leaves the
+project in a state nobody asked for, and the person then has to work out which
+four. Every model is checked before any file is written, and every refusal names
+the model it is about — in a batch the whole point of the message is which of
+the six it concerns.
+
+**`adopt` is now `adopt_many` with a list of one.** It keeps its own route and
+its own screen, but a second implementation would be a second set of refusals
+and the two would drift the first time either was improved.
+
+**And the batch found an edge the single case never could.** `default_path`
+slugifies the model's name, and slugify lowercases — so `Daily_Orders_x` and
+`daily_orders_x` are two names a declaration accepts as different and one file.
+Adopted one at a time the second collides with the *tree* and is refused;
+adopted together there is no tree between them, and without a check the second
+would silently overwrite the first: one file, two models pointing at it, and a
+publish that renames one of them.
+
+**A test that skipped was a test that never ran.** The audit assertion reached
+for `/workspaces/{id}/audit?action=…`, which does not exist, and skipped itself
+with a plausible message — the audit endpoint is `/org/audit`, org-admin only
+and unfiltered. A skip that reads as a capability check and is really a typo is
+the worst kind, because it looks like diligence.
+
+**And a harness fact worth keeping.** Playwright's `has_text` matches
+case-insensitively, so a row filter on `daily_orders_x` selects the row for
+`Daily_Orders_x` too — which is exactly the pair the collision test needs. The
+checkbox's `aria-label` carries the name verbatim and matches exactly.
+
 ### 288. Reset, and the draft it has to take with it (this session)
 
 `code-repositories.md` §2.2's Reset row, p.13: *"Reset the contents of all files

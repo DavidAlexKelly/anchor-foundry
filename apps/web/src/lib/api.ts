@@ -745,6 +745,27 @@ export const models = {
    * than the browser deriving it: the server's rule runs the name through
    * `datasets.slugify`, and a second copy here is the mirrored-list problem
    * §191 found. The answer comes back in the response. */
+  /** Move several transforms into a repository as **one commit** (§289).
+   *
+   * What a change set becomes once the Code pillar page is gone: "these three
+   * moved together, for one reason" is what a commit says about files. All of
+   * them or none - a batch that moved four and refused two leaves the project
+   * in a state nobody asked for. */
+  adoptMany: (
+    wid: string,
+    pid: string,
+    input: {
+      model_ids: string[];
+      repository_id: string;
+      branch?: string;
+      paths?: Record<string, string>;
+      message?: string;
+    },
+  ) =>
+    request<import("./types").ModelAdoption[]>(
+      `/workspaces/${wid}/projects/${pid}/models/adopt`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   adopt: (
     wid: string,
     pid: string,

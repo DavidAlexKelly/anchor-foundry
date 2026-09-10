@@ -14,6 +14,7 @@ import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { Model } from "@/lib/types";
 import { authoredInRepository, canAdopt, pathProblem, readOnlyReason } from "@/lib/model-authoring";
+import { canMove, chosen, defaultMessage, moveLabel } from "@/lib/bulk-adoption";
 import { attribution, emptyNote, isChangeSet, scopeLabel } from "@/lib/transform-history";
 
 const DEFAULT_SQL = "SELECT *\n  FROM orders\n LIMIT 100";
@@ -580,11 +581,17 @@ function ModelRow({
   projectId,
   model,
   canEdit,
+  selected,
+  onSelect,
 }: {
   workspaceId: string;
   projectId: string;
   model: Model;
   canEdit: boolean;
+  /** Null when this transform cannot be moved, so the cell is empty rather
+   *  than holding a control that answers nothing (§289). */
+  selected: boolean | null;
+  onSelect: (on: boolean) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [adopting, setAdopting] = useState(false);
@@ -609,6 +616,21 @@ function ModelRow({
 
   return (
     <tr>
+      {/* **Empty rather than disabled when it cannot move** (§289). A greyed
+          checkbox invites the question "why not"; nothing there says the row
+          is not part of this, and the row already says why - it is authored in
+          a repository. */}
+      <td style={{ width: 28 }}>
+        {selected !== null && (
+          <input
+            type="checkbox"
+            checked={selected}
+            aria-label={`Move ${model.name} into a repository`}
+            data-testid="model-pick"
+            onChange={(e) => onSelect(e.target.checked)}
+          />
+        )}
+      </td>
       <td>
         <strong>{model.name}</strong>
         <div className="slug">
@@ -740,6 +762,10 @@ export default function ModelsPage() {
   const { project } = useProjectBySlug(workspace?.id, params.project);
   const [creating, setCreating] = useState(false);
   const [showProjectHistory, setShowProjectHistory] = useState(false);
+  // **Which transforms to move together** (§289). Ids rather than models, so a
+  // refetch that replaces the row objects does not silently empty the
+  // selection - the thing being chosen is the transform, not the render of it.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const list = useQuery({
     queryKey: ["models", project?.id],
@@ -803,10 +829,20 @@ export default function ModelsPage() {
           )}
         </div>
       )}
+      {list.data && workspace && project && picked.size > 0 && (
+        <MoveTogetherBar
+          workspaceId={workspace.id}
+          projectId={project.id}
+          models={list.data}
+          picked={picked}
+          onDone={() => setPicked(new Set())}
+        />
+      )}
       {list.data && list.data.length > 0 && workspace && project && (
         <table className="table">
           <thead>
             <tr>
+              <th aria-label="Move together" />
               <th>Model</th>
               <th>Last run</th>
               <th>Trigger</th>
@@ -821,6 +857,15 @@ export default function ModelsPage() {
                 projectId={project.id}
                 model={m}
                 canEdit={canEdit}
+                selected={canAdopt(m) ? picked.has(m.id) : null}
+                onSelect={(on) =>
+                  setPicked((current) => {
+                    const next = new Set(current);
+                    if (on) next.add(m.id);
+                    else next.delete(m.id);
+                    return next;
+                  })
+                }
               />
             ))}
           </tbody>
@@ -927,5 +972,135 @@ function ProjectHistoryDialog({
         </button>
       </div>
     </Dialog>
+  );
+}
+
+
+/** Move several transforms into a repository as one commit (§289).
+ *
+ * **This is what a change set becomes.** Decision 0001 called the change set
+ * "the one genuinely new concept" — *"these three transforms changed together,
+ * for one reason"* — and B.1 deletes the only screen that can make one. A
+ * commit says the same thing about a repository's files, so the successor is
+ * to adopt them together and commit together.
+ *
+ * The successor is only real if adopting is *together*: six adoptions are six
+ * commits and six unrelated moves in the history, and a migration costing six
+ * clicks per transform is one a project with forty of them will not do — which
+ * strands them in practice even though nothing refused.
+ */
+function MoveTogetherBar({
+  workspaceId,
+  projectId,
+  models,
+  picked,
+  onDone,
+}: {
+  workspaceId: string;
+  projectId: string;
+  models: Model[];
+  picked: Set<string>;
+  onDone: () => void;
+}) {
+  const [repositoryId, setRepositoryId] = useState("");
+  const [branch, setBranch] = useState("main");
+  const [message, setMessage] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const repositories = useQuery({
+    queryKey: ["repositories", projectId],
+    queryFn: () => repoApi.list(workspaceId, projectId),
+  });
+
+  const going = chosen(models, picked);
+  // **Prefilled, and sent only if edited.** Leaving it alone sends nothing and
+  // the server writes the same sentence; a browser that always sent its own
+  // would be a second implementation of the rule, and the two would drift.
+  //
+  // They agree today, so nothing can *observe* the difference - which is why a
+  // mutant that sends this instead of `undefined` is equivalent. The reason it
+  // is still wrong to send: the server derives from the names it has now, and
+  // this from the ones it rendered, so a transform somebody else renamed
+  // between load and submit is the one case where they part - and the commit
+  // message should describe what moved, not what was on screen.
+  const suggestion = defaultMessage(going.map((m) => m.name));
+
+  const move = useMutation({
+    mutationFn: () =>
+      modelApi.adoptMany(workspaceId, projectId, {
+        model_ids: going.map((m) => m.id),
+        repository_id: repositoryId,
+        branch,
+        message: message.trim() ? message.trim() : undefined,
+      }),
+    onSuccess: async () => {
+      setFailure(null);
+      await queryClient.invalidateQueries({ queryKey: ["models", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["repo-tree"] });
+      onDone();
+    },
+    onError: (e: Error) =>
+      setFailure(e instanceof ApiError ? e.message : "Couldn't move them."),
+  });
+
+  return (
+    <section className="move-together" data-testid="move-together">
+      <p className="field-label">{moveLabel(going.length)}</p>
+      <p className="login-note" style={{ margin: "0 0 8px" }}>
+        They move as one commit, which is what says they moved together — the
+        successor to saving several transforms as one change.
+      </p>
+      <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
+        <select
+          aria-label="Repository"
+          data-testid="move-repository"
+          value={repositoryId}
+          onChange={(e) => setRepositoryId(e.target.value)}
+        >
+          <option value="">Choose a repository…</option>
+          {repositories.data?.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Branch"
+          data-testid="move-branch"
+          value={branch}
+          onChange={(e) => setBranch(e.target.value)}
+        />
+        <input
+          aria-label="Commit message"
+          data-testid="move-message"
+          style={{ flex: "1 1 260px" }}
+          placeholder={suggestion}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+        />
+        <button
+          className="btn"
+          data-testid="move-confirm"
+          disabled={!canMove(going.length, repositoryId) || move.isPending}
+          onClick={() => move.mutate()}
+        >
+          {move.isPending ? "Moving…" : moveLabel(going.length)}
+        </button>
+        <button className="btn quiet" onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+      {repositories.data && repositories.data.length === 0 && (
+        <p className="login-note" data-testid="move-no-repositories">
+          This project has no repositories yet, so there is nowhere to move them.
+        </p>
+      )}
+      {failure && (
+        <div className="form-error" data-testid="move-error">
+          {failure}
+        </div>
+      )}
+    </section>
   );
 }

@@ -2050,3 +2050,200 @@ def test_a_path_is_normalised_before_it_is_looked_up(
     assert [r["id"] for r in rows] == [made["id"]], rows
     assert file_changes(client, fx, repo["id"], "./src/t.sql",
                         content=sql(out, source)).json()["state"] == "unchanged"
+
+
+# ---- adopting several at once (§289) -----------------------------------------
+# **What a change set becomes.** Decision 0001 called the change set "the one
+# genuinely new concept" - "these three transforms changed together, for one
+# reason" - and B.1 deletes the only screen that can make one. A commit says the
+# same thing about a repository's files, so the successor is: adopt them
+# together, then commit together. That only works if adopting *is* together.
+def adopt_many(client: TestClient, fx: Fixture, model_ids, repo_id, **kw):
+    return client.post(
+        f"{pbase(fx)}/models/adopt", headers=hdr(fx.editor_sub),
+        json={"model_ids": model_ids, "repository_id": repo_id, **kw},
+    )
+
+
+def test_several_transforms_move_in_one_commit(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """Six adoptions would be six commits and six unrelated moves in the
+    history. One commit is what says they moved together."""
+    names = [f"batch{n}_{uuid.uuid4().hex[:6]}" for n in range(3)]
+    models = [make_model(client, fx, name=n, code="SELECT 1") for n in names]
+
+    r = adopt_many(client, fx, [m["id"] for m in models], repo["id"])
+    assert r.status_code == 200, r.text
+    done = r.json()
+    assert len(done) == 3
+    assert len({d["commit_id"] for d in done}) == 1, done
+
+    tree = client.get(f"{rbase(fx)}/{repo['id']}/tree", headers=hdr(fx.viewer_sub)).json()
+    for d in done:
+        assert d["path"] in tree["files"], (d, sorted(tree["files"]))
+
+    # And every model now points at its file, which is the half that makes it
+    # editable rather than merely present.
+    after = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    moved = {m["name"]: m for m in after if m["name"] in names}
+    assert all(moved[n]["source_repo_id"] == repo["id"] for n in names), moved
+    assert all(moved[n]["source_path"] for n in names)
+
+
+def test_a_batch_refuses_whole_rather_than_moving_some_of_them(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**All of them or none.**
+
+    A batch that adopted four and refused two leaves the project in a state
+    nobody asked for, and the person then has to work out which four. So every
+    model is checked before any file is written.
+    """
+    good = make_model(client, fx, name=f"ok_{uuid.uuid4().hex[:6]}", code="SELECT 1")
+    already = make_model(client, fx, name=f"taken_{uuid.uuid4().hex[:6]}", code="SELECT 1")
+    assert adopt(client, fx, already["id"], repo["id"]).status_code == 200
+
+    r = adopt_many(client, fx, [good["id"], already["id"]], repo["id"])
+    assert r.status_code == 409, r.text
+    assert "already authored in a repository" in r.json()["detail"]
+
+    # The good one did not move.
+    after = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    still = next(m for m in after if m["id"] == good["id"])
+    assert still["source_repo_id"] is None, still
+
+
+def test_two_models_wanting_one_path_are_refused_by_name(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**Only a batch can find this out.**
+
+    `default_path` slugifies the name, which lowercases - so `Daily_Orders_x`
+    and `daily_orders_x` both become `src/daily_orders_x.sql`. Two names a
+    declaration accepts as different, and one file. Adopted one at a time the
+    second collides with the *tree* and is refused; adopted together there is
+    no tree between them, and without a check the second would silently
+    overwrite the first - one file, two models pointing at it, and a publish
+    that renames one of them.
+    """
+    tag = uuid.uuid4().hex[:6]
+    one = make_model(client, fx, name=f"daily_orders_{tag}", code="SELECT 1")
+    two = make_model(client, fx, name=f"Daily_Orders_{tag}", code="SELECT 2")
+
+    r = adopt_many(client, fx, [one["id"], two["id"]], repo["id"])
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert "would both be written to" in detail, detail
+    # Names both sides, because the fix is to give one of them a path.
+    assert f"daily_orders_{tag}" in detail and f"Daily_Orders_{tag}" in detail
+
+    # And with a path for one of them it goes through as one commit.
+    ok = adopt_many(client, fx, [one["id"], two["id"]], repo["id"],
+                    paths={two["id"]: f"src/other_{tag}.sql"})
+    assert ok.status_code == 200, ok.text
+    assert len({d["commit_id"] for d in ok.json()}) == 1
+
+
+def test_the_commit_message_names_them_and_then_counts(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A commit message listing forty transforms is one nobody reads, and the
+    first few are what makes it recognisable in a log."""
+    models = [
+        make_model(client, fx, name=f"m{n}_{uuid.uuid4().hex[:6]}", code="SELECT 1")
+        for n in range(5)
+    ]
+    assert adopt_many(client, fx, [m["id"] for m in models], repo["id"]).status_code == 200
+
+    commits = client.get(f"{rbase(fx)}/{repo['id']}/commits", headers=hdr(fx.viewer_sub)).json()
+    message = commits[0]["message"]
+    assert models[0]["name"] in message, message
+    assert "and 2 more" in message, message
+
+
+def test_the_caller_may_say_what_the_commit_says(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The reason they moved together is the thing worth recording, and only
+    the person doing it knows what it is."""
+    models = [
+        make_model(client, fx, name=f"why{n}_{uuid.uuid4().hex[:6]}", code="SELECT 1")
+        for n in range(2)
+    ]
+    assert adopt_many(client, fx, [m["id"] for m in models], repo["id"],
+                      message="Ahead of the Q3 rebuild").status_code == 200
+    commits = client.get(f"{rbase(fx)}/{repo['id']}/commits", headers=hdr(fx.viewer_sub)).json()
+    assert commits[0]["message"] == "Ahead of the Q3 rebuild"
+
+
+def test_moving_several_is_audited_once_per_transform(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**One entry per model, not one for the batch.**
+
+    The question somebody asks of an audit log is "what happened to this
+    transform", and an entry naming six of them answers it for none. They share
+    a commit id, which is what says they moved together.
+    """
+    models = [
+        make_model(client, fx, name=f"aud{n}_{uuid.uuid4().hex[:6]}", code="SELECT 1")
+        for n in range(2)
+    ]
+    assert adopt_many(client, fx, [m["id"] for m in models], repo["id"]).status_code == 200
+
+    # `GET /org/audit`, org-admin only and unfiltered - so the filtering is
+    # here rather than in a query string the endpoint does not take.
+    rows = client.get("/api/org/audit?limit=200", headers=hdr(fx.admin_sub))
+    assert rows.status_code == 200, rows.text
+    wanted = {m["id"] for m in models}
+    mine = [
+        e for e in rows.json()
+        if e["action"] == "model.adopt" and str(e.get("resource_id")) in wanted
+    ]
+    assert len(mine) == 2, mine
+    assert len({e["metadata"]["commit_id"] for e in mine}) == 1, mine
+    assert all(e["metadata"]["moved_with"] == 1 for e in mine), mine
+
+
+def test_an_empty_batch_is_refused_rather_than_committing_nothing(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A commit with no files in it is a commit that says nothing happened,
+    which is worse than a refusal because it is in the history forever."""
+    r = client.post(
+        f"{pbase(fx)}/models/adopt", headers=hdr(fx.editor_sub),
+        json={"model_ids": [], "repository_id": repo["id"]},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_two_name_move_names_both_rather_than_counting(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The counting form is for lists too long to read. Two is not too long,
+    and "Move a and -1 more" is what a boundary nobody tested looks like."""
+    models = [
+        make_model(client, fx, name=f"two{n}_{uuid.uuid4().hex[:6]}", code="SELECT 1")
+        for n in range(2)
+    ]
+    assert adopt_many(client, fx, [m["id"] for m in models], repo["id"]).status_code == 200
+    commits = client.get(f"{rbase(fx)}/{repo['id']}/commits", headers=hdr(fx.viewer_sub)).json()
+    assert commits[0]["message"] == (
+        f"Move {models[0]['name']}, {models[1]['name']} into this repository"
+    ), commits[0]
+
+
+def test_moving_several_is_editor_level(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """Same floor as the singular route, and for the same reason: adoption
+    copies the code through unchanged, so it is a change to where a definition
+    is edited from rather than to what it computes - but it still writes a
+    commit, and a viewer may not write."""
+    model = make_model(client, fx, name=f"floor_{uuid.uuid4().hex[:6]}", code="SELECT 1")
+    r = client.post(
+        f"{pbase(fx)}/models/adopt", headers=hdr(fx.viewer_sub),
+        json={"model_ids": [model["id"]], "repository_id": repo["id"]},
+    )
+    assert r.status_code == 403, r.text

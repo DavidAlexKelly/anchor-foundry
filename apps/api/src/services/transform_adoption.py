@@ -97,29 +97,25 @@ def compose(model: dict[str, Any], inputs: dict[str, str], path: str) -> str:
     return source
 
 
-async def adopt(
+async def _prepare(
     conn: AsyncConnection,
     *,
     project_id: UUID,
-    workspace_id: UUID,
     model_id: UUID,
-    repo_id: UUID,
-    branch: str,
     path: str | None,
-    actor_id: UUID,
-) -> dict[str, Any]:
-    """Write this model into this repository, and point it at the file."""
+) -> tuple[dict[str, Any], str, str]:
+    """One model, checked and composed: the model row, its path, its file.
+
+    Everything here refuses rather than repairs, and every refusal names the
+    model - in a batch the whole point of the message is which of the six it
+    is about.
+    """
     model = await model_service.get(conn, project_id, model_id)
     if model.get("source_repo_id"):
         raise ConflictError(
             f"{model['name']!r} is already authored in a repository, at "
             f"{model['source_path']}"
         )
-
-    # Raises NotFoundError through RLS if it is not this project's, which is
-    # the answer db 0006 gives everywhere: a repository in another project does
-    # not exist rather than being forbidden.
-    await repo_service.get_repository(conn, project_id=project_id, repo_id=repo_id)
 
     language = str(model["language"])
     target = path or default_path(str(model["name"]), language)
@@ -138,7 +134,54 @@ async def adopt(
 
     rows = await model_service.list_inputs(conn, model_id)
     inputs = {str(r["input_alias"]): str(r["dataset_name"]) for r in rows}
-    source = compose(model, inputs, target)
+    return model, target, compose(model, inputs, target)
+
+
+async def adopt_many(
+    conn: AsyncConnection,
+    *,
+    project_id: UUID,
+    workspace_id: UUID,
+    models: list[tuple[UUID, str | None]],
+    repo_id: UUID,
+    branch: str,
+    actor_id: UUID,
+    message: str | None = None,
+) -> list[dict[str, Any]]:
+    """Move several transforms into a repository as **one commit** (§289).
+
+    **This is what the change set becomes.** Decision 0001 called the change
+    set "the one genuinely new concept" - *"these three transforms changed
+    together, for one reason"* - and B.1 deletes the only screen that can make
+    one. A commit says the same thing about a repository's files, so the
+    successor to a change set over directly-authored transforms is: adopt them
+    together, then commit together. That only works if adopting *is* together;
+    six adoptions are six commits and six unrelated moves in the history.
+
+    **All of them or none.** A batch that adopted four and refused two would
+    leave the project in a state nobody asked for, and the person then has to
+    work out which four - so every model is checked before any file is
+    written, and the refusal names the model it is about.
+    """
+    # Raises NotFoundError through RLS if it is not this project's, which is
+    # the answer db 0006 gives everywhere: a repository in another project does
+    # not exist rather than being forbidden.
+    await repo_service.get_repository(conn, project_id=project_id, repo_id=repo_id)
+    if not models:
+        # `ValueError`, so this answers 422 like `_write_files`' "a proposal
+        # needs at least one file" - a request naming nothing is malformed
+        # rather than in conflict with anything. **The route does not repeat
+        # it**: a `min_length=1` on the field would be a second rule with a
+        # second message, and whichever fired first would be the one nobody
+        # could find in the code (§213).
+        raise ValueError("no transforms to move")
+
+    prepared: list[tuple[UUID, dict[str, Any], str, str]] = []
+    for model_id, path in models:
+        model, target, source = await _prepare(
+            conn, project_id=project_id, model_id=model_id, path=path
+        )
+        prepared.append((model_id, model, target, source))
 
     # **The whole tree, because `commit` takes a snapshot rather than a patch**
     # (decision 0003). A branch that does not exist yet is not an error: the
@@ -150,33 +193,101 @@ async def adopt(
             conn, workspace_id=workspace_id,
             commit_id=UUID(str(head["head_commit_id"])),
         )
-    if target in files:
-        raise ConflictError(
-            f"{target} already exists on {branch} - choose another path, or "
-            "publish the file that is already there"
-        )
 
+    # **Two models can want the same path, and only a batch can find out.**
+    # `default_path` slugifies the name, so "Daily orders" and "Daily Orders!"
+    # both become `src/daily_orders.sql`. Adopted one at a time the second one
+    # collides with the *tree* and is refused; adopted together there is no
+    # tree between them, and without this the second would silently overwrite
+    # the first - one file, two models pointing at it, and a publish that
+    # renames one of them.
+    claimed: dict[str, str] = {}
+    for _, model, target, _source in prepared:
+        if target in files:
+            raise ConflictError(
+                f"{target} already exists on {branch} - choose another path for "
+                f"{model['name']!r}, or publish the file that is already there"
+            )
+        if target in claimed:
+            raise ConflictError(
+                f"{model['name']!r} and {claimed[target]!r} would both be written to "
+                f"{target} - give one of them a path of its own"
+            )
+        claimed[target] = str(model["name"])
+
+    names = [str(model["name"]) for _, model, _t, _s in prepared]
     made = await repo_service.commit(
         conn,
         repo_id=repo_id,
         workspace_id=workspace_id,
         branch=branch,
-        files={**files, target: source},
-        message=f"Move {model['name']} into this repository",
+        files={**files, **{t: s for _id, _m, t, s in prepared}},
+        message=message or default_message(names),
         created_by=actor_id,
     )
 
-    # **Both, or neither.** A model pointing at a path no commit contains has
-    # no editor at all, and a file nothing points at is published as a *new*
-    # model on the next publish - two different broken states, one transaction.
-    await conn.exec_driver_sql(
-        "UPDATE models SET source_repo_id = %s, source_path = %s WHERE id = %s",
-        (str(repo_id), target, str(model_id)),
+    # **All of them, or none.** A model pointing at a path no commit contains
+    # has no editor at all, and a file nothing points at is published as a
+    # *new* model on the next publish - two different broken states, one
+    # transaction.
+    out: list[dict[str, Any]] = []
+    for model_id, _model, target, _source in prepared:
+        await conn.exec_driver_sql(
+            "UPDATE models SET source_repo_id = %s, source_path = %s WHERE id = %s",
+            (str(repo_id), target, str(model_id)),
+        )
+        out.append({
+            "model_id": str(model_id),
+            "repository_id": str(repo_id),
+            "branch": branch,
+            "path": target,
+            "commit_id": str(made["id"]),
+        })
+    return out
+
+
+def default_message(names: list[str]) -> str:
+    """What the commit says when the caller does not.
+
+    Names them up to a point and then counts, because a commit message listing
+    forty transforms is a commit message nobody reads - and the first few are
+    what makes it recognisable in a log.
+    """
+    if len(names) == 1:
+        return f"Move {names[0]} into this repository"
+    if len(names) <= 3:
+        return f"Move {', '.join(names)} into this repository"
+    return (
+        f"Move {', '.join(names[:3])} and {len(names) - 3} more "
+        "into this repository"
     )
-    return {
-        "model_id": str(model_id),
-        "repository_id": str(repo_id),
-        "branch": branch,
-        "path": target,
-        "commit_id": str(made["id"]),
-    }
+
+
+async def adopt(
+    conn: AsyncConnection,
+    *,
+    project_id: UUID,
+    workspace_id: UUID,
+    model_id: UUID,
+    repo_id: UUID,
+    branch: str,
+    path: str | None,
+    actor_id: UUID,
+) -> dict[str, Any]:
+    """One model, through the same code as many (§289).
+
+    Kept as its own function because the single case has its own route and its
+    own screen, but it is `adopt_many` with a list of one - a second
+    implementation would be a second set of refusals, and the two would drift
+    the first time either was improved.
+    """
+    done = await adopt_many(
+        conn,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        models=[(model_id, path)],
+        repo_id=repo_id,
+        branch=branch,
+        actor_id=actor_id,
+    )
+    return done[0]
