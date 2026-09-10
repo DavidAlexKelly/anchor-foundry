@@ -1620,6 +1620,12 @@ export const objects = {
     request<import("./types").ObjectInstancePage>(
       `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}&offset=${offset}`,
     ),
+  /** One object, by type and instance.
+   *
+   * **Both ids, because the instance store is partitioned by type** — one
+   * index per object type — so there is no read that takes an instance id
+   * alone. That is why a link to an object carries both (§309,
+   * `object-links.ts`), and it is the reason a link cannot be made shorter. */
   getInstance: (wid: string, typeId: string, instanceId: string) =>
     request<import("./types").ObjectInstance>(
       `/workspaces/${wid}/object-types/${typeId}/instances/${instanceId}`,
