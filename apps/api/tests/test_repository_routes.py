@@ -613,3 +613,34 @@ def test_recent_runs_are_newest_first(client: TestClient, fx: Fixture) -> None:
         f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.viewer_sub)
     ).json()
     assert [r["id"] for r in listed][:2] == list(reversed(ids))
+
+def test_the_listing_can_be_asked_about_one_branch(client: TestClient, fx: Fixture) -> None:
+    """**A survivor found this untested.** The Tests panel shows the branch it
+    is on, and a listing that ignored the filter would put a sandbox's failures
+    under `main` - a wrong answer that looks exactly like a right one."""
+    repo = make_repo(client, fx)
+    client.post(
+        f"{base(fx)}/{repo['id']}/branches",
+        headers=hdr(fx.editor_sub), json={"name": "sandbox", "from_branch": "main"},
+    )
+    body = {"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n"}}
+    on_main = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub), json=body
+    ).json()["id"]
+    on_sandbox = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub),
+        json={**body, "branch": "sandbox"},
+    ).json()["id"]
+
+    listed = client.get(
+        f"{base(fx)}/{repo['id']}/tests?branch=sandbox", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert [r["id"] for r in listed] == [on_sandbox]
+
+    # And unfiltered still means every branch, rather than the last one asked
+    # about - the two are different questions and both are asked.
+    everything = [
+        r["id"] for r in
+        client.get(f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.viewer_sub)).json()
+    ]
+    assert on_main in everything and on_sandbox in everything

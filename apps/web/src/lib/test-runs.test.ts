@@ -145,6 +145,22 @@ describe("whether the verdict is bad news", () => {
     expect(isAProblem(run({ status: "errored", outcomes: null, error: "no" }))).toBe(true);
   });
 
+  it("**believes the status over the payload**, which a survivor is why", () => {
+    // The errored branch could be deleted and the assertion above still
+    // passed: an errored run carries no outcomes, so the empty-list clause
+    // below caught it by accident. That made the line unreachable, and it
+    // rested on a coincidence of how the worker writes rows rather than on a
+    // rule - the day a run recorded partial outcomes alongside an error, a
+    // panel would have called it fine. The status is the answer.
+    expect(
+      isAProblem(run({
+        status: "errored",
+        outcomes: [outcome({}), outcome({})],
+        error: "pytest could not start",
+      })),
+    ).toBe(true);
+  });
+
   it("counts an empty run as bad news, for the same reason the verdict does", () => {
     expect(isAProblem(run({ status: "failed", outcomes: [] }))).toBe(true);
   });

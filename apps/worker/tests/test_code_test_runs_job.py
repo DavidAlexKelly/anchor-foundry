@@ -179,43 +179,84 @@ def test_a_repository_with_no_tests_does_not_end_succeeded(repository) -> None:
     assert got["outcomes"] == []
 
 
-def test_a_run_is_claimed_once_and_a_second_poll_leaves_it_alone(repository) -> None:
-    """**Two workers polling the same minute must not both run it.** The claim
-    is the `status = 'queued'` in the UPDATE's WHERE: whoever lands first gets
-    the row and the other sees none.
+def test_a_run_is_claimed_once_even_when_two_workers_found_it(repository) -> None:
+    """**Two workers polling the same minute must not both run it.**
 
-    Asserted through a second poll rather than by racing two threads: what
-    needs pinning is that a row already claimed is not picked up again, and a
-    race would test the database's own guarantees rather than this code's use
-    of them.
+    The claim is the `status = 'queued'` in the UPDATE's WHERE: whoever lands
+    first gets the row, and the other's UPDATE matches nothing and returns no
+    row. `_run_one` says so by returning False.
+
+    **Called directly, twice, and a survivor is why.** The first version of
+    this polled twice and asserted the answer did not change - which it cannot,
+    because `list_queued_test_runs()` only returns queued rows, so the second
+    poll never saw the finished one at all. The claim was doing nothing the
+    discovery filter was not already doing, in *that* test. It is doing
+    something here, which is the case it exists for: both workers discovered
+    the row while it was still queued, and only one may act on it.
     """
     run_id = queue(repository, PASSING)
-    assert poll() >= 1
-    finished_first = row(run_id)["finished_at"]
+    db = PlatformDatabase(dsn=APP_DSN)
+    context = build_op_context(resources={"platform_db": db})
 
-    # Nothing queued now, so this poll has nothing of ours to do.
-    poll()
-    assert row(run_id)["finished_at"] == finished_first
+    first = code_test_runs._run_one(context, db, run_id, repository["workspace_id"])
+    second = code_test_runs._run_one(context, db, run_id, repository["workspace_id"])
+    assert first is True
+    assert second is False, "the second worker ran a row the first had claimed"
+
+    got = row(run_id)
+    assert got["status"] == "succeeded"
+    assert len(got["outcomes"]) == 1
 
 
-def test_one_bad_run_does_not_stop_the_next(repository, monkeypatch) -> None:
-    """§263's lesson, one level up: a candidate that blows up outside the run
-    itself must not take the rest of the batch with it. A queue is the one
-    place with no caller to notice."""
+def test_a_candidate_that_blows_up_outside_the_run_does_not_end_the_batch(
+    repository, monkeypatch
+) -> None:
+    """§263's lesson, at the level it actually applies.
+
+    **A survivor found that the earlier version of this tested the wrong
+    handler.** It made `run_python_tests` raise, which `_run_one` catches
+    itself and records as `errored` - so the op's own `except` was never
+    reached and could be narrowed to `ZeroDivisionError` with nothing noticing.
+    What that handler is for is a candidate failing *outside* `_run_one`
+    entirely: a connection that will not open, a row that vanished. So this
+    breaks `_run_one`.
+    """
     first = queue(repository, PASSING)
     second = queue(repository, PASSING)
 
-    calls = {"n": 0}
-    real = code_test_runs.run_python_tests
+    real = code_test_runs._run_one
+    seen: list = []
 
-    def explode_once(files, timeout_s=None):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("something outside the run")
-        return real(files)
+    def explode_once(context, db, run_id, workspace_id):
+        seen.append(run_id)
+        if len(seen) == 1:
+            raise RuntimeError("the connection went away")
+        return real(context, db, run_id, workspace_id)
 
-    monkeypatch.setattr(code_test_runs, "run_python_tests", explode_once)
+    monkeypatch.setattr(code_test_runs, "_run_one", explode_once)
     poll()
 
+    assert len(seen) == 2, "the second candidate never got its turn"
+    # The one that got through has an answer; the one that blew up is still
+    # queued, which is right - nothing ran it, so nothing may claim it did.
     statuses = {row(first)["status"], row(second)["status"]}
-    assert statuses == {"errored", "succeeded"}, statuses
+    assert statuses == {"queued", "succeeded"}, statuses
+
+
+def test_a_run_that_raised_something_unexpected_is_errored_not_lost(
+    repository, monkeypatch
+) -> None:
+    """`_run_one`'s own defensive handler. Whatever went wrong inside the run,
+    the row gets an answer - a queued row nobody will ever pick up again is
+    worse than a bad answer, because the panel polls it for ever."""
+    run_id = queue(repository, PASSING)
+
+    def explode(files, timeout_s=None):
+        raise RuntimeError("something inside the run")
+
+    monkeypatch.setattr(code_test_runs, "run_python_tests", explode)
+    poll()
+
+    got = row(run_id)
+    assert got["status"] == "errored"
+    assert "could not run these tests" in got["error"]
