@@ -26,6 +26,7 @@ import sys
 
 import pytest
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from anchor_worker import unit_test_report  # noqa: E402
@@ -163,16 +164,74 @@ def test_the_time_limit_is_the_platforms_problem_not_the_authors(monkeypatch) ->
         )
 
 
-def test_our_own_suite_is_not_collected_into_a_customers(tmp_path) -> None:
+def test_our_own_suite_is_not_collected_into_a_customers(monkeypatch) -> None:
     """**`--rootdir`, and why it is not decoration.**
 
     Without it pytest walks upwards from the working directory looking for a
-    config file. The temp directory is under this repository's tree on a
-    developer machine, so it can find *this* repository's `pytest.ini` and run
-    our suite inside a customer's - an outcome no message would explain.
+    config file, and if it finds one it takes that directory as the rootdir and
+    reads its settings. `TMPDIR` is the user's to set, so the scratch directory
+    can perfectly well live inside a checkout of this repository - at which
+    point pytest finds *our* `pytest.ini` and applies it to a customer's run.
+
+    **A survivor is why this test looks like this.** It used to run the tests
+    in the default temp location, which is `/tmp` and therefore under no
+    repository at all, so the guard could be deleted with nothing noticing - a
+    check on a branch the test could not reach. Pointing `tempfile` inside this
+    repository is the configuration that makes it reachable, and it is one a
+    real machine can have.
     """
-    report = run_python_tests({"tests/test_one.py": "def test_it():\n    assert 1\n"})
-    assert [o.id for o in report.outcomes] == ["tests/test_one.py::test_it"]
+    import tempfile as tempfile_module
+
+    nested = os.path.join(REPO_ROOT, ".tmp-rootdir-check")
+    os.makedirs(nested, exist_ok=True)
+    monkeypatch.setattr(tempfile_module, "tempdir", nested)
+    try:
+        report = run_python_tests({"tests/test_one.py": "def test_it():\n    assert 1\n"})
+    finally:
+        monkeypatch.undo()
+    assert [o.id for o in report.outcomes] == ["tests/test_one.py::test_it"], (
+        "this repository's own configuration reached a customer's run"
+    )
+
+
+def test_a_run_that_wrote_no_report_is_not_an_empty_pass() -> None:
+    """**pytest can fail before it has anything to report.**
+
+    A `conftest.py` that will not import is the ordinary way: pytest exits with
+    a usage error and writes no XML at all. Reading that as "no tests, nothing
+    failed" would show a green panel for a repository whose tests cannot even
+    be collected - the same lie as an empty run reported as a pass, arriving by
+    a different door.
+    """
+    with pytest.raises(DatasetEngineError, match="no report"):
+        run_python_tests({
+            "conftest.py": "import a_module_that_is_not_installed_anywhere\n",
+            "tests/test_one.py": "def test_it():\n    assert 1\n",
+        })
+
+
+def test_a_multi_line_failure_is_one_line_in_the_summary_and_whole_in_the_detail() -> None:
+    """A panel shows one line per test, and pytest's message for a comparison
+    is a diff several lines long. Both halves are wanted: the line that fits on
+    the row, and the whole thing for whoever opens it."""
+    report = run_python_tests({
+        "tests/test_diff.py": (
+            "def test_it():\n"
+            "    assert {'a': 1, 'b': 2} == {'a': 1, 'b': 3}\n"
+        ),
+    })
+    (outcome,) = report.outcomes
+    assert outcome.message is not None
+    assert "\n" not in outcome.message, "a summary line has to fit on a row"
+    assert outcome.detail is not None and len(outcome.detail.splitlines()) > 1
+
+
+def test_a_report_that_will_not_parse_is_not_an_empty_run() -> None:
+    """Infrastructure, not a test failure. Returning an empty report here would
+    turn a broken run into "this repository has no tests", which reads as a
+    fact about their code and is a fact about ours."""
+    with pytest.raises(unit_test_report.ReportUnreadable):
+        unit_test_report.parse_junit("<testsuites><oops")
 
 
 # ---- which files are tests ---------------------------------------------------

@@ -240,7 +240,14 @@ def run_python_tests(
                 handle.write(content)
 
         report_path = os.path.join(tmp, "_report.xml")
-        env = {"PATH": "/usr/bin:/bin", "HOME": tmp, "PYTHONPATH": tmp,
+        # **No `PYTHONPATH`, and a mutant is why.** It used to be set to `tmp`
+        # so that a test could import the transform under test by its
+        # repository path, and deleting it changed nothing: `python -m pytest`
+        # already puts the invocation directory first on `sys.path`, and the
+        # invocation directory is `cwd` below. Two mechanisms for one promise
+        # is how they come to disagree (§213), so the one that is load-bearing
+        # is named where it lives - see `cwd`.
+        env = {"PATH": "/usr/bin:/bin", "HOME": tmp,
                "PYTHONDONTWRITEBYTECODE": "1"}
         try:
             result = subprocess.run(
@@ -258,6 +265,11 @@ def run_python_tests(
                  # this repository's own - which would run our suite inside a
                  # customer's, an outcome no message would explain.
                  "--rootdir", tmp, f"--junitxml={report_path}", tmp],
+                # **Load-bearing, not tidiness.** `python -m pytest` prepends
+                # the invocation directory to `sys.path`, so this is what makes
+                # `from src.daily import build` resolve to the repository's own
+                # file. A change here breaks every test that imports the
+                # transform it is testing.
                 cwd=tmp,
                 env=env,
                 capture_output=True,

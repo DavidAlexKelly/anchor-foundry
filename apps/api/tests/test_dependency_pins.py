@@ -56,30 +56,48 @@ NOT_RUN = {
 PIN = re.compile(r"^([A-Za-z0-9_.\-]+)(\[[^\]]*\])?==([^\s;]+)")
 
 
-def pins(path: str) -> dict[str, str]:
+def pins_in(text: str) -> dict[str, str]:
+    """The pins in a requirements file's *text*.
+
+    Split from the file-reading wrapper so the rules below can be checked
+    against a file that does not exist (§293): every requirements file in this
+    repository is correctly pinned, so a guard against an unpinned one has no
+    case in the tree to fire on and could be deleted with nothing noticing.
+    """
     found: dict[str, str] = {}
-    with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
-        for line in handle:
-            match = PIN.match(line.split("#")[0].strip())
-            if match:
-                found[match.group(1).lower().replace("_", "-")] = match.group(3)
+    for line in text.splitlines():
+        match = PIN.match(line.split("#")[0].strip())
+        if match:
+            found[match.group(1).lower().replace("_", "-")] = match.group(3)
     return found
 
 
-def requirement_lines(path: str) -> list[str]:
-    """Every line in the file that is asking for a package.
+def requirement_lines_in(text: str) -> list[str]:
+    """Every line that is asking for a package.
 
     Comments, blank lines and `-r` includes are not requirements; anything else
     is, whether or not `PIN` can read it.
     """
     lines = []
-    with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
-        for raw in handle:
-            line = raw.split("#")[0].strip()
-            if not line or line.startswith("-"):
-                continue
-            lines.append(line)
+    for raw in text.splitlines():
+        line = raw.split("#")[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        lines.append(line)
     return lines
+
+
+def _text(path: str) -> str:
+    with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
+        return handle.read()
+
+
+def pins(path: str) -> dict[str, str]:
+    return pins_in(_text(path))
+
+
+def requirement_lines(path: str) -> list[str]:
+    return requirement_lines_in(_text(path))
 
 
 def test_every_requirements_file_pins_everything_it_asks_for() -> None:
@@ -201,4 +219,46 @@ def test_setup_installs_what_this_file_compares() -> None:
     assert not missing, (
         f"scripts/setup.sh does not install {missing}, so a fresh checkout "
         "cannot run the suite it belongs to"
+    )
+
+
+def test_an_unpinned_requirement_is_caught() -> None:
+    """**The guard above, on a case this repository does not contain.**
+
+    Every requirements file here is correctly pinned, so the comparison in
+    `test_every_requirements_file_pins_everything_it_asks_for` never sees a
+    file that would fail it — which made it a check that could be weakened
+    with nothing noticing. A mutation survived exactly that way (§293). These
+    are the same two functions, over text.
+    """
+    good = "pytest==8.3.3\nmoto[server]==5.0.13\n"
+    assert len(pins_in(good)) == len(requirement_lines_in(good)) == 2
+
+    # A range, the ordinary way a pin stops being one.
+    loose = "pytest==8.3.3\nrequests>=2.0\n"
+    assert len(requirement_lines_in(loose)) == 2
+    assert len(pins_in(loose)) == 1, "a range is not a pin"
+
+    # Comments and includes are not requirements and must not be counted as
+    # unpinned ones, or the guard fails on every file that has either.
+    noise = "# a comment\n\n-r requirements.txt\npytest==8.3.3  # trailing\n"
+    assert requirement_lines_in(noise) == ["pytest==8.3.3"]
+    assert pins_in(noise) == {"pytest": "8.3.3"}
+
+
+def test_the_worker_image_carries_what_it_runs_customer_tests_with() -> None:
+    """**A runtime pin, not a test-only one, and the distinction is deployment
+    shaped.**
+
+    `apps/worker/Dockerfile` installs `requirements.txt` alone, and the
+    transform runner task uses that same image
+    (`infra/cdk/src/constructs/services.ts`). Running a repository's unit tests
+    is a product feature (`code-repositories.md` §8), so pytest has to be in the
+    image — left in `requirements-dev.txt` it would work in every development
+    run and fail in every deployment with "No module named pytest", which is
+    the shape §292 had just finished fixing one floor down.
+    """
+    assert "pytest" in pins("apps/worker/requirements.txt"), (
+        "the runner task runs customer unit tests with pytest and installs "
+        "requirements.txt only"
     )
