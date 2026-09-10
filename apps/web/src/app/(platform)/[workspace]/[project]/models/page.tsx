@@ -16,6 +16,13 @@ import type { Model } from "@/lib/types";
 import { authoredInRepository, canAdopt, pathProblem, readOnlyReason } from "@/lib/model-authoring";
 import { canMove, chosen, defaultMessage, moveLabel } from "@/lib/bulk-adoption";
 import { attribution, emptyNote, isChangeSet, scopeLabel } from "@/lib/transform-history";
+import {
+  describe as describeProposal,
+  unrepositoried,
+  unrepositoriedNote,
+} from "@/lib/pull-requests";
+import { ReviewSurface } from "@/components/code/review-surface";
+import { useUrlState } from "@/components/use-url-state";
 
 const DEFAULT_SQL = "SELECT *\n  FROM orders\n LIMIT 100";
 const DEFAULT_PYTHON = "output = orders.copy()\n";
@@ -829,6 +836,9 @@ export default function ModelsPage() {
           )}
         </div>
       )}
+      {workspace && project && (
+        <DirectProposals workspaceId={workspace.id} projectId={project.id} />
+      )}
       {list.data && workspace && project && picked.size > 0 && (
         <MoveTogetherBar
           workspaceId={workspace.id}
@@ -1101,6 +1111,100 @@ function MoveTogetherBar({
           {failure}
         </div>
       )}
+    </section>
+  );
+}
+
+
+/** Proposals against transforms that are in no repository (§290).
+ *
+ * **They have to be reachable somewhere before the Code pillar page can go.**
+ * §276 gave the repository application a Pull requests tab and deliberately
+ * left these out — a proposal belonging to no repository cannot honestly be
+ * listed under one — and pointed at the Code screen instead, which B.1
+ * deletes. So they live here, beside the transforms they change.
+ *
+ * **Nothing creates them any more.** §277 and §289 made the answer for a
+ * transform outside a repository "move it into one", so what is left is a
+ * finite set of open ones — and stranding those would be deleting somebody's
+ * review rather than deleting a screen.
+ */
+function DirectProposals({
+  workspaceId,
+  projectId,
+}: {
+  workspaceId: string;
+  projectId: string;
+}) {
+  const url = useUrlState();
+  const openId = url.get("proposal") ?? undefined;
+  const setParams = url.set;
+  const queryClient = useQueryClient();
+
+  const proposals = useQuery({
+    queryKey: ["code-proposals", projectId],
+    queryFn: () => codeApi.proposals(workspaceId, projectId, "open"),
+  });
+  const mine = unrepositoried(proposals.data ?? []);
+
+  if (openId) {
+    return (
+      <section className="code-review-mode" data-testid="direct-review">
+        <div className="canvas-settings-head">
+          <strong>Reviewing a change to a transform</strong>
+          <button
+            type="button"
+            className="btn quiet"
+            style={{ padding: "3px 9px", fontSize: 12 }}
+            data-testid="direct-back"
+            onClick={() => setParams({ proposal: undefined })}
+          >
+            Back to models
+          </button>
+        </div>
+        <ReviewSurface
+          workspaceId={workspaceId}
+          projectId={projectId}
+          proposalId={openId}
+          canReview
+          onChanged={() => {
+            queryClient.invalidateQueries({ queryKey: ["code-proposals", projectId] });
+            queryClient.invalidateQueries({ queryKey: ["models", projectId] });
+          }}
+        />
+      </section>
+    );
+  }
+
+  // **Silent when there are none and there never will be.** A permanent empty
+  // section for a shape nothing creates is a section that teaches people to
+  // look past this part of the screen.
+  if (!proposals.isSuccess || mine.length === 0) return null;
+
+  return (
+    <section className="code-open-proposals" data-testid="direct-proposals">
+      <p className="field-label">Changes to transforms outside a repository</p>
+      <p className="login-note" style={{ margin: "0 0 8px" }}>
+        {unrepositoriedNote(mine.length)}
+      </p>
+      <ul className="code-log">
+        {mine.map((p) => (
+          <li key={p.id}>
+            <button
+              type="button"
+              className="code-log-entry"
+              data-testid={`direct-${p.id}`}
+              onClick={() => setParams({ proposal: p.id })}
+            >
+              <span className="code-log-summary">{p.summary}</span>
+              <span className="code-log-meta">
+                <span className="chip brass">{describeProposal(p)}</span>
+                {p.created_by_email ?? "unknown"}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

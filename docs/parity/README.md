@@ -147,8 +147,30 @@ editor is — had no way to declare, so it could not live in a repository under
 any name (§273). §274 built **adoption**: a model becomes a file, one
 transaction, with the declaration written from what the model already says.
 
-What remains before the deletion is moving typed-changes proposal creation into
-the application, so the two shapes of proposal live in one place.
+**The blocker is cleared, and not the way this paragraph predicted (§289–§290).**
+It said what remained was *moving* typed-changes proposal creation into the
+application. That turned out to be the wrong answer: it would have kept a second
+shape of proposal alive — one that names no repository, so it lands on no
+branch and can say nothing about what applying it moves (§283) — for the sake of
+transforms whose real problem is that they are not files yet.
+
+So creation is **withdrawn** rather than moved. §274 made a transform into a
+file, §289 made that a batch (which is what the change set becomes: *these six
+changed together, for one reason*), and the answer for a transform outside a
+repository is now to move it into one and change the file. The path holds in a
+review-required project too, which is the case that made this a blocker:
+adopting into a protected default branch is refused by §284's rule and the
+message names the remedy, so the move goes onto a sandbox branch and the commit
+is proposed like any other.
+
+What §290 then had to do was **not** strand the proposals that already exist.
+They are reviewed on the Models screen, beside the transforms they change —
+`e2e/test_direct_proposals.py` — because a proposal belonging to no repository
+cannot honestly be listed under one, and the Pull requests tab's empty state
+literally said they were "reviewed on the Code screen", a sentence the deletion
+would have turned into a lie with nothing to notice.
+
+What remains before the deletion is the deletion.
 
 #### Stage 2 progress
 

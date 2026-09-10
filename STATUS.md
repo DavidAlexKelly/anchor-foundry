@@ -4388,6 +4388,47 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 290. A home for the reviews the deleted page would have stranded (this session)
+
+The last thing standing between build-order item 1 and the deletion, and it was
+found by reading a sentence rather than by looking for a gap. §276's Pull
+requests tab has an empty state that says where the *other* proposals are, and
+one of its three answers was: these ones "are reviewed on the **Code screen**".
+That is the page B.1 deletes. Nothing would have errored; the tab would simply
+have gone on directing people to a URL that 404s, and no test would have
+noticed, because every test of that sentence asserted its wording and none
+asserted that the place it names exists.
+
+**A proposal whose `source_repo_id` is null belongs to no repository** (db
+0039), which is why §276 deliberately left it out of the tab — listing it under
+one would be a lie, and a review with two homes that disagree about what
+applying it does is worse than one with none (§283: the tab shows which branch
+applying moves, and this shape moves none). So they live on the **Models
+screen**, beside the transforms they change.
+
+**The plan this replaces.** `docs/parity/README.md` said what remained was
+*moving* typed-changes proposal creation into the application. That was the
+wrong answer: it would have kept the second shape alive for the sake of
+transforms whose real problem is that they are not files yet. Creation is
+**withdrawn**, not moved — §274 made a transform into a file, §289 made that a
+batch, and the answer for a transform outside a repository is to move it into
+one and change the file. The path holds in a review-required project too, which
+is the case that made this a blocker at all: adopting into a protected default
+branch is refused by §284's rule with the remedy in the message, so the move
+goes onto a sandbox and the commit is proposed like any other.
+
+**Which makes the surviving set finite**, and that is the whole design of the
+section. Nothing creates more, every one of them ends, and when the last is
+decided the section goes with it — so it is **absent when empty rather than
+empty**. A permanent empty box for a shape the product no longer has is a box
+that teaches people to look past that part of the screen.
+
+**And that decision deleted a tested sentence.** `unrepositoriedNote(0)` existed
+and had a test asserting its wording. Once the caller renders nothing for an
+empty list, it was a string no reader could ever be shown — a check that could
+not fail in any way a person would notice. Both are gone, with the reasoning in
+their place (§213).
+
 ### 289. Adopting several at once, and what a change set becomes (this session)
 
 Build-order item 1 has been blocked since §278 found five capabilities living

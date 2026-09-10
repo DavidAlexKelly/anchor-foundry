@@ -137,7 +137,8 @@ The docs add a note we should honour: "You should not delete any branches that y
 
 | Feature | Status | Notes |
 |---|---|---|
-| List PRs; switch Open / Closed | ◑ | §276: this repository's open proposals, in the tab. Open-only so far; and an empty tab says *where the others are* — three absences with three remedies (nothing anywhere, typed changes reviewed on the Code screen, another repository's) |
+| List PRs; switch Open / Closed | ◑ | §276: this repository's open proposals, in the tab. Open-only so far; and an empty tab says *where the others are* — three absences with three remedies (nothing anywhere, typed changes reviewed on the **Models screen** since §290, another repository's) |
+| A home for proposals that name **no** repository | ✅ | §290: a proposal whose `source_repo_id` is null belongs to no repository and cannot honestly be listed under one, so it is reviewed on the Models screen beside the transform it changes. Nothing creates them any more (§277, §289), so the section is silent when the list is empty — this exists so B.1 can delete the Code pillar page without stranding an open review |
 | Search by title or author | ○ | |
 | Create a PR, choosing the base branch | ◑ | the base is the repository's default branch and is not chosen. **Applying a proposal now lands the commit on it (§283)** — before that it published and stopped there, which was invisible while everything was committed to `main` first and would have made §2.1's protected-branch rule unworkable |
 | **Line-by-line review with comments** | ◑ | §52 built a review surface; verify it is line-level, not file-level |

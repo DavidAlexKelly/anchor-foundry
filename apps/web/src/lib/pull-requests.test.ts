@@ -1,6 +1,6 @@
 import { describe as suite, expect, it } from "vitest";
 
-import { describe, emptyReason, forRepository, unrepositoried } from "./pull-requests";
+import { describe, emptyReason, forRepository, unrepositoried, unrepositoriedNote } from "./pull-requests";
 import type { CodeProposal } from "./types";
 
 function proposal(over: Partial<CodeProposal>): CodeProposal {
@@ -71,7 +71,11 @@ suite("what an empty tab says", () => {
     // The case that makes this function worth having: a reviewer sent a link,
     // finding an empty tab, needs to tell "already dealt with" from "not here".
     const reason = emptyReason([typed], "r-1");
-    expect(reason).toContain("Code screen");
+    // **The Models screen, not the Code screen** (§290). It said "Code screen"
+    // until the typed-changes proposals got a home beside the transforms they
+    // change - and a sentence pointing at a page B.1 deletes would have become
+    // a lie the moment it went, with nothing to notice.
+    expect(reason).toContain("Models screen");
     expect(reason).toContain("1 in this project");
     expect(reason).toContain("changes a transform");
   });
@@ -90,5 +94,27 @@ suite("what an empty tab says", () => {
     const reason = emptyReason([theirs], "r-1");
     expect(reason).not.toContain("Code screen");
     expect(reason).toContain("belongs to something else");
+  });
+});
+
+// `suite`, not `describe`: this module *exports* a `describe`, which is why
+// the vitest one is aliased at the top of the file.
+suite("proposals that name no repository (§290)", () => {
+  // There was a test here for `unrepositoriedNote(0)` — a sentence saying no
+  // such proposals are open and that the answer is to move a transform into a
+  // repository. It is gone with the branch it checked: the section that renders
+  // this note is silent when the list is empty, because a permanent empty
+  // section for a shape nothing creates teaches people to look past that part
+  // of the screen. So the zero sentence was a string no reader could ever be
+  // shown, and a test asserting its wording was a check that could not fail in
+  // any way a person would notice (§213).
+
+  it("counts them and says why they exist", () => {
+    // They were opened before the project used repositories. Without that,
+    // a list of two reads as a feature somebody should be using.
+    expect(unrepositoriedNote(1)).toContain("1 open proposal ");
+    expect(unrepositoriedNote(1)).toContain("It was");
+    expect(unrepositoriedNote(3)).toContain("3 open proposals");
+    expect(unrepositoriedNote(3)).toContain("They were");
   });
 });
