@@ -8,6 +8,7 @@ from urllib.parse import quote
 from dagster import Definitions, ScheduleDefinition
 
 from .jobs.cleanup import workspace_cleanup
+from .jobs.code_test_runs import scheduled_test_runs
 from .jobs.export_schedules import scheduled_exports
 from .jobs.instance_syncs import scheduled_instance_syncs
 from .jobs.model_runs import scheduled_model_runs
@@ -39,6 +40,7 @@ defs = Definitions(
         scheduled_connection_syncs,
         scheduled_instance_syncs,
         scheduled_exports,
+        scheduled_test_runs,
     ],
     schedules=[
         ScheduleDefinition(
@@ -71,6 +73,16 @@ defs = Definitions(
             # cheap - a run with nothing new writes nothing (decision 0016 §1).
             cron_schedule="*/5 * * * *",
             name="poll_scheduled_exports",
+        ),
+        ScheduleDefinition(
+            job=scheduled_test_runs,
+            # Every minute, the same cadence as queued model runs and for the
+            # same reason: somebody is watching this one. A test run is asked
+            # for by a person who has just pressed a button and is looking at
+            # a panel, so the poll interval *is* the latency they see - five
+            # minutes would make the feature feel broken rather than slow.
+            cron_schedule="* * * * *",
+            name="poll_test_runs",
         ),
     ],
     resources={

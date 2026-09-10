@@ -33,6 +33,7 @@ from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
 from ..services import code as code_service
 from ..services import code_checks as check_service
+from ..services import code_test_runs as test_run_service
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
@@ -583,6 +584,128 @@ async def find_problems(
             conn, project_id=access.project_id, files=working
         )
     return ProblemsOut(problems=[ProblemOut(**p) for p in found])
+
+
+class TestRunIn(BaseModel):
+    branch: str | None = None
+    #: The same delta the Problems panel sends (§286): uncommitted edits laid
+    #: over the committed tree, `null` for a file the author has deleted. The
+    #: server already has the commit, and shipping five hundred files to test
+    #: the three that changed would make the button too expensive to press.
+    overrides: dict[str, str | None] = Field(default_factory=dict)
+
+
+class TestOutcomeOut(BaseModel):
+    #: `tests/test_daily.py::test_drops_zero_totals` - what you would type to
+    #: run it again.
+    id: str
+    outcome: str
+    duration_ms: int
+    file: str | None = None
+    line: int | None = None
+    message: str | None = None
+    detail: str | None = None
+
+
+class TestRunOut(BaseModel):
+    id: UUID
+    repo_id: UUID
+    branch: str
+    #: queued | running | succeeded | failed | errored. **`failed` and
+    #: `errored` are different answers** (db 0071): the first is about the
+    #: author's tests, the second about the run not happening.
+    status: str
+    outcomes: list[TestOutcomeOut] | None = None
+    error: str | None = None
+    queued_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+def _run_out(row: dict[str, Any]) -> TestRunOut:
+    raw = row.get("outcomes")
+    return TestRunOut(
+        **{k: v for k, v in row.items() if k != "outcomes"},
+        outcomes=None if raw is None else [TestOutcomeOut(**o) for o in raw],
+    )
+
+
+@router.post("/{repo_id}/tests", response_model=TestRunOut,
+             status_code=status.HTTP_202_ACCEPTED)
+async def run_tests(
+    repo_id: UUID,
+    body: TestRunIn,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> TestRunOut:
+    """p.13's "run all unit tests", p.14's Tests helper: queue a run over this
+    working set.
+
+    **202, not 200**, because nothing has run yet. Decision 0004 confines
+    customer Python to a process holding no platform credentials, so this
+    writes a job and the worker executes it - the same answer the Python
+    preview refusal gives one route above.
+
+    **Editor, unlike Problems.** A test is code the caller supplied and it
+    *executes*, which is the line `preview_transform` draws: the floor matches
+    who may write the file, not who may read it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        branch = body.branch or str(repo["default_branch"])
+        ref = await repo_service.resolve_ref(
+            conn, repo_id=repo_id, branch=branch, commit_id=None,
+            allow_missing_branch=True,
+        )
+        committed = (
+            {} if ref is None
+            else await repo_service.read_tree(
+                conn, workspace_id=access.workspace_id, commit_id=ref
+            )
+        )
+        working = dict(committed)
+        for path, content in body.overrides.items():
+            if content is None:
+                working.pop(path, None)
+            else:
+                working[repo_service.normalise_path(path)] = content
+        row = await test_run_service.request(
+            conn, repo_id=repo_id, branch=branch, files=working,
+            requested_by=access.auth.user_id,
+        )
+    return _run_out(row)
+
+
+@router.get("/{repo_id}/tests/{run_id}", response_model=TestRunOut)
+async def read_test_run(
+    repo_id: UUID,
+    run_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> TestRunOut:
+    """What happened to a run. Viewer: asking for tests to run executes code,
+    reading what they said does not."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        row = await test_run_service.get(conn, repo_id=repo_id, run_id=run_id)
+    return _run_out(row)
+
+
+@router.get("/{repo_id}/tests", response_model=list[TestRunOut])
+async def list_test_runs(
+    repo_id: UUID,
+    branch: str | None = Query(default=None),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[TestRunOut]:
+    """Recent runs, newest first - what the panel opens on."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await test_run_service.latest(conn, repo_id=repo_id, branch=branch)
+    return [_run_out(r) for r in rows]
 
 
 @router.post("/{repo_id}/commits", response_model=CommitOut, status_code=status.HTTP_201_CREATED)

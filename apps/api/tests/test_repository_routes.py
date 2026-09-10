@@ -13,6 +13,7 @@ import os
 import sys
 import uuid
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -451,3 +452,164 @@ def test_the_code_badge_counts_repositories_not_transforms(
 
     make_repo(client, fx)
     assert code_count() == before + 1
+
+
+# ---- unit test runs (§294; db 0071) -------------------------------------------
+def test_asking_for_tests_queues_a_job_rather_than_running_them(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**202, not 200, and the status code is the design.**
+
+    Running a repository's unit tests is running customer Python, which
+    decision 0004 confines to a process holding no platform credentials. §286's
+    Problems panel could answer inline because it parses and reads names; this
+    cannot, and `preview_transform` one route over already refuses Python for
+    exactly this reason. So the API writes a job and the worker executes it.
+    """
+    repo = make_repo(client, fx)
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/tests",
+        headers=hdr(fx.editor_sub),
+        json={"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n"}},
+    )
+    assert r.status_code == 202, r.text
+    run = r.json()
+    assert run["status"] == "queued"
+    assert run["outcomes"] is None, "nothing has run yet"
+    assert run["error"] is None
+    assert run["branch"] == "main"
+
+    # And it is readable back by id, which is what the panel watches.
+    got = client.get(
+        f"{base(fx)}/{repo['id']}/tests/{run['id']}", headers=hdr(fx.viewer_sub)
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["status"] == "queued"
+
+
+def test_the_working_set_is_the_commit_plus_the_authors_edits(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The same delta the Problems panel sends (§286): the server has the
+    commit, so only the changes travel. A run over the committed tree alone
+    would answer a question nobody asked."""
+    repo = make_repo(client, fx)
+    commit(client, fx, repo["id"], {
+        "src/daily.py": "def build(rows):\n    return rows\n",
+        "tests/test_daily.py": "from src.daily import build\n\ndef test_it():\n    assert build([1]) == [1]\n",
+    })
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/tests",
+        headers=hdr(fx.editor_sub),
+        # One file edited, one deleted, and the third arrives from the commit.
+        json={"overrides": {
+            "tests/test_daily.py": "def test_new():\n    assert 1\n",
+            "src/daily.py": None,
+        }},
+    )
+    assert r.status_code == 202, r.text
+
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        files = conn.execute(
+            "SELECT files FROM code_test_runs WHERE id = %s", (r.json()["id"],)
+        ).fetchone()[0]
+    assert set(files) == {"tests/test_daily.py"}, files
+    assert files["tests/test_daily.py"] == "def test_new():\n    assert 1\n"
+
+
+def test_a_run_with_no_files_is_refused_rather_than_queued(
+    client: TestClient, fx: Fixture
+) -> None:
+    """422: a request naming nothing is malformed. An empty run would sit in
+    the queue, come back with no outcomes, and read as "your repository has no
+    tests" - an answer about their code for a request that had none."""
+    repo = make_repo(client, fx)
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub), json={}
+    )
+    assert r.status_code == 422, r.text
+    assert "no files" in r.text
+
+
+def test_a_repositorys_queue_does_not_grow_without_limit(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A panel with a press-and-press-again button is the ordinary way this
+    table fills up, and every extra queued run over the same working set
+    produces the same answer more slowly."""
+    repo = make_repo(client, fx)
+    body = {"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n"}}
+    for _ in range(3):
+        assert client.post(
+            f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub), json=body
+        ).status_code == 202
+    r = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub), json=body
+    )
+    assert r.status_code == 409, r.text
+    assert "already waiting" in r.text
+
+
+def test_a_run_from_another_repository_is_not_found_here(
+    client: TestClient, fx: Fixture
+) -> None:
+    """Scoped to the repository as well as the id, so a run id from elsewhere
+    reads as absent rather than as somebody else's answer - the three-legged
+    check `code._assert_commit_belongs` makes, for the same reason."""
+    mine = make_repo(client, fx)
+    theirs = make_repo(client, fx)
+    r = client.post(
+        f"{base(fx)}/{theirs['id']}/tests",
+        headers=hdr(fx.editor_sub),
+        json={"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n"}},
+    )
+    assert r.status_code == 202
+    run_id = r.json()["id"]
+
+    assert client.get(
+        f"{base(fx)}/{mine['id']}/tests/{run_id}", headers=hdr(fx.viewer_sub)
+    ).status_code == 404
+    assert client.get(
+        f"{base(fx)}/{theirs['id']}/tests/{run_id}", headers=hdr(fx.viewer_sub)
+    ).status_code == 200
+
+
+def test_running_tests_is_editor_and_reading_them_is_viewer(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The line `preview_transform` draws.** Asking for tests to run executes
+    code the caller supplied, so the floor matches who may write the file.
+    Reading what they said touches nothing."""
+    repo = make_repo(client, fx)
+    body = {"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n"}}
+    assert client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.viewer_sub), json=body
+    ).status_code == 403
+
+    made = client.post(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub), json=body
+    )
+    assert made.status_code == 202
+    assert client.get(
+        f"{base(fx)}/{repo['id']}/tests/{made.json()['id']}", headers=hdr(fx.viewer_sub)
+    ).status_code == 200
+    assert client.get(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.viewer_sub)
+    ).status_code == 200
+
+
+def test_recent_runs_are_newest_first(client: TestClient, fx: Fixture) -> None:
+    """What the panel opens on is "what happened last time", which is the
+    question somebody has before they have any other."""
+    repo = make_repo(client, fx)
+    body = {"overrides": {"tests/test_it.py": "def test_it():\n    assert 1\n"}}
+    ids = [
+        client.post(
+            f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.editor_sub), json=body
+        ).json()["id"]
+        for _ in range(2)
+    ]
+    listed = client.get(
+        f"{base(fx)}/{repo['id']}/tests", headers=hdr(fx.viewer_sub)
+    ).json()
+    assert [r["id"] for r in listed][:2] == list(reversed(ids))

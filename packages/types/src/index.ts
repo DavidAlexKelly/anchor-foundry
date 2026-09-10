@@ -2553,3 +2553,50 @@ export interface CodeProposalDetail extends CodeProposal {
   lands_on: string | null;
   landing: string | null;
 }
+
+/** One test in a run's report (db 0071; §294).
+ *
+ * `id` is what you would type to run it again — `tests/test_daily.py::test_x`
+ * — rather than pytest's dotted `classname`, which is a module path. `file`
+ * and `line` are what let a panel open the failing test rather than describe
+ * it; the line is 1-based, converted at the parse because every editor counts
+ * from 1 and pytest's report does not.
+ */
+export interface CodeTestOutcome {
+  id: string;
+  /** passed | failed | error | skipped. **`error` is not `failed`**: an
+   * assertion that did not hold is the author's answer, and a fixture that
+   * blew up is a different problem with a different first thing to look at. */
+  outcome: string;
+  duration_ms: number;
+  file: string | null;
+  line: number | null;
+  /** The failure's first line, for the row. The whole traceback is `detail`. */
+  message: string | null;
+  detail: string | null;
+}
+
+/** A run of a repository's unit tests (db 0071; §294).
+ *
+ * A job rather than a request: running unit tests is running customer Python,
+ * which decision 0004 confines to a process holding no platform credentials.
+ * The panel asks for one and then watches it.
+ */
+export interface CodeTestRun {
+  id: string;
+  repo_id: string;
+  branch: string;
+  /** queued | running | succeeded | failed | errored. **`failed` and `errored`
+   * are different answers**: the first is about the author's tests, the second
+   * about the run not having happened. */
+  status: string;
+  /** Null until the run has an answer. An empty array is a real answer and a
+   * different one: the repository has no tests, which is why such a run ends
+   * `failed` rather than `succeeded`. */
+  outcomes: CodeTestOutcome[] | null;
+  /** Set only when `status` is `errored`, and never a test's failure message. */
+  error: string | null;
+  queued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}

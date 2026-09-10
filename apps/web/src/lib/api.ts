@@ -268,6 +268,34 @@ export const repositories = {
     request<import("./types").RepositoryDiff>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/diff?to_commit_id=${toCommitId}`,
     ),
+  /** Ask for this repository's unit tests to be run over a working set (§294).
+   *
+   * **Returns a queued job, not a report.** Running unit tests is running
+   * customer Python, which decision 0004 confines to a process holding no
+   * platform credentials - so the API writes a row and the worker executes it.
+   * The panel polls `testRun`.
+   *
+   * `overrides` is the same delta the Problems panel sends: the server has the
+   * commit, so only the author's edits travel. */
+  runTests: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { branch?: string; overrides: Record<string, string | null> },
+  ) =>
+    request<import("./types").CodeTestRun>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  testRun: (wid: string, pid: string, rid: string, runId: string) =>
+    request<import("./types").CodeTestRun>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests/${runId}`,
+    ),
+  testRuns: (wid: string, pid: string, rid: string, branch?: string) =>
+    request<import("./types").CodeTestRun[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests` +
+        (branch ? `?branch=${encodeURIComponent(branch)}` : ""),
+    ),
   /** Run one file's transform against a sample of its inputs, writing nothing.
    * `content` is the editor's buffer, so this answers "does what I just typed
    * work" rather than "did what I committed work". */
