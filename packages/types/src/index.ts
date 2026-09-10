@@ -580,6 +580,23 @@ export interface RepositoryCheck {
   source_commit_id: string;
 }
 
+/** One problem detected in a repository's code (§286; p.14's Problems helper).
+ *
+ * Every one of these is something the platform already refuses at publish
+ * time; what the panel changes is *when* you hear about it, and that it names
+ * a line rather than a commit. */
+export interface RepositoryProblem {
+  path: string;
+  /** 1-based, or 0 when the reader could not say where. Not 1: "the first
+   *  line" and "somewhere in this file" are different answers. */
+  line: number;
+  /** `"error"` will refuse a publish; `"warning"` will not. */
+  severity: string;
+  message: string;
+  /** Which reader said so — declaration / sql / input. */
+  source: string;
+}
+
 export interface RepositoryBranchChecks {
   branch: string;
   /** Null when nothing has ever been committed to the branch. */

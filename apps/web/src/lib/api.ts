@@ -173,6 +173,22 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tree${qs ? `?${qs}` : ""}`,
     );
   },
+  /** p.14's Problems helper (§286): what is wrong with this working set.
+   *
+   * **The delta travels, not the tree.** The server already has the commit, so
+   * only the uncommitted edits are sent - `null` for a file the author has
+   * deleted. Sending five hundred files to ask about the three that changed
+   * would make the panel too expensive to open often enough to be useful. */
+  problems: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { branch?: string; overrides?: Record<string, string | null> },
+  ) =>
+    request<{ problems: import("./types").RepositoryProblem[] }>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/problems`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   /** p.19's Checks tab: what ran on this branch (§285). Ours are the checks of
    *  the proposals made over commits on it, because a check asks what the code
    *  would do to the project's datasets and a commit nobody has proposed has

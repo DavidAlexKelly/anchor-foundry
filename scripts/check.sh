@@ -119,7 +119,15 @@ run_unit()  { ( cd "$ROOT/apps/web" && npx vitest run ); }
 # from printing nothing; this is the other failure of the same step, printing
 # too much of the wrong thing. `-ra` adds the short summary block - one
 # `FAILED path::name` line per failure - which survives being read from the end.
-run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q -ra ); }
+#
+# **`--durations=15`, so a long run says which test is long.** This step prints
+# nothing until pytest finishes - `-q` block-buffers its dots into a pipe - so
+# from outside, "still running", "grinding through timeouts" and "hung" look
+# identical, and the only way to tell them apart is to wait. Fifteen lines cost
+# a handful of bytes and answer the first question anybody asks about a slow
+# run. It prints on success too, which is the point: the report that tells you
+# a test is drifting towards a timeout is the green one, not the red one.
+run_e2e()   { ( cd "$ROOT/e2e" && "$PYTHON" -m pytest -q -ra --durations=15 ); }
 
 case "$WHICH" in
   api)    step "API tests" run_api ;;

@@ -4388,6 +4388,53 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 286. The Problems panel, and telling somebody in time (this session)
+
+p.14: *"The Problems helper tells you about any issues detected in your code.
+Click on a specific issue listed here to open up the problematic code."*
+`code-repositories.md` calls this and File Changes the two things that make the
+editor feel like an IDE more than anything else.
+
+**Every problem it reports is one the platform already refuses.** The publish
+path refuses a file that declares nothing, two files claiming one output, and an
+input naming a dataset the project does not have; DuckDB refuses SQL it cannot
+parse; the declaration reader refuses Python that does not. What was missing was
+not the knowledge — it was *when*: all of it arrived at publish time, hours after
+the code was written, in a message about a whole commit rather than about a line.
+
+So this is deliberately **not a second rule engine**. It runs the same readers
+against the working set. A rule that lived only here would be one the publish
+does not enforce, and a rule the publish enforces but this cannot see would be
+exactly the surprise the panel exists to prevent.
+
+Three decisions worth keeping:
+
+* **the delta travels, not the tree.** The server already has the commit, so
+  only the uncommitted edits are sent — `null` for a deleted file. Sending five
+  hundred files to ask about the three that changed would make the panel too
+  expensive to open often enough to be useful;
+* **a line, not a verdict.** DuckDB's `json_serialize_sql` parses without
+  running anything and reports a failure as a *character offset*; turning that
+  into a line is the whole difference between a panel somebody uses and one they
+  read once. `line: 0` stays 0 rather than becoming 1 — "the first line" and
+  "somewhere in this file" are different answers, and offering the first for the
+  second teaches people the line numbers are decoration;
+* **warnings are not errors.** A `.sql` file declaring no transform is perfectly
+  legal — a repository may hold anything — but a file somebody *meant* to be a
+  transform and mistyped the output line of looks exactly the same. Saying so
+  costs nothing, and saying it as an *error* would cost the panel its credibility.
+
+The editor gained a `reveal` prop to make the click land: **an object rather
+than a bare line number**, so asking twice for the same line is two different
+values and the effect fires both times. Clicking the same problem twice after
+scrolling away is the ordinary case, and a bare number would make the second
+click do nothing — which reads as a broken panel rather than a deduplicated
+request.
+
+Viewer rather than editor, unlike Preview beside it: a preview *executes* the
+caller's SQL against the project's data, and this parses and reads names.
+Somebody who may read the code may be told what is wrong with it.
+
 ### 285. The Checks tab, and two ids that agreed with nothing (this session)
 
 `code-repositories.md` §1's fifth tab, and the last one missing — so all five

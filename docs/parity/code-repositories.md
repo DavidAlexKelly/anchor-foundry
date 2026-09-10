@@ -91,7 +91,7 @@ The protected-branch rule is the one to take seriously. It is what makes the Pul
 | Panel | Status | Notes |
 |---|---|---|
 | **Foundry Explorer** | ○ | browse files and folders; select a dataset and Open it. Our equivalent: browse datasets and object types from inside the editor and insert a reference. Small, and disproportionately makes the editor feel connected to the platform. |
-| **Problems** | ○ | "Click on a specific issue listed here to open up the problematic code." `ruff` for Python in the transform runner; DuckDB's parser for SQL, which preview already runs. |
+| **Problems** | ✅ §286 | "Click on a specific issue listed here to open up the problematic code" — and it does: the click opens the file and puts the caret on the line. **Every rule it reports is one the publish already refuses**; what the panel changes is *when* you hear about it. DuckDB's parser for SQL (`json_serialize_sql`, which parses without running anything and gives a character offset to turn into a line), the declaration reader's own words for Python, plus unknown inputs and two files claiming one output. `ruff`-style style lint is not here and is not the valuable part |
 | **Debugger** | ○ | defer — assumes Foundry's transform debugging model |
 | **Preview** | ◑ | SQL only; extend to Python |
 | **Tests** | ○ | the runner already executes customer Python in an isolated container with an empty task role (`docs/decisions/0004-running-customer-code.md`). A test job is the same mechanism with a different entrypoint. |
@@ -222,7 +222,7 @@ Foundry supports several; two matter here (p.3):
 2. ~~**Draft persistence**, then **multi-file tabs**~~ — **done (§281, §282)**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
 3. ~~**The five tabs**~~ — **done (§276, §279, §285)**. Pull requests and Checks re-homed, Settings created. All five of p.10's tabs now exist, and the two that diverge say so on the screen: review policy is per project rather than per repository (§279), and checks attach to a proposal rather than to a commit (§285).
 4. ~~**Protected branches and the sandbox rule.**~~ — **done (§283, §284)**. §283 cleared the prerequisite it would otherwise have broken: applying a proposal lands the commit on the default branch. Protect `main` without that and the first person to use the review path as intended leaves `main` behind forever — the branch everybody opens the repository on would stop describing the repository.
-5. **Problems**, then **File Changes**. These two make the editor feel like an IDE more than anything else here.
+5. ~~**Problems**~~ — **done (§286)** — then **File Changes**. These two make the editor feel like an IDE more than anything else here.
 6. **Unit tests**, then the **Tests panel**, then test output in the Checks tab.
 7. **Tags**, branch checks column, PR column.
 8. **Foundry Explorer equivalent**, SQL Scratchpad history and favourites.
@@ -238,7 +238,7 @@ Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types,
 - **Draft persistence** — open three files, edit two, reload; both drafts survive and the third is clean.
 - **Protected branches** — committing directly to a protected branch is refused, and the refusal names the branch. Mutation: remove the check, and the test goes red. **✅ §284**, and the refusal names the route as well as the branch — a rule that only says no teaches people the product is broken.
 - **Tabs** — each of the five is reachable by URL and by click, and a deep link survives a reload.
-- **Problems** — a file with a deliberate syntax error produces a diagnostic at the right line; clicking it moves the cursor there. Fix the error, and the panel empties.
+- **Problems** — a file with a deliberate syntax error produces a diagnostic at the right line; clicking it moves the cursor there. Fix the error, and the panel empties. **✅ §286**, and the panel reads the *working set* rather than the commit, which is the whole reason it is earlier than a publish.
 - **File Changes** — an uncommitted edit shows as a diff against the committed version; committing empties the panel.
 - **Tests panel** — a failing test is reported as failing. A test suite that cannot fail is the exact thing this repo does not accept.
 - **Checks** — a check that fails blocks the merge, and the block names the check.

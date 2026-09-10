@@ -36,6 +36,7 @@ from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
 from ..services import transform_declarations as declarations
+from ..services import transform_problems as problem_service
 from ..services import transform_publish as publish_service
 from ..services.dataset_engine import DatasetEngineError
 
@@ -498,6 +499,76 @@ async def branch_checks(
         head_commit_id=UUID(str(commit_id)) if commit_id else None,
         checks=[BranchCheckOut(**r) for r in rows],
     )
+
+
+# ---- problems (§286; code-repositories.md §2.4, p.14) -------------------------
+class ProblemOut(BaseModel):
+    path: str
+    #: 1-based, or 0 when the reader could not say where. Not 1: "the first
+    #: line" and "somewhere in this file" are different answers, and a panel
+    #: that sent somebody to line 1 for the second would be lying quietly.
+    line: int
+    #: error / warning. An error will refuse a publish; a warning will not.
+    severity: str
+    message: str
+    #: Which reader said so - declaration / sql / input.
+    source: str
+
+
+class ProblemsIn(BaseModel):
+    branch: str | None = None
+    #: Uncommitted edits laid over the committed tree, path -> content, with
+    #: `null` for a file the author has deleted. **The delta travels, not the
+    #: tree**: the server already has the commit, and sending five hundred
+    #: files to ask about the three that changed would make the panel too
+    #: expensive to open often enough to be useful.
+    overrides: dict[str, str | None] = Field(default_factory=dict)
+
+
+class ProblemsOut(BaseModel):
+    problems: list[ProblemOut]
+
+
+@router.post("/{repo_id}/problems", response_model=ProblemsOut)
+async def find_problems(
+    repo_id: UUID,
+    body: ProblemsIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ProblemsOut:
+    """p.14's Problems helper: what is wrong with this working set.
+
+    **Viewer, unlike Preview.** A preview *executes* the caller's SQL against
+    the project's data, which is why it takes the editor floor; this parses and
+    reads names, touching nothing. Somebody who may read the code may be told
+    what is wrong with it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        ref = await repo_service.resolve_ref(
+            conn,
+            repo_id=repo_id,
+            branch=body.branch or repo["default_branch"],
+            commit_id=None,
+            allow_missing_branch=True,
+        )
+        committed = (
+            {} if ref is None
+            else await repo_service.read_tree(
+                conn, workspace_id=access.workspace_id, commit_id=ref
+            )
+        )
+        working = dict(committed)
+        for path, content in body.overrides.items():
+            if content is None:
+                working.pop(path, None)
+            else:
+                working[repo_service.normalise_path(path)] = content
+        found = await problem_service.find(
+            conn, project_id=access.project_id, files=working
+        )
+    return ProblemsOut(problems=[ProblemOut(**p) for p in found])
 
 
 @router.post("/{repo_id}/commits", response_model=CommitOut, status_code=status.HTTP_201_CREATED)

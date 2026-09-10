@@ -1651,3 +1651,214 @@ def test_a_proposal_cannot_name_a_repository_in_another_project(
     )
     assert r.status_code == 422, r.text
     assert "not in this project" in r.json()["detail"]
+
+
+# ---- problems (§286; code-repositories.md §2.4, p.14) ------------------------
+# "The Problems helper tells you about any issues detected in your code. Click
+# on a specific issue listed here to open up the problematic code."
+#
+# **Every problem here is one the platform already knows how to refuse.** What
+# was missing was not the knowledge, it was *when*: all of it arrived at publish
+# time, hours after the code was written, about a whole commit rather than about
+# a line.
+def problems(client: TestClient, fx: Fixture, repo_id: str, *,
+             branch: str | None = None, overrides: dict | None = None):
+    return client.post(
+        f"{rbase(fx)}/{repo_id}/problems", headers=hdr(fx.viewer_sub),
+        json={"branch": branch, "overrides": overrides or {}},
+    )
+
+
+def test_a_clean_repository_has_no_problems(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    commit(client, fx, repo["id"],
+           {"src/t.sql": sql(f"ok_{uuid.uuid4().hex[:8]}", source)})
+    r = problems(client, fx, repo["id"])
+    assert r.status_code == 200, r.text
+    assert r.json()["problems"] == []
+
+
+def test_sql_that_does_not_parse_is_reported_at_its_line(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**A line, not just a verdict.** p.14 promises "click on a specific issue
+    to open up the problematic code", and a line is the smallest thing that can
+    be opened. DuckDB gives a character offset; turning it into a line is the
+    whole difference between a panel somebody uses and one they read once."""
+    out = f"broken_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELEC id FROM raw\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert len(found) == 1, found
+    assert found[0]["path"] == "src/t.sql"
+    assert found[0]["severity"] == "error"
+    assert found[0]["source"] == "sql"
+    assert found[0]["line"] == 3, found[0]
+    assert "SELEC" in found[0]["message"]
+
+
+def test_an_input_that_names_nothing_is_an_error_naming_both_sides(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The publish refuses this too, hours later, about the whole commit."""
+    out = f"noinput_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = not_a_dataset\nSELECT id FROM raw\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert len(found) == 1, found
+    assert found[0]["source"] == "input"
+    assert "not_a_dataset" in found[0]["message"]
+    # And the alias, because the fix is to change one of the two and knowing
+    # which is which is the thing the author needs.
+    assert "raw" in found[0]["message"]
+
+
+def test_two_files_declaring_one_output_are_both_reported(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**Both, not the second one sorted.** Neither is more wrong than the
+    other, and a panel that blamed `z.sql` because `a.sql` came first would
+    send somebody to fix the wrong file."""
+    out = f"clash_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/a.sql": sql(out, source),
+        "src/z.sql": sql(out, source),
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert {p["path"] for p in found} == {"src/a.sql", "src/z.sql"}, found
+    assert all(p["severity"] == "error" for p in found)
+    assert all(out in p["message"] for p in found)
+
+
+def test_a_source_file_declaring_nothing_is_a_warning_not_an_error(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A repository may hold anything, so this cannot be an error. But a file
+    somebody *meant* to be a transform and mistyped the output line of looks
+    exactly like one that never claimed to be, and saying so costs nothing."""
+    commit(client, fx, repo["id"], {
+        "src/t.sql": sql(f"fine_{uuid.uuid4().hex[:8]}", source),
+        "src/notes.sql": "SELECT 1\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert [p["path"] for p in found] == ["src/notes.sql"], found
+    assert found[0]["severity"] == "warning"
+
+
+def test_a_readme_is_not_a_problem(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """Reporting that a README declares no transform would bury the one file
+    that does under a list of files that never claimed to."""
+    commit(client, fx, repo["id"], {
+        "src/t.sql": sql(f"readme_{uuid.uuid4().hex[:8]}", source),
+        "README.md": "# transforms\n",
+        ".gitignore": "*.parquet\n",
+    })
+    assert problems(client, fx, repo["id"]).json()["problems"] == []
+
+
+def test_problems_are_about_the_working_set_not_the_commit(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**The point of the panel.** The commit is fine; what the author has
+    typed is not, and telling them at publish time is telling them too late."""
+    out = f"working_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    assert problems(client, fx, repo["id"]).json()["problems"] == []
+
+    typed = f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM WHERE\n"
+    found = problems(client, fx, repo["id"],
+                     overrides={"src/t.sql": typed}).json()["problems"]
+    assert len(found) == 1 and found[0]["source"] == "sql", found
+
+    # And a file deleted in the working set stops being a problem, rather than
+    # being reported against a version the author has already removed.
+    broken = {
+        "src/t.sql": sql(out, source),
+        "src/gone.sql": "-- output: x\nNOT SQL AT ALL\n",
+    }
+    commit(client, fx, repo["id"], broken)
+    assert problems(client, fx, repo["id"]).json()["problems"], "the broken file is fine?"
+    assert problems(client, fx, repo["id"],
+                    overrides={"src/gone.sql": None}).json()["problems"] == []
+
+
+def test_errors_come_before_warnings(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The panel is read to find what is broken, and a warning above an error
+    is a warning nobody wanted."""
+    commit(client, fx, repo["id"], {
+        "src/a_notes.sql": "SELECT 1\n",
+        "src/z_broken.sql": f"-- output: b_{uuid.uuid4().hex[:6]}\nSELEC 1\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert [p["severity"] for p in found][0] == "error", found
+    assert found[0]["path"] == "src/z_broken.sql"
+
+
+def test_a_viewer_may_be_told_what_is_wrong_with_code_they_can_read(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """Viewer, unlike Preview. A preview *executes* the caller's SQL against the
+    project's data, which is why it takes the editor floor; this parses and
+    reads names, touching nothing."""
+    commit(client, fx, repo["id"], {"src/t.sql": "SELEC 1\n"})
+    r = client.post(f"{rbase(fx)}/{repo['id']}/problems", headers=hdr(fx.viewer_sub),
+                    json={"overrides": {}})
+    assert r.status_code == 200, r.text
+    assert r.json()["problems"]
+    # 404 rather than 403 for somebody outside the project: whether this
+    # repository exists is itself information, and the platform answers that
+    # question the same way everywhere.
+    assert client.post(f"{rbase(fx)}/{repo['id']}/problems",
+                       headers=hdr(fx.outsider_sub), json={}).status_code == 404
+
+
+def test_a_malformed_declaration_is_an_error_in_the_readers_own_words(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The reader knows what is wrong with the file far better than a
+    rephrasing here would, and it already names the line where it can. What
+    this pins is the *severity*: a declaration nobody can read will refuse a
+    publish, so it cannot be a warning."""
+    commit(client, fx, repo["id"], {
+        "src/t.sql": f"-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert len(found) == 1, found
+    assert found[0]["severity"] == "error", found[0]
+    assert found[0]["source"] == "declaration"
+
+
+def test_a_clash_is_reported_even_when_one_of_the_files_is_also_broken(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**A mutant found a design error here, and this is the fix.**
+
+    The first version skipped a file that already had an error when counting
+    producers, on the reasoning that two errors for one mistake reads as two
+    mistakes. Wrong twice: they are two different mistakes, so fixing the first
+    would make a second appear and the panel would play whack-a-mole; and
+    `plan` checks the clash without parsing any SQL, so hiding it here would
+    make the panel disagree with the refusal it exists to predict.
+    """
+    out = f"both_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/broken.sql": f"-- output: {out}\n-- input: raw = {source}\nSELEC id FROM raw\n",
+        "src/fine.sql": sql(out, source),
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    by_path: dict[str, list[dict]] = {}
+    for p in found:
+        by_path.setdefault(p["path"], []).append(p)
+
+    assert {"sql", "declaration"} == {p["source"] for p in by_path["src/broken.sql"]}, found
+    # And the file that is otherwise fine is told about the clash, rather than
+    # being left to discover it when the other one is fixed.
+    assert [p["source"] for p in by_path["src/fine.sql"]] == ["declaration"], found
+    assert out in by_path["src/fine.sql"][0]["message"]

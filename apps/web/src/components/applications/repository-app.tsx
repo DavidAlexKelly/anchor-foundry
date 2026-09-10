@@ -41,6 +41,13 @@ import {
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
 import {
+  emptyNote as problemsEmptyNote,
+  isSourceFile,
+  location as problemLocation,
+  revealLine,
+  summary as problemsSummary,
+} from "@/lib/problems";
+import {
   checkTarget,
   emptyReason as checksEmptyReason,
   verdict,
@@ -62,6 +69,7 @@ import type {
   PublishPlan,
   RepositoryBranch,
   RepositoryComparison,
+  RepositoryProblem,
   RepositoryTree,
   ResolvedResource,
   TransformPreview,
@@ -381,6 +389,17 @@ function FilesTab({
   };
   const locked = !pinned && isProtected(branchContext);
 
+  // **p.14's Problems helper** (§286). Asked for rather than live: it is a
+  // round trip, and one on every keystroke would be a panel that costs more
+  // than it tells you. The button says when the answer was last true.
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  const [reveal, setReveal] = useState<{ line: number } | undefined>();
+  const problems = useQuery({
+    queryKey: ["repo-problems", rid, branch, edits],
+    queryFn: () => repoApi.problems(wid, pid, rid, { branch, overrides: edits }),
+    enabled: problemsOpen && !pinned,
+  });
+
   const commit = useMutation({
     mutationFn: () =>
       repoApi.commit(wid, pid, rid, { branch, files: working, message }),
@@ -572,9 +591,26 @@ function FilesTab({
                   path={selected}
                   value={source}
                   readOnly={readOnly}
+                  reveal={reveal}
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
                 />
               </div>
+              {!pinned && (
+                <ProblemsPanel
+                  open={problemsOpen}
+                  onToggle={() => setProblemsOpen((v) => !v)}
+                  problems={problems.data?.problems}
+                  pending={problems.isFetching}
+                  error={problems.error as Error | null}
+                  sourceFileCount={paths.filter(isSourceFile).length}
+                  onOpen={(path, line) => {
+                    openFile(path);
+                    // A new object every time, so clicking the same problem
+                    // twice scrolls back to it (§286).
+                    setReveal(line === undefined ? undefined : { line });
+                  }}
+                />
+              )}
               <PreviewPanel
                 wid={wid}
                 pid={pid}
@@ -1739,6 +1775,75 @@ function ChecksTab({
                 {c.proposal_summary}
               </button>{" "}
               <span className="soft">{c.proposal_state}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+
+/** p.14's Problems helper (§286; `code-repositories.md` §2.4).
+ *
+ * "The Problems helper tells you about any issues detected in your code. Click
+ * on a specific issue listed here to open up the problematic code."
+ *
+ * **Everything it reports is something the publish already refuses.** What the
+ * panel changes is *when* you hear about it, and that it names a line rather
+ * than a commit - a refusal at publish time is a refusal hours after the
+ * mistake, about the whole snapshot.
+ *
+ * Collapsed until asked for, like Preview beside it: this is a round trip, and
+ * one on every keystroke would be a panel that costs more than it tells you.
+ */
+function ProblemsPanel({
+  open,
+  onToggle,
+  problems,
+  pending,
+  error,
+  sourceFileCount,
+  onOpen,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  problems: RepositoryProblem[] | undefined;
+  pending: boolean;
+  error: Error | null;
+  sourceFileCount: number;
+  onOpen: (path: string, line: number | undefined) => void;
+}) {
+  return (
+    <section className="repo-problems" data-testid="problems-panel">
+      <div className="repo-problems-head">
+        <button type="button" className="btn quiet" onClick={onToggle}>
+          {open ? "Hide problems" : "Problems"}
+        </button>
+        {open && problems && (
+          <span className="soft" data-testid="problems-summary">
+            {problemsSummary(problems)}
+          </span>
+        )}
+      </div>
+      {open && pending && <p className="state">Checking…</p>}
+      {open && error && <p className="state error">{error.message}</p>}
+      {open && problems && problems.length === 0 && !pending && (
+        <p className="state">{problemsEmptyNote(sourceFileCount)}</p>
+      )}
+      {open && problems && problems.length > 0 && (
+        <ul className="repo-problem-list">
+          {problems.map((p) => (
+            <li key={`${p.path}:${p.line}:${p.message}`} className={`repo-problem ${p.severity}`}>
+              <button
+                type="button"
+                className="repo-problem-open"
+                onClick={() => onOpen(p.path, revealLine(p))}
+              >
+                <span className="chip">{p.severity}</span>
+                <code>{problemLocation(p)}</code>
+                <span>{p.message}</span>
+              </button>
             </li>
           ))}
         </ul>

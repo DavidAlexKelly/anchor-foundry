@@ -1348,6 +1348,24 @@ button { font: inherit; cursor: pointer; }
   background: #fff; cursor: pointer;
 }
 .repo-tree-actions button:hover { border-color: var(--accent); }
+/* p.14's Problems helper (§286). */
+.repo-problems { display: grid; gap: 8px; margin-top: 10px; }
+.repo-problems-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.repo-problem-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; }
+.repo-problem { border-left: 3px solid var(--line); border-radius: var(--radius); }
+.repo-problem.error { border-left-color: var(--danger); }
+.repo-problem.warning { border-left-color: var(--brass, #b07d2b); }
+.repo-problem-open {
+  display: flex; align-items: baseline; gap: 10px; width: 100%;
+  font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+  border: none; background: none; padding: 5px 10px; color: var(--ink-2);
+}
+.repo-problem-open:hover { background: var(--paper); }
+.repo-problem-open code { font-family: var(--font-mono); font-size: 11.5px; white-space: nowrap; }
+.repo-problem .chip { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+.repo-problem.error .chip { background: var(--danger-wash, #fdeceb); color: var(--danger); }
+.repo-problem.warning .chip { background: var(--brass-wash); color: var(--brass, #b07d2b); }
+
 /* p.19's Checks tab (§285). */
 .repo-checks { display: grid; gap: 10px; }
 .repo-checks-verdict { margin: 0; font-size: 13px; }
