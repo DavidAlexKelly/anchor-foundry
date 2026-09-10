@@ -1500,8 +1500,14 @@ def test_a_query_can_be_forgotten(client: TestClient, fx: Fixture) -> None:
 def test_somebody_elses_query_cannot_be_starred_or_forgotten(
     client: TestClient, fx: Fixture
 ) -> None:
-    """The policy makes it invisible, so both come back as 404 rather than as
-    403 — there is nothing there to be forbidden from."""
+    """**db 0073's row policy is what refuses this**, and §306's mutation run
+    is what proved it: removing `AND author_id = :aid` from both statements
+    broke nothing, because the policy already makes another author's row
+    invisible. Both clauses are gone and this is the check that holds the
+    promise.
+
+    404 rather than 403: there is nothing there to be forbidden from.
+    """
     repo = make_repo(client, fx)
     made = _record(fx, repo["id"], "SELECT 'mine' FROM `a`", who=fx.editor)
     where = (

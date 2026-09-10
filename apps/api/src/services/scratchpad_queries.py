@@ -122,23 +122,26 @@ async def set_favourite(
 ) -> dict[str, Any]:
     """Star or unstar one query.
 
-    `author_id` is in the WHERE clause as well as in db 0073's policy. Not
-    belt-and-braces: the policy makes another author's row invisible, so this
-    would return no row and raise `NotFoundError` either way — saying it here
-    means the intent is legible to somebody reading the service without the
-    schema open, and it is the sentence that stays true if the policy is ever
-    relaxed for an admin.
+    **Whose query it is is db 0073's policy, and is deliberately not repeated
+    here** (§213). This had `AND author_id = :aid` in the WHERE clause, and
+    §306's mutation run removed it without breaking a test — because the policy
+    makes another author's row invisible, so the UPDATE matches nothing and
+    this raises `NotFoundError` either way. A condition no test can distinguish
+    is a line claiming to do work it does not do, and the next reader has to
+    decide which of the two is the real rule.
+
+    `author_id` stays a parameter because it is the identity the connection is
+    opened as; it simply is not repeated as a filter.
     """
     row = await fetch_one(
         conn,
         """
         UPDATE scratchpad_queries
            SET favourite = :fav
-         WHERE id = :id AND repo_id = :rid AND author_id = :aid
+         WHERE id = :id AND repo_id = :rid
         RETURNING id, repo_id, sql, favourite, run_count, first_ran_at, last_ran_at
         """,
-        {"id": str(query_id), "rid": str(repo_id), "aid": str(author_id),
-         "fav": favourite},
+        {"id": str(query_id), "rid": str(repo_id), "fav": favourite},
     )
     if row is None:
         raise NotFoundError("this query")
@@ -152,15 +155,19 @@ async def remove(
 
     A scratchpad accumulates mistakes, and a history you cannot clear is one
     people stop opening.
+
+    Whose query it is is db 0073's policy, for the reason `set_favourite`
+    records: the same clause here survived mutation, because the policy already
+    makes another author's row invisible to this DELETE.
     """
     row = await fetch_one(
         conn,
         """
         DELETE FROM scratchpad_queries
-         WHERE id = :id AND repo_id = :rid AND author_id = :aid
+         WHERE id = :id AND repo_id = :rid
         RETURNING id
         """,
-        {"id": str(query_id), "rid": str(repo_id), "aid": str(author_id)},
+        {"id": str(query_id), "rid": str(repo_id)},
     )
     if row is None:
         raise NotFoundError("this query")
