@@ -1384,6 +1384,16 @@ button { font: inherit; cursor: pointer; }
 
 /* p.14's Problems helper (§286). */
 .repo-problems { display: grid; gap: 8px; margin-top: 10px; }
+/* p.13's Explorer helper (§303). Its own classes rather than the Problems
+   panel's: §296 reused `.repo-check` for a second thing and an existing test
+   counting rows started counting two panels' worth. */
+.repo-explorer { display: grid; gap: 8px; margin-top: 10px; }
+.repo-explorer-body { display: grid; gap: 10px; }
+.repo-explorer-body h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
+.repo-explorer-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.repo-explorer-list li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.repo-explorer-name { font-family: var(--mono, monospace); }
+.repo-explorer-list li a { margin-left: auto; }
 .repo-problems-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
 .repo-problem-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; }
 .repo-problem { border-left: 3px solid var(--line); border-radius: var(--radius); }

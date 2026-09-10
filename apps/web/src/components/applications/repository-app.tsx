@@ -38,11 +38,13 @@ import {
   pruneTabs,
   tabLabel,
 } from "@/lib/editor-tabs";
+import Link from "next/link";
 import {
   ApiError,
   api as platformApi,
   code as codeApi,
   repositories as repoApi,
+  resources as resourceApi,
 } from "@/lib/api";
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
@@ -74,6 +76,15 @@ import {
   proposeProblem,
   pullRequestSlot,
 } from "@/lib/branch-columns";
+import {
+  EXPLORER_KINDS,
+  emptyReason as explorerEmptyReason,
+  needsWorkspaceLevel,
+  openHref as explorerHref,
+  sections as explorerSections,
+  shouldSearch,
+  subtitle as explorerSubtitle,
+} from "@/lib/explorer";
 import {
   canCreate as canCreateTag,
   deleteQuestion as tagDeleteQuestion,
@@ -718,6 +729,20 @@ function FilesTab({
           ) : (
             <p className="state">{emptyViewerNote(paths.length, readOnly)}</p>
           )}
+          {/* **Outside the "is a file open" branch, unlike every panel above
+              it**, and that is the difference rather than an oversight. Those
+              four answer questions *about the current file* — its problems,
+              its tests, what changed in it, what it produces — so without one
+              they have no subject. The Explorer's subject is the project, and
+              the moment it is most useful is before there is a file: you open
+              it to find out what to write. An empty repository showing no way
+              to see what the project contains would be the panel missing
+              exactly when it was wanted.
+
+              Offered to a viewer too, unlike Problems, Tests and File Changes:
+              it reads a listing and writes nothing, so there is no control
+              here that a viewer would be refused (§214). */}
+          <ExplorerPanel wid={wid} pid={pid} />
         </div>
       </div>
 
@@ -2383,6 +2408,110 @@ function TestsPanel({
   );
 }
 
+
+/** p.13's Foundry Explorer helper (§303; `code-repositories.md` §2.4).
+ *
+ * "The Foundry Explorer helper is a file navigation interface that lets you
+ *  quickly browse all files and folders. Once you select a specific dataset,
+ *  you can click 'Open' to view the full dataset."
+ *
+ * **Ours browses the platform, not the repository**, and the reason is in
+ * `explorer.ts`: the Files tab beside this one is already a file tree, and a
+ * second one would be a second answer to what is in this repository. What the
+ * editor cannot see is everything *outside* it — which is precisely what a
+ * transform reads and writes.
+ *
+ * Collapsed until asked for, like every panel in this column. It is a round
+ * trip, and this one is over a listing that does not change while you type.
+ */
+function ExplorerPanel({ wid, pid }: { wid: string; pid: string }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  // **The query is part of the key, but only once it is a query.** Below the
+  // threshold `shouldSearch` sends nothing, so keying on the raw text would
+  // fetch an identical unfiltered listing again for every character typed and
+  // filed under a different key — a cache that grows and never hits.
+  const search = shouldSearch(query) ? query.trim() : "";
+  const listing = useQuery({
+    queryKey: ["repo-explorer", wid, pid, search],
+    queryFn: () =>
+      resourceApi.list(wid, pid, {
+        kind: EXPLORER_KINDS,
+        search: search || undefined,
+        // Object types belong to the workspace rather than to a project, so
+        // without this their section is empty in every project forever.
+        includeWorkspaceLevel: needsWorkspaceLevel(EXPLORER_KINDS),
+        limit: 100,
+      }),
+    enabled: open,
+  });
+
+  const found = listing.data?.resources ?? [];
+  const nothing = explorerEmptyReason(found.length, query);
+
+  return (
+    <section className="repo-explorer" data-testid="explorer-panel">
+      <div className="repo-problems-head">
+        <button
+          type="button"
+          className="btn quiet"
+          onClick={() => setOpen((v) => !v)}
+          data-testid="explorer-toggle"
+        >
+          {open ? "Hide explorer" : "Explorer"}
+        </button>
+      </div>
+      {open && (
+        <div className="repo-explorer-body">
+          <input
+            type="search"
+            aria-label="Search datasets and object types"
+            data-testid="explorer-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search"
+          />
+          {listing.isPending ? (
+            <p className="state">Looking…</p>
+          ) : listing.error ? (
+            <p className="state error">{(listing.error as Error).message}</p>
+          ) : nothing ? (
+            <p className="state" data-testid="explorer-empty">
+              {nothing}
+            </p>
+          ) : (
+            explorerSections(found).map((section) => (
+              <div key={section.kind} data-testid={`explorer-${section.kind}`}>
+                <h4>{section.label}</h4>
+                {section.rows.length === 0 ? (
+                  // Drawn rather than skipped: "this project has none" and
+                  // "this panel does not do those" look identical when the
+                  // heading is missing, and only one is actionable.
+                  <p className="state soft">None in this project.</p>
+                ) : (
+                  <ul className="repo-explorer-list">
+                    {section.rows.map((row) => (
+                      <li key={row.id}>
+                        <span className="repo-explorer-name">{row.name}</span>
+                        {explorerSubtitle(row) && (
+                          <span className="soft">{explorerSubtitle(row)}</span>
+                        )}
+                        <Link href={explorerHref(row)} data-testid={`explorer-open-${row.name}`}>
+                          Open
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 /** p.14's File Changes helper (§287; `code-repositories.md` §2.4).
  *
