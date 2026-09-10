@@ -4388,6 +4388,214 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 285. The Checks tab, and two ids that agreed with nothing (this session)
+
+`code-repositories.md` §1's fifth tab, and the last one missing — so all five
+of p.10's tabs now exist, and the two that diverge say so on the screen.
+
+**Foundry runs checks on a commit; ours run on a proposal**, because the schema
+check asks what the code would do to *this project's* datasets and a commit
+nobody has proposed has not said which change it means to make. Since §284 a
+sandbox is where work happens and a proposal is how it lands, so every commit
+that matters is on its way to being one — but a tab that implied a per-commit
+runner exists would promise something the product does not do, so it says which
+it is.
+
+Two decisions inside the tab worth keeping:
+
+* **the whole history, not the head.** A proposal is made over the commit that
+  existed when somebody opened it, and the branch has usually moved on. Showing
+  only the head's checks would empty the tab exactly when somebody went looking
+  at it;
+* **`error` outranks `warn`.** A warning is an answer; an error means nobody
+  has been told anything about the code. A branch reporting "passing" on the
+  strength of checks that never completed is the most misleading thing this tab
+  could say. An unrecognised status sorts with the failures for the same
+  reason: a status this build does not know is not evidence anything is fine.
+
+**Two bugs found on the way, and neither is about the tab.**
+
+*A commit-backed proposal could be edited into nothing.* `PATCH` accepted
+`changes` on one: the rows it writes are never read, because those files come
+from the commit (db 0039) — but the write still moved `files_updated_at`, which
+invalidates every approval and outdates every comment. A call that changes
+nothing about the code under review and drops the reviews of it is the worst
+combination available.
+
+*A proposal could name a commit that was not in the repository it named.*
+`_write_files` has always checked that a typed change names a model in this
+project — "so a proposal cannot smuggle in a transform from somewhere else" —
+and the commit path took two ids from the caller and joined them to nothing. A
+proposal could name repository A and a commit from repository B, or a
+repository in another project of the same workspace. The review surface would
+show one repository's code under another repository's name, and applying it
+would publish it.
+
+**The general shape, and it is the session's recurring one:** two things that
+must agree, kept apart, each validated only against itself. The tell here was a
+mutation survivor on a *redundant* filter — chasing why the line could never
+matter is what turned up the hole it was standing in front of.
+
+Mutation: 27 mutants, no survivors. Three first-pass survivors and none was a
+missing test in the end — one redundant filter **deleted** with reasoning
+(§213), and two mutants **withdrawn**: `p.project_id` stays because a tenancy
+scope resting on a uniqueness argument two joins away is one refactor from
+being wrong, and `if not commit_ids` is a round trip saved rather than a rule
+(`= ANY('{}')` is false for every row, so nothing can tell the paths apart).
+
+### 284. Protected branches, and the rule that lost to the editor (this session)
+
+p.12: *"To edit code in your repository, you must work in a sandbox branch —
+protected branches cannot be directly edited."* `code-repositories.md` §2.1
+calls it the one to take seriously, because it is what makes the Pull requests
+tab load-bearing rather than optional.
+
+**Protection is the review gate, not a second switch.** A repository's default
+branch is protected exactly when its project requires review. A deliberate
+divergence from Foundry, which protects `main` always — and the same choice
+§279's Settings tab already states out loud. §278 is the reason to care: a
+governance setting with one control nobody could find is how the review gate
+nearly disappeared, and a second control for a rule that means the same thing
+is how they start to disagree. It also makes the rule *land*: a protection that
+defaults off is a setting nobody turns on.
+
+The switch gained a consequence, so its description gained one too — a Settings
+tab still saying only "a transform cannot be changed directly" would leave
+somebody discovering the branch rule by being refused by it.
+
+The check is in `commit` rather than the route, because **two paths write
+commits** — the endpoint and adoption (§274) — and a gate on one of them is a
+gate on one screen, which is the argument `assert_direct_edit_allowed` already
+makes. A branch with no commits is not protected: putting a repository's first
+commit on its default branch is how a repository starts, and refusing it would
+leave a new repository in a gated project with no way in at all.
+
+**Where the rule and the editor disagreed, the editor won.** The obvious
+reading is a read-only editor on a protected branch. But people open a file,
+edit it, and think about branches afterwards — an editor that refused the
+typing would be right about the rule and wrong about the work. So the typing is
+kept and the commit bar offers a branch that can hold it: *Commit to a new
+branch from main*, which creates the sandbox, commits there and switches to it.
+§214 asks not to take typing you will refuse to keep; nothing is refused, it
+just lands somewhere else.
+
+**Three existing tests had to change, and the new versions are better.** They
+moved `main` by committing to it directly, which is exactly what this forbids —
+so a divergence now arises the way it actually does: two sandboxes from one
+base, one of them landing first. The synthetic version was never the scenario
+anybody would hit.
+
+**And a harness finding worth more than the unit.** `eventually` must never
+poll `page.url`: it is a value Playwright caches and refreshes when its driver
+processes a navigation event, and `eventually` loops without yielding, so the
+driver never gets a turn and the same stale string comes back for the whole
+timeout. The test reported that nothing happened when the address bar had
+changed seconds earlier — *deterministically*, which is what made it worth
+chasing rather than retrying. `page.wait_for_url` is the waiter for that, and
+`conftest.py` now says so where the next person will look.
+
+Mutation: 21 mutants, no survivors, over three layers — the API for what is
+legal, vitest for what is offered and what the Settings tab claims, the browser
+for the seam between them.
+
+### 283. A proposal that lands, not just one that publishes (this session)
+
+Starting build-order item 4 turned up a prerequisite that had to come first.
+**Applying a commit-backed proposal published the code and stopped there** —
+the branch it was made on never moved.
+
+That was invisible because everything is committed to `main` first: the branch
+was already at the commit, so "the branch does not move" and "the branch is
+right" were the same picture. They come apart the moment work happens on a
+sandbox, which is the whole point of a pull request and the only way to work
+once `main` is protected. Protect it without this and the first person to use
+the review path as intended leaves `main` behind forever — the branch everybody
+opens the repository on stops describing the repository.
+
+**Same shape as §281 before §282**, one level up: do the enabling half first,
+or ship a bug the next unit multiplies. That is now twice in one session, which
+is enough to call it a rule rather than a coincidence.
+
+`landing_state` is asked *before* the publish rather than after, for the reason
+the merge screen exists: every refusal an apply can make is knowable without
+applying, so a divergence arrives as a blocker in the same list as every other
+reason rather than as an error after the publish already happened.
+
+Three states, and the middle one is the one worth arguing about. **A branch
+ahead of the commit is not a divergence**: `move_branch` refuses to move
+backwards, and rightly, because that discards commits — but not moving at all
+discards nothing, and a proposal overtaken by somebody else's landing has
+nothing left to do. Refusing there would strand every proposal made before
+another one landed.
+
+**An absent default branch lands too.** A repository whose commits all went
+somewhere else *reads as empty* — `read_tree` falls back to the default branch
+and finds no row, the shape `delete_branch` refuses to create — so applying is
+exactly the moment to put one there, by the same act that makes a first commit
+create the branch it is on. Found by an existing test rather than by design: a
+proposal made on a branch that was then deleted could no longer be read at all.
+
+Mutation: 23 mutants, no survivors. Both first-pass survivors were the test's
+fault rather than the code's — `land`'s own refusal is unreachable through the
+surface but load-bearing (without it the publish happens and the branch
+silently stays put), and `default_branch()` hardcoded to `"main"` passed
+everything because every repository in every test is created with the default.
+§212 in its usual form.
+
+### 282. Several files open at once, and a change the URL never showed (this session)
+
+`code-repositories.md` §2.3 calls tabs "the single biggest thing making ours
+feel unlike an IDE". Shipping them second paid twice: §281 found a bug they
+would have multiplied, and it removed the need for a second store here.
+
+**The open set is rebuilt, not restored.** Everything expensive in the strip is
+already persisted — the drafts — so a reload gets a tab for every file with
+uncommitted work plus the one the link names, and there is no second store that
+can come back disagreeing with the first about what somebody was doing. That
+leaves one invariant to enforce: **a file with a draft is always open**, because
+a draft in a closed tab is work you can neither see nor reach — §281's failure
+arriving by another road.
+
+**A tab is a view, not a container.** Closing one keeps the edit; it lives in
+the working set and in storage. So the close button on a dirty tab says so:
+somebody who closed it meaning "undo this" and was not told would commit work
+they thought they had thrown away.
+
+**Then the browser found what the pure tests could not.** Opening was an effect
+keyed on `?file=`, which looked right for a deep link and the back button — but
+an effect only fires when the value *changes*, and `router.replace` does not
+land synchronously. Close the last tab and click the same file in the tree
+before the router catches up, and `?file=` reads `src/a.sql` the whole way
+through: cleared and set again inside a window React never observes. The tab
+never reopened and the address bar went on naming a file the editor said was
+not open.
+
+The general shape: **an effect cannot see a change that was undone before it
+was observed.** Anything keyed on a value that a caller may set back to itself
+within one batch has this, and it fails silently in the direction of doing
+nothing.
+
+The fix moved opening into `openFile`, which left the effect with nothing to
+catch — so it is gone with the reasoning in its place (§213, the shape §280
+deleted too).
+
+**Two browser tests were wrong in the other direction, and the product was
+right.** The strip gains a tab the moment it is clicked while the *selection*
+follows the URL, so for a moment the new tab is there and the old file is still
+highlighted and still in the editor — consistent on screen the whole time. A
+test acting on the click alone is acting on a state no person is looking at:
+one typed into the file it had just left, the other deleted it.
+
+Auto-opening the first file on arrival is deliberately gone. With a strip,
+"nothing open" has to be a state you can be in, or closing the last tab is a
+control that lies.
+
+Mutation: 32 mutants, no survivors. Five survivors on the first wiring pass and
+each named a missing test rather than a missing check. A sixth was a **broken
+layer**: cutting the seed line left an unused import, Next refused to compile,
+and the suite skipped into a green report — which is exactly what
+`LayerCannotFail` is for, and it happened twice more in §284 and §285.
+
 ### 281. Drafts that survive a reload, and a save that ate them (this session)
 
 `code-repositories.md` §2.3's own warning, closed — and it is build-order item
