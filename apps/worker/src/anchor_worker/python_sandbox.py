@@ -239,17 +239,26 @@ def run_python_tests(
             with open(target, "w") as handle:
                 handle.write(content)
 
-        # **The configuration this run obeys, pinned to this directory.**
-        # Written only when the repository did not bring its own: a repository
-        # with a `pytest.ini` means it, and a checkout would honour it.
+        # **The configuration this run obeys, and the reason it is a file
+        # rather than a flag.**
         #
-        # `--rootdir` was here first and did not do this, which a surviving
-        # mutant is what proved (§293). pytest determines its *rootdir* and its
-        # *inifile* separately, and `--rootdir` moves only the first - so it
-        # still walked upwards, found whatever config was above the working
-        # directory, and applied it. `TMPDIR` is the user's to set, so "above
-        # the working directory" can perfectly well be a checkout of this
-        # repository. `-c` is what pins it.
+        # pytest looks for an ini in the directory it was given and then
+        # *upwards*, so without one here it finds whatever sits above the
+        # working directory and applies it. `TMPDIR` is the user's to set, so
+        # "above" can perfectly well be a checkout of this repository - at
+        # which point our own settings reach a customer's tests. A file in this
+        # directory is found first and ends the search.
+        #
+        # Two flags were tried before this and neither was the mechanism, which
+        # two surviving mutants are what proved (§293). `--rootdir` moves
+        # pytest's *rootdir* and not its *inifile*, so it walked up anyway;
+        # `-c` pointed at this same file and so said nothing the file's
+        # existence did not already say. One mechanism, and it is this one.
+        #
+        # Written only when the repository did not bring its own: a repository
+        # with a `pytest.ini` means it, a checkout would honour it, and
+        # overwriting theirs would be this platform quietly disagreeing with a
+        # file they wrote.
         config_path = os.path.join(tmp, "pytest.ini")
         if not os.path.exists(config_path):
             with open(config_path, "w") as handle:
@@ -276,8 +285,7 @@ def run_python_tests(
                  # whose job is to open the failing test needs the file it is
                  # in, so ask for the format that says.
                  "-o", "junit_family=xunit1",
-                 "-c", config_path,
-                 "--rootdir", tmp, f"--junitxml={report_path}", tmp],
+                 f"--junitxml={report_path}", tmp],
                 # **Load-bearing, not tidiness.** `python -m pytest` prepends
                 # the invocation directory to `sys.path`, so this is what makes
                 # `from src.daily import build` resolve to the repository's own
