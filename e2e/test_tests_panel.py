@@ -213,3 +213,62 @@ def test_the_button_does_not_invite_a_second_press_while_a_run_is_in_flight(
     eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the run up")
     expect(button).to_have_text("Run tests", timeout=30000)
     expect(button).to_be_enabled()
+
+
+# ---- p.19: the Checks tab shows them too (§296) --------------------------------
+def open_checks(page, repo: dict, branch: str = "main") -> None:
+    page.goto(f"{WEB_BASE}/r/{repo['resource_id']}?tab=checks&branch={branch}")
+    expect(page.get_by_test_id("checks-tab")).to_be_visible(timeout=30000)
+
+
+def test_the_checks_tab_says_what_the_unit_tests_did(page, api) -> None:
+    """p.19: *"The Checks tab will also include the output of any unit tests
+    that have been defined for your repo."*
+
+    **And it names the failures rather than counting them.** "3 failed" sends
+    you to the panel; `tests/test_bad.py::test_it_does_not_hold` sends you to
+    the test.
+    """
+    mod = project(api, "Checks tests")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"tests/test_bad.py": FAILING_TEST})
+
+    open_checks(page, repo)
+    # Nothing has been asked for yet, and the row says which of the two empties
+    # this is: press the button, not write a test.
+    expect(page.get_by_test_id("checks-tests-summary")).to_contain_text(
+        "No unit tests have been run"
+    )
+
+    open_tests(page, repo, "tests/test_bad.py")
+    page.get_by_test_id("tests-run").click()
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the run up")
+
+    open_checks(page, repo)
+    expect(page.get_by_test_id("checks-tests-summary")).to_contain_text(
+        "1 failed", timeout=30000
+    )
+    expect(page.get_by_test_id("checks-tests-failures")).to_contain_text(
+        "tests/test_bad.py::test_it_does_not_hold"
+    )
+
+
+def test_the_checks_tab_does_not_call_an_empty_run_passed(page, api) -> None:
+    """The same assertion the panel makes, on the third screen that could get
+    it wrong. A green row for a repository nobody has written a test in is the
+    suite-that-cannot-fail, and a Checks tab is exactly where somebody would
+    trust it."""
+    mod = project(api, "Checks tests empty")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    commit(mod, repo, {"src/daily.py": "# no tests\n"})
+
+    open_tests(page, repo, "src/daily.py")
+    page.get_by_test_id("tests-run").click()
+    eventually(work_the_queue, lambda n: n >= 1, what="the worker to pick the run up")
+
+    open_checks(page, repo)
+    row = page.get_by_test_id("checks-tests")
+    expect(row).to_contain_text("failed", timeout=30000)
+    expect(page.get_by_test_id("checks-tests-summary")).to_contain_text(
+        "No unit tests in this repository"
+    )

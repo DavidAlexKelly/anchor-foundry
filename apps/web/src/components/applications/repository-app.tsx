@@ -66,6 +66,15 @@ import {
 // about different things - a branch's checks, a run's tests - so the collision
 // is a sign the naming is right rather than a sign one of them should move.
 import {
+  andMore,
+  mostRecent,
+  namedFailures,
+  // Aliased for the same reason the `test-runs` imports above are: this tab
+  // already has a `verdict` and a `status` from `branch-checks.ts`.
+  status as testStatusOf,
+  summary as testSummary,
+} from "@/lib/test-runs-in-checks";
+import {
   canEditProject,
   durationLabel as testDuration,
   isAProblem as testsAreAProblem,
@@ -1798,6 +1807,18 @@ function ChecksTab({
     queryKey: ["repo-checks", rid, branch],
     queryFn: () => repoApi.branchChecks(wid, pid, rid, branch),
   });
+  // **p.19: "The Checks tab will also include the output of any unit tests
+  // that have been defined for your repo."** (§296.)
+  //
+  // A second query rather than a second field on the first, because the two
+  // are not the same kind of thing here: a check belongs to a *proposal*
+  // (§285) and a test run belongs to a *branch and a working set* (db 0071).
+  // Folding them into one response would make the API claim a scope neither
+  // has.
+  const testRuns = useQuery({
+    queryKey: ["repo-test-runs", rid, branch],
+    queryFn: () => repoApi.testRuns(wid, pid, rid, branch),
+  });
 
   if (checks.isPending) return <p className="state">Loading checks…</p>;
   if (checks.error) return <p className="state error">{(checks.error as Error).message}</p>;
@@ -1805,6 +1826,8 @@ function ChecksTab({
   const data = checks.data!;
   const rows = worstFirst(data.checks);
   const state = verdict(rows);
+  const latestRun = mostRecent(testRuns.data ?? []);
+  const testStatus = testStatusOf(latestRun);
 
   return (
     <section className="repo-checks" data-testid="checks-tab">
@@ -1819,6 +1842,29 @@ function ChecksTab({
         them per commit; ours ask what the code would do to this project&apos;s
         datasets, which a commit nobody has proposed has not said.
       </p>
+
+      {/* **The unit tests, and labelled as what they are.** They sit above the
+          proposal checks because they are about this branch as it stands,
+          which is the question somebody opening this tab has first - and they
+          carry their own scope line for the same reason the checks do. */}
+      <div className={`repo-check ${testStatus}`} data-testid="checks-tests">
+        <div className="repo-check-head">
+          <span className="chip">{testStatus === "none" ? "not run" : testStatus}</span>
+          <code>unit tests</code>
+          <span className="soft">on {branch}</span>
+        </div>
+        <p className="repo-check-summary" data-testid="checks-tests-summary">
+          {testSummary(latestRun)}
+        </p>
+        {namedFailures(latestRun).length > 0 && (
+          <ul className="repo-check-detail" data-testid="checks-tests-failures">
+            {namedFailures(latestRun).map((id) => (
+              <li key={id}><code>{id}</code></li>
+            ))}
+            {andMore(latestRun) && <li className="soft">{andMore(latestRun)}</li>}
+          </ul>
+        )}
+      </div>
 
       {rows.length === 0 ? (
         <p className="state">

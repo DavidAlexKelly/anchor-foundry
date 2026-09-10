@@ -4441,6 +4441,43 @@ this unit is about: the parser was `test_report.py`, so pytest collected our
 *source module* as a test file and warned that it could not collect
 `TestOutcome`. Renamed `unit_test_report.py`.
 
+### 296. Test output in the Checks tab, and item 6 closed (this session)
+
+p.19: *"The Checks tab will also include the output of any unit tests that have
+been defined for your repo."*
+
+**The two lists on that tab are not the same kind of thing here, and the tab
+says so.** §285 recorded the first half of that divergence: our checks belong to
+a *proposal*, because a schema check asks what the code would do to this
+project's datasets and a commit nobody has proposed has not said which change it
+means. A test run is different again — it belongs to a **branch and a working
+set** (db 0071), because the question it answers is "does what I just typed
+pass". Two queries rather than one response, because folding them together
+would make the API claim a scope neither has.
+
+**The most recent run, not a history.** The tab answers "what is the state of
+this branch"; every run somebody pressed the button on is a different question
+with its own home, and a list here would grow without bound on exactly the
+branch whose state matters most.
+
+**Named failures, capped at five.** "3 failed" sends you to the panel;
+`tests/test_daily.py::test_totals` sends you to the test. Capped because a
+branch where two hundred tests fail has one problem, not two hundred, and a tab
+that listed them all would bury the proposal checks beside it.
+
+**And the same assertion again, on the third screen that could get it wrong**:
+an empty run is `failed`, not `passed`. A green row for a repository nobody has
+written a test in is the suite-that-cannot-fail, and a Checks tab is exactly
+where somebody would trust it.
+
+**One vocabulary, deliberately.** `passed` / `failed` / `pending` — the words
+the proposal checks already use — because the two kinds of row sit in one list
+under one heading, and a reader made to learn two sets of words for them would
+learn neither.
+
+Build-order item 6 is closed: unit tests (§292–§293), the Tests panel (§294–
+§295), and this.
+
 ### 295. The Tests panel (this session)
 
 p.14's Tests helper, and its whole specification is one sentence: *"When your
