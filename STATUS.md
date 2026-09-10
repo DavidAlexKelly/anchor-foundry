@@ -4388,6 +4388,59 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 292. The module customer code imports, and the runner that could not run it (this session)
+
+Build-order item 6 is "unit tests, then the Tests panel, then test output in the
+Checks tab". §216's rule — open what a line cites before building on it — turned
+the first word into a prerequisite nobody had scoped, and then into a production
+bug.
+
+**A unit test's first line is an import, and the declared shape was not
+importable.** `docs/decisions/0004-running-customer-code.md` documents
+
+    @transform(output="daily_orders", inputs={"orders": "raw_orders"})
+
+and `python_sandbox.py` made it work by defining `transform` as a local in the
+namespace it `exec`s the file into. That is enough to *run* a transform and not
+enough to import one: `from src.daily import build` raises `NameError` before
+any test runs, and `import anchor` raises `ModuleNotFoundError`, because no such
+module existed on disk anywhere. The decorator was a convention enforced by one
+exec namespace, not a contract.
+
+**And the other runner had never had it at all.** `transform_runner.py` is the
+container entrypoint decision 0004 gates — the thing that runs customer Python
+*in production*. It bound no `transform`, handled only the script shape, and
+answered a declared transform with `NameError: name 'transform' is not defined`.
+Development takes the subprocess path, which was right, so the suite was green
+and the deployment was broken. **This is §272's own finding a second time**, in
+the half nobody re-checked: two contracts for one thing, each right about
+itself, and no test on the container path had ever used a decorator.
+
+So `user_api.py` is one decorator and one `resolve_output`, copied into every
+directory customer code runs in as `anchor.py` and imported by both runners.
+The rules used to be written out twice — once as a string in a runner template,
+once incompletely in the container — which is how they came to disagree.
+
+**Staged, not baked into the image.** The runner reaches nothing outside its
+working directory, so `dispatch.stage` writes `anchor.py` beside the code. An
+image-baked copy would drift from the development one the first time either
+changed, which is the shape this whole unit removes.
+
+**And loaded by file path rather than by `import`.** The container runs one job
+and exits, so module caching would never bite in production — which is exactly
+why relying on it would have been wrong. Two tests caught it immediately: a
+second declared transform in one process read as "ambiguous" because the
+registry persisted, and a run staged *without* `anchor.py` imported the previous
+run's. A fresh module object per run is what a fresh container already is, and
+now the tests run against the rule the deployment does.
+
+What remains of item 6: running pytest over a repository's files, then the
+panel, then the Checks tab. Worth recording about the specification itself —
+**the Unit tests chapter is a pointer, not a spec.** p.56 says Code Repositories
+"support discovering and running unit tests through an integrated helper" and
+links to per-language docs absent from `docs/pal/`. Three lines elsewhere are
+the whole buildable specification: p.13, p.14 and p.19.
+
 ### 291. The deletion, and the hole under it (this session)
 
 Build-order item 1, closed. `code-repositories.md` opened by asking for

@@ -12,6 +12,9 @@ The contract, both directions, is files in one directory:
     job.json        what to run, written by the caller before the task starts
     <inputs>.parquet
     <code>          the transform source
+    anchor.py       the module customer code imports (§292), staged rather than
+                    baked into the image so the container runs the same file
+                    the development path copies and the suite exercises
     output.parquet  written here on success
     result.json     written here always, and it is the *only* thing the caller
                     reads to find out what happened
@@ -24,8 +27,17 @@ owner from "your SQL has a typo", and a caller that could not tell them apart
 would report the wrong one to the wrong person.
 
 Reuses the execution contract `python_sandbox.py` already established: each
-input is a pandas DataFrame bound to its alias, and the script assigns its
-result to `output`.
+input is a pandas DataFrame bound to its alias, and the file either assigns its
+result to `output` or declares a `@transform` that returns it.
+
+**That second shape did not run here until §292**, and the sentence above used
+to name only the first. `python_sandbox.py` bound `transform` before executing
+the file and this module never did, so every repository-authored Python
+transform — the shape decision 0004 documents — answered `NameError: name
+'transform' is not defined`. In production only: development takes the
+subprocess path, which was right, so the suite was green and the deployment was
+broken. The rules now live in `user_api.py`, imported by both, because two
+implementations of "which shape is this" is how they came to disagree.
 """
 from __future__ import annotations
 
@@ -88,6 +100,30 @@ def read_job(work_dir: str) -> Job:
     )
 
 
+def _load_anchor(work_dir: str) -> Any:
+    """The `anchor` module this run's code imports, loaded from this run's
+    directory and belonging to nothing else."""
+    import importlib.util
+
+    path = os.path.join(work_dir, "anchor.py")
+    spec = importlib.util.spec_from_file_location("anchor", path)
+    if spec is None or spec.loader is None or not os.path.exists(path):
+        # Not a TransformError: the caller wrote a broken run and the author's
+        # code is fine. Telling them their transform failed would send the
+        # wrong person looking.
+        raise RuntimeError(
+            "anchor.py was not staged beside the transform - the caller did not "
+            "write the module customer code imports"
+        )
+    module = importlib.util.module_from_spec(spec)
+    # In `sys.modules` under its own name so that a transform which says
+    # `import anchor` gets *this* object rather than loading a second copy with
+    # a second registry.
+    sys.modules["anchor"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def execute(work_dir: str, job: Job) -> dict[str, Any]:
     """Run the transform and write its output. Returns the result payload."""
     import duckdb  # imported here so `read_job` failures do not depend on it
@@ -109,6 +145,30 @@ def execute(work_dir: str, job: Job) -> dict[str, Any]:
     except FileNotFoundError as exc:
         raise RuntimeError(f"the transform source {job.code_path} was not staged") from exc
 
+    # **The declared shape, which this path could not run at all (§292).**
+    # `python_sandbox.py` bound `transform` before executing the file and this
+    # module never did, so a repository-authored transform - the shape decision
+    # 0004 documents and §272 made work - died here on `NameError: name
+    # 'transform' is not defined`. In *production only*: development runs the
+    # subprocess path, which was right, so the suite was green and the
+    # deployment was broken. §272's own finding a second time, in the half
+    # nobody re-checked.
+    #
+    # Loaded from the working directory, like everything else this container
+    # touches: `stage` writes `anchor.py` beside the code.
+    #
+    # **By file path, not by `sys.path` and `import`.** The container runs one
+    # job and exits, so caching would never bite in production - which is
+    # exactly why it would have been the wrong thing to rely on. `import`
+    # returns the module some earlier call left in `sys.modules`, carrying its
+    # `declared` registry with it, so a second transform in one process is
+    # "ambiguous" and a run staged without the file imports somebody else's.
+    # A fresh module object per run is what a fresh container already is, and
+    # this way the tests run against the same rule the deployment does.
+    anchor = _load_anchor(work_dir)
+    namespace["transform"] = anchor.transform
+    namespace["anchor"] = anchor
+
     try:
         exec(compile(source, "<transform>", "exec"), namespace)
     except Exception as exc:
@@ -116,12 +176,13 @@ def execute(work_dir: str, job: Job) -> dict[str, Any]:
         # frames - they are noise to whoever wrote the transform.
         raise TransformError(f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=-3)}") from exc
 
-    output = namespace.get("output")
-    if output is None:
-        raise TransformError(
-            "the transform finished without setting `output` - assign the table it "
-            "produces to a variable of that name"
-        )
+    # One implementation of "which shape did this file use", in the module both
+    # runners import. It used to be written out twice, and the two disagreed
+    # about whether the declared shape existed.
+    try:
+        output = anchor.resolve_output(namespace)
+    except anchor.ShapeError as exc:
+        raise TransformError(str(exc)) from exc
 
     connection.register("_output", output)
     try:

@@ -50,6 +50,7 @@ import sys
 import tempfile
 from typing import Any
 
+from . import user_api
 from .dataset_engine import ColumnSchema, DatasetEngineError
 
 DEFAULT_TIMEOUT_S = 300
@@ -70,31 +71,21 @@ for _alias, _path in _inputs.items():
         f"SELECT * FROM read_parquet({{_path!r}})"
     ).df()
 
-# **The decorator, defined so the declared shape can run at all.** It records
-# the function and returns it unchanged: importing this file must not be how
-# the declaration is read - that is `transform_declarations.py`'s job and
-# decision 0004's whole point - so nothing here parses or validates. It exists
-# because a file that says `@transform(...)` has to find a `transform`.
+# **The decorator, imported rather than defined** (§292). It used to be
+# written out here: a `transform` function and a shim `anchor` object built in
+# this template, so that a file saying `@transform(...)` could find one. That
+# was enough to *run* a transform and not enough to **import** one, which is a
+# unit test's first line - `import anchor` found no module, because there was
+# no such file anywhere on disk. So `user_api.py` is copied in beside the code
+# as `anchor.py` and this reads the same decorator the tests do.
 #
-# `anchor.transform` as well as bare `transform`, because the reader accepts
-# both spellings (`_decorator_name`), and a spelling that parses as a
-# declaration and then dies on NameError is the same defect in its second form.
-_declared = []
+# Both spellings, because the declaration reader accepts both
+# (`_decorator_name`), and a spelling that parses as a declaration and then
+# dies on NameError is the same defect in its second form.
+import anchor
 
-
-def transform(**_kwargs):
-    def _register(_fn):
-        _declared.append((_fn, _kwargs))
-        return _fn
-    return _register
-
-
-class _Anchor:
-    transform = staticmethod(transform)
-
-
-_namespace["transform"] = transform
-_namespace["anchor"] = _Anchor()
+_namespace["transform"] = anchor.transform
+_namespace["anchor"] = anchor
 
 with open({code_path!r}) as _f:
     _user_code = _f.read()
@@ -105,66 +96,17 @@ except Exception as exc:
     print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
-# **A module-level `output` wins.** Not a precedence puzzle: a file with both
-# is a script that also happens to declare, and the script's assignment is the
-# thing that ran last. Checking it first also means the old shape reaches its
-# result without the decorator machinery being involved at all.
-_output = _namespace.get("output")
-if _output is None and len(_declared) > 1:
-    # The publisher refuses this too (§272), so reaching it means the file
-    # changed between publish and run. Refusing rather than picking the first
-    # keeps "what was declared" and "what ran" the same sentence.
-    print(
-        "MODEL_ERROR: this file declares more than one transform, so which one "
-        "produces the output is ambiguous",
-        file=sys.stderr,
-    )
+# **The shape rules live in `anchor`, not here** (§292). They used to be
+# written out in this template and again, differently and incompletely, in
+# `transform_runner.py` - the container that runs this in production, which
+# never bound `transform` at all. One implementation, imported by both.
+try:
+    _output = anchor.resolve_output(_namespace)
+except anchor.ShapeError as exc:
+    print(f"MODEL_ERROR: {{exc}}", file=sys.stderr)
     sys.exit(1)
-if _output is None and _declared:
-    _fn, _kwargs = _declared[0]
-    _aliases = dict(_kwargs.get("inputs") or {{}})
-    # **By keyword, never by position.** `@transform` itself refuses positional
-    # arguments so that the file says which name means what rather than relying
-    # on order; passing the inputs positionally here would put that back in
-    # through the other door, and a transform whose parameters were in a
-    # different order would silently read the wrong dataset.
-    _missing = [_a for _a in _aliases if _a not in _namespace]
-    if _missing:
-        print(
-            "MODEL_ERROR: this transform declares inputs that were not provided: "
-            + ", ".join(sorted(_missing)),
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    try:
-        _output = _fn(**{{_a: _namespace[_a] for _a in _aliases}})
-    except TypeError as exc:
-        # The common mistake, and a raw TypeError names the function rather
-        # than the mismatch: a parameter list that does not match the declared
-        # aliases.
-        print(
-            f"MODEL_ERROR: {{_fn.__name__}} does not take the inputs it declares "
-            f"({{', '.join(sorted(_aliases)) or 'none'}}): {{exc}}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    except Exception as exc:
-        print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
-        sys.exit(1)
-    if _output is None:
-        print(
-            f"MODEL_ERROR: {{_fn.__name__}} returned nothing - a declared "
-            "transform returns the table it produces",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-if _output is None:
-    print(
-        "MODEL_ERROR: this file neither set a variable named `output` nor "
-        "declared a transform with @transform",
-        file=sys.stderr,
-    )
+except Exception as exc:
+    print(f"MODEL_ERROR: {{type(exc).__name__}}: {{exc}}", file=sys.stderr)
     sys.exit(1)
 
 _con = duckdb.connect()
@@ -197,6 +139,7 @@ def run_python_transform(
 ) -> tuple[list[ColumnSchema], int]:
     os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
+        user_api.write_into(tmp)
         code_path = os.path.join(tmp, "model.py")
         with open(code_path, "w") as f:
             f.write(code)

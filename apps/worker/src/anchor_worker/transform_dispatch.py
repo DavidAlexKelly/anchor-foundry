@@ -37,6 +37,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import user_api
+
 SCRATCH_ROOT_ENV = "ANCHOR_TRANSFORM_SCRATCH"
 DEFAULT_SCRATCH_ROOT = "/transform-scratch"
 CLUSTER_ENV = "ANCHOR_TRANSFORM_CLUSTER"
@@ -159,6 +161,11 @@ def stage(job: TransformJob, *, root: str | None = None, run_id: str | None = No
 
     with open(os.path.join(work_dir, job.code_filename), "w") as handle:
         handle.write(job.code)
+    # **The module customer code imports** (§292). The runner reaches nothing
+    # outside this directory, so the decorator has to be *in* it - and staging
+    # it here rather than baking it into the image means the container runs the
+    # same `anchor.py` the development path copies and our own suite exercises.
+    user_api.write_into(work_dir)
     with open(os.path.join(work_dir, JOB_FILE), "w") as handle:
         json.dump(
             {

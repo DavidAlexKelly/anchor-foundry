@@ -469,3 +469,21 @@ def test_an_infrastructure_failure_reaching_a_model_run_says_whose_problem_it_is
         dispatch.run_python_transform({}, "output = 1\n", str(tmp_path / "out.parquet"))
     assert str(raised.value).startswith("the platform could not run this transform")
     assert "no result file" in str(raised.value)
+
+
+def test_the_module_customer_code_imports_is_staged_beside_it(scratch) -> None:
+    """**§292: `anchor.py` is part of a run's directory, not part of the image.**
+
+    The runner reaches nothing outside its working directory, so the decorator
+    a transform imports has to be *in* it. Staged here rather than baked into
+    the container image so that the deployment runs the same file the
+    development path copies and `test_user_api.py` exercises — an image-baked
+    copy would drift from it the first time either changed, which is the shape
+    this whole unit exists to remove.
+    """
+    from anchor_worker import user_api
+
+    handle = dispatch.stage(dispatch.TransformJob(code="output = 1\n"), root=scratch)
+    staged = os.path.join(handle.work_dir, "anchor.py")
+    assert os.path.exists(staged), "the runner would find no `anchor` to import"
+    assert open(staged, "rb").read() == open(user_api.__file__, "rb").read()
