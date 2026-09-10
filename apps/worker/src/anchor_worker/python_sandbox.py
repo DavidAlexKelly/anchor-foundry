@@ -51,12 +51,14 @@ import tempfile
 from typing import Any
 
 from . import user_api
+from .limits import MAX_OUTPUT_ROWS, too_many_rows
 from .dataset_engine import ColumnSchema, DatasetEngineError
 
 DEFAULT_TIMEOUT_S = 300
 MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024  # 1 GB, flag: worker-tier day-one cap
 CPU_LIMIT_S = 120
-MAX_OUTPUT_ROWS = 5_000_000  # matches the SQL transform's day-one cap
+# The cap and its sentence are `limits.py`'s, imported by both runners (§298).
+# Re-exported here under the name callers already use.
 
 _RUNNER_TEMPLATE = """
 import json
@@ -180,10 +182,7 @@ def run_python_transform(
 
     row_count = int(payload["row_count"])
     if row_count > MAX_OUTPUT_ROWS:
-        raise DatasetEngineError(
-            f"the transform produced {row_count:,} rows - above this build's "
-            f"{MAX_OUTPUT_ROWS:,} row limit"
-        )
+        raise DatasetEngineError(too_many_rows(row_count, MAX_OUTPUT_ROWS))
     schema = [ColumnSchema(name=c["name"], data_type=c["data_type"]) for c in payload["schema"]]
     return schema, row_count
 

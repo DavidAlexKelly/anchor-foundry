@@ -4441,6 +4441,54 @@ this unit is about: the parser was `test_report.py`, so pytest collected our
 *source module* as a test file and warned that it could not collect
 `TestOutcome`. Renamed `unit_test_report.py`.
 
+### 298. The two runners, asked the same questions (this session)
+
+Borrowed from the Bun team's Zig-to-Rust rewrite, on the user's suggestion. The
+mechanism worth copying is **differential testing**: feed two implementations
+the same input and compare what comes back. Agreement proves neither is right;
+it is *disagreement* that is the point, and it arrives as a list of which cases
+rather than as a bug report months later.
+
+**We have exactly the pair that calls for it.** `python_sandbox.py` runs a
+transform in a subprocess and is what development uses; `transform_runner.py`
+runs one inside the no-egress container and is what a deployment uses. §292
+found the second had never supported the declared `@transform` shape at all —
+so a repository-authored Python transform ran locally and answered `NameError`
+when deployed, with every suite green, because no test on the container path had
+ever used a decorator. §292 fixed that one disagreement by moving the shape
+rules into a module both import; nothing was watching for the next.
+
+**It found one on its first tightening.** The output row cap was declared twice
+and refused in two different sentences:
+
+    the transform produced 3 rows - above this build's 2 row limit
+    the transform produced 3 rows, over the 2 limit
+
+One rule, two wordings, and which one a person saw depended on whether the
+platform was running with ECS configured — which the author of a transform
+neither knows nor should have to. The cap and its sentence are `limits.py` now,
+imported by both.
+
+**Its own module rather than `user_api.py`**, and the distinction is worth
+keeping: that file is copied into the directory customer code runs in and is
+imported *by* their transform. A cap the platform enforces is not part of the
+API a transform is written against, and putting it there would offer it to be
+read, compared against, and eventually worked around.
+
+**The allowed divergence is written down rather than left open.** The container
+appends a traceback to an error raised by the author's own code and the
+subprocess does not, deliberately: a container's run is asynchronous and cannot
+be re-run by pressing a button. So the test asserts the *first line* agrees —
+the sentence a person reads — and separately asserts the traceback really is
+there, so the exemption cannot quietly become the rule.
+
+**What the harness caught, and what it could not.** A differential test is
+weaker than a mutation test: it says two things agree, not that either is
+checked. The mutation harnesses stay the stronger discipline. What this adds is
+the one thing they cannot — a mutation of *both* implementations in the same
+direction looks fine to each of them separately, and this is the only check that
+compares them.
+
 ### 297. The two things CI caught that the local suites could not (this session)
 
 The browser job went red on eleven tests. Both causes were mine, both are

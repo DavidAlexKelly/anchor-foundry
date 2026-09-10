@@ -53,10 +53,15 @@ DEFAULT_WORK_DIR = "/work"
 JOB_FILE = "job.json"
 RESULT_FILE = "result.json"
 
-# Matches the SQL transform's cap. A transform that produces more than this has
-# almost always lost a join condition, and finding out at write time is kinder
-# than finding out when the dataset is queried.
-MAX_OUTPUT_ROWS = 5_000_000
+# **The cap and its sentence live in `limits.py`, imported by both runners**
+# (§298). They were declared here and again in `python_sandbox.py`, with two
+# different wordings for one refusal - and which one a person saw depended on
+# whether the platform was running with ECS configured, which the author of a
+# transform neither knows nor should have to.
+#
+# Re-exported under the old name so `MAX_OUTPUT_ROWS` still means this module's
+# cap to anything that reads it, including the test that lowers it.
+from .limits import MAX_OUTPUT_ROWS, too_many_rows  # noqa: E402
 
 
 class TransformError(Exception):
@@ -188,9 +193,7 @@ def execute(work_dir: str, job: Job) -> dict[str, Any]:
     try:
         row_count = int(connection.execute("SELECT count(*) FROM _output").fetchone()[0])
         if row_count > MAX_OUTPUT_ROWS:
-            raise TransformError(
-                f"the transform produced {row_count:,} rows, over the {MAX_OUTPUT_ROWS:,} limit"
-            )
+            raise TransformError(too_many_rows(row_count, MAX_OUTPUT_ROWS))
         destination = os.path.join(work_dir, job.output_path)
         connection.execute(f"COPY _output TO '{destination}' (FORMAT parquet)")
         schema = connection.execute("DESCRIBE _output").fetchall()

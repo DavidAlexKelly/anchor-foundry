@@ -252,6 +252,7 @@ Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types,
 - **Tests panel** — a failing test is reported as failing. A test suite that cannot fail is the exact thing this repo does not accept. **✅ §295** (`e2e/test_tests_panel.py`), and the harder half with it: a repository with *no* tests is reported as having none rather than as passing, because "nothing failed" and "everything passed" are the same number. The browser test drives the worker's own op, since the dev stack runs no Dagster daemon — what is skipped is the cron, not the work.
 - **Checks** — a check that fails blocks the merge, and the block names the check. Unit-test output is on the tab as of **§296**, and it names the failing tests rather than counting them: "3 failed" sends you to the panel, `tests/test_daily.py::test_totals` sends you to the test.
 - **Tags** — a tag pinned to a commit still resolves to that commit after the branch moves on.
+- **One transform, two runners** — the same transform through the subprocess path and the container path produces the same table, and the same refusal in the same words. **✅ §298** (`apps/worker/tests/test_execution_parity.py`), borrowed from the Bun team's Zig-to-Rust rewrite: feed both implementations the same input and compare, because *agreement proves nothing but disagreement is a precise investigation queue*. It found one on its first tightening — the row cap was declared twice with two different sentences, and which one a person saw depended on whether ECS was configured.
 
 ---
 
