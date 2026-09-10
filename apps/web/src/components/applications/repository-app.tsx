@@ -88,6 +88,18 @@ import {
   subtitle as explorerSubtitle,
   suggestedAlias,
 } from "@/lib/explorer";
+import type { ScratchpadResult } from "@/lib/types";
+import {
+  canRun,
+  emptyReason as scratchpadEmptyReason,
+  oneLine,
+  ranNote,
+  sampleWarning,
+  showRewritten,
+  starLabel,
+  tabLabel as scratchpadTabLabel,
+  type ScratchpadTab,
+} from "@/lib/sql-scratchpad";
 import {
   canCreate as canCreateTag,
   deleteQuestion as tagDeleteQuestion,
@@ -757,6 +769,12 @@ function FilesTab({
               setEdits((c) => ({ ...c, [selected]: next }))
             }
           />
+          {/* p.15's SQL helper, beside the Explorer and outside the "is a file
+              open" branch for the same reason: a scratchpad query names its own
+              datasets, so it has a subject whether or not a file is selected —
+              and asking what is in a dataset is most often what you do *before*
+              writing the transform that reads it. */}
+          <ScratchpadPanel wid={wid} pid={pid} rid={rid} readOnly={readOnly} />
         </div>
       </div>
 
@@ -2417,6 +2435,229 @@ function TestsPanel({
             );
           })}
         </ul>
+      )}
+    </section>
+  );
+}
+
+
+/** p.15's SQL Scratchpad (§305-§306; `code-repositories.md` §2.4).
+ *
+ * "The SQL helper lets you quickly test out SQL queries… To view queries
+ *  marked as favorites, go to the [star] tab. To view a history of queries ran
+ *  in the SQL helper, go to the [clock] tab."
+ *
+ * **The Explorer's opposite number.** That panel says what the project holds;
+ * this one asks it a question. A scratchpad query names datasets in the query
+ * itself — `scratchpad.py` is the one reader of that syntax, and nothing here
+ * parses SQL, for §304's reason.
+ *
+ * Sampled, like Preview, and it says so: a scratchpad is for finding out what
+ * is in a dataset, and running the real thing over every row of a large one
+ * makes the panel unusable rather than accurate.
+ */
+function ScratchpadPanel({
+  wid,
+  pid,
+  rid,
+  readOnly,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  readOnly: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<ScratchpadTab>("query");
+  const [sql, setSql] = useState("");
+  const [refused, setRefused] = useState<string | null>(null);
+  const [result, setResult] = useState<ScratchpadResult | null>(null);
+  // What produced `result`, so the rewritten query is compared against the
+  // text that was actually sent rather than against whatever is in the box now.
+  const [ranSql, setRanSql] = useState("");
+  const client = useQueryClient();
+
+  const history = useQuery({
+    queryKey: ["scratchpad-queries", rid, false],
+    queryFn: () => repoApi.scratchpadQueries(wid, pid, rid, false),
+    enabled: open,
+  });
+  const favourites = useQuery({
+    queryKey: ["scratchpad-queries", rid, true],
+    queryFn: () => repoApi.scratchpadQueries(wid, pid, rid, true),
+    enabled: open,
+  });
+
+  function refresh() {
+    void client.invalidateQueries({ queryKey: ["scratchpad-queries", rid] });
+  }
+
+  const run = useMutation({
+    mutationFn: () => repoApi.runScratchpad(wid, pid, rid, sql),
+    onSuccess: (answer) => {
+      setRefused(null);
+      setResult(answer);
+      setRanSql(sql);
+      // The history only gains a row once the query has *run*, so it is
+      // refreshed here rather than on every press.
+      refresh();
+    },
+    onError: (error) => {
+      setRefused((error as Error).message);
+      setResult(null);
+    },
+  });
+
+  const star = useMutation({
+    mutationFn: (q: { id: string; favourite: boolean }) =>
+      repoApi.favouriteScratchpadQuery(wid, pid, rid, q.id, !q.favourite),
+    onSuccess: refresh,
+  });
+  const forget = useMutation({
+    mutationFn: (id: string) => repoApi.forgetScratchpadQuery(wid, pid, rid, id),
+    onSuccess: refresh,
+  });
+
+  const shown = tab === "favourites" ? favourites.data ?? [] : history.data ?? [];
+  const nothing = scratchpadEmptyReason(tab, history.data?.length ?? 0);
+
+  return (
+    <section className="repo-scratchpad" data-testid="scratchpad-panel">
+      <div className="repo-problems-head">
+        <button
+          type="button"
+          className="btn quiet"
+          onClick={() => setOpen((v) => !v)}
+          data-testid="scratchpad-toggle"
+        >
+          {open ? "Hide SQL" : "SQL"}
+        </button>
+      </div>
+      {open && (
+        <div className="repo-scratchpad-body">
+          <div className="repo-scratchpad-tabs" role="tablist">
+            {(["query", "history", "favourites"] as ScratchpadTab[]).map((each) => (
+              <button
+                key={each}
+                type="button"
+                role="tab"
+                aria-selected={tab === each}
+                className={tab === each ? "btn quiet on" : "btn quiet"}
+                data-testid={`scratchpad-tab-${each}`}
+                onClick={() => setTab(each)}
+              >
+                {scratchpadTabLabel(
+                  each,
+                  each === "favourites"
+                    ? favourites.data?.length ?? 0
+                    : history.data?.length ?? 0,
+                )}
+              </button>
+            ))}
+          </div>
+
+          {tab === "query" ? (
+            <>
+              <textarea
+                className="repo-scratchpad-sql"
+                aria-label="SQL query"
+                data-testid="scratchpad-sql"
+                value={sql}
+                onChange={(e) => setSql(e.target.value)}
+                placeholder="SELECT * FROM `/path/to/dataset`"
+              />
+              <button
+                type="button"
+                className="btn"
+                data-testid="scratchpad-run"
+                disabled={!canRun(sql) || run.isPending || readOnly}
+                onClick={() => run.mutate()}
+              >
+                {run.isPending ? "Running…" : "Run"}
+              </button>
+              {refused && (
+                <p className="state error" data-testid="scratchpad-refused">
+                  {refused}
+                </p>
+              )}
+              {result && (
+                <>
+                  {sampleWarning(result) && (
+                    <p className="repo-preview-warning" data-testid="scratchpad-sampled">
+                      {sampleWarning(result)}
+                    </p>
+                  )}
+                  {showRewritten(ranSql, result) && (
+                    <p className="soft" data-testid="scratchpad-ran">
+                      Ran as <code>{result.ran}</code>
+                    </p>
+                  )}
+                  <div className="repo-preview-table" data-testid="scratchpad-result">
+                    <table>
+                      <thead>
+                        <tr>
+                          {result.columns.map((c) => (
+                            <th key={c.name}>{c.name}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.rows.map((row, i) => (
+                          <tr key={i}>
+                            {row.map((cell, j) => (
+                              <td key={j}>{cell === null ? "" : String(cell)}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          ) : nothing && shown.length === 0 ? (
+            <p className="state" data-testid="scratchpad-empty">
+              {nothing}
+            </p>
+          ) : (
+            <ul className="repo-scratchpad-list">
+              {shown.map((q) => (
+                <li key={q.id} data-testid={`scratchpad-query-${q.id}`}>
+                  <button
+                    type="button"
+                    className="repo-scratchpad-recall"
+                    data-testid={`scratchpad-recall-${q.id}`}
+                    onClick={() => {
+                      setSql(q.sql);
+                      setTab("query");
+                    }}
+                  >
+                    {oneLine(q.sql)}
+                  </button>
+                  {ranNote(q) && <span className="soft">{ranNote(q)}</span>}
+                  <button
+                    type="button"
+                    className="btn quiet"
+                    aria-label={starLabel(q)}
+                    data-testid={`scratchpad-star-${q.id}`}
+                    onClick={() => star.mutate({ id: q.id, favourite: q.favourite })}
+                  >
+                    {q.favourite ? "★" : "☆"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn quiet"
+                    aria-label={`Forget ${oneLine(q.sql, 40)}`}
+                    data-testid={`scratchpad-forget-${q.id}`}
+                    onClick={() => forget.mutate(q.id)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </section>
   );

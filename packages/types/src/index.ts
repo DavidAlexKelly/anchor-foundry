@@ -2646,3 +2646,44 @@ export interface RepositoryBranchSummary {
   proposal_state: string | null;
   proposal_summary: string | null;
 }
+
+/** One entry in the SQL Scratchpad's history (§306; db 0073; p.15).
+ *
+ * **p.15's two tabs are one of these with one filter.** A favourite is a
+ * history entry somebody starred, not a second copy — which is also why the
+ * row is per *distinct query text* rather than per run: with a row per run, a
+ * star would be left behind the moment you pressed the button again.
+ */
+export interface ScratchpadQuery {
+  id: string;
+  repo_id: string;
+  sql: string;
+  favourite: boolean;
+  /** What a per-run table would have told you, without being one. */
+  run_count: number;
+  /** Deliberately not moved on a re-run: "I wrote this on Tuesday and I am
+   * still running it" is a different fact from when it last ran. */
+  first_ran_at: string;
+  last_ran_at: string;
+}
+
+/** What running a scratchpad query returns (§305; p.15). */
+export interface ScratchpadResult {
+  columns: { name: string; data_type: string }[];
+  rows: unknown[][];
+  row_count: number;
+  truncated: boolean;
+  sampled: boolean;
+  inputs: {
+    alias: string;
+    dataset: string;
+    dataset_id: string;
+    rows_available: number;
+    rows_used: number;
+    sampled: boolean;
+  }[];
+  /** What the query was rewritten to. Shown rather than hidden: backticks are
+   * Foundry's engine and not ours, so somebody who typed p.15's syntax and got
+   * an error from DuckDB should be able to see what DuckDB was given. */
+  ran: string;
+}

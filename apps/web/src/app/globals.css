@@ -1384,6 +1384,15 @@ button { font: inherit; cursor: pointer; }
 
 /* p.14's Problems helper (§286). */
 .repo-problems { display: grid; gap: 8px; margin-top: 10px; }
+/* p.15's SQL Scratchpad (§306). Its own classes, for §296's reason. */
+.repo-scratchpad { display: grid; gap: 8px; margin-top: 10px; }
+.repo-scratchpad-body { display: grid; gap: 8px; }
+.repo-scratchpad-tabs { display: flex; gap: 4px; }
+.repo-scratchpad-tabs .on { text-decoration: underline; }
+.repo-scratchpad-sql { min-height: 96px; font-family: var(--font-mono); font-size: 12.5px; width: 100%; }
+.repo-scratchpad-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.repo-scratchpad-list li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.repo-scratchpad-recall { flex: 1; text-align: left; font-family: var(--font-mono); background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
 /* p.13's Explorer helper (§303). Its own classes rather than the Problems
    panel's: §296 reused `.repo-check` for a second thing and an existing test
    counting rows started counting two panels' worth. */

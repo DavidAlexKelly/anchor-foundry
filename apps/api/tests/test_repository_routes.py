@@ -1291,3 +1291,224 @@ def test_a_viewer_may_not_run_a_scratchpad_query(
     answer = scratchpad(client, fx, repo["id"], "SELECT * FROM `orders`",
                         sub=fx.viewer_sub)
     assert answer.status_code == 403, answer.text
+
+
+# --- Scratchpad history and favourites (§306; db 0073; p.15) ----------------
+#
+# Through the service rather than through the run route: recording happens
+# after a query reaches the engine, and reaching the engine needs a dataset
+# with parquet behind it. The rules worth testing — one row per text, the cap,
+# what a star exempts — are all about the table, and the browser suite covers
+# the seam.
+
+
+def _run(coroutine_factory):
+    import asyncio
+    return asyncio.run(coroutine_factory())
+
+
+def _record(fx, repo_id, sql, *, who=None):
+    import asyncio
+    from uuid import UUID
+
+    from src.lib.db import user_connection
+    from src.services import scratchpad_queries
+
+    async def go():
+        async with user_connection(UUID(str(who or fx.editor))) as conn:
+            row = await scratchpad_queries.record(
+                conn, repo_id=UUID(repo_id), author_id=UUID(str(who or fx.editor)),
+                sql=sql,
+            )
+            await conn.commit()
+            return row
+
+    return asyncio.run(go())
+
+
+def _listing(fx, repo_id, *, favourites=False, who=None):
+    import asyncio
+    from uuid import UUID
+
+    from src.lib.db import user_connection
+    from src.services import scratchpad_queries
+
+    async def go():
+        async with user_connection(UUID(str(who or fx.editor))) as conn:
+            return await scratchpad_queries.listing(
+                conn, repo_id=UUID(repo_id), author_id=UUID(str(who or fx.editor)),
+                favourites_only=favourites,
+            )
+
+    return asyncio.run(go())
+
+
+def test_running_the_same_query_twice_is_one_history_entry(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**One row per distinct text, not per run.**
+
+    A history that repeats one query twenty times is a log, and what somebody
+    opens this tab for is the query they wrote, not the twentieth time they
+    ran it.
+    """
+    repo = make_repo(client, fx)
+    first = _record(fx, repo["id"], "SELECT * FROM `a`")
+    again = _record(fx, repo["id"], "SELECT * FROM `a`")
+    assert again["id"] == first["id"]
+    assert again["run_count"] == 2
+    assert len(_listing(fx, repo["id"])) == 1
+
+
+def test_the_first_run_is_remembered_separately_from_the_last(
+    client: TestClient, fx: Fixture
+) -> None:
+    """"I wrote this on Tuesday and I am still running it" is a different fact
+    from when it last ran, and one overwriting the other would lose it."""
+    repo = make_repo(client, fx)
+    first = _record(fx, repo["id"], "SELECT * FROM `a`")
+    again = _record(fx, repo["id"], "SELECT * FROM `a`")
+    assert again["first_ran_at"] == first["first_ran_at"]
+    assert again["last_ran_at"] >= first["last_ran_at"]
+
+
+def test_the_history_is_capped_and_the_oldest_goes(
+    client: TestClient, fx: Fixture
+) -> None:
+    """A history that grows for ever is a table nobody prunes and a tab nobody
+    can read. Pruned on write, because there is no job that would do it and a
+    cap enforced by a job that does not exist is not a cap."""
+    from src.services.scratchpad_queries import MAX_HISTORY
+
+    repo = make_repo(client, fx)
+    for n in range(MAX_HISTORY + 5):
+        _record(fx, repo["id"], f"SELECT {n} FROM `a`")
+
+    kept = _listing(fx, repo["id"])
+    assert len(kept) == MAX_HISTORY
+    texts = {row["sql"] for row in kept}
+    assert f"SELECT {MAX_HISTORY + 4} FROM `a`" in texts, "the newest is kept"
+    assert "SELECT 0 FROM `a`" not in texts, "the oldest went"
+
+
+def test_a_favourite_survives_the_cap(client: TestClient, fx: Fixture) -> None:
+    """**The half that makes the cap safe.** A star is the one signal somebody
+    has given that a query is worth keeping, and a retention rule that ignored
+    it would delete precisely the queries they asked to keep — quietly, and
+    only for the people who use the feature most."""
+    from src.services.scratchpad_queries import MAX_HISTORY
+
+    repo = make_repo(client, fx)
+    starred = _record(fx, repo["id"], "SELECT 'keep me' FROM `a`")
+    assert client.patch(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries/{starred['id']}",
+        headers=hdr(fx.editor_sub), json={"favourite": True},
+    ).status_code == 200
+
+    for n in range(MAX_HISTORY + 5):
+        _record(fx, repo["id"], f"SELECT {n} FROM `a`")
+
+    texts = {row["sql"] for row in _listing(fx, repo["id"])}
+    assert "SELECT 'keep me' FROM `a`" in texts
+    # And it is not counted against the cap either: the un-starred history is
+    # still allowed its full length.
+    assert len(texts) == MAX_HISTORY + 1
+
+
+def test_the_favourites_tab_is_the_same_list_with_one_filter(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.15 shows two tabs. They are one thing seen twice — a favourite is a
+    history entry somebody starred, and starring is not a way of making a
+    second copy."""
+    repo = make_repo(client, fx)
+    starred = _record(fx, repo["id"], "SELECT 'starred' FROM `a`")
+    _record(fx, repo["id"], "SELECT 'plain' FROM `a`")
+    client.patch(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries/{starred['id']}",
+        headers=hdr(fx.editor_sub), json={"favourite": True},
+    )
+
+    everything = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries",
+        headers=hdr(fx.editor_sub),
+    ).json()
+    favourites = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries?favourites=true",
+        headers=hdr(fx.editor_sub),
+    ).json()
+    assert len(everything) == 2
+    assert [q["sql"] for q in favourites] == ["SELECT 'starred' FROM `a`"]
+    # The same row, not a copy of it.
+    assert favourites[0]["id"] == str(starred["id"])
+
+
+def test_a_star_survives_running_the_query_again(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The reason the table is per-text rather than per-run: with a row per
+    run, starring one run would leave the star behind the moment you pressed
+    the button again."""
+    repo = make_repo(client, fx)
+    made = _record(fx, repo["id"], "SELECT 'starred' FROM `a`")
+    client.patch(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries/{made['id']}",
+        headers=hdr(fx.editor_sub), json={"favourite": True},
+    )
+    again = _record(fx, repo["id"], "SELECT 'starred' FROM `a`")
+    assert again["favourite"] is True
+
+
+def test_another_persons_history_is_not_visible(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**db 0073's policy, not a service rule.** A scratchpad is a workbench:
+    what is on it is half-finished, often wrong, and written to be thrown
+    away. p.15 gives no sharing affordance, and project access alone would put
+    somebody's scratch work in front of their colleagues."""
+    repo = make_repo(client, fx)
+    _record(fx, repo["id"], "SELECT 'mine' FROM `a`", who=fx.editor)
+
+    theirs = client.get(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries",
+        headers=hdr(fx.admin_sub),
+    )
+    assert theirs.status_code == 200, theirs.text
+    assert [q["sql"] for q in theirs.json()] == []
+
+
+def test_a_query_can_be_forgotten(client: TestClient, fx: Fixture) -> None:
+    """A scratchpad accumulates mistakes, and a history you cannot clear is
+    one people stop opening."""
+    repo = make_repo(client, fx)
+    made = _record(fx, repo["id"], "SELECT 'oops' FROM `a`")
+    gone = client.delete(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries/{made['id']}",
+        headers=hdr(fx.editor_sub),
+    )
+    assert gone.status_code == 204, gone.text
+    assert _listing(fx, repo["id"]) == []
+
+
+def test_somebody_elses_query_cannot_be_starred_or_forgotten(
+    client: TestClient, fx: Fixture
+) -> None:
+    """The policy makes it invisible, so both come back as 404 rather than as
+    403 — there is nothing there to be forbidden from."""
+    repo = make_repo(client, fx)
+    made = _record(fx, repo["id"], "SELECT 'mine' FROM `a`", who=fx.editor)
+    where = (
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+        f"/repositories/{repo['id']}/scratchpad/queries/{made['id']}"
+    )
+    assert client.patch(
+        where, headers=hdr(fx.admin_sub), json={"favourite": True}
+    ).status_code == 404
+    assert client.delete(where, headers=hdr(fx.admin_sub)).status_code == 404

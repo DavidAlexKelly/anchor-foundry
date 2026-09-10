@@ -39,6 +39,7 @@ from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
 from ..services import scratchpad
+from ..services import scratchpad_queries
 from ..services import transform_declarations as declarations
 from ..services import transform_problems as problem_service
 from ..services import transform_publish as publish_service
@@ -1317,6 +1318,15 @@ async def run_scratchpad(
             "there is nothing to run against"
         ) from exc
 
+    # **Recorded only once it has run** (§306; p.15's history tab is "a history
+    # of queries ran in the SQL helper"). A history full of queries that were
+    # refused before reaching the engine is a list of typos, and the one you
+    # want back is never in it.
+    async with user_connection(access.auth.user_id) as conn:
+        await scratchpad_queries.record(
+            conn, repo_id=repo_id, author_id=access.auth.user_id, sql=body.sql
+        )
+
     return ScratchpadOut(
         columns=[c.as_dict() for c in result.columns],
         rows=result.rows,
@@ -1341,6 +1351,91 @@ async def run_scratchpad(
         ],
         ran=rewritten,
     )
+
+
+# ---- Scratchpad history and favourites (§306; db 0073; p.15) -----------------
+class ScratchpadQueryOut(BaseModel):
+    id: UUID
+    repo_id: UUID
+    sql: str
+    favourite: bool
+    run_count: int
+    first_ran_at: datetime
+    last_ran_at: datetime
+
+
+class FavouriteIn(BaseModel):
+    favourite: bool
+
+
+@router.get("/{repo_id}/scratchpad/queries", response_model=list[ScratchpadQueryOut])
+async def list_scratchpad_queries(
+    repo_id: UUID,
+    favourites: bool = Query(default=False),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[ScratchpadQueryOut]:
+    """p.15's two tabs, as one route with one filter.
+
+    **Viewer, unlike running a query.** Reading your own history executes
+    nothing; the editor floor on `run_scratchpad` is about who may execute SQL
+    against the project's data, and it would be a strange rule that let
+    somebody run a query and then not see that they had.
+
+    Whose history it is never travels in the request. db 0073's policy pins it
+    to the caller, so there is no parameter here that could be changed to
+    somebody else's.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await scratchpad_queries.listing(
+            conn, repo_id=repo_id, author_id=access.auth.user_id,
+            favourites_only=favourites,
+        )
+    return [ScratchpadQueryOut(**row) for row in rows]
+
+
+@router.patch("/{repo_id}/scratchpad/queries/{query_id}",
+              response_model=ScratchpadQueryOut)
+async def favourite_scratchpad_query(
+    repo_id: UUID,
+    query_id: UUID,
+    body: FavouriteIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ScratchpadQueryOut:
+    """p.15's star.
+
+    A star is a note to yourself about your own history, so it takes the same
+    floor as reading it: viewer. Nothing about the project changes.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        row = await scratchpad_queries.set_favourite(
+            conn, repo_id=repo_id, author_id=access.auth.user_id,
+            query_id=query_id, favourite=body.favourite,
+        )
+    return ScratchpadQueryOut(**row)
+
+
+@router.delete("/{repo_id}/scratchpad/queries/{query_id}",
+               status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def forget_scratchpad_query(
+    repo_id: UUID,
+    query_id: UUID,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> None:
+    """A scratchpad accumulates mistakes, and a history you cannot clear is one
+    people stop opening."""
+    async with user_connection(access.auth.user_id) as conn:
+        await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        await scratchpad_queries.remove(
+            conn, repo_id=repo_id, author_id=access.auth.user_id, query_id=query_id
+        )
 
 
 # ---- preview (ROADMAP.md phase 2, item 2.6) ----------------------------------

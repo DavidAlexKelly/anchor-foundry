@@ -337,6 +337,39 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/reference`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  /** p.15's SQL helper: run an ad-hoc query over this project's datasets.
+   *
+   * Recorded in the history only once it has *run* — p.15's tab is "a history
+   * of queries ran in the SQL helper", and a history full of queries that were
+   * refused before reaching the engine is a list of typos. */
+  runScratchpad: (wid: string, pid: string, rid: string, sql: string) =>
+    request<import("./types").ScratchpadResult>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad`,
+      { method: "POST", body: JSON.stringify({ sql }) },
+    ),
+  /** p.15's two tabs, as one request with one filter. Whose history it is
+   * never travels in the request: db 0073's policy pins it to the caller. */
+  scratchpadQueries: (wid: string, pid: string, rid: string, favourites: boolean) =>
+    request<import("./types").ScratchpadQuery[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad/queries` +
+        (favourites ? "?favourites=true" : ""),
+    ),
+  favouriteScratchpadQuery: (
+    wid: string,
+    pid: string,
+    rid: string,
+    queryId: string,
+    favourite: boolean,
+  ) =>
+    request<import("./types").ScratchpadQuery>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad/queries/${queryId}`,
+      { method: "PATCH", body: JSON.stringify({ favourite }) },
+    ),
+  forgetScratchpadQuery: (wid: string, pid: string, rid: string, queryId: string) =>
+    request<void>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/scratchpad/queries/${queryId}`,
+      { method: "DELETE" },
+    ),
   testRun: (wid: string, pid: string, rid: string, runId: string) =>
     request<import("./types").CodeTestRun>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tests/${runId}`,
