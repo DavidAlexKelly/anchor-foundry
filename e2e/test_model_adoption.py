@@ -367,3 +367,37 @@ def test_a_refused_batch_moves_none_of_them_and_says_why(page, api) -> None:
     # And neither moved: the repository is still empty.
     commits = mod.api.call("GET", f"{mod.base}/repositories/{repo['id']}/commits")
     assert commits == [], commits
+
+
+# ---- what a version changed (§291) -------------------------------------------
+def test_a_versions_diff_survived_the_deletion_of_the_code_page(page, api) -> None:
+    """**The last row of §278's table, and the one §280 half-moved.**
+
+    That table listed `changeSet` + `diff` together; §280 moved the change-set
+    contents onto this screen and left the *diffs* on the page B.1 deletes. So
+    the history dialog could show what a version **is** and not what it
+    **changed** - which is the question a history is usually opened to answer.
+    Deleting the page without this would have taken it away from every
+    transform outside a repository, silently, which is the exact failure §278
+    stopped.
+    """
+    mod = project(api, "Version diff")
+    name = f"diffme_{uuid.uuid4().hex[:6]}"
+    made = make_model(mod, name=name, code="SELECT 1 AS id")
+    mod.api.call("PATCH", f"{mod.base}/models/{made['id']}",
+                 {"code": "SELECT 1 AS id, 2 AS total"})
+
+    models_screen(page, mod)
+    row(page, name).get_by_role("button", name="History").click()
+
+    # v1 has nothing before it, so it is not offered a diff: a diff of
+    # everything against nothing is the file, which the Code button shows.
+    expect(page.get_by_test_id("version-1-changes")).to_have_count(0)
+
+    page.get_by_test_id("version-2-changes").click()
+    shown = page.get_by_test_id("version-2-diff")
+    expect(shown).to_be_visible(timeout=30000)
+    # The added column, as an addition rather than as the whole file - which is
+    # what separates this from the Code button next to it.
+    expect(shown).to_contain_text("+SELECT 1 AS id, 2 AS total")
+    expect(shown).to_contain_text("-SELECT 1 AS id")

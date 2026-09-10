@@ -1,90 +1,119 @@
 "use client";
 
 /**
- * The Code pillar (ROADMAP Code item 2).
+ * The Code pillar: this project's repositories (§291).
  *
- * There is no "new repository" button, and its absence is the design:
- * `docs/decisions/0001-where-code-lives.md` decided this pillar renders the
- * transform history Models already writes rather than storing code a second
- * time, because a run is pinned to the exact definition that produced it and
- * a git ref cannot promise that. So a project's transforms *are* the
- * repository - this page is the file tree, the source, the diff and the
- * commit log over them.
+ * **This file used to be a second transform editor**, and `code-repositories.md`
+ * opened by asking for it to be deleted — "463 lines duplicating this, worse".
+ * §278 found that was only true of the editor half: five capabilities lived
+ * here and nowhere else, and the page could not go until each had a home.
+ * §279 took the review gate, §280 the change history, §289 succeeded the change
+ * set with a commit, and §290 gave the typed-changes proposals a home beside
+ * the transforms they change. This is the deletion.
  *
- * The one thing it can do that the inline Models editor cannot is stage
- * several files and save them as **one change set**, which is the only
- * genuinely new concept here: before it, "these three transforms changed
- * together, for one reason" could not be said.
+ * **And the deletion exposed a hole.** The old file opened with *"There is no
+ * 'new repository' button, and its absence is the design"* — true when decision
+ * 0001 made the pillar a view over `model_versions`, and false since §94 gave
+ * the project real `code_repos`. Nothing in `apps/web` called
+ * `POST /repositories`: every repository in the product had been made by a
+ * script, none could be listed anywhere, and the repository application was
+ * reachable only by a `/r/{id}` link somebody already had. §275's adopt dialog
+ * had already been caught by it, telling people to "create one on the Code
+ * screen" — a screen with no such control. So the pillar becomes what it should
+ * have been: the repositories, each opening into the application.
+ *
+ * The rules for what to *offer* are in `lib/repository-list.ts`; the server
+ * owns every refusal (`routes/repositories.py`).
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
-import { ApiError, code as codeApi } from "@/lib/api";
+import { useParams, useRouter } from "next/navigation";
+import { useState } from "react";
+import { ApiError, repositories as repoApi } from "@/lib/api";
+import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
-import type { CodeFile, CodeHistoryEntry } from "@/lib/types";
+import { canCreate, emptyReason, openHref, subtitle } from "@/lib/repository-list";
 
-function DiffText({ text }: { text: string }) {
-  if (!text.trim()) {
-    return <p className="canvas-widget-empty">No difference between these versions.</p>;
-  }
-  return (
-    <pre className="code-diff">
-      {text.split("\n").map((line, i) => {
-        const kind =
-          line.startsWith("+++") || line.startsWith("---")
-            ? "meta"
-            : line.startsWith("@@")
-              ? "hunk"
-              : line.startsWith("+")
-                ? "add"
-                : line.startsWith("-")
-                  ? "del"
-                  : "ctx";
-        return (
-          <span key={i} className={`diff-line diff-${kind}`}>
-            {line || " "}
-          </span>
-        );
-      })}
-    </pre>
-  );
-}
-
-function HistoryList({
-  entries,
-  onOpen,
+function NewRepository({
+  workspaceId,
+  projectId,
+  onClose,
 }: {
-  entries: CodeHistoryEntry[];
-  onOpen: (entry: CodeHistoryEntry) => void;
+  workspaceId: string;
+  projectId: string;
+  onClose: () => void;
 }) {
-  if (entries.length === 0) {
-    return <p className="canvas-widget-empty">No edits recorded yet.</p>;
-  }
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+
+  const create = useMutation({
+    mutationFn: () =>
+      repoApi.create(workspaceId, projectId, { name, description }),
+    onSuccess: async (made) => {
+      await queryClient.invalidateQueries({ queryKey: ["repositories", projectId] });
+      // **Straight into it.** A repository with no files is not something to
+      // admire in a list; the next thing anybody does is put code in it, and
+      // that is the application's Files tab.
+      router.push(openHref(made));
+    },
+  });
+
   return (
-    <ul className="code-log">
-      {entries.map((entry) => (
-        <li key={`${entry.kind}-${entry.id}`}>
-          <button type="button" className="code-log-entry" onClick={() => onOpen(entry)}>
-            <span className="code-log-summary">{entry.summary}</span>
-            <span className="code-log-meta">
-              {/* Two kinds of entry, deliberately: a standalone save from the
-                  Models editor is a real edit with no message, and inventing
-                  one for it would claim an intention nobody expressed. */}
-              <span className={`chip${entry.kind === "change_set" ? " brass" : ""}`}>
-                {entry.kind === "change_set"
-                  ? `${entry.model_count} file${entry.model_count === 1 ? "" : "s"}`
-                  : "single save"}
-              </span>
-              {entry.created_by_email ?? "unknown"} ·{" "}
-              {new Date(entry.created_at).toLocaleString()}
-            </span>
+    <Dialog open title="New repository" onClose={onClose}>
+      <p className="login-note" style={{ marginTop: 0 }}>
+        A repository holds transforms as files, with branches, review and a
+        history of who changed what. Move a transform into one from the Models
+        screen, or write a new file here.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          create.mutate();
+        }}
+      >
+        <Field label="Name">
+          <input
+            type="text"
+            value={name}
+            data-testid="repository-name"
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+          />
+        </Field>
+        <Field label="Description" hint="Optional.">
+          <input
+            type="text"
+            value={description}
+            data-testid="repository-description"
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+        {create.isError && (
+          <p className="state error" data-testid="repository-error">
+            {create.error instanceof ApiError
+              ? create.error.message
+              : (create.error as Error).message}
+          </p>
+        )}
+        <div className="row-actions" style={{ justifyContent: "flex-end" }}>
+          <button type="button" className="btn quiet" onClick={onClose}>
+            Cancel
           </button>
-        </li>
-      ))}
-    </ul>
+          <button
+            type="submit"
+            className="btn"
+            data-testid="repository-create"
+            disabled={create.isPending}
+          >
+            {create.isPending ? "Creating…" : "Create repository"}
+          </button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -92,109 +121,18 @@ export default function CodePage() {
   const params = useParams<{ workspace: string; project: string }>();
   const { workspace } = useWorkspaceBySlug(params.workspace);
   const { project } = useProjectBySlug(workspace?.id, params.project);
-  const queryClient = useQueryClient();
-
-  const [selected, setSelected] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [summary, setSummary] = useState("");
-  // Prefilled, and editable to nothing. A template that cannot be emptied is a
-  // template that gets submitted with its headings still blank.
-  const [description, setDescription] = useState(DESCRIPTION_TEMPLATE);
-  const [viewing, setViewing] = useState<CodeHistoryEntry | null>(null);
-  const [openProposal, setOpenProposal] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const ready = !!workspace && !!project;
-  const tree = useQuery({
-    queryKey: ["code-tree", project?.id],
-    queryFn: () => codeApi.tree(workspace!.id, project!.id),
-    enabled: ready,
-  });
-  const files = useMemo(() => tree.data ?? [], [tree.data]);
-  const current: CodeFile | undefined = files.find((f) => f.id === selected) ?? files[0];
-
-  const file = useQuery({
-    queryKey: ["code-file", current?.id, current?.current_version],
-    queryFn: () => codeApi.file(workspace!.id, project!.id, current!.id),
-    enabled: ready && !!current,
-  });
-  const history = useQuery({
-    queryKey: ["code-history", project?.id],
-    queryFn: () => codeApi.history(workspace!.id, project!.id),
-    enabled: ready,
-  });
-  const changeSet = useQuery({
-    queryKey: ["code-change-set", viewing?.id],
-    queryFn: () => codeApi.changeSet(workspace!.id, project!.id, viewing!.id),
-    enabled: ready && viewing?.kind === "change_set",
-  });
-  const versionDiff = useQuery({
-    queryKey: ["code-diff", viewing?.id, viewing?.model_id, viewing?.version_number],
-    queryFn: () =>
-      codeApi.diff(
-        workspace!.id,
-        project!.id,
-        viewing!.model_id!,
-        (viewing!.version_number ?? 1) - 1 || null,
-        viewing!.version_number ?? undefined,
-      ),
-    enabled: ready && viewing?.kind === "version" && !!viewing?.model_id,
-  });
-
-  const policy = useQuery({
-    queryKey: ["code-review-policy", project?.id],
-    queryFn: () => codeApi.reviewPolicy(workspace!.id, project!.id),
-    enabled: ready,
-  });
-  const proposals = useQuery({
-    queryKey: ["code-proposals", project?.id],
-    queryFn: () => codeApi.proposals(workspace!.id, project!.id, "open"),
+  const list = useQuery({
+    queryKey: ["repositories", project?.id],
+    queryFn: () => repoApi.list(workspace!.id, project!.id),
     enabled: ready,
   });
 
-  const canEdit = project ? project.effective_role !== "viewer" : false;
-  const isOwner = project?.effective_role === "owner";
-  const reviewRequired = policy.data?.require_code_review ?? false;
-  const stagedCount = Object.keys(drafts).length;
-
-  const refreshAll = async () => {
-    setDrafts({});
-    setSummary("");
-    setDescription(DESCRIPTION_TEMPLATE);
-    await queryClient.invalidateQueries({ queryKey: ["code-tree", project?.id] });
-    await queryClient.invalidateQueries({ queryKey: ["code-history", project?.id] });
-    await queryClient.invalidateQueries({ queryKey: ["code-proposals", project?.id] });
-    await queryClient.invalidateQueries({ queryKey: ["code-file"] });
-  };
-
-  const save = useMutation({
-    mutationFn: () =>
-      codeApi.saveChangeSet(workspace!.id, project!.id, {
-        summary,
-        changes: Object.entries(drafts).map(([model_id, code]) => ({ model_id, code })),
-      }),
-    onSuccess: refreshAll,
-  });
-  const propose = useMutation({
-    mutationFn: () =>
-      codeApi.propose(workspace!.id, project!.id, {
-        summary,
-        description,
-        changes: Object.entries(drafts).map(([model_id, code]) => ({ model_id, code })),
-      }),
-    onSuccess: async (created) => {
-      await refreshAll();
-      setOpenProposal(created.id);
-    },
-  });
-  const setPolicy = useMutation({
-    mutationFn: (required: boolean) =>
-      codeApi.setReviewPolicy(workspace!.id, project!.id, required),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["code-review-policy", project?.id] });
-    },
-  });
-
-  const body = current ? drafts[current.id] ?? file.data?.code ?? "" : "";
+  const role = project?.effective_role ?? "viewer";
+  const repositories = list.data ?? [];
+  const empty = list.isSuccess ? emptyReason(repositories.length, role) : null;
 
   return (
     <main>
@@ -203,260 +141,63 @@ export default function CodePage() {
           <p className="eyebrow">project · code</p>
           <h1>Code</h1>
           <p className="sub">
-            Every transform in this project, with the history Models already keeps.
-            Editing here writes the same versions a run resolves against.
+            This project&apos;s repositories. Each one opens into the editor,
+            with branches, review and history over the transforms it holds.
           </p>
         </div>
         <div className="row-actions">
-          {/* The gate is a property of the project, so it is stated wherever
-              code is edited rather than hidden in a settings page. */}
-          <span className={`chip${reviewRequired ? " brass" : ""}`}>
-            {reviewRequired ? "review required" : "direct edits allowed"}
-          </span>
-          {isOwner && (
+          {/* Not disabled for a viewer, absent: `POST /repositories` is
+              editor-level, and a control that looks like it works is worse
+              than one that is not there (§214). The empty state says why. */}
+          {canCreate(role) && (
             <button
               type="button"
-              className="btn quiet"
-              disabled={setPolicy.isPending}
-              onClick={() => setPolicy.mutate(!reviewRequired)}
+              className="btn"
+              data-testid="repository-new"
+              onClick={() => setCreating(true)}
             >
-              {reviewRequired ? "Allow direct edits" : "Require review"}
+              New repository
             </button>
           )}
         </div>
       </div>
 
-      {tree.isPending && <div className="state">Loading…</div>}
-      {tree.isError && (
-        <div className="state error">Couldn&apos;t load this project&apos;s code.</div>
-      )}
-      {tree.data && files.length === 0 && !openProposal && (
-        <div className="empty">
-          <h2>No transforms yet</h2>
-          <p>
-            A project&apos;s models are its code. Create one under{" "}
-            <Link href={`/${params.workspace}/${params.project}/models`}>Models</Link>, or
-            publish one from a repository, and it appears here as a file.
-          </p>
-        </div>
+      {list.isPending && <div className="state">Loading…</div>}
+      {list.isError && (
+        <div className="state error">Couldn&apos;t load this project&apos;s repositories.</div>
       )}
 
-      {/* Outside the shell below, deliberately. A project whose only proposal
-          publishes a repository commit has no transforms *yet* - so a list
-          rendered only when there are files would make the one thing worth
-          looking at the one thing you cannot reach. */}
-      {!openProposal && proposals.data && proposals.data.length > 0 && (
-        <section className="code-open-proposals">
-          <p className="field-label">Open proposals</p>
+      <div data-testid="repository-list">
+        {empty && (
+          <div className="empty">
+            <h2>No repositories yet</h2>
+            <p data-testid="repository-empty">{empty}</p>
+          </div>
+        )}
+        {repositories.length > 0 && (
           <ul className="code-log">
-            {proposals.data.map((p) => (
-              <li key={p.id}>
-                <button
-                  type="button"
-                  className="code-log-entry"
-                  onClick={() => {
-                    setViewing(null);
-                    setOpenProposal(p.id);
-                  }}
-                >
-                  <span className="code-log-summary">{p.summary}</span>
-                  <span className="code-log-meta">
-                    <span className="chip brass">
-                      {p.source_commit_id
-                        ? `publishes ${p.source_commit_id.slice(0, 8)}`
-                        : `${p.file_count} file${p.file_count === 1 ? "" : "s"}`}
-                    </span>
-                    {p.created_by_email ?? "unknown"}
-                  </span>
-                </button>
+            {repositories.map((r) => (
+              <li key={r.id}>
+                {/* By resource id, never a slug path: a link built from a
+                    workspace and project slug stops working the moment
+                    somebody renames either, which is exactly when a shared
+                    link is most likely to be clicked. */}
+                <Link className="code-log-entry" href={openHref(r)}>
+                  <span className="code-log-summary">{r.name}</span>
+                  <span className="code-log-meta">{subtitle(r)}</span>
+                </Link>
               </li>
             ))}
           </ul>
-        </section>
-      )}
+        )}
+      </div>
 
-      {openProposal && workspace && project && (
-        <div className="code-review-mode">
-          <div className="canvas-settings-head">
-            <strong>Reviewing a proposal</strong>
-            <button
-              type="button"
-              className="btn quiet"
-              style={{ padding: "3px 9px", fontSize: 12 }}
-              onClick={() => setOpenProposal(null)}
-            >
-              Back to the editor
-            </button>
-          </div>
-          <ReviewSurface
-            workspaceId={workspace.id}
-            projectId={project.id}
-            proposalId={openProposal}
-            canReview={canEdit}
-            onChanged={refreshAll}
-          />
-        </div>
-      )}
-
-      {files.length > 0 && !openProposal && (
-        <div className="code-shell">
-          <aside className="code-tree">
-            <p className="field-label">Files</p>
-            <ul>
-              {files.map((f) => (
-                <li key={f.id}>
-                  <button
-                    type="button"
-                    className={`code-tree-item${current?.id === f.id ? " current" : ""}`}
-                    onClick={() => setSelected(f.id)}
-                  >
-                    <span>{f.path}</span>
-                    <span className="code-tree-meta">
-                      {drafts[f.id] !== undefined ? "edited" : `v${f.current_version ?? 1}`}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </aside>
-
-          <section className="code-main">
-            {current && (
-              <>
-                <div className="code-file-head">
-                  <strong>{current.path}</strong>
-                  <span className="code-tree-meta">
-                    {current.language} · v{file.data?.version_number ?? current.current_version}
-                  </span>
-                </div>
-                <textarea
-                  className="code-editor"
-                  spellCheck={false}
-                  value={body}
-                  readOnly={!canEdit}
-                  aria-label={`Source of ${current.path}`}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [current.id]: e.target.value }))}
-                />
-              </>
-            )}
-
-            {canEdit && stagedCount > 0 && (
-              <div className="code-commit">
-                <p className="field-label">
-                  {stagedCount} file{stagedCount === 1 ? "" : "s"} staged
-                </p>
-                <p className="canvas-widget-empty">
-                  {reviewRequired
-                    ? "This project requires review, so these files become a proposal: nothing takes effect until somebody else approves it and it is applied."
-                    : "Saving writes one version per changed file, grouped under this message — files whose content is unchanged are skipped, and if none of them changed the whole save is refused."}
-                </p>
-                <input
-                  type="text"
-                  value={summary}
-                  placeholder="What does this change do?"
-                  aria-label="Change summary"
-                  onChange={(e) => setSummary(e.target.value)}
-                />
-                {reviewRequired && (
-                  <textarea
-                    className="code-description"
-                    rows={7}
-                    value={description}
-                    aria-label="Proposal description"
-                    placeholder="What this changes, why, and how it was checked"
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
-                )}
-                {(save.isError || propose.isError) && (
-                  <div className="form-error">
-                    {(save.error ?? propose.error) instanceof ApiError
-                      ? (save.error ?? propose.error as ApiError).message
-                      : "Couldn't save this change."}
-                  </div>
-                )}
-                <div className="row-actions">
-                  {reviewRequired ? (
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={!summary.trim() || propose.isPending}
-                      onClick={() => propose.mutate()}
-                    >
-                      {propose.isPending ? "Opening…" : "Open proposal"}
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="btn"
-                        disabled={!summary.trim() || save.isPending}
-                        onClick={() => save.mutate()}
-                      >
-                        {save.isPending ? "Saving…" : "Save change set"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn quiet"
-                        disabled={!summary.trim() || propose.isPending}
-                        onClick={() => propose.mutate()}
-                      >
-                        Propose instead
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    className="btn quiet"
-                    onClick={() => {
-                      setDrafts({});
-                      setSummary("");
-                    }}
-                  >
-                    Discard
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <aside className="code-side">
-            <p className="field-label">History</p>
-            {history.data && <HistoryList entries={history.data} onOpen={setViewing} />}
-            {viewing && (
-              <div className="code-detail">
-                <div className="canvas-settings-head">
-                  <strong>{viewing.summary}</strong>
-                  <button
-                    type="button"
-                    className="btn quiet"
-                    style={{ padding: "3px 9px", fontSize: 12 }}
-                    onClick={() => setViewing(null)}
-                  >
-                    Close
-                  </button>
-                </div>
-                {viewing.kind === "change_set" && changeSet.data && (
-                  <>
-                    {changeSet.data.description && <p>{changeSet.data.description}</p>}
-                    <ul className="code-log">
-                      {changeSet.data.models.map((m) => (
-                        <li key={m.model_id} className="code-change-file">
-                          {m.path}{" "}
-                          <span className="code-tree-meta">
-                            v{m.previous_version ?? "—"} → v{m.version_number}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-                {viewing.kind === "version" && versionDiff.data && (
-                  <DiffText text={versionDiff.data.diff} />
-                )}
-              </div>
-            )}
-          </aside>
-        </div>
+      {creating && workspace && project && (
+        <NewRepository
+          workspaceId={workspace.id}
+          projectId={project.id}
+          onClose={() => setCreating(false)}
+        />
       )}
     </main>
   );

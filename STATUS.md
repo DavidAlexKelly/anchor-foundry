@@ -4388,6 +4388,60 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 291. The deletion, and the hole under it (this session)
+
+Build-order item 1, closed. `code-repositories.md` opened by asking for
+`code/page.tsx` to be deleted — *"463 lines duplicating this, worse"* — and
+§278 stopped that one grep short of being wrong: five capabilities lived there
+and nowhere else. §279 took the review gate, §280 the change history, §289
+succeeded the change set with a commit, §290 gave the typed-changes proposals a
+home. This is the deletion, and `apps/api/tests/test_one_editor.py` is §10's own
+acceptance test — *"grep for `textarea` under `app/(platform)`"* — finally run.
+
+**The sixth row moved too, quietly.** §278's table listed `changeSet` + `diff`
+together and §280 moved only the first: the history dialog could show what a
+version *is* and not what it *changed*. That is the question a history is
+usually opened to answer, and deleting the page would have taken it from every
+transform outside a repository without erroring. It is a **Changes** button
+beside **Code** now, not offered on v1 because a diff of everything against
+nothing is the file.
+
+**And emptying the page exposed a hole the same size as the one it filled.**
+The file opened with *"There is no 'new repository' button, and its absence is
+the design"* — true when decision 0001 made the pillar a view over
+`model_versions`, and false since §94 gave the project real `code_repos`.
+Grepping for the create call turns up **nothing in `apps/web` at all**: every
+repository in the product had been made by a script, none could be listed
+anywhere, and this whole application — seven tabs, thirteen sections of work —
+was reachable only by a `/r/{id}` link somebody already had.
+
+**§275's adopt dialog had already been caught by it and nobody noticed.** "This
+project has no repositories yet. Create one on the Code screen, then move this
+transform into it" — a screen with no such control. §290's shape exactly: a
+pointer at a place that cannot do what it says, invisible because every test of
+it asserts its wording. It is a link now, which is what makes the two testable
+together rather than two sentences somebody has to keep in agreement by hand.
+
+So the pillar is **replaced rather than deleted**: the project's repositories,
+each opening into the application by resource id — never a slug path, because a
+link built from a workspace and project slug stops working the moment somebody
+renames either, which is exactly when a shared link is most likely to be
+clicked.
+
+**And the badge beside it was counting the wrong thing.** `resource_counts.code`
+counted `models`, under a comment saying `code_repos` "has never had a row
+written to it" — true when it was written, false since §94. A project with one
+repository and forty transforms showed 40 beside a list of one. The test is
+written as a *difference* — create a transform, the badge does not move; create
+a repository, it does — because an absolute number would pass on a module-scoped
+fixture whose other tests happen to leave the two counts equal.
+
+**Three client methods went with the page** (`tree`, `file`, `saveChangeSet`).
+The routes stay: `POST /code/change-sets` still works and the change sets
+already recorded are still read by the history dialog — a log you cannot read is
+a log that may as well be deleted. What has no client is the *making* of one,
+because nothing in the product should now offer it.
+
 ### 290. A home for the reviews the deleted page would have stranded (this session)
 
 The last thing standing between build-order item 1 and the deletion, and it was

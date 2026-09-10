@@ -411,3 +411,43 @@ def test_an_outsider_sees_nothing(client: TestClient, fx: Fixture) -> None:
     for sub in (fx.outsider_sub, fx.foreign_sub):
         r = client.get(f"{base(fx)}/{repo['id']}", headers=hdr(sub))
         assert r.status_code in (403, 404), (sub, r.text)
+
+
+# ---- the sidebar badge (§291) ------------------------------------------------
+def test_the_code_badge_counts_repositories_not_transforms(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**A count is a promise about what is behind the link.**
+
+    The Code badge counted `models` - the same rows the Models badge counts -
+    because decision 0001 had made the pillar a view over `model_versions`, and
+    the comment in `projects.py` said `code_repos` "has never had a row written
+    to it". That stopped being true at §94, and §291 made the pillar the list of
+    repositories, so a project with one repository and forty transforms would
+    have shown 40 beside a list of one.
+
+    Written as a *difference*: a transform is created and the badge does not
+    move, then a repository is and it does. Asserting an absolute number would
+    pass on a module-scoped fixture whose other tests happen to leave the two
+    counts equal.
+    """
+    detail = f"/api/workspaces/{fx.workspace}/projects/{fx.project}"
+
+    def code_count() -> int:
+        r = client.get(detail, headers=hdr(fx.viewer_sub))
+        assert r.status_code == 200, r.text
+        return int(r.json()["resource_counts"]["code"])
+
+    before = code_count()
+
+    r = client.post(
+        f"/api/workspaces/{fx.workspace}/projects/{fx.project}/models",
+        headers=hdr(fx.editor_sub),
+        json={"name": f"badge_{uuid.uuid4().hex[:8]}", "language": "sql",
+              "code": "SELECT 1", "inputs": []},
+    )
+    assert r.status_code == 201, r.text
+    assert code_count() == before, "a transform is not a repository"
+
+    make_repo(client, fx)
+    assert code_count() == before + 1

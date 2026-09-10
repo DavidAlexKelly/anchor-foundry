@@ -129,6 +129,19 @@ export const repositories = {
     request<import("./types").Repository[]>(
       `/workspaces/${wid}/projects/${pid}/repositories`,
     ),
+  /** Make one. **This had no caller in `apps/web` until §291** — the route has
+   * existed since §94 and every repository in the product had been created by
+   * a script, which made the whole repository application reachable only by a
+   * `/r/{id}` link somebody already had. */
+  create: (
+    wid: string,
+    pid: string,
+    input: { name: string; description?: string; default_branch?: string },
+  ) =>
+    request<import("./types").Repository>(
+      `/workspaces/${wid}/projects/${pid}/repositories`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   get: (wid: string, pid: string, rid: string) =>
     request<import("./types").Repository>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}`,
@@ -1852,15 +1865,14 @@ export const canvas = {
  * transforms as a single edit through the same service the inline Models
  * editor calls. */
 export const code = {
-  tree: (wid: string, pid: string) =>
-    request<import("./types").CodeFile[]>(
-      `/workspaces/${wid}/projects/${pid}/code/tree`,
-    ),
-  file: (wid: string, pid: string, modelId: string, version?: number) =>
-    request<import("./types").CodeFileDetail>(
-      `/workspaces/${wid}/projects/${pid}/code/files/${modelId}` +
-        (version ? `?version=${version}` : ""),
-    ),
+  // **`tree` and `file` went with the page that called them (§291).** They
+  // were the project-wide transform tree and one transform's source, and the
+  // Models screen answers both: it lists every transform in the project, with
+  // the repository and path of each one that is in a repository, and its
+  // History dialog holds every saved definition. A client method with no
+  // caller is a second way to ask a question that has a first way, and the two
+  // drift. The routes stay - `GET /code/tree` is still the honest answer to
+  // "what transforms does this project have" for anything outside the browser.
   diff: (wid: string, pid: string, modelId: string, from: number | null, to?: number) =>
     request<import("./types").CodeDiff>(
       `/workspaces/${wid}/projects/${pid}/code/files/${modelId}/diff?` +
@@ -1978,17 +1990,13 @@ export const code = {
       `/workspaces/${wid}/projects/${pid}/code/proposals/${id}/withdraw`,
       { method: "POST" },
     ),
-  saveChangeSet: (
-    wid: string,
-    pid: string,
-    input: {
-      summary: string;
-      description?: string;
-      changes: { model_id: string; code?: string }[];
-    },
-  ) =>
-    request<import("./types").CodeChangeSet>(
-      `/workspaces/${wid}/projects/${pid}/code/change-sets`,
-      { method: "POST", body: JSON.stringify(input) },
-    ),
+  // **`saveChangeSet` is gone with the screen that called it (§291).** It was
+  // decision 0001's "one genuinely new concept" - several transforms saved as
+  // one change - and §289 gave it a successor rather than a new home: move
+  // them into a repository together, and the commit says they belong together.
+  // The route still exists and `POST /code/change-sets` still works; what has
+  // no client is the *making* of one, because nothing in the product should
+  // now offer it. `changeSet` above stays: the ones already recorded are read
+  // by the Models screen's history dialog, and a log you cannot read is a log
+  // that may as well be deleted.
 };

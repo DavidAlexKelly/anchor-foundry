@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import {
@@ -23,6 +24,42 @@ import {
 } from "@/lib/pull-requests";
 import { ReviewSurface } from "@/components/code/review-surface";
 import { useUrlState } from "@/components/use-url-state";
+
+/** A unified diff, coloured by line kind.
+ *
+ * Carried over from `code/page.tsx` when §291 deleted it, because the version
+ * diff went with it and nothing else could render one. The classes are the
+ * ones `globals.css` already defines. */
+function DiffText({ text, testId }: { text: string; testId?: string }) {
+  if (!text.trim()) {
+    return (
+      <p className="canvas-widget-empty" data-testid={testId}>
+        No difference between these versions.
+      </p>
+    );
+  }
+  return (
+    <pre className="code-diff" data-testid={testId}>
+      {text.split("\n").map((line, i) => {
+        const kind =
+          line.startsWith("+++") || line.startsWith("---")
+            ? "meta"
+            : line.startsWith("@@")
+              ? "hunk"
+              : line.startsWith("+")
+                ? "add"
+                : line.startsWith("-")
+                  ? "del"
+                  : "ctx";
+        return (
+          <span key={i} className={`diff-line diff-${kind}`}>
+            {line || " "}
+          </span>
+        );
+      })}
+    </pre>
+  );
+}
 
 const DEFAULT_SQL = "SELECT *\n  FROM orders\n LIMIT 100";
 const DEFAULT_PYTHON = "output = orders.copy()\n";
@@ -80,11 +117,25 @@ function HistoryDialog({
   canEdit: boolean;
   onClose: () => void;
 }) {
-  const [open, setOpen] = useState<number | null>(null);
+  const [open, setOpen] = useState<{ version: number; view: "code" | "diff" } | null>(
+    null,
+  );
   const queryClient = useQueryClient();
   const history = useQuery({
     queryKey: ["model-versions", model.id],
     queryFn: () => modelApi.versions(workspaceId, projectId, model.id),
+  });
+  // **The last thing that lived only on the Code pillar page (§291).** §278's
+  // table listed `changeSet` + `diff` together and §280 moved only the first:
+  // the history dialog could show what a version *is* and not what it
+  // *changed*. Deleting the page without this would have taken "what changed"
+  // away from every transform outside a repository - silently, which is the
+  // exact failure §278 stopped.
+  const diff = useQuery({
+    queryKey: ["code-diff", model.id, open?.version],
+    queryFn: () =>
+      codeApi.diff(workspaceId, projectId, model.id, (open!.version - 1) || null, open!.version),
+    enabled: open?.view === "diff",
   });
   const restore = useMutation({
     mutationFn: (versionNumber: number) =>
@@ -138,10 +189,42 @@ function HistoryDialog({
                     <button
                       className="btn quiet"
                       style={{ padding: "3px 9px", fontSize: 12 }}
-                      onClick={() => setOpen(open === v.version_number ? null : v.version_number)}
+                      data-testid={`version-${v.version_number}-code`}
+                      onClick={() =>
+                        setOpen(
+                          open?.version === v.version_number && open.view === "code"
+                            ? null
+                            : { version: v.version_number, view: "code" },
+                        )
+                      }
                     >
-                      {open === v.version_number ? "Hide" : "Code"}
+                      {open?.version === v.version_number && open.view === "code"
+                        ? "Hide"
+                        : "Code"}
                     </button>
+                    {/* **What it changed**, which is a different question from
+                        what it is - and the one a history is usually read to
+                        answer. Not offered on v1: there is no version before
+                        it, and a diff of everything against nothing is the
+                        file, which the button next door already shows. */}
+                    {v.version_number > 1 && (
+                      <button
+                        className="btn quiet"
+                        style={{ padding: "3px 9px", fontSize: 12 }}
+                        data-testid={`version-${v.version_number}-changes`}
+                        onClick={() =>
+                          setOpen(
+                            open?.version === v.version_number && open.view === "diff"
+                              ? null
+                              : { version: v.version_number, view: "diff" },
+                          )
+                        }
+                      >
+                        {open?.version === v.version_number && open.view === "diff"
+                          ? "Hide"
+                          : "Changes"}
+                      </button>
+                    )}
                     {canEdit && index > 0 && (
                       <button
                         className="btn quiet"
@@ -159,13 +242,21 @@ function HistoryDialog({
           </tbody>
         </table>
       </div>
-      {open !== null && (
+      {open?.view === "code" && (
         <pre
           className="sql-box"
           style={{ marginTop: 10, whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto" }}
         >
-          {history.data?.find((v) => v.version_number === open)?.code}
+          {history.data?.find((v) => v.version_number === open.version)?.code}
         </pre>
+      )}
+      {open?.view === "diff" && (
+        <div style={{ marginTop: 10, maxHeight: 240, overflow: "auto" }}>
+          {diff.isPending && <div className="state">Loading…</div>}
+          {diff.isSuccess && (
+            <DiffText text={diff.data.diff} testId={`version-${open.version}-diff`} />
+          )}
+        </div>
       )}
       <div className="form-actions">
         <button className="btn quiet" onClick={onClose}>
@@ -467,6 +558,7 @@ function AdoptDialog({
   model: Model;
   onClose: () => void;
 }) {
+  const params = useParams<{ workspace: string; project: string }>();
   const [repositoryId, setRepositoryId] = useState("");
   const [branch, setBranch] = useState("main");
   const [path, setPath] = useState("");
@@ -516,9 +608,19 @@ function AdoptDialog({
           {noRepositories ? (
             // Not an empty picker: a control with nothing in it reads as
             // broken, and the thing to do about it is elsewhere.
+            //
+            // **And it is a link, because it was a lie.** This said "create
+            // one on the Code screen" while the Code screen had no such
+            // control - §290's shape, a pointer at a place that cannot do
+            // what it says. §291 gave that screen the control; the link is
+            // what makes the two testable together rather than two sentences
+            // that have to be kept in agreement by hand.
             <p className="login-note" data-testid="adopt-no-repositories">
-              This project has no repositories yet. Create one on the Code
-              screen, then move this transform into it.
+              This project has no repositories yet.{" "}
+              <Link href={`/${params.workspace}/${params.project}/code`}>
+                Create one on the Code screen
+              </Link>
+              , then move this transform into it.
             </p>
           ) : (
             <select
