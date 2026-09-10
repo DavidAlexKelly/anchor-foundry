@@ -317,3 +317,29 @@ def test_both_paths_refuse_the_same_number_of_rows(tmp_path, monkeypatch) -> Non
     # The size and the limit both named, because "too many rows" without either
     # leaves the author guessing at which join lost its condition.
     assert "3" in agreed["error"] and "2" in agreed["error"], agreed["error"]
+
+# ---- the comparison itself, given a case that fires it -------------------------
+def test_the_comparison_catches_a_real_divergence(tmp_path, monkeypatch) -> None:
+    """**A survivor found that `assert_agree` could be switched off** and every
+    test in this file still passed: each case also asserts on the dict it
+    returns, and that dict is the *subprocess* answer. So the comparison — the
+    only thing this module exists for — was a check nothing could make fail.
+
+    Every real case here agrees, which is the problem: a guard with no case in
+    the tree that fires it can be deleted with nothing noticing. §293 hit the
+    same shape twice. So this manufactures a divergence, by lowering the cap on
+    one runner and not the other, and asserts the comparison sees it and says
+    which side said what.
+    """
+    monkeypatch.setattr(runner, "MAX_OUTPUT_ROWS", 2)
+    sandbox, container = both(tmp_path, "output = orders\n")
+    assert sandbox["ok"], "the subprocess path should still have written 3 rows"
+    assert not container["ok"], "the container should have refused at 2"
+
+    with pytest.raises(AssertionError) as caught:
+        assert_agree(sandbox, container)
+    # And the failure names both answers, because "they disagree" without them
+    # is a message that sends somebody back to run it again by hand.
+    assert "subprocess (development)" in str(caught.value)
+    assert "container  (deployment)" in str(caught.value)
+    assert "row limit" in str(caught.value)
