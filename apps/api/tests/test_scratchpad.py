@@ -83,10 +83,25 @@ def test_a_backtick_inside_a_string_literal_is_not_a_reference() -> None:
     assert references("SELECT '`/orders`' AS note") == []
 
 
-def test_a_doubled_quote_inside_a_literal_does_not_end_it() -> None:
-    """`''` is an escaped quote. A scanner that ended the literal there would
-    treat the rest of the string as SQL."""
+def test_a_doubled_quote_inside_a_literal_changes_nothing() -> None:
+    """The property, kept; the special case that used to serve it, gone.
+
+    A doubled quote is SQL's escape, so the obvious reading is that a scanner
+    must skip both or it will treat the rest of the literal as SQL. The branch
+    that did was **unkillable** - §305's mutation run removed it and no test
+    could tell. It could not: the two quotes are adjacent, so reading them as
+    one escape or as a close followed by an open covers exactly the same
+    characters, and coverage is the only thing this scanner is ever asked
+    about.
+
+    The assertion stays, because the behaviour is what matters and it is easy
+    to break another way. The branch went, because a check you cannot make fail
+    is not a check.
+    """
     assert references("SELECT 'it''s `/orders` really' AS note") == []
+    assert references("SELECT 'a''b', `orders`") == [
+        Reference(qualifier=None, path="orders")
+    ]
 
 
 def test_a_backtick_in_a_line_comment_is_not_a_reference() -> None:

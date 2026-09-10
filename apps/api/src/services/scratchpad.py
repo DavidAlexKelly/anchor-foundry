@@ -89,17 +89,25 @@ def _spans_to_skip(sql: str) -> list[tuple[int, int]]:
     while i < len(sql):
         ch = sql[i]
         if ch == "'":
-            j = i + 1
-            while j < len(sql):
-                if sql[j] == "'":
-                    # `''` is an escaped quote inside the literal, not its end.
-                    if j + 1 < len(sql) and sql[j + 1] == "'":
-                        j += 2
-                        continue
-                    break
-                j += 1
-            spans.append((i, min(j + 1, len(sql))))
-            i = j + 1
+            # **`''` needs no special case, and this had one until §305's
+            # mutation run.** The obvious reading is that a doubled quote is an
+            # escape and does not end the literal, so the scanner should skip
+            # both — and the branch that did was unkillable: removing it broke
+            # no test, and could not, because it changes *which* spans exist
+            # and never which characters are inside one. The two quotes are
+            # adjacent, so treating them as one escape or as a close followed
+            # by an open covers exactly the same text. Checked over every
+            # string up to eight characters long drawn from quote, backtick,
+            # letter and comma — 87,380 of them, none differing.
+            #
+            # What this scanner is asked is only ever "is this backtick inside
+            # a literal", so the distinction the escape rule makes is one
+            # nothing here can observe. A parser that had to *read* the
+            # literal's value would need it.
+            j = sql.find("'", i + 1)
+            end = len(sql) if j == -1 else j + 1
+            spans.append((i, end))
+            i = end
             continue
         if ch == '"':
             j = sql.find('"', i + 1)
