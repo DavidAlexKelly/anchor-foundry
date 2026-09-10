@@ -41,6 +41,11 @@ import {
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
 import {
+  isProtected,
+  protectedReason,
+  suggestedSandboxName,
+} from "@/lib/protected-branches";
+import {
   canChangeReviewPolicy,
   reviewPolicyEffect,
   reviewPolicyLockedReason,
@@ -165,6 +170,9 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
           error={tree.error as Error | null}
           openPath={openPath}
           onOpen={(path) => setParams({ file: path })}
+          defaultBranch={repo.data?.default_branch ?? "main"}
+          branches={branches.data}
+          onSwitchBranch={(name) => setParams({ branch: name, commit: undefined })}
         />
       )}
       {tab === "history" && (
@@ -225,6 +233,9 @@ function FilesTab({
   error,
   openPath,
   onOpen,
+  defaultBranch,
+  branches,
+  onSwitchBranch,
 }: {
   wid: string;
   pid: string;
@@ -236,6 +247,9 @@ function FilesTab({
   error: Error | null;
   openPath: string | undefined;
   onOpen: (path: string | undefined) => void;
+  defaultBranch: string;
+  branches: RepositoryBranch[] | undefined;
+  onSwitchBranch: (name: string) => void;
 }) {
   const queryClient = useQueryClient();
   // The working set: the committed tree with unsaved edits laid over it. Kept
@@ -329,6 +343,24 @@ function FilesTab({
     ([path, content]) => (committed[path] ?? null) !== content,
   );
 
+  // **The protected-branch rule** (§284; `code-repositories.md` §2.1, p.12).
+  // The server owns it (`assert_branch_is_writable`); this decides what to
+  // offer, which is §214's division. Shared query key with the Settings tab,
+  // so flipping the gate there changes this without a second fetch.
+  const policy = useQuery({
+    queryKey: ["code-review-policy", pid],
+    queryFn: () => codeApi.reviewPolicy(wid, pid),
+  });
+  const branchContext = {
+    branch,
+    defaultBranch,
+    reviewRequired: policy.data?.require_code_review ?? false,
+    // A branch with nothing on it is not protected: the first commit is how a
+    // repository starts, not an edit to one.
+    hasCommits: (tree?.commit_id ?? null) !== null,
+  };
+  const locked = !pinned && isProtected(branchContext);
+
   const commit = useMutation({
     mutationFn: () =>
       repoApi.commit(wid, pid, rid, { branch, files: working, message }),
@@ -341,6 +373,36 @@ function FilesTab({
       queryClient.invalidateQueries({ queryKey: ["repo-tree", rid] });
       queryClient.invalidateQueries({ queryKey: ["repo-commits", rid] });
       queryClient.invalidateQueries({ queryKey: ["repo-branches", rid] });
+    },
+    onError: (e: Error) => setFailure(e.message),
+  });
+
+  /** Commit this work to a new sandbox branch instead.
+   *
+   * **The alternative was a read-only editor, and it is worse.** People open a
+   * file, edit it, and think about branches afterwards; an editor that refused
+   * the typing would be right about the rule and wrong about the work. §214
+   * asks not to take typing you will refuse to keep - so the typing is kept,
+   * on a branch that can hold it, and §283 is what makes that not a detour:
+   * applying the pull request moves the default branch to this commit.
+   */
+  const commitToSandbox = useMutation({
+    mutationFn: async () => {
+      const name = suggestedSandboxName((branches ?? []).map((b) => b.name));
+      await repoApi.createBranch(wid, pid, rid, { name, from_branch: branch });
+      await repoApi.commit(wid, pid, rid, { branch: name, files: working, message });
+      return name;
+    },
+    onSuccess: (name) => {
+      // Cleared *before* the switch: these drafts are committed now, and they
+      // belong to the branch being left rather than the one being joined.
+      setEdits({});
+      setMessage("");
+      setFailure(null);
+      queryClient.invalidateQueries({ queryKey: ["repo-branches", rid] });
+      queryClient.invalidateQueries({ queryKey: ["repo-tree", rid] });
+      queryClient.invalidateQueries({ queryKey: ["repo-commits", rid] });
+      onSwitchBranch(name);
     },
     onError: (e: Error) => setFailure(e.message),
   });
@@ -507,12 +569,22 @@ function FilesTab({
         </div>
       </div>
 
+      {/* **Why this branch takes no commits, and the way through** (§284).
+          Above the commit bar rather than in place of the editor: the typing
+          is not refused, it just lands somewhere that can hold it. */}
+      {locked && (
+        <p className="state repo-protected" data-testid="protected-branch">
+          {protectedReason(branchContext)}
+        </p>
+      )}
+
       {!readOnly && dirty && (
         <form
           className="repo-commit-bar"
           onSubmit={(e) => {
             e.preventDefault();
-            commit.mutate();
+            if (locked) commitToSandbox.mutate();
+            else commit.mutate();
           }}
         >
           <span className="repo-dirty">
@@ -524,9 +596,22 @@ function FilesTab({
             placeholder="What changed, and why"
             aria-label="Commit message"
           />
-          <button className="btn" type="submit" disabled={commit.isPending}>
-            {commit.isPending ? "Committing…" : `Commit to ${branch}`}
-          </button>
+          {locked ? (
+            <button
+              className="btn"
+              type="submit"
+              disabled={commitToSandbox.isPending}
+              data-testid="commit-to-sandbox"
+            >
+              {commitToSandbox.isPending
+                ? "Creating the branch…"
+                : `Commit to a new branch from ${branch}`}
+            </button>
+          ) : (
+            <button className="btn" type="submit" disabled={commit.isPending}>
+              {commit.isPending ? "Committing…" : `Commit to ${branch}`}
+            </button>
+          )}
           <button type="button" className="repo-discard" onClick={() => setEdits({})}>
             Discard
           </button>

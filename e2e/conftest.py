@@ -299,6 +299,15 @@ def eventually(read, matches, *, what: str, timeout_ms: int | None = None):
 
     The failure message carries the last value seen, because "still [3, 2] after
     20s" says what went wrong and "timed out" does not.
+
+    **Never poll `page.url` with this** (§284, and it cost a probe). `page.url`
+    is a value Playwright caches and refreshes when its driver processes a
+    navigation event; the loop below never yields, so the driver never gets a
+    turn and the same stale string comes back for the whole timeout. The test
+    then reports that nothing happened when the address bar changed seconds
+    earlier. `page.wait_for_url(...)` is the waiter for that, and the same
+    caution applies to anything else that is a cached property rather than a
+    fresh read: this is for values *derived* from the DOM or fetched over HTTP.
     """
     deadline = time.monotonic() + (timeout_ms or SETTLE_MS) / 1000
     last = None

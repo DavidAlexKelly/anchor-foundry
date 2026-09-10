@@ -48,10 +48,12 @@ Six labelled regions (p.10–11): In-App Help, Branch Options, Code Editor Optio
 |---|---|---|
 | Branch dropdown | ✅ | |
 | Create a sandbox branch from an existing branch | ✅ | |
-| **Protected branches cannot be directly edited** | ○ | "To edit code in your repository, you must work in a sandbox branch" (p.12). We allow editing `main` directly. **Its prerequisite is now in place (§283):** applying a proposal moves the default branch, so work that only ever happens on a sandbox still leaves `main` describing the repository. |
+| **Protected branches cannot be directly edited** | ✅ §284 | "To edit code in your repository, you must work in a sandbox branch" (p.12). **Protection is the review gate, not a second switch:** a repository's default branch is protected exactly when its project requires review. A divergence from Foundry, which protects `main` always — and the same choice §279's Settings tab already states out loud, for the reason §278 gives. A branch with no commits is not protected: the first commit is how a repository starts. §283 is what makes the sandbox not a detour |
 | Global branches | ○ | out of scope — see `README.md` on Global Branching |
 
 The protected-branch rule is the one to take seriously. It is what makes the Pull requests tab load-bearing rather than optional, and it is a refusal, so it is testable.
+
+> **§284 built it, and chose the editor over the rule where they disagreed.** The obvious reading is a read-only editor on a protected branch. People open a file, edit it, and think about branches afterwards — an editor that refused the typing would be right about the rule and wrong about the work. So the typing is kept and the commit bar offers a branch that can hold it: *Commit to a new branch from main*, which creates the sandbox, commits there, and switches to it. §214 asks not to take typing you will refuse to keep; nothing here is refused, it just lands somewhere else.
 
 ### 2.2 Code editor options (p.13)
 
@@ -219,7 +221,7 @@ Foundry supports several; two matter here (p.3):
 1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **The original blocker is cleared and a larger one was found (§278): see the correction in the header — five capabilities live only on that page, including the only control for `require_code_review`. The editor half is now redundant; the page cannot go until the other five have somewhere to be.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
 2. ~~**Draft persistence**, then **multi-file tabs**~~ — **done (§281, §282)**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
 3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
-4. **Protected branches and the sandbox rule.** A refusal, so it is testable, and it makes the PR tab meaningful. **§283 cleared the prerequisite it would otherwise have broken:** applying a proposal now lands the commit on the default branch. Protect `main` without that and the first person to use the review path as intended leaves `main` behind forever — the branch everybody opens the repository on would stop describing the repository.
+4. ~~**Protected branches and the sandbox rule.**~~ — **done (§283, §284)**. §283 cleared the prerequisite it would otherwise have broken: applying a proposal lands the commit on the default branch. Protect `main` without that and the first person to use the review path as intended leaves `main` behind forever — the branch everybody opens the repository on would stop describing the repository.
 5. **Problems**, then **File Changes**. These two make the editor feel like an IDE more than anything else here.
 6. **Unit tests**, then the **Tests panel**, then test output in the Checks tab.
 7. **Tags**, branch checks column, PR column.
@@ -234,7 +236,7 @@ Deferred indefinitely: Debugger, Build helper, IntelliSense over platform types,
 
 - **One editor** — grep for `textarea` under `app/(platform)` and assert `code/page.tsx` is not in the results. Crude, and it cannot pass for the wrong reason.
 - **Draft persistence** — open three files, edit two, reload; both drafts survive and the third is clean.
-- **Protected branches** — committing directly to a protected branch is refused, and the refusal names the branch. Mutation: remove the check, and the test goes red.
+- **Protected branches** — committing directly to a protected branch is refused, and the refusal names the branch. Mutation: remove the check, and the test goes red. **✅ §284**, and the refusal names the route as well as the branch — a rule that only says no teaches people the product is broken.
 - **Tabs** — each of the five is reachable by URL and by click, and a deep link survives a reload.
 - **Problems** — a file with a deliberate syntax error produces a diagnostic at the right line; clicking it moves the cursor there. Fix the error, and the panel empties.
 - **File Changes** — an uncommitted edit shows as a diff against the committed version; committing empties the panel.

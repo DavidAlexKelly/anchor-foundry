@@ -91,6 +91,62 @@ async def read_blobs(
     return {r["sha256"]: r["content"] for r in rows}
 
 
+async def assert_branch_is_writable(
+    conn: AsyncConnection, *, repo_id: UUID, branch: str
+) -> None:
+    """The protected-branch rule (§284; `code-repositories.md` §2.1, p.12).
+
+    > "To edit code in your repository, you must work in a sandbox branch —
+    > protected branches cannot be directly edited."
+
+    **Protection is the review gate, not a second switch.** A repository's
+    default branch is protected exactly when its project requires review. That
+    is a deliberate divergence from Foundry, which protects `main` always, and
+    it is the same choice §279's Settings tab already states out loud: one
+    switch rather than two that must agree. §278 is the reason to care - a
+    setting with one control that nobody could find was how the review gate
+    nearly disappeared, and adding a second control for a rule that means the
+    same thing is how they start to disagree.
+
+    It also makes the rule *land* rather than merely exist. A protection that
+    defaults off is a setting nobody turns on; this one is on exactly when
+    somebody has said changes here need reviewing.
+
+    **A branch with no commits is not protected**, because there is nothing to
+    edit yet. Creating a repository and putting its first commit on the default
+    branch is how a repository starts, and it is what Foundry does for you from
+    a template. Refusing it would leave a new repository in a gated project
+    with no way in at all short of a branch created from nothing, which is a
+    wall rather than a rule.
+
+    Here rather than in the route, because two paths write commits - the commit
+    endpoint and adoption (§274) - and a gate on one of them is a gate on one
+    screen (`code.py`, `assert_direct_edit_allowed`).
+    """
+    from . import code as code_service
+
+    row = await fetch_one(
+        conn,
+        "SELECT project_id, default_branch FROM code_repos WHERE id = :rid",
+        {"rid": str(repo_id)},
+    )
+    if row is None:
+        raise NotFoundError("repository not found")
+    if branch != row["default_branch"]:
+        return
+    if not await code_service.requires_review(conn, UUID(str(row["project_id"]))):
+        return
+    head = await branch_head(conn, repo_id=repo_id, name=branch)
+    if head is None or head["head_commit_id"] is None:
+        return
+    raise ConflictError(
+        f"{branch!r} is protected because this project requires code review, so it "
+        "cannot be committed to directly. Create a sandbox branch from it, commit "
+        f"there, and open a pull request - applying that moves {branch!r} to your "
+        "commit."
+    )
+
+
 async def commit(
     conn: AsyncConnection,
     *,
@@ -110,6 +166,7 @@ async def commit(
     """
     if len(files) > MAX_FILES:
         raise ValueError(f"a repository may hold at most {MAX_FILES} files")
+    await assert_branch_is_writable(conn, repo_id=repo_id, branch=branch)
 
     manifest: dict[str, str] = {}
     for raw_path, content in files.items():

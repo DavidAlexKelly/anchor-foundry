@@ -678,15 +678,19 @@ def test_a_commit_proposal_goes_stale_when_another_one_lands_first(
     landed = client.post(f"{cbase(fx)}/proposals/{a['id']}/apply", headers=hdr(fx.editor_sub))
     assert landed.status_code == 200, landed.text
 
+    # On a sandbox from here: `main` is protected while review is required
+    # (§284), and the successive versions are the point of this test rather
+    # than the branch they sit on.
+    sandbox(client, fx, repo["id"], "race")
     second = commit(client, fx, repo["id"], {
         "src/t.sql": sql(out, source, body="SELECT id, total, region FROM raw"),
-    })
+    }, branch="race")
     b = propose_commit(client, fx, repo["id"], second["id"], summary="B").json()
     assert b["files"][0]["base_version"] == b["files"][0]["current_version"]
 
     third = commit(client, fx, repo["id"], {
         "src/t.sql": sql(out, source, body="SELECT id FROM raw"),
-    })
+    }, branch="race")
     c = propose_commit(client, fx, repo["id"], third["id"], summary="C").json()
     client.post(f"{cbase(fx)}/proposals/{c['id']}/reviews", headers=hdr(fx.owner_sub),
                 json={"verdict": "approve", "comment": ""})
@@ -1127,12 +1131,21 @@ def test_a_proposal_over_a_commit_the_branch_has_moved_past_still_applies(
     """
     out = f"overtaken_{uuid.uuid4().hex[:8]}"
     first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
-    p = propose_commit(client, fx, repo["id"], first["id"]).json()
-    later = commit(client, fx, repo["id"],
-                   {"src/t.sql": sql(out, source), "README.md": "# later\n"})
 
-    assert client.get(f"{cbase(fx)}/proposals/{p['id']}",
-                      headers=hdr(fx.viewer_sub)).json()["landing"] == "landed"
+    # `main` moves the only way it can now that it is protected (§284): another
+    # proposal, over a descendant, landing first.
+    sandbox(client, fx, repo["id"], "ahead")
+    later = commit(client, fx, repo["id"],
+                   {"src/t.sql": sql(out, source), "README.md": "# later\n"},
+                   branch="ahead")
+    q = propose_commit(client, fx, repo["id"], later["id"], summary="the newer one").json()
+    assert approve_and_apply(client, fx, q["id"]).status_code == 200
+    assert branch_head(client, fx, repo["id"], "main") == later["id"]
+
+    # And *now* somebody opens one over the older commit. Proposed after the
+    # landing, so it is not stale - it asks for code the branch already has.
+    p = propose_commit(client, fx, repo["id"], first["id"], summary="the older one").json()
+    assert p["landing"] == "landed", p["landing"]
     assert approve_and_apply(client, fx, p["id"]).status_code == 200
     # The branch stayed where it was: the proposal had nothing to add to it.
     assert branch_head(client, fx, repo["id"], "main") == later["id"]
@@ -1148,6 +1161,7 @@ def test_a_diverged_branch_is_a_blocker_before_the_button_not_an_error_after(
     happening and being rolled back.
     """
     out = f"diverged_{uuid.uuid4().hex[:8]}"
+    theirs_out = f"theirs_{uuid.uuid4().hex[:8]}"
     commit(client, fx, repo["id"], {"README.md": "# transforms\n"})
     sandbox(client, fx, repo["id"], "side")
     made = commit(client, fx, repo["id"],
@@ -1156,10 +1170,17 @@ def test_a_diverged_branch_is_a_blocker_before_the_button_not_an_error_after(
     p = propose_commit(client, fx, repo["id"], made["id"]).json()
     assert p["landing"] == "fast_forward"
 
-    # Somebody else lands something on main, and now a pointer cannot express
-    # both histories.
+    # Somebody else's sandbox lands, and now a pointer cannot express both
+    # histories. Two branches from one base is the shape that produces this in
+    # practice - and since §284 it is the only shape that can, because `main`
+    # takes no direct commits while review is required.
+    sandbox(client, fx, repo["id"], "theirs")
     moved = commit(client, fx, repo["id"],
-                   {"README.md": "# transforms\n", "docs/notes.md": "# theirs\n"})
+                   {"README.md": "# transforms\n",
+                    "src/other.sql": sql(theirs_out, source)},
+                   branch="theirs")
+    other = propose_commit(client, fx, repo["id"], moved["id"], summary="theirs").json()
+    assert approve_and_apply(client, fx, other["id"]).status_code == 200
     detail = client.get(f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.viewer_sub)).json()
     assert detail["landing"] == "diverged"
     assert any("has moved on since this was proposed" in b for b in detail["blockers"]), \
@@ -1250,3 +1271,120 @@ def test_a_repository_whose_default_branch_is_not_main_lands_on_its_own(
     # And `main` was never invented on the way: a repository that named its own
     # trunk does not acquire a second one.
     assert branch_head(client, fx, repo["id"], "main") is None
+
+
+# ---- protected branches (§284; code-repositories.md §2.1, p.12) ---------------
+# "To edit code in your repository, you must work in a sandbox branch -
+# protected branches cannot be directly edited."
+#
+# **Protection is the review gate, not a second switch.** A repository's default
+# branch is protected exactly when its project requires review. §278 is the
+# reason: a governance setting with one control nobody could find is how the
+# review gate nearly disappeared, and two controls for a rule that means the
+# same thing is how they start to disagree.
+def try_commit(client: TestClient, fx: Fixture, repo_id: str, files: dict,
+               *, branch: str = "main"):
+    return client.post(
+        f"{rbase(fx)}/{repo_id}/commits", headers=hdr(fx.editor_sub),
+        json={"branch": branch, "files": files, "message": ""},
+    )
+
+
+def test_a_gated_project_refuses_a_direct_commit_to_the_default_branch(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**The refusal, and it names the way through.**
+
+    A rule that only says no teaches people that the product is broken. This
+    one names the branch, says why it is protected, and describes the path -
+    including the part §283 built, which is that applying the pull request is
+    what moves the branch.
+    """
+    out = f"prot_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    r = try_commit(client, fx, repo["id"], {"src/t.sql": sql(out, source, body="SELECT id FROM raw")})
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert "'main' is protected" in detail, detail
+    assert "requires code review" in detail
+    assert "sandbox branch" in detail
+    assert "pull request" in detail
+
+
+def test_the_first_commit_in_a_repository_is_not_an_edit(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**A branch with no commits is not protected**, because there is nothing
+    to edit yet.
+
+    Creating a repository and putting its first commit on the default branch is
+    how a repository starts - it is what Foundry does for you from a template.
+    Refusing it would leave a new repository in a gated project with no way in
+    at all short of a branch created from nothing, which is a wall rather than
+    a rule.
+    """
+    out = f"firstc_{uuid.uuid4().hex[:8]}"
+    r = try_commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    assert r.status_code == 201, r.text
+    # And the second one is refused, so the exception is about emptiness rather
+    # than about the branch.
+    assert try_commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)}).status_code == 409
+
+
+def test_an_ungated_project_still_commits_to_its_default_branch(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """No `gated` fixture: protection is the gate, so with the gate off there
+    is nothing protecting anything. A rule that fired regardless would be a
+    second switch, and the one the Settings tab shows would stop describing
+    what happens."""
+    out = f"ungated_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    assert try_commit(
+        client, fx, repo["id"],
+        {"src/t.sql": sql(out, source, body="SELECT id FROM raw")},
+    ).status_code == 201
+
+
+def test_a_sandbox_branch_takes_the_commit_the_default_branch_refused(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """The whole route, end to end: refused on `main`, accepted on a sandbox,
+    and landed by the review."""
+    out = f"route_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    assert try_commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)}).status_code == 409
+
+    sandbox(client, fx, repo["id"], "work")
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(out, source, body="SELECT id FROM raw")},
+                  branch="work")
+    assert branch_head(client, fx, repo["id"], "main") == first["id"]
+
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    assert approve_and_apply(client, fx, p["id"]).status_code == 200
+    assert branch_head(client, fx, repo["id"], "main") == made["id"]
+
+
+def test_adoption_obeys_the_same_rule_as_a_commit(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**Two paths write commits, and a gate on one of them is a gate on one
+    screen.**
+
+    Adoption (§274) turns a transform into a file by committing it, so it is an
+    edit to the repository and follows the branch rule like any other. The
+    check lives in `commit` rather than in the route for exactly this reason.
+    """
+    out = f"adopt_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    model = make_model(client, fx, name=f"adopted_{uuid.uuid4().hex[:8]}", code="SELECT 1")
+
+    refused = adopt(client, fx, model["id"], repo["id"])
+    assert refused.status_code == 409, refused.text
+    assert "protected" in refused.json()["detail"]
+
+    sandbox(client, fx, repo["id"], "adopting")
+    allowed = adopt(client, fx, model["id"], repo["id"], branch="adopting")
+    assert allowed.status_code == 200, allowed.text

@@ -1348,6 +1348,13 @@ button { font: inherit; cursor: pointer; }
   background: #fff; cursor: pointer;
 }
 .repo-tree-actions button:hover { border-color: var(--accent); }
+/* The protected-branch note (§284). Brass rather than red: it is a rule
+   somebody is being told about, not a mistake they made. */
+.repo-protected {
+  border: 1px solid var(--brass, #b07d2b); border-left-width: 3px;
+  background: var(--brass-wash); border-radius: var(--radius);
+  padding: 9px 12px; margin: 0;
+}
 .repo-commit-bar {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border: 1px solid var(--brass);
