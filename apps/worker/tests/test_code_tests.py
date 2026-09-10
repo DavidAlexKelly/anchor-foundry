@@ -165,21 +165,23 @@ def test_the_time_limit_is_the_platforms_problem_not_the_authors(monkeypatch) ->
 
 
 def test_our_own_suite_is_not_collected_into_a_customers(monkeypatch) -> None:
-    """**`--rootdir`, and why it is not decoration.**
+    """**The run's own `pytest.ini`, and why it is a file rather than a flag.**
 
-    Without it pytest walks upwards from the working directory looking for a
-    config file, and if it finds one it takes that directory as the rootdir and
-    reads its settings. `TMPDIR` is the user's to set, so the scratch directory
-    can perfectly well live inside a checkout of this repository - at which
-    point pytest finds *our* `pytest.ini` and applies it to a customer's run.
+    pytest looks for a config in the directory it is given and then *upwards*,
+    and applies whatever it finds first. `TMPDIR` is the user's to set, so the
+    scratch directory can perfectly well live inside a checkout of this
+    repository - at which point our settings reach a customer's tests. A file
+    in the run directory is found first and ends the search.
 
-    **Two survivors are why this test looks like this**, and the second one
-    found the guard was the wrong guard. It first ran in the default temp
-    location - `/tmp`, under no repository at all - so nothing was above it to
-    inherit and the check could not fire. Given a config file above it, the
-    original `--rootdir` still failed: pytest settles its *rootdir* and its
-    *inifile* separately and `--rootdir` moves only the first, so it walked up
-    and applied the config anyway. `-c` is what pins it.
+    **Three survivors are why this test looks like this**, and none of them was
+    a test written carelessly. It first ran in the default temp location -
+    `/tmp`, under no repository at all - so nothing was above it to inherit and
+    the check could not fire. Given a config file above it, `--rootdir` still
+    failed: pytest settles its *rootdir* and its *inifile* separately and
+    `--rootdir` moves only the first, so it walked up and read the config
+    anyway. Then `-c` survived too, because it pointed at the file this run
+    writes and so said nothing the file's existence did not already say. One
+    mechanism came out of three, and this is the test that holds it.
     """
     import tempfile as tempfile_module
 
