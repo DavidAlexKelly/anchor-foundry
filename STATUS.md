@@ -4482,12 +4482,35 @@ be re-run by pressing a button. So the test asserts the *first line* agrees —
 the sentence a person reads — and separately asserts the traceback really is
 there, so the exemption cannot quietly become the rule.
 
-**What the harness caught, and what it could not.** A differential test is
-weaker than a mutation test: it says two things agree, not that either is
-checked. The mutation harnesses stay the stronger discipline. What this adds is
-the one thing they cannot — a mutation of *both* implementations in the same
-direction looks fine to each of them separately, and this is the only check that
-compares them.
+**What the harness caught, and what it could not.** Two findings, and both were
+about the test rather than the product.
+
+The comparison itself survived being switched off. `assert True or sandbox ==
+container` left every case passing, because each also asserts on the dict it
+returns and that dict is the subprocess answer — so the one thing the module
+exists for was a check nothing could make fail. Every real case agrees, which is
+exactly the problem: a guard with no case in the tree that fires it can be
+deleted with nothing noticing (§293 hit that shape twice). The file now
+manufactures a divergence — the cap lowered on one runner and not the other —
+and asserts the comparison sees it and names both answers.
+
+And **a differential test is blind to a change in a rule both sides share**,
+which is the technique's own boundary. My first two attempts to demonstrate that
+were wrong: disabling `resolve_output`'s neither-shape branch makes the container
+crash outright, and lowering the cap to 1 breaks the success cases — both caught,
+by a route the harness had not predicted. A mutant that genuinely tests the limit
+has to leave both runners self-consistent *and* satisfy every other assertion,
+which means changing a shared **wording**. That one survived — and in surviving
+showed that nothing pinned the refusal's wording anywhere, so the sentence an
+author reads when a join loses its condition was unchecked. The answer was not a
+cleverer comparison but `tests/test_limits.py`: test the rule where the rule
+lives. The two files together say the runners agree with each other, and that
+they agree with the rule.
+
+So the ordering stands: mutation testing is the stronger discipline and this is
+an addition to it, not a replacement. What it adds is the one thing a
+single-implementation mutation run cannot see — that the *other* implementation
+was never asked the same question.
 
 ### 297. The two things CI caught that the local suites could not (this session)
 
