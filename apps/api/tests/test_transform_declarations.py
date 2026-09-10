@@ -557,10 +557,22 @@ def test_an_existing_input_is_kept() -> None:
 
 def test_the_body_of_the_file_is_untouched() -> None:
     """Only the declaration block moves. A splice that reformatted the query
-    would make Insert a thing people stop using."""
-    body = "SELECT\n  id,\n  -- output: not a declaration, a note about a column\n  total\nFROM x\n"
+    would make Insert a thing people stop using.
+
+    **The comment in the body is one that would match**, and it has to be. The
+    first version of this test used a note the pattern could not match anyway —
+    so removing the splice's stopping rule broke nothing, and a mutation run
+    said so. `-- output: total` inside a query is `read`'s own documented case:
+    somebody explaining a column, not declaring a transform. The splice stops
+    where the reader stops, or Insert silently edits the query.
+    """
+    body = "SELECT\n  id,\n  -- output: total\n  total\nFROM x\n"
     after = with_input("t.sql", f"-- output: daily\n{body}", alias="o", dataset="orders")
-    assert after.endswith(body)
+    assert after.endswith(body), after
+    # And the file still declares exactly one output, which is what the note
+    # inside the query never was.
+    declaration = read("t.sql", after)
+    assert declaration is not None and declaration.output == "daily"
 
 
 def test_a_comment_above_the_declaration_stays_above_it() -> None:
