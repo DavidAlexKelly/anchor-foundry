@@ -606,25 +606,34 @@ def test_an_insert_button_writes_the_reference_name_not_its_label(page, api):
     page.get_by_label(f"Notify {me['email']}").check()
     page.get_by_test_id("rule-2-subject").fill("For ")
     page.get_by_test_id("rule-2-subject-insert-recipient").click()
-    # **Wait for the insert to land before touching another field**, and this
-    # is a real race rather than caution. `insert` in `notify-rule-fields.tsx`
-    # schedules a `requestAnimationFrame` that focuses the field it just wrote
-    # to, so the sentence can be continued - correct, deliberate, and
-    # documented there. Playwright's `fill` focuses its target and *then*
-    # types; when that frame fires in between, focus is back on the subject and
-    # the body's text is typed into the subject instead. The failure reads
-    # `For {{{recipient}}}By ` and blames the insert button, which put exactly
-    # the right thing in exactly the right place.
-    #
-    # One run in about four, and only on CI - a slower machine widens the gap
-    # between `fill`'s focus and its typing. Found by the screenshot-on-failure
-    # this suite gained the same day; three earlier attempts could not even
-    # name it.
     expect(page.get_by_test_id("rule-2-subject")).to_have_value("For {{{recipient}}}")
+    # **The caret comes back to the field that was written to**, which is what
+    # `insert` in `notify-rule-fields.tsx` schedules a `requestAnimationFrame`
+    # for: a reference is inserted mid-sentence and the sentence is then
+    # continued, so a button that left focus on itself would make you click
+    # back into the field every time.
+    #
+    # It is also the only wait that is *sound* here, and that is worth saying
+    # because the obvious one is not. Clicking the button moves focus to the
+    # button; the frame moves it back. The value, meanwhile, lands on the
+    # render *before* that frame - so waiting for the value, which is what this
+    # test used to do, can return with the frame still pending. `fill` on the
+    # next field then focuses it, the pending frame pulls focus back here, and
+    # Playwright's `insertText` - which goes to whatever is focused, not to
+    # what the locator resolved - types the body's text into the subject. The
+    # body is left empty and the failure blames the *next* insert button, which
+    # put exactly the right thing into exactly the right place.
+    #
+    # One run in about twenty on CI, and never locally: a slower machine widens
+    # the gap between `fill`'s focus and its typing.
+    expect(page.get_by_test_id("rule-2-subject")).to_be_focused()
 
     page.get_by_test_id("rule-2-body").fill("By ")
     page.get_by_test_id("rule-2-body-insert-current_user").click()
     expect(page.get_by_test_id("rule-2-body")).to_have_value("By {{{current_user}}}")
+    # The same for the textarea branch, which is a different element with the
+    # same ref and the same frame.
+    expect(page.get_by_test_id("rule-2-body")).to_be_focused()
     # Re-asserted after the second insert: the subject must still say what it
     # said, which is what fails if the two fields ever share a write again.
     expect(page.get_by_test_id("rule-2-subject")).to_have_value("For {{{recipient}}}")
