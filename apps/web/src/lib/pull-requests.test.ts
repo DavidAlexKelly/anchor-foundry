@@ -117,4 +117,13 @@ suite("proposals that name no repository (§290)", () => {
     expect(unrepositoriedNote(3)).toContain("3 open proposals");
     expect(unrepositoriedNote(3)).toContain("They were");
   });
+
+  it("**says what to do instead**, which is the half a reader needs", () => {
+    // A survivor found this: the clause could be deleted and every check
+    // above still passed. "They were opened before this project used
+    // repositories" says why these exist and leaves the obvious next question
+    // - how do I open one now? - unanswered, on a screen whose whole point is
+    // that the old answer is gone (§277, §289).
+    expect(unrepositoriedNote(2)).toContain("new changes go through one");
+  });
 });
