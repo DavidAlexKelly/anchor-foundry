@@ -57,17 +57,17 @@ The protected-branch rule is the one to take seriously. It is what makes the Pul
 
 ### 2.2 Code editor options (p.13)
 
-| Action | Status |
-|---|---|
-| **Preview** — run the transform on a sample of input datasets | ◑ SQL only |
-| **Test** — run all unit tests in the current file | ○ |
-| **Commit** — commit changes on the sandbox branch, triggering automatic checks | ✅ |
-| **Build** — build output datasets of the current file after checks; no-op if the file produces none | ○ |
-| **Create Pull request** | ◑ via proposals, elsewhere |
-| Merge another branch into the current one | ✅ |
-| **Reset** — discard uncommitted changes, matching the remote branch | ○ |
-| **Upgrade** — upgrade the branch to latest language versions | ○ (may never apply to us) |
-| New file / folder / **sub-project** | ◑ file only |
+| Action | Status | Notes |
+|---|---|---|
+| **Preview** — run the transform on a sample of input datasets | ◑ SQL only | |
+| **Test** — run all unit tests in the current file | ○ | |
+| **Commit** — commit changes on the sandbox branch, triggering automatic checks | ✅ | |
+| **Build** — build output datasets of the current file after checks; no-op if the file produces none | ○ | |
+| **Create Pull request** | ◑ via proposals, elsewhere | |
+| Merge another branch into the current one | ✅ | |
+| **Reset** — discard uncommitted changes, matching the remote branch | ✅ §288 | the button existed and nothing tested it. Since §281 it also has to take the *persisted* draft with it, which was an emergent consequence of writing an empty map rather than anything written down — and it asks first, because it is the one control here that destroys work and it sits beside the one that saves it |
+| **Upgrade** — upgrade the branch to latest language versions | ○ (may never apply to us) | |
+| New file / folder / **sub-project** | ◑ file only | |
 
 ### 2.3 File editor
 

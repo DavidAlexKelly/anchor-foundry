@@ -4388,6 +4388,31 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 288. Reset, and the draft it has to take with it (this session)
+
+`code-repositories.md` §2.2's Reset row, p.13: *"Reset the contents of all files
+to match the latest commit on your remote branch. This will clear any changes
+that have not yet been committed on your branch."*
+
+**The button already existed and nothing tested it**, which is the interesting
+part. Marking a row ✅ because the code appears to do the thing is how a parity
+document starts describing a product that no longer exists — so the row was ○
+until somebody checked, and checking turned up two things.
+
+**Since §281 it has a second obligation nobody wrote down.** `setEdits({})`
+removes the *persisted* draft too, but only as an emergent consequence: writing
+an empty map is what `writeDrafts` turns into `removeItem`. A change to that
+function which stopped removing on empty would silently resurrect discarded work
+on the next reload, and no test would have noticed. Now one does, and it reloads
+the page rather than reading state — the half that needs storage to have been
+cleared rather than merely the component.
+
+**And it asks first.** This is the one control in the bar that destroys work, and
+it sits beside the one that saves it. The cost of the wrong button used to be
+this session's typing; since drafts persist it may be days of it. The count is in
+the question because "discard your changes?" and "discard changes to 7 files?"
+are answered differently by the same person.
+
 ### 287. File Changes, and a diff with one author (this session)
 
 p.14: *"The File Changes helper can be used to view any uncommitted changes to

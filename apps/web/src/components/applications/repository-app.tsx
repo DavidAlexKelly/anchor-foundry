@@ -20,7 +20,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
-import { draftKey, readDrafts, saveWarning, writeDrafts } from "@/lib/editor-drafts";
+import {
+  discardQuestion,
+  draftKey,
+  readDrafts,
+  saveWarning,
+  writeDrafts,
+} from "@/lib/editor-drafts";
 import {
   activeTab,
   closeLabel,
@@ -693,7 +699,20 @@ function FilesTab({
               {commit.isPending ? "Committing…" : `Commit to ${branch}`}
             </button>
           )}
-          <button type="button" className="repo-discard" onClick={() => setEdits({})}>
+          {/* **Asks first** (§288). The one control here that destroys work,
+              beside the one that saves it - and since §281 what it throws away
+              may be days of typing rather than this session's, because the
+              drafts persist. `setEdits({})` is also what removes them from
+              storage, through the save effect above. */}
+          <button
+            type="button"
+            className="repo-discard"
+            onClick={() => {
+              if (window.confirm(discardQuestion(Object.keys(edits).length))) {
+                setEdits({});
+              }
+            }}
+          >
             Discard
           </button>
         </form>
