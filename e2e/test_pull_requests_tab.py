@@ -369,3 +369,81 @@ def test_a_proposal_over_a_commit_the_branch_already_has_says_nothing_will_move(
     landing = page.get_by_test_id("proposal-landing")
     expect(landing).to_be_visible(timeout=30000)
     expect(landing).to_contain_text("already has this commit")
+
+
+# ---- Reset (§288; code-repositories.md §2.2, p.13) ---------------------------
+# "Reset the contents of all files to match the latest commit on your remote
+# branch. This will clear any changes that have not yet been committed."
+#
+# The button existed and nothing tested it. Since §281 it also has to take the
+# *persisted* draft with it - a Discard that left the draft in storage would
+# bring the work back on the next reload, which is the exact opposite of what
+# the button says.
+def test_discarding_asks_first_and_keeps_the_work_when_the_answer_is_no(
+    page, api
+) -> None:
+    """**The one control here that destroys work, beside the one that saves
+    it.** An accidental click costs everything typed since the last commit -
+    and since drafts persist, that may be days of it rather than this
+    session's."""
+    mod = project(api, "Discard cancel")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    out = f"d_{uuid.uuid4().hex[:6]}"
+    commit(mod, repo, {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+
+    open_file(page, repo, "src/t.sql")
+    type_into_editor(page, "\n-- work I do not want to lose")
+    eventually(lambda: editor_text(page), lambda t: "-- work I do not want to lose" in t,
+               what="the typing to land")
+
+    asked: list[str] = []
+
+    def refuse(dialog):
+        asked.append(dialog.message)
+        dialog.dismiss()
+
+    page.once("dialog", refuse)
+    page.get_by_role("button", name="Discard", exact=True).click()
+
+    eventually(lambda: asked, lambda a: len(a) == 1, what="the confirmation to be asked")
+    assert "1 file?" in asked[0], asked
+    assert "cannot be undone" in asked[0], asked
+    stays(lambda: editor_text(page), lambda t: "-- work I do not want to lose" in t,
+          what="the work surviving a refused discard")
+
+
+def test_discarding_takes_the_persisted_draft_with_it(page, api) -> None:
+    """**The obligation §281 created and nothing pinned.**
+
+    `setEdits({})` is what removes the stored key, through the save effect - an
+    emergent consequence of writing an empty map, not something anybody wrote
+    down. A change to `writeDrafts` that stopped removing on empty would
+    silently resurrect discarded work on the next reload, and no test would
+    have noticed.
+    """
+    mod = project(api, "Discard drafts")
+    repo = repository(mod, f"Transforms {mod.tag}")
+    source = dataset(mod, f"orders_{mod.tag}")
+    out = f"dd_{uuid.uuid4().hex[:6]}"
+    committed = f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM raw\n"
+    commit(mod, repo, {"src/t.sql": committed})
+
+    open_file(page, repo, "src/t.sql")
+    type_into_editor(page, "\n-- about to be thrown away")
+    eventually(lambda: editor_text(page), lambda t: "-- about to be thrown away" in t,
+               what="the typing to land")
+
+    page.once("dialog", lambda d: d.accept())
+    page.get_by_role("button", name="Discard", exact=True).click()
+    eventually(lambda: editor_text(page), lambda t: "-- about to be thrown away" not in t,
+               what="the editor to go back to the committed file")
+
+    # And it stays gone across a reload, which is the half that needs storage
+    # to have been cleared rather than just state.
+    page.reload()
+    open_file(page, repo, "src/t.sql")
+    stays(lambda: editor_text(page), lambda t: "-- about to be thrown away" not in t,
+          what="the discarded draft staying discarded")

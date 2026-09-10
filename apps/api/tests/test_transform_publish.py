@@ -1651,3 +1651,402 @@ def test_a_proposal_cannot_name_a_repository_in_another_project(
     )
     assert r.status_code == 422, r.text
     assert "not in this project" in r.json()["detail"]
+
+
+# ---- problems (§286; code-repositories.md §2.4, p.14) ------------------------
+# "The Problems helper tells you about any issues detected in your code. Click
+# on a specific issue listed here to open up the problematic code."
+#
+# **Every problem here is one the platform already knows how to refuse.** What
+# was missing was not the knowledge, it was *when*: all of it arrived at publish
+# time, hours after the code was written, about a whole commit rather than about
+# a line.
+def problems(client: TestClient, fx: Fixture, repo_id: str, *,
+             branch: str | None = None, overrides: dict | None = None):
+    return client.post(
+        f"{rbase(fx)}/{repo_id}/problems", headers=hdr(fx.viewer_sub),
+        json={"branch": branch, "overrides": overrides or {}},
+    )
+
+
+def test_a_clean_repository_has_no_problems(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    commit(client, fx, repo["id"],
+           {"src/t.sql": sql(f"ok_{uuid.uuid4().hex[:8]}", source)})
+    r = problems(client, fx, repo["id"])
+    assert r.status_code == 200, r.text
+    assert r.json()["problems"] == []
+
+
+def test_sql_that_does_not_parse_is_reported_at_its_line(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**A line, not just a verdict.** p.14 promises "click on a specific issue
+    to open up the problematic code", and a line is the smallest thing that can
+    be opened. DuckDB gives a character offset; turning it into a line is the
+    whole difference between a panel somebody uses and one they read once."""
+    out = f"broken_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = {source}\nSELEC id FROM raw\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert len(found) == 1, found
+    assert found[0]["path"] == "src/t.sql"
+    assert found[0]["severity"] == "error"
+    assert found[0]["source"] == "sql"
+    assert found[0]["line"] == 3, found[0]
+    assert "SELEC" in found[0]["message"]
+
+
+def test_an_input_that_names_nothing_is_an_error_naming_both_sides(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The publish refuses this too, hours later, about the whole commit."""
+    out = f"noinput_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/t.sql": f"-- output: {out}\n-- input: raw = not_a_dataset\nSELECT id FROM raw\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert len(found) == 1, found
+    assert found[0]["source"] == "input"
+    assert "not_a_dataset" in found[0]["message"]
+    # And the alias, because the fix is to change one of the two and knowing
+    # which is which is the thing the author needs.
+    assert "raw" in found[0]["message"]
+
+
+def test_two_files_declaring_one_output_are_both_reported(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**Both, not the second one sorted.** Neither is more wrong than the
+    other, and a panel that blamed `z.sql` because `a.sql` came first would
+    send somebody to fix the wrong file."""
+    out = f"clash_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/a.sql": sql(out, source),
+        "src/z.sql": sql(out, source),
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert {p["path"] for p in found} == {"src/a.sql", "src/z.sql"}, found
+    assert all(p["severity"] == "error" for p in found)
+    assert all(out in p["message"] for p in found)
+
+
+def test_a_source_file_declaring_nothing_is_a_warning_not_an_error(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A repository may hold anything, so this cannot be an error. But a file
+    somebody *meant* to be a transform and mistyped the output line of looks
+    exactly like one that never claimed to be, and saying so costs nothing."""
+    commit(client, fx, repo["id"], {
+        "src/t.sql": sql(f"fine_{uuid.uuid4().hex[:8]}", source),
+        "src/notes.sql": "SELECT 1\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert [p["path"] for p in found] == ["src/notes.sql"], found
+    assert found[0]["severity"] == "warning"
+
+
+def test_a_readme_is_not_a_problem(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """Reporting that a README declares no transform would bury the one file
+    that does under a list of files that never claimed to."""
+    commit(client, fx, repo["id"], {
+        "src/t.sql": sql(f"readme_{uuid.uuid4().hex[:8]}", source),
+        "README.md": "# transforms\n",
+        ".gitignore": "*.parquet\n",
+    })
+    assert problems(client, fx, repo["id"]).json()["problems"] == []
+
+
+def test_problems_are_about_the_working_set_not_the_commit(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**The point of the panel.** The commit is fine; what the author has
+    typed is not, and telling them at publish time is telling them too late."""
+    out = f"working_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    assert problems(client, fx, repo["id"]).json()["problems"] == []
+
+    typed = f"-- output: {out}\n-- input: raw = {source}\nSELECT id FROM WHERE\n"
+    found = problems(client, fx, repo["id"],
+                     overrides={"src/t.sql": typed}).json()["problems"]
+    assert len(found) == 1 and found[0]["source"] == "sql", found
+
+    # And a file deleted in the working set stops being a problem, rather than
+    # being reported against a version the author has already removed.
+    broken = {
+        "src/t.sql": sql(out, source),
+        "src/gone.sql": "-- output: x\nNOT SQL AT ALL\n",
+    }
+    commit(client, fx, repo["id"], broken)
+    assert problems(client, fx, repo["id"]).json()["problems"], "the broken file is fine?"
+    assert problems(client, fx, repo["id"],
+                    overrides={"src/gone.sql": None}).json()["problems"] == []
+
+
+def test_errors_come_before_warnings(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The panel is read to find what is broken, and a warning above an error
+    is a warning nobody wanted."""
+    commit(client, fx, repo["id"], {
+        "src/a_notes.sql": "SELECT 1\n",
+        "src/z_broken.sql": f"-- output: b_{uuid.uuid4().hex[:6]}\nSELEC 1\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert [p["severity"] for p in found][0] == "error", found
+    assert found[0]["path"] == "src/z_broken.sql"
+
+
+def test_a_viewer_may_be_told_what_is_wrong_with_code_they_can_read(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """Viewer, unlike Preview. A preview *executes* the caller's SQL against the
+    project's data, which is why it takes the editor floor; this parses and
+    reads names, touching nothing."""
+    commit(client, fx, repo["id"], {"src/t.sql": "SELEC 1\n"})
+    r = client.post(f"{rbase(fx)}/{repo['id']}/problems", headers=hdr(fx.viewer_sub),
+                    json={"overrides": {}})
+    assert r.status_code == 200, r.text
+    assert r.json()["problems"]
+    # 404 rather than 403 for somebody outside the project: whether this
+    # repository exists is itself information, and the platform answers that
+    # question the same way everywhere.
+    assert client.post(f"{rbase(fx)}/{repo['id']}/problems",
+                       headers=hdr(fx.outsider_sub), json={}).status_code == 404
+
+
+def test_a_malformed_declaration_is_an_error_in_the_readers_own_words(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """The reader knows what is wrong with the file far better than a
+    rephrasing here would, and it already names the line where it can. What
+    this pins is the *severity*: a declaration nobody can read will refuse a
+    publish, so it cannot be a warning."""
+    commit(client, fx, repo["id"], {
+        "src/t.sql": f"-- input: raw = {source}\nSELECT id FROM raw\n",
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    assert len(found) == 1, found
+    assert found[0]["severity"] == "error", found[0]
+    assert found[0]["source"] == "declaration"
+
+
+def test_a_clash_is_reported_even_when_one_of_the_files_is_also_broken(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**A mutant found a design error here, and this is the fix.**
+
+    The first version skipped a file that already had an error when counting
+    producers, on the reasoning that two errors for one mistake reads as two
+    mistakes. Wrong twice: they are two different mistakes, so fixing the first
+    would make a second appear and the panel would play whack-a-mole; and
+    `plan` checks the clash without parsing any SQL, so hiding it here would
+    make the panel disagree with the refusal it exists to predict.
+    """
+    out = f"both_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/broken.sql": f"-- output: {out}\n-- input: raw = {source}\nSELEC id FROM raw\n",
+        "src/fine.sql": sql(out, source),
+    })
+    found = problems(client, fx, repo["id"]).json()["problems"]
+    by_path: dict[str, list[dict]] = {}
+    for p in found:
+        by_path.setdefault(p["path"], []).append(p)
+
+    assert {"sql", "declaration"} == {p["source"] for p in by_path["src/broken.sql"]}, found
+    # And the file that is otherwise fine is told about the clash, rather than
+    # being left to discover it when the other one is fixed.
+    assert [p["source"] for p in by_path["src/fine.sql"]] == ["declaration"], found
+    assert out in by_path["src/fine.sql"][0]["message"]
+
+
+# ---- file changes (§287; code-repositories.md §2.4, p.14) --------------------
+# "The File Changes helper can be used to view any uncommitted changes to the
+# current file, as well as compare previous versions of the file."
+def file_changes(client: TestClient, fx: Fixture, repo_id: str, path: str, **kw):
+    return client.post(
+        f"{rbase(fx)}/{repo_id}/file-changes", headers=hdr(fx.viewer_sub),
+        json={"path": path, **kw},
+    )
+
+
+def file_history(client: TestClient, fx: Fixture, repo_id: str, path: str, **kw):
+    q = "&".join(f"{k}={v}" for k, v in kw.items())
+    return client.get(
+        f"{rbase(fx)}/{repo_id}/file-history?path={path}" + (f"&{q}" if q else ""),
+        headers=hdr(fx.viewer_sub),
+    )
+
+
+def test_an_uncommitted_edit_reads_as_a_side_by_side_diff(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**The half the spec asks for by name**: "point it at uncommitted state".
+
+    The same builder the review surface uses, so the panel and the review
+    cannot disagree about what changed - a second alignment would be a second
+    answer the first time either was improved.
+    """
+    out = f"fc_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    typed = sql(out, source, body="SELECT id FROM raw")
+    r = file_changes(client, fx, repo["id"], "src/t.sql", content=typed)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["state"] == "modified"
+    assert body["added"] == 1 and body["removed"] == 1, body
+    changed = [row for row in body["rows"] if row["kind"] == "changed"]
+    assert len(changed) == 1
+    assert "SELECT id, total FROM raw" in changed[0]["live_text"]
+    assert "SELECT id FROM raw" in changed[0]["proposed_text"]
+
+
+def test_a_file_with_no_edit_says_unchanged_rather_than_showing_nothing(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """"Nothing has changed" and "there is nothing here" are different answers,
+    and the panel is read for the first."""
+    out = f"same_{uuid.uuid4().hex[:8]}"
+    code = sql(out, source)
+    commit(client, fx, repo["id"], {"src/t.sql": code})
+
+    body = file_changes(client, fx, repo["id"], "src/t.sql", content=code).json()
+    assert body["state"] == "unchanged"
+    assert body["added"] == 0 and body["removed"] == 0
+    assert body["rows"], "an unchanged file still has lines to show"
+    assert all(row["kind"] == "same" for row in body["rows"])
+
+
+def test_a_new_file_and_a_deleted_one_are_each_named(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    out = f"newdel_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    added = file_changes(client, fx, repo["id"], "src/new.sql", content="SELECT 1\n").json()
+    assert added["state"] == "added"
+    assert added["added"] == 1 and added["removed"] == 0
+
+    # `content: null` is a deletion in the working set, which is a change worth
+    # showing rather than an absence.
+    deleted = file_changes(client, fx, repo["id"], "src/t.sql", content=None).json()
+    assert deleted["state"] == "deleted"
+    assert deleted["removed"] == 3 and deleted["added"] == 0, deleted
+
+
+def test_a_file_absent_on_both_sides_is_unchanged_not_deleted(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A path nobody has ever committed and nobody is editing has not been
+    deleted, and saying so would invent a change."""
+    commit(client, fx, repo["id"], {"src/t.sql": sql(f"n_{uuid.uuid4().hex[:6]}", source)})
+    body = file_changes(client, fx, repo["id"], "src/never.sql", content=None).json()
+    assert body["state"] == "unchanged"
+    assert body["rows"] == []
+
+
+def test_comparing_against_an_older_commit(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """p.14's second half: "compare previous versions of the file"."""
+    out = f"older_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    latest = sql(out, source, body="SELECT id FROM raw")
+    commit(client, fx, repo["id"], {"src/t.sql": latest})
+
+    # Against the head: nothing has been typed, so nothing has changed.
+    assert file_changes(client, fx, repo["id"], "src/t.sql",
+                        content=latest).json()["state"] == "unchanged"
+    # Against the first commit: the change that landed in between.
+    older = file_changes(client, fx, repo["id"], "src/t.sql",
+                         content=latest, against_commit_id=first["id"]).json()
+    assert older["state"] == "modified"
+    assert older["added"] == 1 and older["removed"] == 1
+
+
+def test_the_file_history_is_the_commits_that_changed_this_file(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """**Not every commit on the branch.** The version list somebody means is
+    the one where the file changed, and most commits said nothing about it -
+    compared by content address, which is what a manifest is for."""
+    out = f"hist_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    # Touches another file entirely: this must not appear.
+    commit(client, fx, repo["id"], {"src/t.sql": sql(out, source), "README.md": "# a\n"})
+    second = commit(client, fx, repo["id"], {
+        "src/t.sql": sql(out, source, body="SELECT id FROM raw"),
+        "README.md": "# a\n",
+    })
+
+    rows = file_history(client, fx, repo["id"], "src/t.sql").json()
+    assert [r["id"] for r in rows] == [second["id"], first["id"]], rows
+    assert rows[0]["state"] == "modified"
+    assert rows[1]["state"] == "added"
+    assert rows[0]["sha"] != rows[1]["sha"]
+
+
+def test_a_deletion_appears_in_the_file_history(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A file that was removed is a version of its history, and the commit that
+    removed it is the one somebody is looking for."""
+    out = f"gone_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {
+        "src/t.sql": sql(out, source),
+        "src/keep.sql": sql(f"k_{uuid.uuid4().hex[:6]}", source),
+    })
+    removed = commit(client, fx, repo["id"], {
+        "src/keep.sql": sql(f"k_{uuid.uuid4().hex[:6]}", source),
+    })
+
+    rows = file_history(client, fx, repo["id"], "src/t.sql").json()
+    assert rows[0]["id"] == removed["id"]
+    assert rows[0]["state"] == "deleted"
+    assert rows[0]["sha"] is None
+
+
+def test_the_file_history_of_a_path_nobody_committed_is_empty(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    commit(client, fx, repo["id"], {"src/t.sql": sql(f"e_{uuid.uuid4().hex[:6]}", source)})
+    assert file_history(client, fx, repo["id"], "src/never.sql").json() == []
+
+
+def test_the_file_history_is_this_branchs_history(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A branch's history is *its* history, which is what `history` already
+    promises and what this has to keep promising once it filters."""
+    out = f"branchy_{uuid.uuid4().hex[:8]}"
+    first = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    sandbox(client, fx, repo["id"], "side")
+    on_side = commit(client, fx, repo["id"],
+                     {"src/t.sql": sql(out, source, body="SELECT id FROM raw")},
+                     branch="side")
+
+    on_main = file_history(client, fx, repo["id"], "src/t.sql", branch="main").json()
+    assert [r["id"] for r in on_main] == [first["id"]], on_main
+    on_branch = file_history(client, fx, repo["id"], "src/t.sql", branch="side").json()
+    assert [r["id"] for r in on_branch] == [on_side["id"], first["id"]], on_branch
+
+
+def test_a_path_is_normalised_before_it_is_looked_up(
+    client: TestClient, fx: Fixture, repo: dict, source: str
+) -> None:
+    """A path is normalised everywhere else it is used - `commit` does it, and
+    a manifest key is always the normalised form. A reader that skipped it
+    would answer "this file has no history" for a leading slash somebody typed
+    or a link built by hand, which is the least helpful way to be wrong."""
+    out = f"norm_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+
+    rows = file_history(client, fx, repo["id"], "/src/t.sql").json()
+    assert [r["id"] for r in rows] == [made["id"]], rows
+    assert file_changes(client, fx, repo["id"], "./src/t.sql",
+                        content=sql(out, source)).json()["state"] == "unchanged"

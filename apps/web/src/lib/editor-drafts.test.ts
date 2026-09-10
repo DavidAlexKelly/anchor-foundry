@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DRAFT_LIMIT_BYTES,
   clearDrafts,
+  discardQuestion,
   draftKey,
   readDrafts,
   saveWarning,
@@ -147,5 +148,21 @@ describe("what to tell somebody", () => {
     // error" is not.
     expect(saveWarning("unavailable")).toContain("reload before committing");
     expect(saveWarning("too-large")).toContain("reload before committing");
+  });
+});
+
+describe("discarding", () => {
+  it("**counts the files, because the answer depends on it**", () => {
+    // "Discard your changes?" and "discard changes to 7 files?" are answered
+    // differently by the same person.
+    expect(discardQuestion(1)).toContain("1 file?");
+    expect(discardQuestion(7)).toContain("7 files?");
+  });
+
+  it("**says it cannot be undone**, because it cannot", () => {
+    // Drafts persist, so what is being thrown away may be days of work rather
+    // than this session's - and the button sits beside the one that saves it.
+    expect(discardQuestion(2)).toContain("cannot be undone");
+    expect(discardQuestion(2)).toContain("not saved anywhere else");
   });
 });

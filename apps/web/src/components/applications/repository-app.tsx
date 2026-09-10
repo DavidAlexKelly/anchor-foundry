@@ -18,9 +18,15 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useUrlState } from "@/components/use-url-state";
-import { draftKey, readDrafts, saveWarning, writeDrafts } from "@/lib/editor-drafts";
+import {
+  discardQuestion,
+  draftKey,
+  readDrafts,
+  saveWarning,
+  writeDrafts,
+} from "@/lib/editor-drafts";
 import {
   activeTab,
   closeLabel,
@@ -40,6 +46,21 @@ import {
 } from "@/lib/api";
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
+import {
+  hasChanges,
+  headline,
+  isGap,
+  versionLabel,
+  versionsEmptyNote,
+  withContext,
+} from "@/lib/file-changes";
+import {
+  emptyNote as problemsEmptyNote,
+  isSourceFile,
+  location as problemLocation,
+  revealLine,
+  summary as problemsSummary,
+} from "@/lib/problems";
 import {
   checkTarget,
   emptyReason as checksEmptyReason,
@@ -62,6 +83,9 @@ import type {
   PublishPlan,
   RepositoryBranch,
   RepositoryComparison,
+  RepositoryFileChanges,
+  RepositoryFileVersion,
+  RepositoryProblem,
   RepositoryTree,
   ResolvedResource,
   TransformPreview,
@@ -381,6 +405,17 @@ function FilesTab({
   };
   const locked = !pinned && isProtected(branchContext);
 
+  // **p.14's Problems helper** (§286). Asked for rather than live: it is a
+  // round trip, and one on every keystroke would be a panel that costs more
+  // than it tells you. The button says when the answer was last true.
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  const [reveal, setReveal] = useState<{ line: number } | undefined>();
+  const problems = useQuery({
+    queryKey: ["repo-problems", rid, branch, edits],
+    queryFn: () => repoApi.problems(wid, pid, rid, { branch, overrides: edits }),
+    enabled: problemsOpen && !pinned,
+  });
+
   const commit = useMutation({
     mutationFn: () =>
       repoApi.commit(wid, pid, rid, { branch, files: working, message }),
@@ -572,9 +607,41 @@ function FilesTab({
                   path={selected}
                   value={source}
                   readOnly={readOnly}
+                  reveal={reveal}
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
                 />
               </div>
+              {!pinned && (
+                <ProblemsPanel
+                  open={problemsOpen}
+                  onToggle={() => setProblemsOpen((v) => !v)}
+                  problems={problems.data?.problems}
+                  pending={problems.isFetching}
+                  error={problems.error as Error | null}
+                  sourceFileCount={paths.filter(isSourceFile).length}
+                  onOpen={(path, line) => {
+                    openFile(path);
+                    // A new object every time, so clicking the same problem
+                    // twice scrolls back to it (§286).
+                    setReveal(line === undefined ? undefined : { line });
+                  }}
+                />
+              )}
+              {!pinned && (
+                <FileChangesPanel
+                  wid={wid}
+                  pid={pid}
+                  rid={rid}
+                  branch={branch}
+                  path={selected}
+                  // `source` *is* the working content: `working` is the
+                  // committed tree with `edits` laid over it, and a path whose
+                  // edit is `null` is not in `paths`, so it cannot be the
+                  // selected file. A ternary here read as though it might be
+                  // something else (§213).
+                  content={source}
+                />
+              )}
               <PreviewPanel
                 wid={wid}
                 pid={pid}
@@ -632,7 +699,20 @@ function FilesTab({
               {commit.isPending ? "Committing…" : `Commit to ${branch}`}
             </button>
           )}
-          <button type="button" className="repo-discard" onClick={() => setEdits({})}>
+          {/* **Asks first** (§288). The one control here that destroys work,
+              beside the one that saves it - and since §281 what it throws away
+              may be days of typing rather than this session's, because the
+              drafts persist. `setEdits({})` is also what removes them from
+              storage, through the save effect above. */}
+          <button
+            type="button"
+            className="repo-discard"
+            onClick={() => {
+              if (window.confirm(discardQuestion(Object.keys(edits).length))) {
+                setEdits({});
+              }
+            }}
+          >
             Discard
           </button>
         </form>
@@ -1742,6 +1822,200 @@ function ChecksTab({
             </li>
           ))}
         </ul>
+      )}
+    </section>
+  );
+}
+
+
+/** p.14's Problems helper (§286; `code-repositories.md` §2.4).
+ *
+ * "The Problems helper tells you about any issues detected in your code. Click
+ * on a specific issue listed here to open up the problematic code."
+ *
+ * **Everything it reports is something the publish already refuses.** What the
+ * panel changes is *when* you hear about it, and that it names a line rather
+ * than a commit - a refusal at publish time is a refusal hours after the
+ * mistake, about the whole snapshot.
+ *
+ * Collapsed until asked for, like Preview beside it: this is a round trip, and
+ * one on every keystroke would be a panel that costs more than it tells you.
+ */
+function ProblemsPanel({
+  open,
+  onToggle,
+  problems,
+  pending,
+  error,
+  sourceFileCount,
+  onOpen,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  problems: RepositoryProblem[] | undefined;
+  pending: boolean;
+  error: Error | null;
+  sourceFileCount: number;
+  onOpen: (path: string, line: number | undefined) => void;
+}) {
+  return (
+    <section className="repo-problems" data-testid="problems-panel">
+      <div className="repo-problems-head">
+        <button type="button" className="btn quiet" onClick={onToggle}>
+          {open ? "Hide problems" : "Problems"}
+        </button>
+        {open && problems && (
+          <span className="soft" data-testid="problems-summary">
+            {problemsSummary(problems)}
+          </span>
+        )}
+      </div>
+      {open && pending && <p className="state">Checking…</p>}
+      {open && error && <p className="state error">{error.message}</p>}
+      {open && problems && problems.length === 0 && !pending && (
+        <p className="state">{problemsEmptyNote(sourceFileCount)}</p>
+      )}
+      {open && problems && problems.length > 0 && (
+        <ul className="repo-problem-list">
+          {problems.map((p) => (
+            <li key={`${p.path}:${p.line}:${p.message}`} className={`repo-problem ${p.severity}`}>
+              <button
+                type="button"
+                className="repo-problem-open"
+                onClick={() => onOpen(p.path, revealLine(p))}
+              >
+                <span className="chip">{p.severity}</span>
+                <code>{problemLocation(p)}</code>
+                <span>{p.message}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+
+/** p.14's File Changes helper (§287; `code-repositories.md` §2.4).
+ *
+ * "The File Changes helper can be used to view any uncommitted changes to the
+ * current file, as well as compare previous versions of the file."
+ *
+ * **The diff is built by the same aligner the review surface uses.** A second
+ * alignment would be a second answer the first time either was improved, and
+ * "what changed" is the one question a repository must not have two answers to.
+ *
+ * Collapsed until asked for, like Problems and Preview beside it: it is a round
+ * trip, and one on every keystroke would cost more than it tells you.
+ */
+function FileChangesPanel({
+  wid,
+  pid,
+  rid,
+  branch,
+  path,
+  content,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  path: string;
+  content: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  // **Which commit to compare against**, or the branch head when nothing is
+  // chosen. p.14's "compare previous versions" is this one control.
+  const [against, setAgainst] = useState<string | undefined>();
+
+  const changes = useQuery({
+    queryKey: ["repo-file-changes", rid, branch, path, content, against],
+    queryFn: () =>
+      repoApi.fileChanges(wid, pid, rid, {
+        path,
+        branch,
+        content,
+        against_commit_id: against,
+      }),
+    enabled: open,
+  });
+  const versions = useQuery({
+    queryKey: ["repo-file-history", rid, branch, path],
+    queryFn: () => repoApi.fileHistory(wid, pid, rid, path, branch),
+    enabled: open,
+  });
+
+  // A file switch is a different question, so a comparison chosen for the last
+  // one is not an answer to this one.
+  useEffect(() => setAgainst(undefined), [path, branch]);
+
+  const data: RepositoryFileChanges | undefined = changes.data;
+  const rows = data ? withContext(data.rows) : [];
+  const list: RepositoryFileVersion[] = versions.data ?? [];
+
+  return (
+    <section className="repo-changes" data-testid="file-changes-panel">
+      <div className="repo-changes-head">
+        <button type="button" className="btn quiet" onClick={() => setOpen((v) => !v)}>
+          {open ? "Hide file changes" : "File changes"}
+        </button>
+        {open && data && (
+          <span className="soft" data-testid="file-changes-headline">
+            {headline(data)}
+          </span>
+        )}
+        {open && (
+          <label className="soft" style={{ marginLeft: "auto" }}>
+            Compare with{" "}
+            <select
+              aria-label="Compare with"
+              value={against ?? ""}
+              onChange={(e) => setAgainst(e.target.value || undefined)}
+            >
+              <option value="">the latest commit</option>
+              {list.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {versionLabel(v)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+
+      {open && changes.isFetching && <p className="state">Comparing…</p>}
+      {open && changes.error && (
+        <p className="state error">{(changes.error as Error).message}</p>
+      )}
+      {open && data && !hasChanges(data) && !changes.isFetching && (
+        <p className="state">{headline(data)}</p>
+      )}
+      {open && !versions.isFetching && list.length === 0 && data && (
+        <p className="soft" data-testid="file-changes-versions-empty">
+          {versionsEmptyNote(data.state)}
+        </p>
+      )}
+      {open && data && hasChanges(data) && (
+        <table className="repo-diff-table">
+          <tbody>
+            {rows.map((r, i) => (
+              <Fragment key={`${r.live_line ?? "x"}-${r.proposed_line ?? "x"}-${i}`}>
+                {isGap(data.rows, rows, i) && (
+                  <tr className="repo-diff-gap">
+                    <td colSpan={4}>…</td>
+                  </tr>
+                )}
+                <tr className={`repo-diff-row ${r.kind}`}>
+                  <td className="repo-diff-num">{r.live_line ?? ""}</td>
+                  <td className="repo-diff-text">{r.live_text ?? ""}</td>
+                  <td className="repo-diff-num">{r.proposed_line ?? ""}</td>
+                  <td className="repo-diff-text">{r.proposed_text ?? ""}</td>
+                </tr>
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
       )}
     </section>
   );

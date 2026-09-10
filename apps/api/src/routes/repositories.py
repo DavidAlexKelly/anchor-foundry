@@ -31,11 +31,13 @@ from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
+from ..services import code as code_service
 from ..services import code_checks as check_service
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
 from ..services import transform_declarations as declarations
+from ..services import transform_problems as problem_service
 from ..services import transform_publish as publish_service
 from ..services.dataset_engine import DatasetEngineError
 
@@ -110,6 +112,19 @@ class DiffOut(BaseModel):
     added: list[str]
     deleted: list[str]
     modified: list[str]
+
+
+class FileHistoryOut(BaseModel):
+    """A commit that changed one file (§287)."""
+    id: UUID
+    parent_id: UUID | None
+    message: str
+    created_by: UUID | None
+    created_at: datetime
+    #: The file's content address at this commit, or null where it was deleted.
+    sha: str | None
+    #: added / modified / deleted, about this file at this commit.
+    state: str
 
 
 class CompareOut(BaseModel):
@@ -500,6 +515,76 @@ async def branch_checks(
     )
 
 
+# ---- problems (§286; code-repositories.md §2.4, p.14) -------------------------
+class ProblemOut(BaseModel):
+    path: str
+    #: 1-based, or 0 when the reader could not say where. Not 1: "the first
+    #: line" and "somewhere in this file" are different answers, and a panel
+    #: that sent somebody to line 1 for the second would be lying quietly.
+    line: int
+    #: error / warning. An error will refuse a publish; a warning will not.
+    severity: str
+    message: str
+    #: Which reader said so - declaration / sql / input.
+    source: str
+
+
+class ProblemsIn(BaseModel):
+    branch: str | None = None
+    #: Uncommitted edits laid over the committed tree, path -> content, with
+    #: `null` for a file the author has deleted. **The delta travels, not the
+    #: tree**: the server already has the commit, and sending five hundred
+    #: files to ask about the three that changed would make the panel too
+    #: expensive to open often enough to be useful.
+    overrides: dict[str, str | None] = Field(default_factory=dict)
+
+
+class ProblemsOut(BaseModel):
+    problems: list[ProblemOut]
+
+
+@router.post("/{repo_id}/problems", response_model=ProblemsOut)
+async def find_problems(
+    repo_id: UUID,
+    body: ProblemsIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> ProblemsOut:
+    """p.14's Problems helper: what is wrong with this working set.
+
+    **Viewer, unlike Preview.** A preview *executes* the caller's SQL against
+    the project's data, which is why it takes the editor floor; this parses and
+    reads names, touching nothing. Somebody who may read the code may be told
+    what is wrong with it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        ref = await repo_service.resolve_ref(
+            conn,
+            repo_id=repo_id,
+            branch=body.branch or repo["default_branch"],
+            commit_id=None,
+            allow_missing_branch=True,
+        )
+        committed = (
+            {} if ref is None
+            else await repo_service.read_tree(
+                conn, workspace_id=access.workspace_id, commit_id=ref
+            )
+        )
+        working = dict(committed)
+        for path, content in body.overrides.items():
+            if content is None:
+                working.pop(path, None)
+            else:
+                working[repo_service.normalise_path(path)] = content
+        found = await problem_service.find(
+            conn, project_id=access.project_id, files=working
+        )
+    return ProblemsOut(problems=[ProblemOut(**p) for p in found])
+
+
 @router.post("/{repo_id}/commits", response_model=CommitOut, status_code=status.HTTP_201_CREATED)
 async def create_commit(
     repo_id: UUID,
@@ -547,6 +632,125 @@ async def list_commits(
         await repo_service.get_repository(conn, project_id=access.project_id, repo_id=repo_id)
         rows = await repo_service.history(conn, repo_id=repo_id, branch=branch, limit=limit)
     return [CommitOut(**r) for r in rows]
+
+
+# ---- file changes (§287; code-repositories.md §2.4, p.14) --------------------
+class FileChangeRowOut(BaseModel):
+    """One line of a side-by-side diff, carrying both sides' line numbers.
+
+    The same shape the review surface uses (`code.py`'s `DiffRowOut`) and the
+    same builder behind it. **A second alignment would be a second answer**:
+    the panel and the review would disagree about what changed the first time
+    one of them was improved.
+    """
+    kind: str
+    live_line: int | None
+    live_text: str | None
+    proposed_line: int | None
+    proposed_text: str | None
+
+
+class FileChangesIn(BaseModel):
+    path: str
+    branch: str | None = None
+    #: What the editor holds. `null` means the file has been deleted in the
+    #: working set, which is a change worth showing rather than an absence.
+    content: str | None = None
+    #: What to compare against. Defaults to the branch head - "what have I
+    #: changed" - and takes an older commit for p.14's "comparison with
+    #: previous versions".
+    against_commit_id: UUID | None = None
+
+
+class FileChangesOut(BaseModel):
+    path: str
+    #: added / deleted / modified / unchanged, about this file rather than the
+    #: whole tree.
+    state: str
+    added: int
+    removed: int
+    rows: list[FileChangeRowOut]
+
+
+@router.post("/{repo_id}/file-changes", response_model=FileChangesOut)
+async def file_changes(
+    repo_id: UUID,
+    body: FileChangesIn,
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> FileChangesOut:
+    """p.14: "view any uncommitted changes to the current file, as well as
+    compare previous versions of the file".
+
+    **Only the working side travels.** The committed side is already here, and
+    a panel that posted both would be paying twice for the half the server
+    wrote - the same reasoning §286's Problems endpoint takes for its overrides.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        ref = (
+            body.against_commit_id
+            if body.against_commit_id is not None
+            else await repo_service.resolve_ref(
+                conn,
+                repo_id=repo_id,
+                branch=body.branch or repo["default_branch"],
+                commit_id=None,
+                allow_missing_branch=True,
+            )
+        )
+        path = repo_service.normalise_path(body.path)
+        committed = (
+            {} if ref is None
+            else await repo_service.read_tree(
+                conn, workspace_id=access.workspace_id, commit_id=ref
+            )
+        )
+    before = committed.get(path)
+    after = body.content
+    rows = code_service.side_by_side(before or "", after or "")
+    # A file absent on both sides has no rows and nothing to say, which is not
+    # the same as one whose two versions happen to match.
+    if before is None and after is None:
+        state = "unchanged"
+    elif before is None:
+        state = "added"
+    elif after is None:
+        state = "deleted"
+    else:
+        state = "unchanged" if before == after else "modified"
+    return FileChangesOut(
+        path=path,
+        state=state,
+        added=sum(1 for r in rows if r["kind"] in ("added", "changed")),
+        removed=sum(1 for r in rows if r["kind"] in ("removed", "changed")),
+        rows=[FileChangeRowOut(**r) for r in rows],
+    )
+
+
+@router.get("/{repo_id}/file-history", response_model=list[FileHistoryOut])
+async def file_history(
+    repo_id: UUID,
+    path: str = Query(...),
+    branch: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> list[FileHistoryOut]:
+    """The commits that **changed** this file, newest first (§287).
+
+    Not every commit on the branch: the version list p.14 means is the one
+    where the file changed, and most commits said nothing about it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        rows = await repo_service.touching(
+            conn, repo_id=repo_id, branch=branch or str(repo["default_branch"]),
+            path=path, limit=limit,
+        )
+    return [FileHistoryOut(**r) for r in rows]
 
 
 @router.get("/{repo_id}/diff", response_model=DiffOut)

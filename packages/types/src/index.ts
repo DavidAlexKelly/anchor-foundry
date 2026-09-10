@@ -580,6 +580,59 @@ export interface RepositoryCheck {
   source_commit_id: string;
 }
 
+/** One line of a side-by-side diff of a file (§287; p.14's File Changes).
+ *
+ * The same shape the review surface uses, from the same builder: a second
+ * alignment would be a second answer the first time either was improved. */
+export interface RepositoryFileChangeRow {
+  /** same / added / removed / changed. */
+  kind: string;
+  live_line: number | null;
+  live_text: string | null;
+  proposed_line: number | null;
+  proposed_text: string | null;
+}
+
+export interface RepositoryFileChanges {
+  path: string;
+  /** added / deleted / modified / unchanged, about this file. */
+  state: string;
+  added: number;
+  removed: number;
+  rows: RepositoryFileChangeRow[];
+}
+
+/** A commit that changed one file (§287). Not every commit on the branch —
+ *  most of them said nothing about it. */
+export interface RepositoryFileVersion {
+  id: string;
+  parent_id: string | null;
+  message: string;
+  created_by: string | null;
+  created_at: string;
+  /** The file's content address at this commit, or null where it was deleted. */
+  sha: string | null;
+  /** added / modified / deleted, about this file at this commit. */
+  state: string;
+}
+
+/** One problem detected in a repository's code (§286; p.14's Problems helper).
+ *
+ * Every one of these is something the platform already refuses at publish
+ * time; what the panel changes is *when* you hear about it, and that it names
+ * a line rather than a commit. */
+export interface RepositoryProblem {
+  path: string;
+  /** 1-based, or 0 when the reader could not say where. Not 1: "the first
+   *  line" and "somewhere in this file" are different answers. */
+  line: number;
+  /** `"error"` will refuse a publish; `"warning"` will not. */
+  severity: string;
+  message: string;
+  /** Which reader said so — declaration / sql / input. */
+  source: string;
+}
+
 export interface RepositoryBranchChecks {
   branch: string;
   /** Null when nothing has ever been committed to the branch. */

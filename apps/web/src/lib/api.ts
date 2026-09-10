@@ -173,6 +173,48 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tree${qs ? `?${qs}` : ""}`,
     );
   },
+  /** p.14's File Changes helper (§287): this file, before and after.
+   *
+   * **Only the working side travels.** The committed side is already on the
+   * server, and posting both would pay twice for the half it wrote. */
+  fileChanges: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: {
+      path: string;
+      branch?: string;
+      content: string | null;
+      against_commit_id?: string;
+    },
+  ) =>
+    request<import("./types").RepositoryFileChanges>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/file-changes`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  /** The commits that *changed* this file (§287), newest first. */
+  fileHistory: (wid: string, pid: string, rid: string, path: string, branch?: string) =>
+    request<import("./types").RepositoryFileVersion[]>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/file-history` +
+        `?path=${encodeURIComponent(path)}` +
+        (branch ? `&branch=${encodeURIComponent(branch)}` : ""),
+    ),
+  /** p.14's Problems helper (§286): what is wrong with this working set.
+   *
+   * **The delta travels, not the tree.** The server already has the commit, so
+   * only the uncommitted edits are sent - `null` for a file the author has
+   * deleted. Sending five hundred files to ask about the three that changed
+   * would make the panel too expensive to open often enough to be useful. */
+  problems: (
+    wid: string,
+    pid: string,
+    rid: string,
+    input: { branch?: string; overrides?: Record<string, string | null> },
+  ) =>
+    request<{ problems: import("./types").RepositoryProblem[] }>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/problems`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
   /** p.19's Checks tab: what ran on this branch (§285). Ours are the checks of
    *  the proposals made over commits on it, because a check asks what the code
    *  would do to the project's datasets and a commit nobody has proposed has

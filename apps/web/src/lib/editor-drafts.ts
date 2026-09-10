@@ -118,3 +118,26 @@ export function saveWarning(outcome: SaveOutcome): string | null {
   }
   return null;
 }
+
+/**
+ * What to ask before throwing uncommitted work away (§288).
+ *
+ * `code-repositories.md` §2.2's Reset: *"Reset the contents of all files to
+ * match the latest commit on your remote branch. This will clear any changes
+ * that have not yet been committed on your branch"* (p.13).
+ *
+ * **It asks, because it is the one control here that destroys work and it sits
+ * beside the one that saves it.** Commit and Discard are two buttons in one
+ * bar, and the cost of the wrong one is everything typed since the last
+ * commit - which, since drafts persist, may be days of it rather than the
+ * current session.
+ *
+ * The count is in the question because "discard your changes?" and "discard
+ * changes to 7 files?" are answered differently by the same person.
+ */
+export function discardQuestion(fileCount: number): string {
+  return (
+    `Discard uncommitted changes to ${fileCount} file${fileCount === 1 ? "" : "s"}? ` +
+    "They are not saved anywhere else, so this cannot be undone."
+  );
+}

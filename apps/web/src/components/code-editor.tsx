@@ -16,7 +16,7 @@
 
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Route every worker request at the plain editor worker. The languages this
 // editor offers - SQL, Python, Markdown - are tokenised by Monarch on the main
@@ -57,16 +57,36 @@ export function CodeEditor({
   value,
   readOnly,
   onChange,
+  reveal,
 }: {
   path: string;
   value: string;
   readOnly?: boolean;
   onChange?: (next: string) => void;
+  /** A line to scroll to and put the caret on (§286).
+   *
+   * **A `{line}` object rather than a bare number**, so asking twice for the
+   * same line is two different values and the effect below fires both times.
+   * Clicking the same problem twice, having scrolled away in between, is the
+   * ordinary case - and a bare number would make the second click do nothing,
+   * which reads as a broken panel rather than as a deduplicated request. */
+  reveal?: { line: number };
 }) {
   // Monaco measures itself on mount; rendering it before the panel has a size
   // gives a zero-height editor that never recovers.
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
+
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  useEffect(() => {
+    if (!reveal || !editorRef.current) return;
+    // `revealLineInCenter` rather than `revealLine`: a line put at the very
+    // bottom of the viewport is technically visible and practically missed.
+    editorRef.current.revealLineInCenter(reveal.line);
+    editorRef.current.setPosition({ lineNumber: reveal.line, column: 1 });
+    editorRef.current.focus();
+  }, [reveal, path]);
+
   if (!ready) return <div className="code-editor-loading">Loading editor…</div>;
 
   return (
@@ -81,6 +101,15 @@ export function CodeEditor({
       value={value}
       onChange={(next: string | undefined) => onChange?.(next ?? "")}
       loading={<div className="code-editor-loading">Loading editor…</div>}
+      onMount={(editor: monaco.editor.IStandaloneCodeEditor) => {
+        editorRef.current = editor;
+        // A file opened *by* a problem mounts with the reveal already asked
+        // for, and the effect above has run before this editor existed.
+        if (reveal) {
+          editor.revealLineInCenter(reveal.line);
+          editor.setPosition({ lineNumber: reveal.line, column: 1 });
+        }
+      }}
       options={{
         readOnly,
         minimap: { enabled: false },

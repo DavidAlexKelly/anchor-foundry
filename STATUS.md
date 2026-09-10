@@ -4388,6 +4388,129 @@ the same scratch database the same way. §243's lesson is that a plausible
 mechanism is not a diagnosis, so this is logged as one unexplained transient
 rather than fixed.
 
+### 288. Reset, and the draft it has to take with it (this session)
+
+`code-repositories.md` §2.2's Reset row, p.13: *"Reset the contents of all files
+to match the latest commit on your remote branch. This will clear any changes
+that have not yet been committed on your branch."*
+
+**The button already existed and nothing tested it**, which is the interesting
+part. Marking a row ✅ because the code appears to do the thing is how a parity
+document starts describing a product that no longer exists — so the row was ○
+until somebody checked, and checking turned up two things.
+
+**Since §281 it has a second obligation nobody wrote down.** `setEdits({})`
+removes the *persisted* draft too, but only as an emergent consequence: writing
+an empty map is what `writeDrafts` turns into `removeItem`. A change to that
+function which stopped removing on empty would silently resurrect discarded work
+on the next reload, and no test would have noticed. Now one does, and it reloads
+the page rather than reading state — the half that needs storage to have been
+cleared rather than merely the component.
+
+**And it asks first.** This is the one control in the bar that destroys work, and
+it sits beside the one that saves it. The cost of the wrong button used to be
+this session's typing; since drafts persist it may be days of it. The count is in
+the question because "discard your changes?" and "discard changes to 7 files?"
+are answered differently by the same person.
+
+### 287. File Changes, and a diff with one author (this session)
+
+p.14: *"The File Changes helper can be used to view any uncommitted changes to
+the current file, as well as compare previous versions of the file."* The second
+half of `code-repositories.md` build-order item 5, and the pair with §286 that
+the spec calls the two things that make the editor feel like an IDE.
+
+**Both halves turned out to be re-pointings rather than new machinery**, which
+is the shape §286 had too. The diff is `code.side_by_side` — the aligner the
+review surface already uses — pointed at the working file instead of at a
+proposal. A second alignment would be a second answer the first time either was
+improved, and *"what changed"* is the one question a repository must not have
+two answers to.
+
+Three decisions worth keeping:
+
+* **only the working side travels.** The committed side is already on the
+  server; posting both would pay twice for the half it wrote. Same reasoning as
+  §286's overrides;
+* **the version picker offers the commits that *changed* this file**, compared
+  by content address. A commit that touched forty other files and left this one
+  alone is not a version of it, and listing it would bury the two that are. A
+  parent outside the fetched window is *unknown* rather than absent — treating
+  it as absent would report the oldest commit in the page as having added the
+  file, differently on every scroll;
+* **an unchanged file has rows and they are all `same`.** So "is there a diff"
+  asks the *state* rather than the row count: rendering them would put a whole
+  file in a panel sized for a hunk.
+
+Context is three lines either side, which is what `difflib` itself defaults to —
+matching it means the panel and a unified diff of the same file agree about what
+is worth showing. Overlapping context merges rather than repeating, and an
+elided gap says "…", because a diff that silently skips two hundred lines and
+shows the next change flush against the last one reads as one hunk.
+
+**A browser test was wrong and the code was right**, again: typing `\n` before a
+comment at `Control+End` adds a blank line as well, because the committed file
+already ends with a newline and the caret is on an empty last line. `+2` was the
+honest count; the test meant to type one line and had typed two.
+
+**And a real bug, found by a test that failed for a reason I had not guessed.**
+`touching` read its chain from `history`, which finishes with
+`ORDER BY created_at DESC` — and every commit made in one transaction shares a
+timestamp *exactly*, because `now()` is the transaction's start time. So the
+order was whatever the database felt like, and the version list would have
+reordered itself between reads. It walks `ancestors` now. `_commit_rows` says
+this about itself two hundred lines up — "two commits made in the same second
+have an order in the history and no order in the clock, and the history is the
+one that is true" — which is the second time this session that a comment already
+in the file described the bug about to be written.
+
+### 286. The Problems panel, and telling somebody in time (this session)
+
+p.14: *"The Problems helper tells you about any issues detected in your code.
+Click on a specific issue listed here to open up the problematic code."*
+`code-repositories.md` calls this and File Changes the two things that make the
+editor feel like an IDE more than anything else.
+
+**Every problem it reports is one the platform already refuses.** The publish
+path refuses a file that declares nothing, two files claiming one output, and an
+input naming a dataset the project does not have; DuckDB refuses SQL it cannot
+parse; the declaration reader refuses Python that does not. What was missing was
+not the knowledge — it was *when*: all of it arrived at publish time, hours after
+the code was written, in a message about a whole commit rather than about a line.
+
+So this is deliberately **not a second rule engine**. It runs the same readers
+against the working set. A rule that lived only here would be one the publish
+does not enforce, and a rule the publish enforces but this cannot see would be
+exactly the surprise the panel exists to prevent.
+
+Three decisions worth keeping:
+
+* **the delta travels, not the tree.** The server already has the commit, so
+  only the uncommitted edits are sent — `null` for a deleted file. Sending five
+  hundred files to ask about the three that changed would make the panel too
+  expensive to open often enough to be useful;
+* **a line, not a verdict.** DuckDB's `json_serialize_sql` parses without
+  running anything and reports a failure as a *character offset*; turning that
+  into a line is the whole difference between a panel somebody uses and one they
+  read once. `line: 0` stays 0 rather than becoming 1 — "the first line" and
+  "somewhere in this file" are different answers, and offering the first for the
+  second teaches people the line numbers are decoration;
+* **warnings are not errors.** A `.sql` file declaring no transform is perfectly
+  legal — a repository may hold anything — but a file somebody *meant* to be a
+  transform and mistyped the output line of looks exactly the same. Saying so
+  costs nothing, and saying it as an *error* would cost the panel its credibility.
+
+The editor gained a `reveal` prop to make the click land: **an object rather
+than a bare line number**, so asking twice for the same line is two different
+values and the effect fires both times. Clicking the same problem twice after
+scrolling away is the ordinary case, and a bare number would make the second
+click do nothing — which reads as a broken panel rather than a deduplicated
+request.
+
+Viewer rather than editor, unlike Preview beside it: a preview *executes* the
+caller's SQL against the project's data, and this parses and reads names.
+Somebody who may read the code may be told what is wrong with it.
+
 ### 285. The Checks tab, and two ids that agreed with nothing (this session)
 
 `code-repositories.md` §1's fifth tab, and the last one missing — so all five

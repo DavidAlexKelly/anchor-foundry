@@ -532,3 +532,75 @@ async def test_landing_moves_a_branch_that_is_behind_and_reports_that_it_did(
         conn, repo_id=uuid.UUID(repo["id"]), branch=trunk,
         commit_id=uuid.UUID(str(ahead["id"])),
     ) is False
+
+
+# ---- which commits are versions of a file (§287) -------------------------------
+@pytest.mark.anyio
+async def test_touching_returns_only_the_commits_that_changed_the_file(
+    conn, repo
+) -> None:
+    tag = uuid.uuid4().hex[:6]
+    branch = f"t-{tag}"
+    first = await commit_files(conn, repo, {"a.sql": "1"}, branch=branch)
+    await commit_files(conn, repo, {"a.sql": "1", "b.sql": "9"}, branch=branch)
+    third = await commit_files(conn, repo, {"a.sql": "2", "b.sql": "9"}, branch=branch)
+
+    rows = await repos.touching(
+        conn, repo_id=uuid.UUID(repo["id"]), branch=branch, path="a.sql"
+    )
+    assert [r["id"] for r in rows] == [third["id"], first["id"]]
+    assert [r["state"] for r in rows] == ["modified", "added"]
+
+
+@pytest.mark.anyio
+async def test_touching_honours_its_limit(conn, repo) -> None:
+    """**§212, and it took a mutant to reach.** Every other test here makes two
+    or three commits, so a limit of twenty was a number nothing came near."""
+    tag = uuid.uuid4().hex[:6]
+    branch = f"t-{tag}"
+    for n in range(5):
+        await commit_files(conn, repo, {"a.sql": str(n)}, branch=branch)
+
+    rows = await repos.touching(
+        conn, repo_id=uuid.UUID(repo["id"]), branch=branch, path="a.sql", limit=2
+    )
+    assert len(rows) == 2
+
+
+@pytest.mark.anyio
+async def test_a_parent_outside_the_window_is_not_read_as_no_parent(
+    conn, repo
+) -> None:
+    """**Unknown is not absent**, and the difference is a lie about who added
+    the file.
+
+    The walk fetches a window of history - `limit * 4` commits - and compares
+    each commit's manifest with its parent's. When the parent is *outside* that
+    window its manifest is unknown, and treating unknown as "the file was not
+    there" reports the oldest commit in the page as having added it. Which page
+    that is depends on the limit, so the same repository would answer
+    differently depending on how much of it somebody asked for.
+
+    The file here changes once, at the very beginning, and then eleven commits
+    say nothing about it - so with a small limit the change falls outside the
+    window and the honest answer is an empty list.
+    """
+    tag = uuid.uuid4().hex[:6]
+    branch = f"t-{tag}"
+    await commit_files(conn, repo, {"a.sql": "the only version"}, branch=branch)
+    for n in range(11):
+        await commit_files(
+            conn, repo, {"a.sql": "the only version", f"other{n}.sql": str(n)},
+            branch=branch,
+        )
+
+    rows = await repos.touching(
+        conn, repo_id=uuid.UUID(repo["id"]), branch=branch, path="a.sql", limit=2
+    )
+    assert rows == [], rows
+
+    # And with a window wide enough to reach it, the real answer comes back.
+    whole = await repos.touching(
+        conn, repo_id=uuid.UUID(repo["id"]), branch=branch, path="a.sql", limit=50
+    )
+    assert [r["state"] for r in whole] == ["added"], whole
