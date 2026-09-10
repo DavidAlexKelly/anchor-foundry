@@ -4441,6 +4441,93 @@ this unit is about: the parser was `test_report.py`, so pytest collected our
 *source module* as a test file and warned that it could not collect
 `TestOutcome`. Renamed `unit_test_report.py`.
 
+### 295. The Tests panel (this session)
+
+p.14's Tests helper, and its whole specification is one sentence: *"When your
+repository contains unit tests, the Tests Helper lets you run those tests and
+displays their results."*
+
+**It polls, and that is not laziness.** §286's Problems panel answers from one
+request because it parses and reads names; a test run is a job (§294), so the
+only way to learn it finished is to ask. `shouldPoll` is a named rule rather
+than an inline comparison because it going false is the only thing that ever
+stops the asking.
+
+**A run with no tests is reported as having none**, in the verdict and in the
+colour. "Nothing failed" and "everything passed" are the same number, and a
+green tick over a repository nobody has written a test in is the
+suite-that-cannot-fail this repo does not accept, wearing the wrong colour.
+
+**Failures first, then errors, then the rest in the order they ran.** Two
+hundred tests and one failure is the ordinary case, and a panel that made you
+scroll for it is one people stop opening. Within a severity the file order is
+kept, because it is the only order a reader can predict.
+
+**A row that cannot say where to jump does not jump.** pytest names no file for
+a collection error, and a row that went somewhere plausible and wrong is worse
+than one that does nothing, because the reader believes it.
+
+**Two things this unit got wrong first, both found by writing the test.**
+
+`canRun` was `!readOnly`, taken from the editor. `readOnly` is about a *pinned
+commit*, and the panel only renders when the commit is not pinned - so the
+check was always true: a control offered to a viewer the server would refuse
+(§214), dressed as a guard. It is `canEditProject(role)` now, which is the
+route's actual floor, on the query key the Settings tab already uses so it is
+one cached answer rather than a second request.
+
+And the browser test for that rule is **gone rather than fixed**. This suite
+signs in as one user and cannot be a viewer, so the assertion could only ever
+have been about something else - which is exactly what the first version did,
+asserting branch protection, a different rule that does not hide the button at
+all. The real rule has three layers that can each be made to fail: the unit
+test, the API's 403, and the route's dependency. What replaced it is a check
+that *is* reachable here: the button reports progress and is disabled while a
+run is in flight, because the server refuses a fourth queued run and a button
+still saying "Run tests" would walk people into that refusal.
+
+**The browser suite drives the worker's op itself**, and says so. The dev stack
+starts Postgres, the API and Next, and no Dagster daemon, so a queued run would
+sit in the table for ever. The op called is the one the deployed schedule
+calls, on the same row - what is skipped is the cron, not the work. A test that
+faked the result would prove the panel can render a fixture.
+
+### 294. A test run is a job, not a request (this session)
+
+Item 6's second part, and the shape was decided years earlier.
+`routes/repositories.py` has refused to preview a Python transform since §69,
+with the reason in the message: *"they run in an isolated task rather than in
+the API, which takes long enough to need a job you can watch rather than a
+request that waits."* Running a repository's unit tests is the same act, so it
+is the same answer.
+
+db 0071 is the thing you watch. The API writes a queued row and answers **202**,
+the worker claims it on the same one-minute poll queued model runs use, and the
+panel reads it back.
+
+**The files travel and are stored**, which is unlike every other job in this
+schema: they all name a resource and read its current state. A test run is over
+the author's *uncommitted* working set, because the question is "does what I
+just typed pass" - the same choice §286 made - and there is nowhere else that
+working set exists. So the row is a snapshot, and a run always reports on the
+code it actually ran rather than on whatever the file says by the time somebody
+reads the answer.
+
+**`failed` and `errored` are different statuses**, and that is
+`transform_runner.py`'s result-file rule arriving in the schema. Tests that ran
+and did not pass are `failed`, with their outcomes; a run that could not happen
+is `errored`, with a sentence about the platform. A CHECK constraint stops a
+terminal row claiming success with no answer at all - the
+green-suite-that-ran-nothing failure, arriving through the database instead of
+through the report.
+
+**The claim is the `status = 'queued'` in the UPDATE's WHERE**, so two workers
+polling the same minute cannot both run it and both write an answer.
+
+One real bug, found by its own test: the unfiltered listing passed a bare NULL
+to `:branch IS NULL`, which Postgres cannot type - `AmbiguousParameter`. Cast at
+the query.
+
 ### 292. The module customer code imports, and the runner that could not run it (this session)
 
 Build-order item 6 is "unit tests, then the Tests panel, then test output in the

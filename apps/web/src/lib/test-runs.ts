@@ -163,3 +163,22 @@ export function runLabel(run: CodeTestRun | undefined): string {
   if (run !== undefined && !isSettled(run)) return "Running…";
   return "Run tests";
 }
+
+/**
+ * Whether this role is offered the Run button.
+ *
+ * **`POST /tests` is editor-level**, because asking for tests to run executes
+ * code the caller supplied — the line `preview_transform` draws, and the one
+ * `code_test_runs.py` takes. A viewer's button would be a control that looks
+ * like it works (§214), and it is a *different* rule from the editor's
+ * read-only state: that is about a pinned commit, and running a pinned
+ * commit's tests would be refused for a reason nobody could read off the
+ * screen.
+ *
+ * The first version of the panel used the editor's `readOnly` for this, which
+ * is always false where the panel renders — so the check was a check that
+ * could not fire.
+ */
+export function canEditProject(role: string): boolean {
+  return role === "editor" || role === "owner";
+}

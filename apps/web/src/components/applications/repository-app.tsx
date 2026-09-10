@@ -61,6 +61,20 @@ import {
   revealLine,
   summary as problemsSummary,
 } from "@/lib/problems";
+// Aliased, because `branch-checks.ts` next door exports a `verdict` and a
+// `worstFirst` of its own. The two modules answer the same *shape* of question
+// about different things - a branch's checks, a run's tests - so the collision
+// is a sign the naming is right rather than a sign one of them should move.
+import {
+  canEditProject,
+  durationLabel as testDuration,
+  isAProblem as testsAreAProblem,
+  runLabel,
+  shouldPoll,
+  target as testTarget,
+  verdict as testVerdict,
+  worstFirst as worstTestsFirst,
+} from "@/lib/test-runs";
 import {
   checkTarget,
   emptyReason as checksEmptyReason,
@@ -624,6 +638,21 @@ function FilesTab({
                     // A new object every time, so clicking the same problem
                     // twice scrolls back to it (§286).
                     setReveal(line === undefined ? undefined : { line });
+                  }}
+                />
+              )}
+              {!pinned && (
+                <TestsPanel
+                  wid={wid}
+                  pid={pid}
+                  rid={rid}
+                  branch={branch}
+                  working={working}
+                  onOpen={(path, line) => {
+                    openFile(path);
+                    // A new object every time, so clicking the same failing
+                    // test twice scrolls back to it (§286).
+                    setReveal({ line });
                   }}
                 />
               )}
@@ -1890,6 +1919,147 @@ function ProblemsPanel({
               </button>
             </li>
           ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+
+/** p.14's Tests helper (§295; `code-repositories.md` §8).
+ *
+ * "When your repository contains unit tests, the Tests Helper lets you run
+ * those tests and displays their results."
+ *
+ * **Asked for, and then watched.** Unlike Problems next door, this cannot
+ * answer from one request: running unit tests is running customer Python, and
+ * decision 0004 confines that to a process holding no platform credentials. So
+ * pressing the button queues a job (db 0071) and the panel polls until it has
+ * an answer - which is why `shouldPoll` is a named rule rather than an inline
+ * comparison, since it going false is the only thing that ever stops it.
+ *
+ * The wording rules are in `lib/test-runs.ts`. What is here is the seam.
+ */
+function TestsPanel({
+  wid,
+  pid,
+  rid,
+  branch,
+  working,
+  onOpen,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  working: Record<string, string>;
+  onOpen: (path: string, line: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // **The route's floor, asked for rather than inferred.** Running tests
+  // executes code the caller supplied, so `POST /tests` is editor-level - the
+  // line `preview_transform` draws. The first version of this took `!readOnly`
+  // from the editor, which is about a *pinned commit* and is therefore always
+  // true inside this panel: a control offered to a viewer who would be refused
+  // (§214), dressed as a check. On the key the Settings tab already uses, so
+  // this is the same cached answer rather than a second request.
+  const project = useQuery({
+    queryKey: ["project", wid, pid],
+    queryFn: () => platformApi.project(wid, pid),
+    enabled: open,
+  });
+  const canRun = canEditProject(project.data?.effective_role ?? "viewer");
+  const [runId, setRunId] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const run = useQuery({
+    queryKey: ["repo-test-run", rid, runId],
+    queryFn: () => repoApi.testRun(wid, pid, rid, runId!),
+    enabled: open && runId !== null,
+    // **The panel polls because there is nothing to push to it.** A job's
+    // answer arrives in a table, and this is the only way to learn it landed.
+    // `false` once settled, so a finished run stops asking rather than
+    // polling for the life of the page.
+    refetchInterval: (query) => (shouldPoll(query.state.data) ? 1500 : false),
+  });
+
+  const start = useMutation({
+    mutationFn: () =>
+      // **The whole working set, not a delta.** Problems sends `edits` over a
+      // commit the server already has; here the *files themselves* are what
+      // gets stored and run (db 0071), and the server lays these over the
+      // branch. Sending only the edits would run the committed version of
+      // every file somebody had not touched, which is the right answer to a
+      // question nobody asked.
+      repoApi.runTests(wid, pid, rid, { branch, overrides: working }),
+    onSuccess: (made) => {
+      setFailure(null);
+      setRunId(made.id);
+    },
+    onError: (error) => setFailure((error as Error).message),
+  });
+
+  const current = run.data;
+  return (
+    <section className="repo-problems" data-testid="tests-panel">
+      <div className="repo-problems-head">
+        <button
+          type="button"
+          className="btn quiet"
+          data-testid="tests-toggle"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? "Hide tests" : "Tests"}
+        </button>
+        {open && canRun && (
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="tests-run"
+            disabled={start.isPending || shouldPoll(current)}
+            onClick={() => start.mutate()}
+          >
+            {runLabel(current)}
+          </button>
+        )}
+        {open && (
+          <span
+            className={testsAreAProblem(current) ? "chip brass" : "soft"}
+            data-testid="tests-verdict"
+          >
+            {testVerdict(current)}
+          </span>
+        )}
+      </div>
+      {open && failure && (
+        <p className="state error" data-testid="tests-error">{failure}</p>
+      )}
+      {open && current?.outcomes && current.outcomes.length > 0 && (
+        <ul className="repo-problem-list" data-testid="tests-list">
+          {worstTestsFirst(current.outcomes).map((o) => {
+            const jump = testTarget(o);
+            const took = testDuration(o);
+            return (
+              <li key={o.id} className={`repo-problem ${o.outcome}`}>
+                <button
+                  type="button"
+                  className="repo-problem-open"
+                  data-testid={`test-${o.outcome}`}
+                  // **Disabled rather than inert when there is nowhere to go.**
+                  // pytest names no file for a collection error, and a row that
+                  // jumped somewhere plausible and wrong is worse than one that
+                  // does not jump.
+                  disabled={jump === null}
+                  onClick={() => jump && onOpen(jump.path, jump.line)}
+                >
+                  <span className="chip">{o.outcome}</span>
+                  <code>{o.id}</code>
+                  {o.message && <span>{o.message}</span>}
+                  {took && <span className="soft">{took}</span>}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canEditProject,
   durationLabel,
   isAProblem,
   isSettled,
@@ -204,5 +205,15 @@ describe("the button", () => {
     expect(runLabel(run({ status: "queued" }))).toBe("Running…");
     expect(runLabel(run({ status: "succeeded" }))).toBe("Run tests");
     expect(runLabel(undefined)).toBe("Run tests");
+  });
+});
+
+describe("who is offered the Run button", () => {
+  it("**not a viewer**, because running tests executes code they may not write", () => {
+    // The line `preview_transform` draws and the route takes. Offered and
+    // refused is worse than not offered (§214).
+    expect(canEditProject("viewer")).toBe(false);
+    expect(canEditProject("editor")).toBe(true);
+    expect(canEditProject("owner")).toBe(true);
   });
 });
