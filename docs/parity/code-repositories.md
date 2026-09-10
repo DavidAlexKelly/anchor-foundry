@@ -184,7 +184,7 @@ Two limits Palantir states plainly and we should copy rather than discover: the 
 | Summary of running and completed checks per branch | ✅ §285 |
 | Branch selector | ✅ §285 — the application's own, at the top of every tab. A second one inside this tab would be a second answer to "which branch am I looking at" |
 | Drill into a specific check | ✅ §285 — it opens the proposal the check belongs to, because that *is* the detail a check has |
-| **Unit test output included in checks** | ○ |
+| **Unit test output included in checks** | ✅ §296 | p.19: *"The Checks tab will also include the output of any unit tests that have been defined for your repo."* **This row said ○ for eleven units after it was built**, and four other places in this document cited §296 for it the whole time — §2.4's Tests row, §2.5, the build order and §10's acceptance list. Nothing catches that: `test_parity_marks.py` (§302) resolves what a finished row *cites*, and a row claiming a feature is absent cites nothing to resolve. The two directions of rot are not symmetric, and only one of them is machine-checkable. It names the failing tests rather than counting them: "3 failed" sends you to the panel, `tests/test_daily.py::test_totals` sends you to the test |
 | Custom checks (TOC §25) | ○ |
 
 ---
@@ -217,7 +217,7 @@ Foundry supports several; two matter here (p.3):
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Unit tests** (TOC §12) | ○ | prerequisite for the Tests panel and for test output in checks. **The chapter is a pointer, not a specification** — p.56 says Code Repositories "support discovering and running unit tests through an integrated helper" and links to per-language docs that are not in `docs/pal/`. What is actually specified is three lines elsewhere: run all tests in the current file (p.13), a Tests helper that runs them and displays results (p.14), and their output in the Checks tab (p.19). Enough to build honestly, and worth saying so rather than implying we are meeting a specification that is not here. **§292 cleared the prerequisite nobody had scoped**: a test's first line is an import, and the declared transform shape was not importable — see the note below |
+| **Unit tests** (TOC §12) | ◑ §292–§296 | **A second row that went stale in the same direction as line 187**, and for the same reason: it was written as a prerequisite and never re-read once the prerequisite was met. Of the three lines it names below as what is *actually* specified, two are done — the Tests helper (p.14, §295) and its output in the Checks tab (p.19, §296) — and the third, per-file scoping (p.13), is the ◑ that keeps this row off ✅. **The chapter is a pointer, not a specification** — p.56 says Code Repositories "support discovering and running unit tests through an integrated helper" and links to per-language docs that are not in `docs/pal/`. What is actually specified is three lines elsewhere: run all tests in the current file (p.13), a Tests helper that runs them and displays results (p.14), and their output in the Checks tab (p.19). Enough to build honestly, and worth saying so rather than implying we are meeting a specification that is not here. **§292 cleared the prerequisite nobody had scoped**: a test's first line is an import, and the declared transform shape was not importable — see the note below |
 | Libraries / dependency management (TOC §14) | ○ | how does a customer add a Python package? Currently unanswered. |
 | In-product documentation (TOC §15) | ○ | |
 | Project references — use datasets across projects (TOC §10) | ◑ | |
