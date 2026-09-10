@@ -25,7 +25,7 @@ import uuid
 from playwright.sync_api import expect
 
 from api import Module
-from conftest import WEB_BASE, eventually
+from conftest import WEB_BASE, eventually, stays
 
 
 def project(api, name: str) -> Module:
@@ -148,8 +148,16 @@ def test_a_repositorys_proposal_does_not_leak_into_this_list(page, api) -> None:
     )
 
     models_screen(page, mod)
-    expect(page.get_by_test_id(f"direct-{proposal['id']}")).to_have_count(0)
-    expect(page.get_by_test_id("direct-proposals")).to_have_count(0)
+    # **`stays`, not `to_have_count(0)`** (§291's survivor, generalised in
+    # `conftest.eventually`'s docstring). This section renders when its own
+    # query resolves, so an absence asserted the moment the models table
+    # appears passes on "not loaded yet" - it happened to catch its mutant, by
+    # a race it could just as easily have lost.
+    stays(lambda: page.get_by_test_id(f"direct-{proposal['id']}").count(),
+          lambda n: n == 0,
+          what="another repository's proposal staying off the Models screen")
+    stays(lambda: page.get_by_test_id("direct-proposals").count(), lambda n: n == 0,
+          what="the section staying absent rather than empty")
 
     # **And it is on the tab that does own it**, which is what makes the two
     # assertions above about scoping rather than about a proposal that is
@@ -183,4 +191,5 @@ def test_a_withdrawn_review_leaves_the_list(page, api) -> None:
 
     page.reload()
     expect(page.locator(".table tbody tr").first).to_be_visible(timeout=30000)
-    expect(page.get_by_test_id("direct-proposals")).to_have_count(0)
+    stays(lambda: page.get_by_test_id("direct-proposals").count(), lambda n: n == 0,
+          what="a withdrawn review staying out of the list")

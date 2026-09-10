@@ -390,6 +390,13 @@ def test_a_versions_diff_survived_the_deletion_of_the_code_page(page, api) -> No
     models_screen(page, mod)
     row(page, name).get_by_role("button", name="History").click()
 
+    # **The wait comes first, and a mutant is what proved it has to.**
+    # `to_have_count(0)` on the v1 button passed while the dialog was still
+    # loading its versions - nothing is absent more convincingly than something
+    # that has not arrived - so the check survived a mutant that offered every
+    # version a diff. Asserting the v2 button is *there* is what makes the
+    # assertion below about v1 rather than about timing.
+    expect(page.get_by_test_id("version-2-changes")).to_be_visible(timeout=30000)
     # v1 has nothing before it, so it is not offered a diff: a diff of
     # everything against nothing is the file, which the Code button shows.
     expect(page.get_by_test_id("version-1-changes")).to_have_count(0)
