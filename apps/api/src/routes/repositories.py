@@ -31,6 +31,7 @@ from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
+from ..services import code_checks as check_service
 from ..services import dataset_engine as engine
 from ..services import datasets as ds_service
 from ..services import repositories as repo_service
@@ -409,6 +410,94 @@ async def read_tree(
             )
         )
     return TreeOut(commit_id=ref, files=files)
+
+
+# ---- checks on a branch (§285; code-repositories.md §5, p.19) -----------------
+class BranchCheckOut(BaseModel):
+    """One check result, carrying the proposal it belongs to.
+
+    A check without the change it is about is a verdict on nothing, so the
+    proposal travels with it - the Checks tab is a list of *what ran*, and what
+    ran is always "these checks, on this proposal, over this commit".
+    """
+    id: UUID
+    name: str
+    # pass / warn / fail / error. `error` is not a pass: it means nobody has
+    # been told anything about the code.
+    status: str
+    summary: str
+    model_id: UUID | None = None
+    source_path: str | None = None
+    ran_at: datetime
+    ran_by_email: str | None = None
+    # **There is no `stale` here, and that is deliberate** (§213, §285).
+    #
+    # `ProposalDetail` carries one, and it earns it: a typed-changes proposal's
+    # files can be edited, so a result can end up describing code nobody will
+    # apply. A commit-backed proposal's cannot - the commit is immutable, which
+    # is the property db 0039 chose it for - so `files_updated_at` never moves
+    # and the flag is `false` for every row this endpoint can return. A field
+    # that is always false is a field that lies about being a question.
+    #
+    # It was written and removed on finding the one path that could have moved
+    # it: `PATCH /proposals/{id}` with `changes` accepted them on a
+    # commit-backed proposal, wrote rows nothing reads, and invalidated every
+    # approval on the way. That is now refused (`update_proposal`), which is a
+    # fix worth having on its own and is also what makes this line unnecessary.
+    proposal_id: UUID
+    proposal_summary: str
+    proposal_state: str
+    source_commit_id: UUID
+
+
+class BranchChecksOut(BaseModel):
+    branch: str
+    #: Null when nothing has ever been committed to the branch.
+    head_commit_id: UUID | None = None
+    checks: list[BranchCheckOut]
+
+
+@router.get("/{repo_id}/checks", response_model=BranchChecksOut)
+async def branch_checks(
+    repo_id: UUID,
+    branch: str | None = Query(default=None),
+    access: ProjectAccess = Depends(require_project_role("viewer")),
+) -> BranchChecksOut:
+    """p.19: "view a summary of running and completed checks on each branch".
+
+    **Ours attach to a proposal rather than to a commit**, which is a real
+    divergence and one the tab states rather than papers over: the schema check
+    asks what the code would do to the project's datasets, and a commit nobody
+    has proposed has not said which change it means to make. So this is the
+    checks of the proposals made over commits on this branch - and since §284 a
+    sandbox is where work happens and a proposal is how it lands, that is every
+    commit on its way to mattering.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        repo = await repo_service.get_repository(
+            conn, project_id=access.project_id, repo_id=repo_id
+        )
+        name = branch or repo["default_branch"]
+        head = await repo_service.branch_head(conn, repo_id=repo_id, name=name)
+        if head is None:
+            raise NotFoundError(f"branch {name!r} does not exist")
+        commit_id = head["head_commit_id"]
+        # The whole history, not just the head: a proposal is made over the
+        # commit that existed when somebody opened it, and the branch has
+        # usually moved on since. Showing only the head's checks would empty
+        # the tab the moment anybody committed again.
+        commits = (
+            [] if commit_id is None
+            else [UUID(str(c)) for c in await repo_service.ancestors(conn, UUID(str(commit_id)))]
+        )
+        rows = await check_service.for_branch(
+            conn, project_id=access.project_id, repo_id=repo_id, commit_ids=commits
+        )
+    return BranchChecksOut(
+        branch=name,
+        head_commit_id=UUID(str(commit_id)) if commit_id else None,
+        checks=[BranchCheckOut(**r) for r in rows],
+    )
 
 
 @router.post("/{repo_id}/commits", response_model=CommitOut, status_code=status.HTTP_201_CREATED)

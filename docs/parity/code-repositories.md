@@ -2,7 +2,7 @@
 
 **Source:** `docs/pal/foundry_code-repositories.pdf`, 140 pages. Citations are `(p.13)`.
 
-**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor and Preview), History, Branches, **Pull requests** (§276), Publish, **Settings** (§279). Checks still live on the project's Code pillar page, as does creation of the typed-changes proposal shape — the one that names no repository.
+**Today:** `apps/web/src/components/applications/repository-app.tsx`, full-screen at `/r/{id}`. Tabs: Files (with editor, tabs and Preview), History, Branches, **Pull requests** (§276), **Checks** (§285), Publish, **Settings** (§279). Creation of the typed-changes proposal shape — the one that names no repository — still lives on the project's Code pillar page.
 
 Foundry's own summary of the product: "a web-based integrated development environment (IDE) for writing and collaborating on production-ready code", with all common Git tasks through the web UI, integrated pull-request review, and "IntelliSense, code linting and error checking, and rich help dialogs" (p.2).
 
@@ -31,7 +31,7 @@ Foundry's own summary of the product: "a web-based integrated development enviro
 | **Code** | ✅ | ours is called Files |
 | **Branches** | ✅ | create, list, delete, fast-forward, merge |
 | **Pull requests** | ◑ | the tab exists (§276) and shows this repository's commit proposals, reviewed in place. Still ◑ because the *typed-changes* shape belongs to no repository (db 0039's `source_repo_id` is null for it) and so cannot be shown here honestly — it stays on the Code page until adoption (§274) makes it unnecessary rather than moved |
-| **Checks** | ◑ | checks run and block, no tab |
+| **Checks** | ◑ | §285: the tab exists, per branch, and a check opens the change it is about. Still ◑ because **ours run on a proposal rather than on a commit** — the schema check asks what the code would do to this project's datasets, and a commit nobody has proposed has not said which change it means. The tab says so rather than implying a per-commit runner. Unit-test output is §6's ○ row |
 | **Settings** | ◑ | §279: the tab exists and holds the code-review gate, which §278 found had exactly one control in the product — on the page B.1 deletes. p.20's other groups are §6's ○ rows |
 
 Ours has **History** and **Publish**, which have no Foundry counterpart at tab level. History belongs in the File Changes helper; Publish belongs on the branch. Keep both until their replacements land, then fold them in.
@@ -172,9 +172,9 @@ Two limits Palantir states plainly and we should copy rather than discover: the 
 
 | Feature | Status |
 |---|---|
-| Summary of running and completed checks per branch | ◑ (no tab) |
-| Branch selector | ○ |
-| Drill into a specific check | ◑ |
+| Summary of running and completed checks per branch | ✅ §285 |
+| Branch selector | ✅ §285 — the application's own, at the top of every tab. A second one inside this tab would be a second answer to "which branch am I looking at" |
+| Drill into a specific check | ✅ §285 — it opens the proposal the check belongs to, because that *is* the detail a check has |
 | **Unit test output included in checks** | ○ |
 | Custom checks (TOC §25) | ○ |
 
@@ -220,7 +220,7 @@ Foundry supports several; two matter here (p.3):
 
 1. **Fold the pillar page in** — delete `code/page.tsx`, move proposal creation into the application. Nothing else can be judged while two editors exist. **The original blocker is cleared and a larger one was found (§278): see the correction in the header — five capabilities live only on that page, including the only control for `require_code_review`. The editor half is now redundant; the page cannot go until the other five have somewhere to be.** `README.md` records why: deleting this page strands every model that has never been in a repository, because `code/page.tsx:179` is the only place a *typed-changes* proposal is created and a model with no `source_path` has no commit to publish — so in a review-required project it would have no editable path at all. Verified rather than inherited (`repository-app.tsx:432` only ever creates the publish-a-commit shape). §273 gave a script a way to declare and §274 built adoption, so a model can now become a file, and §276 re-homed the review surface into the repository application. What remains before the deletion is the *creation* of typed-changes proposals — the one shape that names no repository.
 2. ~~**Draft persistence**, then **multi-file tabs**~~ — **done (§281, §282)**. The order was the point: tabs are what make the loss expensive, and shipping them first would have multiplied a bug rather than found it.
-3. **The five tabs** — Pull requests and Checks re-homed, Settings created.
+3. ~~**The five tabs**~~ — **done (§276, §279, §285)**. Pull requests and Checks re-homed, Settings created. All five of p.10's tabs now exist, and the two that diverge say so on the screen: review policy is per project rather than per repository (§279), and checks attach to a proposal rather than to a commit (§285).
 4. ~~**Protected branches and the sandbox rule.**~~ — **done (§283, §284)**. §283 cleared the prerequisite it would otherwise have broken: applying a proposal lands the commit on the default branch. Protect `main` without that and the first person to use the review path as intended leaves `main` behind forever — the branch everybody opens the repository on would stop describing the repository.
 5. **Problems**, then **File Changes**. These two make the editor feel like an IDE more than anything else here.
 6. **Unit tests**, then the **Tests panel**, then test output in the Checks tab.

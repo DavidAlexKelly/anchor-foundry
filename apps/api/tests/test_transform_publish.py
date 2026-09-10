@@ -1388,3 +1388,266 @@ def test_adoption_obeys_the_same_rule_as_a_commit(
     sandbox(client, fx, repo["id"], "adopting")
     allowed = adopt(client, fx, model["id"], repo["id"], branch="adopting")
     assert allowed.status_code == 200, allowed.text
+
+
+# ---- checks on a branch (§285; code-repositories.md §5, p.19) -----------------
+# "In the Checks tab, you can view a summary of running and completed checks on
+# each branch. Use the dropdown branch menu to select a different branch."
+def branch_checks(client: TestClient, fx: Fixture, repo_id: str, branch: str | None = None):
+    q = f"?branch={branch}" if branch else ""
+    return client.get(f"{rbase(fx)}/{repo_id}/checks{q}", headers=hdr(fx.viewer_sub))
+
+
+def run_checks(client: TestClient, fx: Fixture, proposal_id: str):
+    return client.post(f"{cbase(fx)}/proposals/{proposal_id}/checks",
+                       headers=hdr(fx.editor_sub))
+
+
+def test_a_branchs_checks_are_the_checks_of_the_proposals_made_on_it(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**The divergence, and the reason it is not a fudge.**
+
+    Foundry runs checks on a commit; ours run on a proposal, because the schema
+    check asks what the code would do to the project's datasets and a commit
+    nobody has proposed has not said which change it means to make. Since §284
+    a sandbox is where work happens and a proposal is how it lands, so every
+    commit that matters is on its way to being one.
+    """
+    out = f"chk_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"README.md": "# t\n"})
+    sandbox(client, fx, repo["id"], "work")
+    made = commit(client, fx, repo["id"],
+                  {"README.md": "# t\n", "src/t.sql": sql(out, source)}, branch="work")
+    p = propose_commit(client, fx, repo["id"], made["id"], summary="Add a transform").json()
+    assert run_checks(client, fx, p["id"]).status_code == 200
+
+    seen = branch_checks(client, fx, repo["id"], "work")
+    assert seen.status_code == 200, seen.text
+    body = seen.json()
+    assert body["branch"] == "work"
+    assert body["head_commit_id"] == made["id"]
+    names = {c["name"] for c in body["checks"]}
+    assert names == {"transform_runs", "schema_compatible"}, names
+    # Each carries the change it is about: a check without one is a verdict on
+    # nothing.
+    for c in body["checks"]:
+        assert c["proposal_id"] == p["id"]
+        assert c["proposal_summary"] == "Add a transform"
+        assert c["proposal_state"] == "open"
+        assert c["source_commit_id"] == made["id"]
+
+
+def test_the_default_branch_is_what_you_get_without_asking(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    out = f"dflt_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    run_checks(client, fx, p["id"])
+
+    body = branch_checks(client, fx, repo["id"]).json()
+    assert body["branch"] == "main"
+    assert len(body["checks"]) == 2, body["checks"]
+
+
+def test_a_branch_shows_the_checks_of_commits_it_has_moved_past(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**The whole history, not just the head.**
+
+    A proposal is made over the commit that existed when somebody opened it,
+    and the branch has usually moved on since. Showing only the head's checks
+    would empty the tab the moment anybody committed again - which is exactly
+    when somebody would go looking at it.
+    """
+    out = f"hist_{uuid.uuid4().hex[:8]}"
+    commit(client, fx, repo["id"], {"README.md": "# t\n"})
+    sandbox(client, fx, repo["id"], "work")
+    first = commit(client, fx, repo["id"],
+                   {"README.md": "# t\n", "src/t.sql": sql(out, source)}, branch="work")
+    p = propose_commit(client, fx, repo["id"], first["id"]).json()
+    run_checks(client, fx, p["id"])
+
+    commit(client, fx, repo["id"],
+           {"README.md": "# t\n", "src/t.sql": sql(out, source), "docs/x.md": "# x\n"},
+           branch="work")
+
+    body = branch_checks(client, fx, repo["id"], "work").json()
+    assert len(body["checks"]) == 2, body["checks"]
+    assert all(c["source_commit_id"] == first["id"] for c in body["checks"])
+
+
+def test_another_branchs_checks_do_not_appear_here(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """Two sandboxes from one base. A tab that showed both would be answering a
+    different question from the one its branch selector asks."""
+    commit(client, fx, repo["id"], {"README.md": "# t\n"})
+    sandbox(client, fx, repo["id"], "mine")
+    sandbox(client, fx, repo["id"], "theirs")
+    mine = commit(client, fx, repo["id"],
+                  {"README.md": "# t\n", "src/a.sql": sql(f"a_{uuid.uuid4().hex[:6]}", source)},
+                  branch="mine")
+    theirs = commit(client, fx, repo["id"],
+                    {"README.md": "# t\n", "src/b.sql": sql(f"b_{uuid.uuid4().hex[:6]}", source)},
+                    branch="theirs")
+    run_checks(client, fx, propose_commit(client, fx, repo["id"], mine["id"]).json()["id"])
+    run_checks(client, fx, propose_commit(client, fx, repo["id"], theirs["id"]).json()["id"])
+
+    on_mine = branch_checks(client, fx, repo["id"], "mine").json()["checks"]
+    assert on_mine and all(c["source_commit_id"] == mine["id"] for c in on_mine), on_mine
+    on_theirs = branch_checks(client, fx, repo["id"], "theirs").json()["checks"]
+    assert on_theirs and all(c["source_commit_id"] == theirs["id"] for c in on_theirs)
+
+
+def test_a_branch_with_no_proposals_has_no_checks_rather_than_an_error(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """Nothing has run yet is a real state, and the tab has to be able to say
+    so - "no checks" and "this branch does not exist" are different answers."""
+    commit(client, fx, repo["id"], {"src/t.sql": sql(f"q_{uuid.uuid4().hex[:6]}", source)})
+    body = branch_checks(client, fx, repo["id"], "main").json()
+    assert body["checks"] == []
+    assert body["head_commit_id"] is not None
+
+    missing = branch_checks(client, fx, repo["id"], "nope")
+    assert missing.status_code == 404, missing.text
+
+
+def test_a_commit_backed_proposal_refuses_an_edit_to_its_files(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**Found while looking for a stale check, and it was doing real damage.**
+
+    A commit-backed proposal's files come from the commit (db 0039), so
+    `code_proposal_files` rows written by a PATCH are never read - but the write
+    still moved `files_updated_at`, which invalidates every approval and
+    outdates every comment. A call that changes nothing about the code under
+    review and drops the reviews of it is the worst combination available.
+
+    It is also why the Checks tab carries no staleness flag: with this refused,
+    a commit-backed proposal's `files_updated_at` never moves at all.
+    """
+    out = f"immut_{uuid.uuid4().hex[:8]}"
+    made = commit(client, fx, repo["id"], {"src/t.sql": sql(out, source)})
+    p = propose_commit(client, fx, repo["id"], made["id"]).json()
+    models = client.get(f"{pbase(fx)}/models", headers=hdr(fx.viewer_sub)).json()
+    if not models:
+        pytest.skip("no model to name in a change")
+
+    r = client.patch(f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.editor_sub),
+                     json={"changes": [{"model_id": models[0]["id"], "code": "SELECT 1"}]})
+    assert r.status_code == 422, r.text
+    assert "over a commit" in r.json()["detail"]
+    assert "immutable" in r.json()["detail"]
+
+    # The prose still edits, because a reviewer approved code rather than prose.
+    renamed = client.patch(f"{cbase(fx)}/proposals/{p['id']}", headers=hdr(fx.editor_sub),
+                           json={"summary": "A better title"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["summary"] == "A better title"
+
+
+def test_a_proposal_cannot_name_a_commit_from_another_repository(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """**The smuggling path the commit branch never had** (§285).
+
+    `_write_files` has always checked that a typed change names a model in this
+    project - "so a proposal cannot smuggle in a transform from somewhere
+    else". The commit path took two ids from the caller and joined them to
+    nothing, so a proposal could name repository A and a commit from repository
+    B: the review surface would show one repository's code under another
+    repository's name, and applying it would publish it.
+    """
+    out = f"smug_{uuid.uuid4().hex[:8]}"
+    elsewhere = client.post(rbase(fx), headers=hdr(fx.editor_sub),
+                            json={"name": f"Other {uuid.uuid4().hex[:8]}"}).json()
+    theirs = commit(client, fx, elsewhere["id"], {"src/t.sql": sql(out, source)})
+
+    r = propose_commit(client, fx, repo["id"], theirs["id"])
+    assert r.status_code == 422, r.text
+    assert "not in that repository" in r.json()["detail"]
+
+    # And the honest version of the same request is accepted.
+    assert propose_commit(client, fx, elsewhere["id"], theirs["id"]).status_code == 201
+
+
+def test_a_commit_backed_proposal_has_to_say_which_repository(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """Refused rather than inferred from the commit. Inferring would make the
+    field decorative, and a decorative field is one nothing keeps honest."""
+    made = commit(client, fx, repo["id"],
+                  {"src/t.sql": sql(f"norepo_{uuid.uuid4().hex[:8]}", source)})
+    r = client.post(
+        f"{cbase(fx)}/proposals", headers=hdr(fx.editor_sub),
+        json={"summary": "No repository named", "source_commit_id": made["id"]},
+    )
+    assert r.status_code == 422, r.text
+    assert "which repository" in r.json()["detail"]
+
+
+def test_two_repositories_in_one_project_keep_their_checks_apart(
+    client: TestClient, fx: Fixture, repo: dict, source: str, gated
+) -> None:
+    """§212: every checks test until now used one repository, so nothing here
+    ever crossed the boundary the query is drawn on."""
+    other = client.post(rbase(fx), headers=hdr(fx.editor_sub),
+                        json={"name": f"Second {uuid.uuid4().hex[:8]}"}).json()
+    mine = commit(client, fx, repo["id"],
+                  {"src/a.sql": sql(f"m_{uuid.uuid4().hex[:6]}", source)})
+    theirs = commit(client, fx, other["id"],
+                    {"src/b.sql": sql(f"t_{uuid.uuid4().hex[:6]}", source)})
+    run_checks(client, fx, propose_commit(client, fx, repo["id"], mine["id"]).json()["id"])
+    run_checks(client, fx, propose_commit(client, fx, other["id"], theirs["id"]).json()["id"])
+
+    here = branch_checks(client, fx, repo["id"]).json()["checks"]
+    assert here and all(c["source_commit_id"] == mine["id"] for c in here), here
+    there = branch_checks(client, fx, other["id"]).json()["checks"]
+    assert there and all(c["source_commit_id"] == theirs["id"] for c in there), there
+
+
+def test_a_proposal_cannot_name_a_repository_in_another_project(
+    client: TestClient, fx: Fixture, source: str, gated
+) -> None:
+    """**The third leg of the join, and it took a mutant to reach.**
+
+    Every repository in every test here lives in the one fixture project, so
+    `r.project_id = :pid` was a condition nothing ever crossed - §212 again. It
+    is reachable in the product: somebody in two projects of one workspace can
+    read both, so a proposal opened in this project could name the other's
+    repository and its commit, and the two ids would agree with each other
+    while agreeing with nothing here.
+    """
+    import psycopg
+
+    tag = uuid.uuid4().hex[:8]
+    with psycopg.connect(os.environ["TEST_ADMIN_DSN"], autocommit=True) as conn:
+        elsewhere = conn.execute(
+            """INSERT INTO projects (workspace_id, name, slug, created_by)
+               VALUES (%s,%s,%s,%s) RETURNING id""",
+            (fx.workspace, f"Neighbour {tag}", f"neighbour-{tag}", fx.owner),
+        ).fetchone()[0]
+
+    other_base = f"/api/workspaces/{fx.workspace}/projects/{elsewhere}"
+    repo = client.post(f"{other_base}/repositories", headers=hdr(fx.editor_sub),
+                       json={"name": f"Theirs {tag}"})
+    assert repo.status_code == 201, repo.text
+    made = client.post(
+        f"{other_base}/repositories/{repo.json()['id']}/commits",
+        headers=hdr(fx.editor_sub),
+        json={"branch": "main", "files": {"src/t.sql": "SELECT 1\n"}, "message": ""},
+    )
+    assert made.status_code == 201, made.text
+
+    # The two ids agree with each other, and with nothing in this project.
+    r = client.post(
+        f"{cbase(fx)}/proposals", headers=hdr(fx.editor_sub),
+        json={"summary": "Somebody else's repository",
+              "source_repo_id": repo.json()["id"],
+              "source_commit_id": made.json()["id"]},
+    )
+    assert r.status_code == 422, r.text
+    assert "not in this project" in r.json()["detail"]

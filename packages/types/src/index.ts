@@ -557,6 +557,36 @@ export interface RepositoryTree {
   files: Record<string, string>;
 }
 
+/** One check result on a branch, carrying the proposal it belongs to (§285).
+ *
+ * A check without the change it is about is a verdict on nothing, which is why
+ * the proposal travels with it. **No staleness flag, unlike `CodeCheck`:** a
+ * commit-backed proposal's files come from an immutable commit, so its
+ * `files_updated_at` never moves and the flag would be false on every row. */
+export interface RepositoryCheck {
+  id: string;
+  name: string;
+  /** pass / warn / fail / error. `error` is not a pass: it means nobody has
+   *  been told anything about the code. */
+  status: string;
+  summary: string;
+  model_id: string | null;
+  source_path: string | null;
+  ran_at: string;
+  ran_by_email: string | null;
+  proposal_id: string;
+  proposal_summary: string;
+  proposal_state: string;
+  source_commit_id: string;
+}
+
+export interface RepositoryBranchChecks {
+  branch: string;
+  /** Null when nothing has ever been committed to the branch. */
+  head_commit_id: string | null;
+  checks: RepositoryCheck[];
+}
+
 export interface RepositoryDiff {
   added: string[];
   deleted: string[];

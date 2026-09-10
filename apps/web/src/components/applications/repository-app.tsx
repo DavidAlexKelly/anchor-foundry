@@ -41,6 +41,13 @@ import {
 import { DESCRIPTION_TEMPLATE, ReviewSurface } from "@/components/code/review-surface";
 import { describe as describeProposal, emptyReason, forRepository } from "@/lib/pull-requests";
 import {
+  checkTarget,
+  emptyReason as checksEmptyReason,
+  verdict,
+  verdictNote,
+  worstFirst,
+} from "@/lib/branch-checks";
+import {
   isProtected,
   protectedReason,
   suggestedSandboxName,
@@ -68,7 +75,9 @@ const CodeEditor = dynamic(
 
 // **`pulls` before `publish`, because that is the order the work happens in**
 // and `code-repositories.md` §1 lists Pull requests before anything of ours.
-const TABS = ["files", "history", "branches", "pulls", "publish", "settings"] as const;
+// **`checks` beside `pulls`**, which is the order `code-repositories.md` §1
+// lists them and the order the work happens in: propose, then see what ran.
+const TABS = ["files", "history", "branches", "pulls", "checks", "publish", "settings"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -76,6 +85,7 @@ const TAB_LABELS: Record<Tab, string> = {
   history: "History",
   branches: "Branches",
   pulls: "Pull requests",
+  checks: "Checks",
   publish: "Publish",
   settings: "Settings",
 };
@@ -185,6 +195,16 @@ export function RepositoryApplication({ resource }: { resource: ResolvedResource
         />
       )}
       {tab === "settings" && <SettingsTab wid={wid} pid={pid} />}
+      {tab === "checks" && (
+        <ChecksTab
+          wid={wid}
+          pid={pid}
+          rid={rid}
+          branch={current}
+          defaultBranch={repo.data?.default_branch ?? "main"}
+          onOpenProposal={(id) => setParams({ tab: "pulls", proposal: id })}
+        />
+      )}
       {tab === "pulls" && (
         <PullRequestsTab
           wid={wid}
@@ -1631,6 +1651,98 @@ function SettingsTab({ wid, pid }: { wid: string; pid: string }) {
         <p className="login-note" data-testid="settings-review-locked">{locked}</p>
       )}
       {failure && <div className="form-error">{failure}</div>}
+    </section>
+  );
+}
+
+
+/** p.19's Checks tab (§285), the last of `code-repositories.md` §1's five.
+ *
+ * **A divergence stated on the screen rather than papered over.** Foundry runs
+ * checks on a *commit*: you commit to a sandbox and checks start. Ours run on a
+ * *proposal*, because the schema check asks what the code would do to the
+ * project's datasets and a commit nobody has proposed has not said which change
+ * it means to make. Since §284 a sandbox is where work happens and a proposal
+ * is how it lands, so every commit that matters is on its way to being one -
+ * but a tab that implied a per-commit runner exists would promise something the
+ * product does not do.
+ *
+ * The branch comes from the application's own selector rather than a second one
+ * inside the tab: p.19 says "use the dropdown branch menu", and there is one.
+ */
+function ChecksTab({
+  wid,
+  pid,
+  rid,
+  branch,
+  defaultBranch,
+  onOpenProposal,
+}: {
+  wid: string;
+  pid: string;
+  rid: string;
+  branch: string;
+  defaultBranch: string;
+  onOpenProposal: (id: string) => void;
+}) {
+  const checks = useQuery({
+    queryKey: ["repo-checks", rid, branch],
+    queryFn: () => repoApi.branchChecks(wid, pid, rid, branch),
+  });
+
+  if (checks.isPending) return <p className="state">Loading checks…</p>;
+  if (checks.error) return <p className="state error">{(checks.error as Error).message}</p>;
+
+  const data = checks.data!;
+  const rows = worstFirst(data.checks);
+  const state = verdict(rows);
+
+  return (
+    <section className="repo-checks" data-testid="checks-tab">
+      <p className={`repo-checks-verdict ${state}`} data-testid="checks-verdict">
+        <span className="chip">{state}</span> {verdictNote(rows)}
+      </p>
+      {/* Said once, where somebody reading a thin list would otherwise assume
+          the runner is broken rather than that it runs somewhere else. */}
+      <p className="soft" data-testid="checks-scope">
+        Checks run on a pull request rather than on every commit, so these are
+        the checks of the proposals made over commits on {branch}. Foundry runs
+        them per commit; ours ask what the code would do to this project&apos;s
+        datasets, which a commit nobody has proposed has not said.
+      </p>
+
+      {rows.length === 0 ? (
+        <p className="state">
+          {checksEmptyReason(data.head_commit_id !== null, branch === defaultBranch)}
+        </p>
+      ) : (
+        <ul className="repo-check-list">
+          {rows.map((c) => (
+            <li key={c.id} className={`repo-check ${c.status}`}>
+              <div className="repo-check-head">
+                <span className="chip">{c.status}</span>
+                <code>{c.name}</code>
+                <span className="soft">{checkTarget(c)}</span>
+                <span className="soft" style={{ marginLeft: "auto" }}>
+                  {new Date(c.ran_at).toLocaleString()}
+                </span>
+              </div>
+              <p className="repo-check-summary">{c.summary}</p>
+              {/* p.19: "Click on a specific check to view more detailed
+                  information." The detail a check has is the change it is
+                  about, so this opens that rather than a dialog of its own. */}
+              <button
+                type="button"
+                className="repo-check-open"
+                onClick={() => onOpenProposal(c.proposal_id)}
+              >
+                {c.proposal_summary}
+              </button>{" "}
+              <span className="soft">{c.proposal_state}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

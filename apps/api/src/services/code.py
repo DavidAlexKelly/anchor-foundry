@@ -497,6 +497,8 @@ async def create_proposal(
         )
     if not commit_backed and not changes:
         raise ValueError("a proposal needs at least one file")
+    if commit_backed:
+        await _assert_commit_belongs(conn, project_id, source_repo_id, source_commit_id)
     row = await fetch_one(
         conn,
         """
@@ -526,6 +528,46 @@ async def create_proposal(
     return await get_proposal(conn, project_id, proposal_id)
 
 
+async def _assert_commit_belongs(
+    conn: AsyncConnection,
+    project_id: UUID,
+    repo_id: UUID | None,
+    commit_id: UUID | None,
+) -> None:
+    """A commit-backed proposal names a commit *in a repository in this project*.
+
+    **`_write_files` has always checked this for typed changes** - "so a
+    proposal cannot smuggle in a transform from somewhere else" - and the
+    commit path had no equivalent (§285). Both ids come from the caller, and
+    nothing joined them: a proposal could name repository A and a commit from
+    repository B, or a repository in another project the author happens to be a
+    member of. The review surface would then show one repository's code under
+    another repository's name, and applying it would publish it.
+
+    Refused rather than repaired, because there is no honest repair: which of
+    the two ids was the mistake is not knowable from here.
+    """
+    if repo_id is None:
+        raise ValueError(
+            "a proposal over a commit has to say which repository the commit is in"
+        )
+    row = await fetch_one(
+        conn,
+        """
+        SELECT c.id
+          FROM code_commits c
+          JOIN code_repos r ON r.id = c.repo_id
+         WHERE c.id = :cid AND r.id = :rid AND r.project_id = :pid
+        """,
+        {"cid": str(commit_id), "rid": str(repo_id), "pid": str(project_id)},
+    )
+    if row is None:
+        raise ValueError(
+            "that commit is not in that repository, or that repository is not in "
+            "this project - a proposal has to name a commit somebody here can read"
+        )
+
+
 async def update_proposal(
     conn: AsyncConnection,
     project_id: UUID,
@@ -549,6 +591,24 @@ async def update_proposal(
         raise ValueError("this proposal is closed")
     if str(proposal["created_by"]) != str(actor_id):
         raise ValueError("only the author can edit a proposal")
+    if changes is not None and proposal["source_commit_id"]:
+        # **Found in §285, and it was doing real damage quietly.** A
+        # commit-backed proposal's files come from the commit (db 0039), so
+        # `code_proposal_files` rows written here are never read - but the
+        # write still moves `files_updated_at`, which invalidates every
+        # approval and outdates every comment. A call that changes nothing
+        # about the code under review and drops the reviews of it is the worst
+        # combination available: the reviewer's work is gone and there is
+        # nothing new to review.
+        #
+        # The way to change what a commit-backed proposal proposes is another
+        # commit and another proposal, because the commit is immutable - which
+        # is the property it was chosen for.
+        raise ValueError(
+            "this proposal is over a commit, so its files cannot be edited here - "
+            "the commit is immutable, which is what makes the code under review "
+            "the code that was approved. Commit again and propose that."
+        )
     if changes is not None:
         await _write_files(conn, project_id, proposal_id, changes)
     await fetch_one(

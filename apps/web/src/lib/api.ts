@@ -173,6 +173,15 @@ export const repositories = {
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/tree${qs ? `?${qs}` : ""}`,
     );
   },
+  /** p.19's Checks tab: what ran on this branch (§285). Ours are the checks of
+   *  the proposals made over commits on it, because a check asks what the code
+   *  would do to the project's datasets and a commit nobody has proposed has
+   *  not said which change it means to make. */
+  branchChecks: (wid: string, pid: string, rid: string, branch?: string) =>
+    request<import("./types").RepositoryBranchChecks>(
+      `/workspaces/${wid}/projects/${pid}/repositories/${rid}/checks` +
+        (branch ? `?branch=${encodeURIComponent(branch)}` : ""),
+    ),
   commits: (wid: string, pid: string, rid: string, branch?: string) =>
     request<import("./types").RepositoryCommit[]>(
       `/workspaces/${wid}/projects/${pid}/repositories/${rid}/commits` +
