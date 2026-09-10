@@ -88,7 +88,20 @@ import {
   subtitle as explorerSubtitle,
   suggestedAlias,
 } from "@/lib/explorer";
-import type { ScratchpadResult } from "@/lib/types";
+import type { RepositoryCheck, ScratchpadResult } from "@/lib/types";
+import {
+  assistDetail,
+  assistIsAProblem,
+  assistLabel,
+  assistState,
+  checksAreAProblem as statusChecksAreAProblem,
+  checksLabel as statusChecksLabel,
+  problemsAreAProblem,
+  problemsLabel,
+  savingDetail,
+  savingIsAProblem,
+  savingLabel,
+} from "@/lib/status-bar";
 import {
   canRun,
   emptyReason as scratchpadEmptyReason,
@@ -485,6 +498,17 @@ function FilesTab({
   // round trip, and one on every keystroke would be a panel that costs more
   // than it tells you. The button says when the answer was last true.
   const [problemsOpen, setProblemsOpen] = useState(false);
+  // **p.15's status bar needs the editor's own readiness** (§307). Monaco is a
+  // dynamic import, and "the editor is loading" is the first thing the bar has
+  // to be able to say.
+  const [editorReady, setEditorReady] = useState(false);
+  // The branch's checks, on the **same key the Checks tab uses**, so this is
+  // the same cached answer rather than a second request that could disagree
+  // with it (§296).
+  const statusChecks = useQuery({
+    queryKey: ["repo-checks", rid, branch],
+    queryFn: () => repoApi.branchChecks(wid, pid, rid, branch),
+  });
   const [reveal, setReveal] = useState<{ line: number } | undefined>();
   const problems = useQuery({
     queryKey: ["repo-problems", rid, branch, edits],
@@ -684,6 +708,7 @@ function FilesTab({
                   value={source}
                   readOnly={readOnly}
                   reveal={reveal}
+                  onReady={() => setEditorReady(true)}
                   onChange={(next) => setEdits((c) => ({ ...c, [selected]: next }))}
                 />
               </div>
@@ -846,6 +871,19 @@ function FilesTab({
       {draftWarning && (
         <p className="state error" data-testid="draft-warning">{draftWarning}</p>
       )}
+      {/* p.15's status bar (§307), under the editor and above the commit bar:
+          it reports on the editor and on the branch, and the commit bar is the
+          thing you press *after* reading it. */}
+      <StatusBar
+        editorReady={editorReady}
+        analysing={problems.isFetching}
+        analysisFailed={problems.error !== null}
+        problemCount={problems.data?.problems.length}
+        checks={statusChecks.data?.checks}
+        changedFiles={Object.keys(edits).length}
+        draftWarning={draftWarning}
+        onOpenProblems={() => setProblemsOpen(true)}
+      />
       {failure && <p className="state error">{failure}</p>}
     </div>
   );
@@ -2437,6 +2475,92 @@ function TestsPanel({
         </ul>
       )}
     </section>
+  );
+}
+
+
+/** p.15's status bar (§307; `code-repositories.md` §2.5).
+ *
+ * Four indicators: Code Assist, Problems on the left, Checks on the right, and
+ * file saving. **It reports and does not decide** — `verdict` in
+ * `branch-checks.ts` says what a branch's checks amount to, the Problems panel
+ * counts problems, `editor-drafts.ts` says what happened to a save. A status
+ * bar that recomputed any of them would be a second answer to a question
+ * already answered one panel away, and §296 is what that costs.
+ *
+ * Built last, because it is meaningless before the things it reports on exist.
+ */
+function StatusBar({
+  editorReady,
+  analysing,
+  analysisFailed,
+  problemCount,
+  checks,
+  changedFiles,
+  draftWarning,
+  onOpenProblems,
+}: {
+  editorReady: boolean;
+  analysing: boolean;
+  analysisFailed: boolean;
+  problemCount: number | undefined;
+  checks: RepositoryCheck[] | undefined;
+  changedFiles: number;
+  draftWarning: string | null;
+  onOpenProblems: () => void;
+}) {
+  const assist = assistState({
+    editorReady,
+    analysing,
+    failed: analysisFailed,
+    answered: problemCount !== undefined,
+  });
+  const problems = problemsLabel(problemCount);
+  const checksSays = statusChecksLabel(checks);
+
+  return (
+    <div className="repo-status-bar" data-testid="status-bar">
+      <span
+        className={assistIsAProblem(assist) ? "chip brass" : "soft"}
+        title={assistDetail(assist)}
+        data-testid="status-assist"
+      >
+        {assistLabel(assist)}
+      </span>
+      {/* p.15: "an indication appears on the left side… Click on the
+          indication to open the Problems helper." A button rather than a
+          label, because the click is what p.15 specifies. */}
+      {problems && (
+        <button
+          type="button"
+          className={problemsAreAProblem(problemCount) ? "chip brass" : "btn quiet"}
+          data-testid="status-problems"
+          onClick={onOpenProblems}
+        >
+          {problems}
+        </button>
+      )}
+      <span
+        className={savingIsAProblem(draftWarning) ? "chip brass" : "soft"}
+        title={savingDetail(changedFiles, draftWarning)}
+        data-testid="status-saving"
+      >
+        {savingLabel(changedFiles, draftWarning)}
+      </span>
+      {/* p.15 puts the checks on the right. `margin-left: auto` in the CSS,
+          rather than an order this component has to keep in step with a
+          sentence. */}
+      {checksSays && (
+        <span
+          className={
+            statusChecksAreAProblem(checks) ? "chip brass repo-status-right" : "soft repo-status-right"
+          }
+          data-testid="status-checks"
+        >
+          {checksSays}
+        </span>
+      )}
+    </div>
   );
 }
 

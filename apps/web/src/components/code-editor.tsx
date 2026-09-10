@@ -58,6 +58,7 @@ export function CodeEditor({
   readOnly,
   onChange,
   reveal,
+  onReady,
 }: {
   path: string;
   value: string;
@@ -71,6 +72,15 @@ export function CodeEditor({
    * ordinary case - and a bare number would make the second click do nothing,
    * which reads as a broken panel rather than as a deduplicated request. */
   reveal?: { line: number };
+  /** Called once Monaco has actually mounted (§307).
+   *
+   * **From `onMount`, not from the mount guard below.** `ready` is a one-tick
+   * guard so Monaco measures itself against a panel that has a size; it says
+   * nothing about whether Monaco has *loaded*, which is a dynamic import and
+   * the thing p.15's status bar is about. Reporting the guard would tell the
+   * status bar the editor was ready one tick after the page appeared, every
+   * time, which is a status bar that is always right and never useful. */
+  onReady?: () => void;
 }) {
   // Monaco measures itself on mount; rendering it before the panel has a size
   // gives a zero-height editor that never recovers.
@@ -103,6 +113,7 @@ export function CodeEditor({
       loading={<div className="code-editor-loading">Loading editor…</div>}
       onMount={(editor: monaco.editor.IStandaloneCodeEditor) => {
         editorRef.current = editor;
+        onReady?.();
         // A file opened *by* a problem mounts with the reveal already asked
         // for, and the effect above has run before this editor existed.
         if (reveal) {

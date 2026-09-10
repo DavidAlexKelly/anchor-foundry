@@ -1384,6 +1384,12 @@ button { font: inherit; cursor: pointer; }
 
 /* p.14's Problems helper (§286). */
 .repo-problems { display: grid; gap: 8px; margin-top: 10px; }
+/* p.15's status bar (§307). Its own classes, for §296's reason. */
+.repo-status-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 0; margin-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }
+/* p.15 puts the checks on the right, so the CSS says so rather than the
+   component keeping an order in step with a sentence. */
+.repo-status-right { margin-left: auto; }
 /* p.15's SQL Scratchpad (§306). Its own classes, for §296's reason. */
 .repo-scratchpad { display: grid; gap: 8px; margin-top: 10px; }
 .repo-scratchpad-body { display: grid; gap: 8px; }
