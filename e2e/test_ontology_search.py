@@ -125,3 +125,53 @@ def test_a_query_matching_nothing_says_so(page, ontology):
     expect(page.get_by_test_id("ontology-search-results")).to_contain_text(
         "Nothing in this workspace's ontology matches that"
     )
+
+
+# --- the third ownerless kind (§316) ------------------------------------------
+
+
+def test_an_interface_hit_opens_the_interface(page, api):
+    """**Sixty-four units of a hit that opened nothing** (§252 to §316).
+
+    An interface belongs to no object type — it is implemented *by* types
+    rather than owned by one (`object-link-types` p.4) — so it has no type's
+    screen to borrow. §252 made interfaces searchable without giving them one,
+    and the click fell through the group check into the shared property
+    handler: an editor opened for an id from another table, found nothing, and
+    said nothing.
+
+    **Nothing errored, which is why it lasted.** That is also why this test has
+    to assert what *did* open rather than that something did: a dialog that
+    never resolves and a dialog showing the wrong thing both look like a click
+    that worked.
+    """
+    from api import Module
+
+    mod = Module(api, "Interface search")
+    word = f"zarquon{uuid.uuid4().hex[:6]}"
+    api.call(
+        "POST", f"/workspaces/{mod.workspace_id}/interfaces",
+        {"api_name": f"if_{word}", "display_name": f"Shape {word}",
+         "properties": [{"api_name": "code", "display_name": "Code",
+                         "data_type": "string", "required": True}]},
+    )
+
+    open_manager(page, mod)
+    page.get_by_label("Search the ontology").fill(word)
+    hit = page.get_by_test_id("ontology-search-results").locator(
+        "[data-kind='interface']"
+    )
+    eventually(lambda: hit.count(), lambda n: n == 1, what="the interface hit")
+    # The label the six-kind map had no entry for. A blank chip is not
+    # something anybody reports, so it is asserted rather than left to the eye.
+    expect(hit).to_contain_text("Interface")
+    # And the count that says whether changing this shape is cheap — the fact
+    # somebody looking at an interface is deciding on.
+    expect(hit).to_contain_text("implemented by 0 object types")
+
+    hit.click()
+    # The interface's own screen, named after the interface. Before §316 this
+    # was a shared property editor over an interface id.
+    expect(page.get_by_role("dialog")).to_contain_text(
+        f"if_{word} objects", timeout=30000
+    )

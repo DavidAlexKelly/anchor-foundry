@@ -26,22 +26,18 @@ import { useEffect, useRef, useState } from "react";
 import { objects as objApi } from "@/lib/api";
 import { highlight } from "@/components/ontology-highlight";
 import { memberSummary } from "@/lib/object-type-groups";
-import type { OntologySearchHit } from "@/lib/types";
-
-const KIND_LABELS: Record<OntologySearchHit["kind"], string> = {
-  object_type: "Object type",
-  property: "Property",
-  link_type: "Link type",
-  action_type: "Action",
-  shared_property: "Shared property",
-  group: "Group",
-};
+import {
+  KIND_LABELS,
+  destinationFor,
+  implementationSummary,
+} from "@/lib/search-destination";
 
 export function OntologySearch({
   workspaceId,
   onOpenType,
   onOpenSharedProperty,
   onOpenGroup,
+  onOpenInterface,
 }: {
   workspaceId: string;
   /** Where a hit goes. Four of the six kinds belong to an object type, which
@@ -53,10 +49,18 @@ export function OntologySearch({
    * that has nothing to do with what was searched for. */
   onOpenSharedProperty: (sharedId: string) => void;
   /** The sixth, for the same reason (p.261). A group is not on an object type
-   * and cannot borrow one's destination — and the two ownerless kinds cannot
-   * share a handler either, since a group id opened as a shared property finds
+   * and cannot borrow one's destination — and the ownerless kinds cannot share
+   * a handler either, since a group id opened as a shared property finds
    * nothing and silently does nothing at all. */
   onOpenGroup: (groupId: string) => void;
+  /** The seventh, and **the one that proved the sentence above was a rule and
+   * not a remark** (§316). §252 made interfaces searchable without giving them
+   * a destination, so for sixty-four units an interface hit did exactly what
+   * that comment describes: it fell past the group check into
+   * `onOpenSharedProperty` and opened an editor for an id that is not a shared
+   * property. An interface is implemented *by* object types rather than owned
+   * by one (`object-link-types` p.4), so it has no type's screen to borrow. */
+  onOpenInterface: (interfaceId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -117,13 +121,22 @@ export function OntologySearch({
                     style={{ padding: "4px 10px", fontSize: 12.5, textAlign: "left" }}
                     data-kind={hit.kind}
                     data-matched-field={hit.matched_field}
-                    onClick={() =>
-                      hit.object_type_id
-                        ? onOpenType(hit.object_type_id)
-                        : hit.kind === "group"
-                          ? onOpenGroup(hit.id)
-                          : onOpenSharedProperty(hit.id)
-                    }
+                    /* **The dispatch is a decision, not a chain of
+                       ternaries** (§316). The chain that stood here fell
+                       through to the last branch for any kind it did not
+                       name, which is how an interface hit came to open a
+                       shared property editor. `destinationFor` has a case per
+                       kind and no default, so the next kind added to the union
+                       is a compile error rather than a click that does
+                       nothing. */
+                    onClick={() => {
+                      const to = destinationFor(hit);
+                      if (!to) return;
+                      if (to.open === "object_type") onOpenType(to.id);
+                      else if (to.open === "group") onOpenGroup(to.id);
+                      else if (to.open === "interface") onOpenInterface(to.id);
+                      else onOpenSharedProperty(to.id);
+                    }}
                   >
                     <span className="slug" style={{ marginRight: 8 }}>
                       {KIND_LABELS[hit.kind]}
@@ -161,6 +174,15 @@ export function OntologySearch({
                          answer rather than a broken row. */
                       <span className="slug" style={{ marginLeft: 8 }}>
                         {memberSummary(hit.usage_count ?? 0)}
+                      </span>
+                    ) : hit.kind === "interface" ? (
+                      /* The third ownerless kind, saying the number that
+                         decides whether editing this shape is cheap
+                         (§252's argument). Without this branch it fell to the
+                         one below and rendered "on " with nothing after it —
+                         an interface has no owning type to name. */
+                      <span className="slug" style={{ marginLeft: 8 }}>
+                        {implementationSummary(hit.usage_count ?? 0)}
                       </span>
                     ) : hit.kind !== "object_type" ? (
                       <span className="slug" style={{ marginLeft: 8 }}>

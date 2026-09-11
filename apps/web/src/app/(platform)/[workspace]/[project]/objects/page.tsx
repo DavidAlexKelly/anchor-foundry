@@ -925,6 +925,10 @@ export default function ObjectsPage() {
   // opens it again rather than being swallowed as "no change".
   const [editingShared, setEditingShared] = useState<string | null>(null);
   const [openingGroup, setOpeningGroup] = useState<string | null>(null);
+  // The third ownerless kind (§316). §252 made interfaces searchable and left
+  // the hit with nowhere to go, so it fell through to the shared property
+  // editor and opened an id from another table — silently.
+  const [openingInterface, setOpeningInterface] = useState<string | null>(null);
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   // `ontology-manager` p.29's other two home-page filters. Separate pieces of
   // state rather than one object, because each is one control and combining
@@ -1095,6 +1099,7 @@ export default function ObjectsPage() {
           onOpenType={(typeId) => setEditingType(typeId)}
           onOpenSharedProperty={(sharedId) => setEditingShared(sharedId)}
           onOpenGroup={(groupId) => setOpeningGroup(groupId)}
+          onOpenInterface={(interfaceId) => setOpeningInterface(interfaceId)}
         />
       )}
 
@@ -1489,6 +1494,8 @@ export default function ObjectsPage() {
           <InterfacesPanel
             workspaceId={workspace!.id}
             canEdit={canEditOntology}
+            openId={openingInterface}
+            onOpened={() => setOpeningInterface(null)}
           />
 
           {/* Groups last of the four, because it is the only one that says

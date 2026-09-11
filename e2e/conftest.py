@@ -132,6 +132,17 @@ def _refuse_a_stale_api() -> None:
     Compares the newest mtime under `apps/api/src` against when the server
     process started. Best-effort: if the process cannot be found or `/proc` is
     not there, this says nothing rather than blocking a run it cannot judge.
+
+    **An mtime, not a hash, and a tool that rewrites a file trips it.** A
+    mutation harness that restores a file with `git show HEAD:<path>` writes
+    identical bytes and a new mtime, so this refuses a tree that is in fact
+    exactly what the server loaded. That is the right way round - this cannot
+    know what the process read, and the alternative guess is the failure shape
+    the docstring above is about - but it has a consequence worth knowing
+    before it costs an afternoon: a harness whose *later* sweeps depend on this
+    suite must put the mtime back (`os.utime`) after each restore, or every one
+    of those mutants dies on this guard and is scored as caught while proving
+    nothing at all.
     """
     import subprocess
 

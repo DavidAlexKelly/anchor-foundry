@@ -1944,28 +1944,40 @@ export interface ModuleStateDetail extends ModuleState {
 }
 
 export interface OntologySearchHit {
+  /** **Seven, and `interface` was missing from this list for sixty-four
+   * units** (§252 made them searchable, §316 noticed). The server has returned
+   * `interface` hits the whole time; this union declared six, and nothing
+   * could complain — the response model types `kind` as `str`, and a
+   * `Record<Kind, …>` over a union with a member missing is a *complete*
+   * record, so `tsc` was satisfied by a map with a hole in it. The hit
+   * rendered with a blank label and, clicked, fell through to the shared
+   * property handler and opened nothing at all. */
   kind:
     | "object_type"
     | "property"
     | "link_type"
     | "action_type"
     | "shared_property"
-    | "group";
+    | "group"
+    | "interface";
   id: string;
   api_name: string;
   display_name: string;
   /** Where it lives. A property called "status" is not somewhere anybody can
    * navigate to; "status on Ticket" is.
    *
-   * **Null for a shared property and for a group**, neither of which belongs
-   * to an object type by definition (`object-link-types` p.178, p.261) — null
-   * rather than a stand-in, because a made-up owner would send whoever clicked
-   * it somewhere with nothing to do with what they searched for. */
+   * **Null for the three ownerless kinds** — a shared property, a group and an
+   * interface, none of which belongs to an object type by definition
+   * (`object-link-types` p.178, p.261, p.4; an interface is implemented *by*
+   * types rather than owned by one) — null rather than a stand-in, because a
+   * made-up owner would send whoever clicked it somewhere with nothing to do
+   * with what they searched for. */
   object_type_id: string | null;
   object_type_name: string;
-  /** How many things use it. Set for the two kinds with no owner to name:
-   * object types for a shared property, member object types for a group —
-   * which is the closest true answer to "where does this live". */
+  /** How many things use it. Set for the three kinds with no owner to name:
+   * object types for a shared property, member object types for a group,
+   * implementing types for an interface — which is the closest true answer to
+   * "where does this live". */
   usage_count: number | null;
   matched_field: string;
   matched_value: string;
