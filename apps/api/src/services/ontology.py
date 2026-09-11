@@ -211,6 +211,27 @@ async def list_types(
                ot.created_at, ot.updated_at,
                (SELECT count(*) FROM object_type_sources s
                  WHERE s.object_type_id = ot.id) AS source_count,
+               -- **p.29's issue column** (§313): "Object types whose backing
+               -- datasources are unregistered or have failed to reindex … will
+               -- have red error messages in the issue column of the object
+               -- type page."
+               --
+               -- Both of p.29's conditions, as two counts rather than one
+               -- flag, because they are different problems with different
+               -- remedies: a type with no source was never pointed at data,
+               -- and a type whose source failed was and then broke. A single
+               -- "has a problem" boolean would send both people to the same
+               -- screen to work out which they had.
+               --
+               -- Counted here rather than joined, because a type may have
+               -- several sources and a join would multiply the row.
+               (SELECT count(*) FROM object_type_sources s
+                 WHERE s.object_type_id = ot.id
+                   AND s.sync_status = 'error') AS failing_source_count,
+               (SELECT s.last_error FROM object_type_sources s
+                 WHERE s.object_type_id = ot.id AND s.sync_status = 'error'
+                 ORDER BY s.last_synced_at DESC NULLS LAST
+                 LIMIT 1) AS source_error,
                -- Just the hidden ones, not every property. A browser listing
                -- types needs to know which columns not to draw
                -- (`object-link-types` p.111) and nothing else about them, and

@@ -1,0 +1,269 @@
+"""p.29's issue column (§313; `ontology-manager` p.29; `ontology.md` §1, §6).
+
+    "Object types whose backing datasources are unregistered or have failed to
+     reindex into Object Storage v1 (Phonograph) will have red error messages
+     in the issue column of the object type page." (p.29)
+
+**Two rows, one mechanism.** `ontology.md` carried this twice — as "indexing /
+reindexing state and errors surfaced per object type" and as p.29's red error
+messages — and they are the same thing seen from the Ontology Manager and from
+the type. Neither needed new storage: `object_type_sources` has carried
+`sync_status`, `last_synced_at` and `last_error` since db 0003, and nothing has
+ever shown them.
+
+**Two numbers rather than one flag**, and that is the decision worth testing. A
+type with no source was never pointed at data; a type whose source failed was,
+and then broke. p.29 names both — "unregistered *or* have failed to reindex" —
+and a single "has a problem" boolean would send both people to the same screen
+to work out which they had.
+"""
+from __future__ import annotations
+
+import io
+import os
+import sys
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
+from src.main import create_app  # noqa: E402
+from src.middleware import auth as auth_mw  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def fx() -> Fixture:
+    return Fixture()
+
+
+@pytest.fixture(scope="module")
+def client() -> TestClient:
+    auth_mw.configure_verifier(LocalVerifier())
+    app = create_app()
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
+
+
+@pytest.fixture(autouse=True)
+def _fresh_identity_cache() -> None:
+    auth_mw.clear_identity_cache()
+
+
+def wbase(fx: Fixture) -> str:
+    return f"/api/workspaces/{fx.workspace}"
+
+
+def pbase(fx: Fixture) -> str:
+    return f"{wbase(fx)}/projects/{fx.project}"
+
+
+@pytest.fixture()
+def a_type(client: TestClient, fx: Fixture) -> str:
+    tag = uuid.uuid4().hex[:8]
+    r = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={
+            "api_name": f"site_{tag}", "display_name": f"Site {tag}",
+            "properties": [
+                {"api_name": "code", "display_name": "Code", "data_type": "string",
+                 "required": True},
+            ],
+            "title_property": "code",
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+@pytest.fixture()
+def a_dataset(client: TestClient, fx: Fixture) -> str:
+    csv = b"code,name\nA1,Alpha\n"
+    # `name` is a form field, not the filename: the route takes both and only
+    # the field names the dataset.
+    r = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"Sites {uuid.uuid4().hex[:8]}"},
+        files={"file": ("sites.csv", io.BytesIO(csv), "text/csv")},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def a_source(client, fx, type_id: str, dataset_id: str) -> str:
+    r = client.post(
+        f"{pbase(fx)}/object-type-sources", headers=hdr(fx.editor_sub),
+        json={"object_type_id": type_id, "dataset_id": dataset_id,
+              "primary_key_column": "code", "column_mappings": {"code": "code"}},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def summary(client, fx, type_id: str) -> dict:
+    r = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200, r.text
+    return next(t for t in r.json()["items"] if t["id"] == type_id)
+
+
+def break_the_source(fx, source_id: str, message: str) -> None:
+    """Mark a source as having failed, the way a sync would.
+
+    **Written through the service rather than through a route**, because there
+    is no route that makes a sync fail on demand — the same thing §300 did to
+    get a check into the `error` state. The alternative is a test that can only
+    assert the happy path, which is the path p.29 is not about.
+    """
+    import asyncio
+    from uuid import UUID
+
+    from src.lib.db import user_connection
+    from src.services import ontology as ontology_service
+
+    async def go() -> None:
+        async with user_connection(UUID(str(fx.editor))) as conn:
+            await ontology_service.mark_source_synced(
+                conn, UUID(source_id), ok=False, error=message
+            )
+            await conn.commit()
+
+    asyncio.run(go())
+
+
+# --- p.29's two conditions --------------------------------------------------
+
+
+def test_a_type_with_no_source_is_not_reported_as_failing(
+    client: TestClient, fx: Fixture, a_type: str
+) -> None:
+    """**The distinction the whole row turns on.**
+
+    p.29 names two conditions, and a type nobody has pointed at data is the
+    first — not the second. Reporting it as a failure would tell somebody
+    something broke when nothing has been tried.
+    """
+    row = summary(client, fx, a_type)
+    assert row["source_count"] == 0
+    assert row["failing_source_count"] == 0
+    assert row["source_error"] is None
+
+
+def test_a_healthy_source_is_not_an_issue(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """A source that has never been synced is not a source that failed.
+
+    `never_synced` is db 0003's default and the ordinary state of a source
+    somebody just made; counting it would make the column red on every type the
+    moment it was wired up.
+    """
+    a_source(client, fx, a_type, a_dataset)
+    row = summary(client, fx, a_type)
+    assert row["source_count"] == 1
+    assert row["failing_source_count"] == 0
+    assert row["source_error"] is None
+
+
+def test_a_failed_source_is_counted_and_says_why(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """p.29's red error message, and it carries the failure's **own words**.
+
+    "This type has an issue" is a fact nobody can act on; the message the sync
+    produced is the one thing that says what to fix.
+    """
+    source = a_source(client, fx, a_type, a_dataset)
+    break_the_source(fx, source, "column 'code' is not in the dataset any more")
+
+    row = summary(client, fx, a_type)
+    assert row["failing_source_count"] == 1
+    assert row["source_error"] == "column 'code' is not in the dataset any more"
+
+
+def test_a_type_with_one_failing_source_of_two_is_still_reported(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """**Counted, not joined**, which is why this is a subquery.
+
+    A type may have several sources, and a join would multiply the row — so a
+    type with two sources would appear twice in a list that is supposed to have
+    one row per type.
+    """
+    first = a_source(client, fx, a_type, a_dataset)
+    second_dataset_csv = b"code,name\nB2,Beta\n"
+    made = client.post(
+        f"{pbase(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+        data={"name": f"More {uuid.uuid4().hex[:8]}"},
+        files={"file": ("more.csv", io.BytesIO(second_dataset_csv), "text/csv")},
+    )
+    assert made.status_code == 201, made.text
+    a_source(client, fx, a_type, made.json()["id"])
+    break_the_source(fx, first, "one of two is broken")
+
+    listed = client.get(f"{wbase(fx)}/object-types", headers=hdr(fx.viewer_sub)).json()
+    rows = [t for t in listed["items"] if t["id"] == a_type]
+    assert len(rows) == 1, "a type with two sources appears once"
+    assert rows[0]["source_count"] == 2
+    assert rows[0]["failing_source_count"] == 1
+    assert rows[0]["source_error"] == "one of two is broken"
+
+
+def test_a_source_that_recovers_stops_being_an_issue(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """The column reports the *current* state, not a history.
+
+    A red mark that never clears is one people learn to ignore, which is worse
+    than not having it — the same argument §300 made about a branch's checks.
+    """
+    source = a_source(client, fx, a_type, a_dataset)
+    break_the_source(fx, source, "temporarily broken")
+    assert summary(client, fx, a_type)["failing_source_count"] == 1
+
+    import asyncio
+    from uuid import UUID
+
+    from src.lib.db import user_connection
+    from src.services import ontology as ontology_service
+
+    async def fixed() -> None:
+        async with user_connection(UUID(str(fx.editor))) as conn:
+            await ontology_service.mark_source_synced(
+                conn, UUID(source), ok=True, error=None
+            )
+            await conn.commit()
+
+    asyncio.run(fixed())
+
+    row = summary(client, fx, a_type)
+    assert row["failing_source_count"] == 0
+    assert row["source_error"] is None
+
+
+def test_another_types_failure_is_not_reported_on_this_one(
+    client: TestClient, fx: Fixture, a_type: str, a_dataset: str
+) -> None:
+    """The subquery is correlated, and this is what says so.
+
+    A count written without the `object_type_id` clause would report every
+    failure in the workspace against every type — and it would look right on a
+    workspace with one broken source, which is exactly the state a first test
+    leaves behind.
+    """
+    other = client.post(
+        f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub),
+        json={"api_name": f"other_{uuid.uuid4().hex[:8]}",
+              "display_name": f"Other {uuid.uuid4().hex[:6]}",
+              "properties": [{"api_name": "code", "display_name": "Code",
+                              "data_type": "string", "required": True}],
+              "title_property": "code"},
+    ).json()["id"]
+    source = a_source(client, fx, other, a_dataset)
+    break_the_source(fx, source, "the other type is broken")
+
+    assert summary(client, fx, other)["failing_source_count"] == 1
+    mine = summary(client, fx, a_type)
+    assert mine["failing_source_count"] == 0
+    assert mine["source_error"] is None

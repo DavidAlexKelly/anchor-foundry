@@ -201,6 +201,13 @@ class ObjectTypeSummary(BaseModel):
     colour: str
     title_property_id: UUID | None
     source_count: int
+    # **p.29's issue column** (§313). Two counts rather than one flag, because
+    # "never pointed at data" and "pointed at data and broke" are different
+    # problems with different remedies.
+    failing_source_count: int = 0
+    # The most recent failure's own words, so the column can say what went
+    # wrong rather than only that something did. Null when nothing is failing.
+    source_error: str | None = None
     # The api_names an application should not draw (`object-link-types` p.111).
     # Only the hidden ones: a list endpoint should not carry every property of
     # every type to answer "which columns do I skip".

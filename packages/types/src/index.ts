@@ -1653,6 +1653,14 @@ export interface ObjectTypeSummary {
   colour: string;
   title_property_id: string | null;
   source_count: number;
+  /** p.29's issue column (§313): how many of this type's sources last failed
+   * to sync. **Two numbers rather than one flag**, because a type with no
+   * source at all was never pointed at data, and a type whose source failed
+   * was and then broke — different problems, different remedies. */
+  failing_source_count: number;
+  /** The most recent failure's own words, so the column can say what went
+   * wrong rather than only that something did. Null when nothing is failing. */
+  source_error: string | null;
   /** api_names an application should not draw (Foundry `object-link-types`
    * p.111). Only the hidden ones — a list endpoint should not carry every
    * property of every type to answer "which columns do I skip". */

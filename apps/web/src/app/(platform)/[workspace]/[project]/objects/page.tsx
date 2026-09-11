@@ -15,6 +15,11 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { InterfacesPanel } from "@/components/interfaces-panel";
 import { OntologySearch } from "@/components/ontology-search";
+import {
+  issueDetail,
+  issueIsAnError,
+  issueLabel,
+} from "@/lib/object-type-issues";
 import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
 import {
   GroupChips, GroupFilter, ObjectTypeGroupsPanel,
@@ -1252,7 +1257,7 @@ export default function ObjectsPage() {
             <thead>
               <tr>
                 <th aria-label="Select" />
-                <th>Object type</th><th>Sources</th><th aria-label="Actions" />
+                <th>Object type</th><th>Sources</th><th>Issue</th><th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
@@ -1303,6 +1308,25 @@ export default function ObjectsPage() {
                     )}
                   </td>
                   <td className="count">{t.source_count}</td>
+                  {/* **p.29's issue column** (§313): "Object types whose
+                      backing datasources are unregistered or have failed to
+                      reindex … will have red error messages in the issue
+                      column of the object type page."
+
+                      The cell counts and the hover explains, because the
+                      failure's own words are the part that says what to fix
+                      and are far too long for a table cell. */}
+                  <td>
+                    {issueLabel(t) && (
+                      <span
+                        className={issueIsAnError(t) ? "chip brass" : "slug"}
+                        title={issueDetail(t) ?? undefined}
+                        data-testid={`type-issue-${t.api_name}`}
+                      >
+                        {issueLabel(t)}
+                      </span>
+                    )}
+                  </td>
                   <td>
                     <div className="row-actions">
                       <Link

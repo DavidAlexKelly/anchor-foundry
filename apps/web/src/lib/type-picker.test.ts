@@ -14,6 +14,8 @@ function type(id: string, api_name = id): ObjectTypeSummary {
     colour: "",
     title_property_id: null,
     source_count: 0,
+  failing_source_count: 0,
+  source_error: null,
     hidden_properties: [],
     resource_id: `r-${id}`,
     status: "experimental",
