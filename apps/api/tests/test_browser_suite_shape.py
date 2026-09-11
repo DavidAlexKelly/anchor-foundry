@@ -22,6 +22,16 @@ that fails.
 in the API suite rather than in `e2e/` — the browser suite takes half an hour
 and needs a running stack, and this is a fact about text on disk that should
 fail in seconds.
+
+**Where the mutation testing stops, and why it stops there.** The helpers below
+are mutation-tested through the manufactured-breakage cases: break the regex,
+lose a line number, scan the wrong files, and one of them goes red. The
+`assert` statements are not, and cannot be — weakening a test's own assertion
+*is* deleting the test, and no suite can answer "would deleting this test be
+noticed?" about itself. §311's run confirmed it: three mutants that softened
+the floors and the refusal survived, as every such mutant always will. The
+honest place to stop is one level up, at the helpers, which is where the
+searching actually happens.
 """
 from __future__ import annotations
 
