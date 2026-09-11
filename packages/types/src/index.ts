@@ -1644,6 +1644,43 @@ export type ValueFormat =
       timezone?: string;
     };
 
+/** p.32's four numbers over p.32's window (§320; `ontology-manager` p.32-34).
+ *
+ * **`window_days` travels with them.** Every one of these is "over the last 30
+ * days", and a screen that hard-coded the sentence would go on saying it after
+ * somebody changed the constant. */
+export interface ObjectTypeUsage {
+  reads: number;
+  writes: number;
+  /** Reads plus writes — p.32's own definition, computed by the server rather
+   * than stored, so it cannot disagree with the two it came from. */
+  interactions: number;
+  /** Unique people. **The number that changes the decision**: thirty reads by
+   * one person and thirty by thirty people are the same `reads` and a
+   * different answer to "can I rename this property". */
+  active_users: number;
+  window_days: number;
+}
+
+/** One application's share of it (p.33's "in which Foundry applications"). */
+export interface ObjectTypeUsageByApplication {
+  application: string;
+  reads: number;
+  writes: number;
+  interactions: number;
+  active_users: number;
+}
+
+/** One day of it (p.33's "when"). Days with no usage are absent rather than
+ * zero — a server that manufactured thirty rows would be inventing data to
+ * make a chart easier. */
+export interface ObjectTypeUsageByDay {
+  day: string;
+  reads: number;
+  writes: number;
+  interactions: number;
+}
+
 export interface ObjectTypeSummary {
   id: string;
   api_name: string;

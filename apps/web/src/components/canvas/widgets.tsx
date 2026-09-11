@@ -3786,6 +3786,9 @@ export function CanvasObjectTable({
           ? { property: filterProperty!, value: String(filterValue) }
           : { q: searchValue ? String(searchValue) : undefined }),
         limit: pageSize,
+        // p.33's "in which Foundry applications" (§320): a widget's reads are
+        // Workshop's, which is the answer somebody renaming a property needs.
+        application: "workshop",
       }),
     enabled: !!objectTypeId,
   });
@@ -10387,6 +10390,8 @@ export function CanvasMap({
           ? { property: filterProperty!, value: String(filterValue) }
           : { q: searchValue ? String(searchValue) : undefined }),
         limit: objectLimit,
+        // Workshop's, like the other widget read above (§320).
+        application: "workshop",
       }),
     enabled: source === "objects" && !usingSet && !!objectTypeId && !!locationProperty,
   });

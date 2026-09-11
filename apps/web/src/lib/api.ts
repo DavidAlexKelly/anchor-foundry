@@ -1216,10 +1216,14 @@ export const objects = {
       value?: string;
       limit?: number;
       offset?: number;
+      /** Which application is asking, for p.32's usage counting (§320).
+       * Unset is counted as the API, which is what an unlabelled caller is. */
+      application?: string;
     },
   ) => {
     const search = new URLSearchParams();
     if (input.q) search.set("q", input.q);
+    if (input.application) search.set("application", input.application);
     for (const t of input.typeIds ?? []) search.append("type_id", t);
     if (input.property && input.value !== undefined) {
       search.set("property", input.property);
@@ -1439,6 +1443,26 @@ export const objects = {
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
     ),
+  /** p.32's usage metrics for one object type (§320).
+   *
+   * **`application` is passed by the caller, and the Ontology Manager passes
+   * its own name so it is not counted** (p.32: "any object type or link type
+   * usage happening in Ontology Manager is not included"). The Manager and the
+   * Explorer list a type's objects through the same route, so nothing on the
+   * server can tell them apart — this is the only place the difference is
+   * known. */
+  usage: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeUsage>(
+      `/workspaces/${wid}/object-types/${typeId}/usage`,
+    ),
+  usageByApplication: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeUsageByApplication[]>(
+      `/workspaces/${wid}/object-types/${typeId}/usage/by-application`,
+    ),
+  usageByDay: (wid: string, typeId: string) =>
+    request<import("./types").ObjectTypeUsageByDay[]>(
+      `/workspaces/${wid}/object-types/${typeId}/usage/daily`,
+    ),
   /** p.30's quick links to "recently edited object types, link types, and
    * action types". No `limit` here: the server's default is what a hover is
    * worth, and a caller passing its own number would be deciding how long a
@@ -1657,9 +1681,20 @@ export const objects = {
       `/workspaces/${wid}/projects/${pid}/object-type-sources/${sourceId}/schedule`,
       { method: "DELETE" },
     ),
-  listInstances: (wid: string, typeId: string, limit = 50, offset = 0) =>
+  /** A page of one type's objects.
+   *
+   * **`application` decides whether this counts as a read** (§320;
+   * `ontology-manager` p.32). The Ontology Manager and the Object Explorer
+   * both list a type's objects through this route, and p.32 counts one and
+   * excludes the other — so the caller says which it is. A caller that says
+   * nothing is counted as the API, which is what it is. */
+  listInstances: (
+    wid: string, typeId: string, limit = 50, offset = 0, application?: string,
+  ) =>
     request<import("./types").ObjectInstancePage>(
-      `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}&offset=${offset}`,
+      `/workspaces/${wid}/object-types/${typeId}/instances?limit=${limit}` +
+        `&offset=${offset}` +
+        (application ? `&application=${encodeURIComponent(application)}` : ""),
     ),
   /** One object, by type and instance.
    *

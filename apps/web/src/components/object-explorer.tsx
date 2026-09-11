@@ -268,6 +268,10 @@ export function ObjectExplorer({
           : {}),
         limit: PAGE,
         offset,
+        // p.32 counts the Object Explorer's reads and excludes the Ontology
+        // Manager's; the two use different routes here, but the label is what
+        // the breakdown on a type's page groups by (§320).
+        application: "explorer",
       }),
     enabled: !!workspaceId,
   });

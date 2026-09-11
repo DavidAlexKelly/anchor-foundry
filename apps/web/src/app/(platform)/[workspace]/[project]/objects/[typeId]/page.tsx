@@ -11,6 +11,7 @@ import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { UndoToast } from "@/components/undo-toast";
+import { UsagePanel } from "@/components/usage-panel";
 import type {
   ActionExecuteResult,
   ActionType,
@@ -143,7 +144,15 @@ export default function ObjectInstancesPage() {
   });
   const instances = useQuery({
     queryKey: ["object-instances", params.typeId, page],
-    queryFn: () => objApi.listInstances(workspace!.id, params.typeId, PAGE_SIZE, page * PAGE_SIZE),
+    // **Named as the Ontology Manager, so this read is not counted** (§320;
+    // `ontology-manager` p.32: "any object type or link type usage happening
+    // in Ontology Manager is not included"). This page and the Object Explorer
+    // list a type's objects through the same route, so the label is the only
+    // thing that tells them apart — and somebody deciding whether to rename a
+    // property must not become the type's most active user for having looked.
+    queryFn: () => objApi.listInstances(
+      workspace!.id, params.typeId, PAGE_SIZE, page * PAGE_SIZE, "ontology_manager",
+    ),
     enabled: !!workspace,
   });
   const actionTypes = useQuery({
@@ -317,6 +326,10 @@ export default function ObjectInstancesPage() {
           onDismiss={() => setApplied(null)}
         />
       )}
+      {/* p.33's usage summary, on the page about the type it is about. Last,
+          because it is what somebody consults *before* changing something
+          above it rather than something they came here to do. */}
+      {workspace && <UsagePanel workspaceId={workspace.id} typeId={params.typeId} />}
     </main>
   );
 }
