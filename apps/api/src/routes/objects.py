@@ -51,6 +51,9 @@ from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
+from ..services import notification_store
+from ..services import object_comments as comments_service
+from ..services import workspaces as workspaces_service
 from ..services import object_type_usage as usage_service
 from ..services import ontology_recent
 from ..services import ontology_search
@@ -1652,6 +1655,171 @@ async def download_attachment(
         },
     )
 
+
+
+# ---- comments on an object (`object-views` p.137) ----------------------------
+class CommentMention(BaseModel):
+    """One person named in a comment, and where.
+
+    **The span travels with it** so the thread marks exactly those characters.
+    A browser re-finding the name would be §146's second matcher, free to
+    disagree with the one that decided who was notified — and the disagreement
+    shows as a highlight on the wrong word.
+    """
+
+    user_id: UUID
+    label: str
+    start: int
+    end: int
+
+
+class CommentOut(BaseModel):
+    id: UUID
+    object_type_id: UUID
+    instance_id: UUID
+    #: `None` when the author's account is gone. Somebody leaving does not
+    #: unsay what they said, so the comment stays and the thread renders an
+    #: unknown author rather than dropping it.
+    author_id: UUID | None
+    author_name: str | None = None
+    author_email: str | None = None
+    body: str
+    mentions: list[CommentMention]
+    attachments: list[AttachmentOut]
+    created_at: datetime
+
+
+class CommentIn(BaseModel):
+    """What somebody says, and what they attach.
+
+    **No `mentions` field, deliberately.** They are found on the server from
+    the text, against this workspace's own members — a client that could send
+    a list of user ids could have a comment delivered to somebody who cannot
+    see the object it is about.
+    """
+
+    body: str = Field(min_length=1, max_length=comments_service.MAX_BODY)
+    attachments: list[AttachmentOut] = Field(
+        default_factory=list, max_length=comments_service.MAX_ATTACHMENTS
+    )
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/comments",
+    response_model=list[CommentOut],
+)
+async def list_object_comments(
+    type_id: UUID,
+    instance_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[CommentOut]:
+    """p.137's thread, oldest first.
+
+    Viewer: reading the conversation about an object is reading the object's
+    context.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        rows = await comments_service.thread(
+            conn, object_type_id=type_id, instance_id=instance_id
+        )
+    return [
+        CommentOut(**{**r, "mentions": _jsonb(r["mentions"]),
+                      "attachments": _jsonb(r["attachments"])})
+        for r in rows
+    ]
+
+
+@router.get(
+    "/object-types/{type_id}/instances/{instance_id}/comments/count",
+    response_model=dict,
+)
+async def count_object_comments(
+    type_id: UUID,
+    instance_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> dict:
+    """What p.137's **View comments** button needs to know before it is pressed.
+
+    Its own endpoint rather than the length of the thread: the header is drawn
+    on a screen that has no reason to have fetched the conversation, and
+    fetching one to count it would make every object view pay for a panel
+    almost nobody opens.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        return {
+            "count": await comments_service.count_for(
+                conn, object_type_id=type_id, instance_id=instance_id
+            )
+        }
+
+
+@router.post(
+    "/object-types/{type_id}/instances/{instance_id}/comments",
+    response_model=CommentOut, status_code=status.HTTP_201_CREATED,
+)
+async def post_object_comment(
+    type_id: UUID,
+    instance_id: UUID,
+    body: CommentIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("editor")),
+) -> CommentOut:
+    """p.137's "comment on an object", and the notification that makes a
+    mention worth writing.
+
+    `editor`, because adding to a conversation attached to workspace content is
+    a write. Reading it is `viewer`, one endpoint up.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await ontology_service.get_type(conn, access.workspace_id, type_id)
+        members = await workspaces_service.list_members(conn, access.workspace_id)
+        try:
+            row = await comments_service.post(
+                conn,
+                workspace_id=access.workspace_id,
+                object_type_id=type_id,
+                instance_id=instance_id,
+                author_id=access.auth.user_id,
+                body=body.body,
+                members=members,
+                attachments=[a.model_dump() for a in body.attachments],
+            )
+        except comments_service.CommentRefused as exc:
+            raise ValueError(str(exc)) from exc
+
+        mentions = _jsonb(row["mentions"])
+        # **The point of naming a colleague is that they find out.** A mention
+        # that only decorated the text would be a feature nobody could tell was
+        # working.
+        #
+        # Not the author, though: naming yourself in your own comment is a way
+        # of writing, not a request to be interrupted.
+        told: set[str] = set()
+        for mention in mentions:
+            user_id = str(mention["user_id"])
+            if user_id == str(access.auth.user_id) or user_id in told:
+                continue
+            told.add(user_id)
+            await notification_store.deliver(
+                conn,
+                workspace_id=access.workspace_id,
+                user_id=user_id,
+                actor_id=access.auth.user_id,
+                action_run_id=None,
+                content={
+                    "subject": "You were mentioned in a comment",
+                    # The comment itself, so the notification is worth reading
+                    # rather than a prompt to go and read something else.
+                    "body": row["body"][:500],
+                    # §309's object link: one key, both halves, so a half-copied
+                    # URL is malformed rather than plausibly a filter.
+                    "link_url": f"/explore?object={type_id}:{instance_id}",
+                    "link_text": "Open the object",
+                },
+            )
+    return CommentOut(**{**row, "mentions": mentions,
+                         "attachments": _jsonb(row["attachments"])})
 
 # ---- value types (workspace-scoped; `object-link-types` p.222-234) ----------
 class ValueTypeOut(BaseModel):
