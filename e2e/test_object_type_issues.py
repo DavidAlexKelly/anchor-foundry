@@ -147,28 +147,53 @@ def test_a_type_nobody_has_sourced_says_so_without_being_an_error(page, api) -> 
                what="the hover to say what to do")
 
 
-# --- p.29's third home-page filter (§315) ------------------------------------
+# --- p.29's third home-page filter (§315; the test rewritten in §318) ---------
 
 
 def test_the_issue_filter_narrows_to_types_that_need_attention(page, api) -> None:
     """p.29: "filtering object types … based on their visibility, development
     status, and **indexing issues**".
 
-    **Its own workspace**, which is the only way to assert a *filtered list*
-    rather than the presence of one row. The shared workspace holds over a
-    thousand types and any number of them may be broken, so "the filter found
-    my type" would pass against a filter that found everything.
+    **Both types are named so one search finds both**, and that is the whole
+    shape of this test rather than a convenience. Three traps had to be met to
+    get here, and the third is the one that matters.
+
+    1. This page has **four tables** — object types, link types, action types
+       and dataset mappings — and `tbody tr` matches rows in all of them. The
+       mappings table carries the seeded dataset's name, which is the tagged
+       string this test looks for, so the first version read a different table
+       and reported the filter as broken while it was working.
+
+    2. The listing is a **page** (§256) into a workspace every run adds to, so
+       "the filter returned two rows" is a claim about how many other types
+       happen to match. The search box is what makes an assertion about one
+       row.
+
+    3. **And then every negative assertion was vacuous** (§318, found by a
+       surviving mutant). Filling the search box starts a debounced fetch; the
+       row count was read straight afterwards, so "the healthy type is not in
+       the list" was true about a list that had not arrived yet. `eventually`'s
+       own docstring says it in so many words — *nothing is absent more
+       convincingly than something that has not rendered* — and three mutants
+       that disconnected the filter entirely sailed through, because a filter
+       that does nothing and a fetch that has not landed look identical from a
+       count of zero.
+
+    So the two types share a prefix, one search finds both, and **the row that
+    must be present is the proof that the fetch landed**. The absence next to
+    it is then about the product. Asserted as a pair on every value, because a
+    pair cannot be satisfied by a list that is not there.
     """
     mod = Module(api, "Issue filter")
     mod.object_type(columns=["id", "town"], rows=[{"id": "1", "town": "Ely"}],
                     key="id", title="town")
     healthy = f"seed_{mod.tag}"
-
-    # A second type in the same workspace, with nothing mapped to it.
-    bare_tag = uuid.uuid4().hex[:8]
+    # **Named to share the seeded type's prefix**, so one search returns both
+    # and neither assertion below can be satisfied by an empty table.
+    bare = f"seed_{mod.tag}_bare"
     api.call(
         "POST", f"/workspaces/{mod.workspace_id}/object-types",
-        {"api_name": f"bare_{bare_tag}", "display_name": f"Bare {bare_tag}",
+        {"api_name": bare, "display_name": f"Bare {mod.tag}",
          "properties": [{"api_name": "code", "display_name": "Code",
                          "data_type": "string", "required": True}]},
     )
@@ -176,47 +201,32 @@ def test_the_issue_filter_narrows_to_types_that_need_attention(page, api) -> Non
     page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/objects")
     chooser = page.get_by_test_id("issue-filter")
     expect(chooser).to_be_visible(timeout=30000)
-    chooser.select_option("unsourced")
+    page.get_by_test_id("type-search").fill(f"seed_{mod.tag}")
 
-    # **Per-type ids and a search, not `tbody tr` and a count.** Two traps,
-    # both met here.
-    #
-    # This page has four tables — object types, link types, action types and
-    # dataset mappings — and `tbody tr` matches rows in all of them. The
-    # mappings table carries the seeded dataset's name, which is the tagged
-    # string this test looks for, so the first version read a different table
-    # and reported the filter as broken while it was working.
-    #
-    # And the listing is a *page* (§256). `Module` builds into a shared
-    # workspace that every run adds to, so "the filter returned two rows" is a
-    # claim about how many other types happen to match — the search box is what
-    # makes each assertion about one row. It also puts the and-ing of the two
-    # controls under test, which is the shape p.29's filters already have.
-    def shows(api_name: str, issue: str) -> int:
+    def rows(issue: str) -> tuple[int, int]:
+        """(the healthy type's rows, the bare one's) under this filter."""
         chooser.select_option(issue)
-        box = page.get_by_test_id("type-search")
-        box.fill("")
-        box.fill(api_name)
-        return page.get_by_test_id(f"select-{api_name}").count()
+        return (page.get_by_test_id(f"select-{healthy}").count(),
+                page.get_by_test_id(f"select-{bare}").count())
 
-    # Unsourced: the bare one is in, the healthy one is out. Both directions,
-    # because a filter that returned everything satisfies the first alone.
-    eventually(lambda: shows(f"bare_{bare_tag}", "unsourced"), lambda n: n == 1,
-               what="the unsourced type")
-    eventually(lambda: shows(healthy, "unsourced"), lambda n: n == 0,
-               what="the healthy type to be filtered out")
+    # Unsourced: the bare one is in and the healthy one is out — **as one
+    # observation**, so the zero is read off a table that is demonstrably
+    # showing results.
+    eventually(lambda: rows("unsourced"), lambda r: r == (0, 1),
+               what="only the unsourced type, under `unsourced`")
 
-    # Failing: a broken source, not an absent one — which is why these are two
-    # values rather than one.
+    # Failing is a broken source, not an absent one, which is why p.29's two
+    # conditions are two values here rather than one.
     break_the_source(mod.object_type_id, "the dataset went away")
-    eventually(lambda: shows(healthy, "failing"), lambda n: n == 1,
-               what="the failing type")
-    eventually(lambda: shows(f"bare_{bare_tag}", "failing"), lambda n: n == 0,
-               what="the unsourced type to be filtered out")
+    eventually(lambda: rows("failing"), lambda r: r == (1, 0),
+               what="only the failing type, under `failing`")
 
     # `any` is both, which is the question somebody opening this is asking.
-    eventually(lambda: shows(healthy, "any"), lambda n: n == 1,
-               what="the failing type under `any`")
-    eventually(lambda: shows(f"bare_{bare_tag}", "any"), lambda n: n == 1,
-               what="the unsourced type under `any`")
+    eventually(lambda: rows("any"), lambda r: r == (1, 1),
+               what="both types, under `any`")
+
+    # And the unfiltered list still holds both, so the three answers above are
+    # narrowings of something rather than three different searches.
+    eventually(lambda: rows(""), lambda r: r == (1, 1),
+               what="both types, unfiltered")
     heal_the_source(mod.object_type_id)
