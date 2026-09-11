@@ -19,9 +19,23 @@ import { describe, expect, it } from "vitest";
  * depend on being read.
  */
 
-const CSS = readFileSync(
-  join(__dirname, "globals.css"),
-  "utf8",
+/** Comments stripped, and **that is a rule this file learned the hard way**
+ * (§319). A comment naming a past mistake — "`--panel`, not `--rule`"; "§303's
+ * `var(--mono, monospace)`" — is the most useful thing to write next to a
+ * declaration, and it is exactly what a textual scan reads as a declaration.
+ * §302 hit the same shape from the other side: a checker whose own fixture
+ * appeared in its own search.
+ *
+ * A check that punishes the comment explaining it is a check people work
+ * around by deleting the comment, so it reads the CSS rather than the prose
+ * about it.
+ */
+function withoutComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, " ");
+}
+
+const CSS = withoutComments(
+  readFileSync(join(__dirname, "globals.css"), "utf8"),
 );
 
 /** Names declared as `--x: value`, anywhere - including inside the media and
@@ -64,5 +78,17 @@ describe("globals.css custom properties", () => {
     // token because the shade is specific to that drawing. Listed rather than
     // pattern-matched away, so a second one is a decision somebody makes.
     expect(undeclaredFallbacks).toEqual(["--muted-bg"]);
+  });
+
+  it("reads the stylesheet rather than the prose about it", () => {
+    // **The vacuity guard for `withoutComments`.** A stripper that removed
+    // everything would make both checks above pass for the best possible
+    // reason and the worst possible cause; one that removed nothing would put
+    // back the failure it exists to prevent. So: the declarations survive, and
+    // a token named only inside a comment does not count as read.
+    expect(declared(CSS).size).toBeGreaterThanOrEqual(15);
+    expect(CSS).not.toContain("/*");
+    const inACommentOnly = withoutComments("/* var(--not-a-token) */ a { b: c }");
+    expect(readWithoutFallback(inACommentOnly).size).toBe(0);
   });
 });

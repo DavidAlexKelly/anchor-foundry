@@ -300,3 +300,69 @@ def test_the_limit_is_honoured(client: TestClient, fx: Fixture, ontology: dict) 
     )
     assert r.status_code == 200
     assert len(r.json()) == 2
+
+
+# --- The browser's copy of the kinds (§316) -----------------------------------
+
+
+#: Four levels: tests -> api -> apps -> the repository root.
+ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+SEARCH_PY = os.path.join(
+    ROOT, "apps", "api", "src", "services", "ontology_search.py"
+)
+TYPES_TS = os.path.join(ROOT, "packages", "types", "src", "index.ts")
+
+
+def kinds_returned() -> set[str]:
+    """Every `"kind": "..."` this service can put in a result."""
+    import re
+
+    text = open(SEARCH_PY, encoding="utf-8").read()
+    return set(re.findall(r'"kind":\s*"([a-z_]+)"', text))
+
+
+def kinds_declared() -> set[str]:
+    """The `kind` union of `OntologySearchHit` in the shared types."""
+    import re
+
+    text = open(TYPES_TS, encoding="utf-8").read()
+    start = text.index("export interface OntologySearchHit")
+    body = text[start : text.index("id: string;", start)]
+    return set(re.findall(r'\|\s*"([a-z_]+)"', body))
+
+
+def test_every_kind_the_search_returns_is_one_the_browser_declares() -> None:
+    """**Sixty-four units of a hit that opened nothing** (§252 to §316).
+
+    `interface` was returned by this service from the day interfaces became
+    searchable and was never added to the union. Neither layer could complain:
+    the response model types `kind` as `str`, and in TypeScript a
+    `Record<Kind, string>` over a union with a member *missing* is a complete
+    record — so `tsc` was satisfied by a label map with a hole in it, the chip
+    rendered blank, and the click fell through the last `else` into the shared
+    property handler and opened an editor for an id from another table.
+
+    Nothing errored, which is why it lasted. This is the one direction that can
+    be asserted cheaply, and it is the direction that breaks a screen:
+    `test_response_type_drift` makes the same argument about fields.
+    """
+    missing = kinds_returned() - kinds_declared()
+    assert not missing, (
+        f"the search returns {sorted(missing)} and the browser's "
+        "OntologySearchHit does not declare them, so a hit of that kind has no "
+        "label and no destination"
+    )
+
+
+def test_the_two_lists_are_actually_being_read() -> None:
+    """The check above is only worth having if both halves find something.
+
+    A regex that silently matched nothing would make the assertion above pass
+    for the best possible reason and the worst possible cause — which is this
+    repo's standing finding, one file over.
+    """
+    assert "interface" in kinds_returned()
+    assert "object_type" in kinds_returned()
+    assert len(kinds_declared()) >= 7

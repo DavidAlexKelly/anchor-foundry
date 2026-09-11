@@ -724,9 +724,20 @@ function ObjectsDialog({
 export function InterfacesPanel({
   workspaceId,
   canEdit,
+  openId,
+  onOpened,
 }: {
   workspaceId: string;
   canEdit: boolean;
+  /** Open this one as soon as it can be resolved — the ontology search hands
+   * over an id, and only this component knows how to turn one into an open
+   * dialog. Same contract as the groups and shared properties panels', and
+   * **it is the contract this panel did not have** (§316): §252 made
+   * interfaces searchable while the only way to open one stayed a click on a
+   * row in this list, so a hit had nowhere to go and quietly went to the
+   * shared property editor instead. */
+  openId?: string | null;
+  onOpened?: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -748,6 +759,20 @@ export function InterfacesPanel({
   });
 
   const all = interfaces.data ?? [];
+
+  // Resolved during render rather than in an effect, like the groups panel:
+  // the id may arrive before the list does, and an effect keyed on `openId`
+  // alone would miss the case where the list is what arrives second.
+  //
+  // **Browsing, not editing.** A search hit is somebody looking for a thing,
+  // and the answer to "where is it" is what it is and what implements it —
+  // not an editor over its definition, which a viewer may not even be allowed
+  // to save. The row's own Edit button is still how you get to that.
+  const requested = openId ? all.find((i) => i.id === openId) ?? null : null;
+  if (requested && browsing?.id !== requested.id) {
+    setBrowsing(requested);
+    onOpened?.();
+  }
 
   return (
     <>

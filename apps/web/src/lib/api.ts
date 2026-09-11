@@ -1232,6 +1232,34 @@ export const objects = {
       `/workspaces/${wid}/object-instances${qs ? `?${qs}` : ""}`,
     );
   },
+  /** p.34's favourite objects (§312).
+   *
+   * Whose they are never travels in the request: db 0074's policy pins every
+   * read and write to the caller. */
+  favourites: (wid: string) =>
+    request<import("./types").ObjectFavourite[]>(
+      `/workspaces/${wid}/object-favourites`,
+    ),
+  isFavourite: (wid: string, typeId: string, instanceId: string) =>
+    request<{ favourite: boolean }>(
+      `/workspaces/${wid}/object-favourites/${typeId}/${instanceId}`,
+    ),
+  /** **PUT, because starring twice is the same star.** The button's state
+   * arrived a moment ago, so a second press is ordinary rather than a mistake,
+   * and a route that refused it would be a toggle that fails for having
+   * worked. */
+  addFavourite: (
+    wid: string,
+    input: { object_type_id: string; instance_id: string; label: string },
+  ) =>
+    request<import("./types").ObjectFavourite>(
+      `/workspaces/${wid}/object-favourites`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  removeFavourite: (wid: string, typeId: string, instanceId: string) =>
+    request<void>(`/workspaces/${wid}/object-favourites/${typeId}/${instanceId}`, {
+      method: "DELETE",
+    }),
   /** Saved searches (item 4.1). The definition is validated server-side by the
    *  same function `explore` goes through, so a search that cannot run is
    *  refused here rather than the next time somebody opens it. */
@@ -1262,9 +1290,9 @@ export const objects = {
    * ontology. */
   /** The object types page's table, and every type picker in the product.
    *
-   * Three filters, all optional and all and-ed: p.262's group and
+   * Four filters, all optional and all and-ed: p.262's group and
    * `ontology-manager` p.29's "visibility, development status, and indexing
-   * issues" — less the third, which is state the sync path does not record.
+   * issues" — all three of p.29's since §315.
    *
    * Built as a `URLSearchParams` rather than by concatenating, because with
    * three optional parameters the string-building version has a `?`-versus-`&`
@@ -1275,6 +1303,10 @@ export const objects = {
     filters?: {
       status?: import("./types").OntologyStatus | null;
       visibility?: import("./types").PropertyVisibility | null;
+      /** p.29's third home-page filter (§315): `failing`, `unsourced` or
+       * `any`. Two values rather than one, because p.29 names two things that
+       * can be wrong and they have different remedies. */
+      issue?: import("./types").TypeIssueFilter | null;
       /** Matched against the display name and the api name. The reason this
        * endpoint has a search at all is that it also has a `limit`: a picker
        * that can only show fifty types has to be able to find the fifty-first.
@@ -1291,6 +1323,7 @@ export const objects = {
     if (groupId) query.set("group_id", groupId);
     if (filters?.status) query.set("status", filters.status);
     if (filters?.visibility) query.set("visibility", filters.visibility);
+    if (filters?.issue) query.set("issue", filters.issue);
     if (filters?.q) query.set("q", filters.q);
     for (const id of filters?.ids ?? []) query.append("ids", id);
     if (filters?.limit !== undefined) query.set("limit", String(filters.limit));
@@ -1405,6 +1438,14 @@ export const objects = {
   searchOntology: (wid: string, q: string) =>
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
+    ),
+  /** p.30's quick links to "recently edited object types, link types, and
+   * action types". No `limit` here: the server's default is what a hover is
+   * worth, and a caller passing its own number would be deciding how long a
+   * list somebody else has to read. */
+  recentlyEdited: (wid: string) =>
+    request<import("./types").RecentlyEdited[]>(
+      `/workspaces/${wid}/ontology-recent`,
     ),
   /** Interfaces (`object-link-types` p.4, p.53; `ontology` p.60–62). */
   listInterfaces: (wid: string) =>
@@ -1800,6 +1841,26 @@ export const actions = {
     request<import("./types").ActionType>(
       `/workspaces/${wid}/action-types/${actionTypeId}`,
     ),
+  /** p.154's Undo, addressed as the pairing it is: a run of *this* action.
+   *
+   * A run reached through the wrong action type is not found rather than
+   * quietly undone — the caller has asked about a pairing that does not
+   * exist, and the id they guessed belongs to somebody else's action. */
+  undo: (wid: string, pid: string, actionTypeId: string, runId: string) =>
+    request<import("./types").ActionUndoResult>(
+      `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/runs/${runId}/undo`,
+      { method: "POST" },
+    ),
+  /** p.154's "Allow revert after action submission" toggle, in the Form tab.
+   *
+   * **`false` here is not undoable for applications already made** (p.155:
+   * "even if action reverts have been toggled on again"), which is why the
+   * screen that offers this asks before switching it off. */
+  setRevert: (wid: string, actionTypeId: string, allow: boolean) =>
+    request<import("./types").ActionType>(
+      `/workspaces/${wid}/action-types/${actionTypeId}`,
+      { method: "PATCH", body: JSON.stringify({ allow_revert: allow }) },
+    ),
 };
 
 export const canvas = {
@@ -1975,6 +2036,13 @@ export const canvas = {
     request<import("./types").CanvasApp[]>(`/workspaces/${wid}/published-canvas-apps`),
   getPublished: (wid: string, appId: string) =>
     request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/published-canvas-apps/${appId}`),
+  /** p.166's `/dev/`: the app as its author last **saved** it (§314).
+   *
+   * Refused with a 404 to anybody who may not edit the project, because "for
+   * testing purposes" means unpublished work and a 403 would confirm there is
+   * some. */
+  getSaved: (wid: string, appId: string) =>
+    request<import("./types").CanvasAppDetail>(`/workspaces/${wid}/saved-canvas-apps/${appId}`),
 };
 
 /** The Code pillar's repository surface (ROADMAP Code item 2). Reads render

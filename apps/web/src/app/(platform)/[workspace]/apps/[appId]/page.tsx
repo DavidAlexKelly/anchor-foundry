@@ -32,6 +32,13 @@ import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
 import { CanvasNode } from "@/components/canvas/SettingsPanel";
 import { seedFromQuery } from "@/components/canvas/pure";
 import { useModuleTitle } from "@/components/canvas/module-title";
+import {
+  VERSION_PARAM,
+  aheadNote,
+  aheadOfPublished,
+  versionFrom,
+  versionNote,
+} from "@/lib/app-version";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import {
   eventsOf, layoutOf, pageSelectionOf, routingOf, stateSavingOf, variablesOf,
@@ -56,9 +63,24 @@ export default function PublishedAppPage() {
   const search = useSearchParams();
   const { workspace, isPending: wsPending, notFound } = useWorkspaceBySlug(params.workspace);
 
+  // **p.166's `/dev/`** (§314): "you can change the `/latest/` to `/dev/` in
+  // the URL, and the link will now redirect to the last saved version of the
+  // Workshop application instead of the last published version."
+  //
+  // A query parameter rather than a path segment, because every other piece of
+  // linkable state in this platform lives in the query string — see
+  // `app-version.ts` for why a second convention would be worse than a
+  // divergence.
+  const version = versionFrom(search.get(VERSION_PARAM));
+
   const app = useQuery({
-    queryKey: ["published-canvas-app", params.appId],
-    queryFn: () => canvasApi.getPublished(workspace!.id, params.appId),
+    // Keyed on the version, so the two are separate cached answers rather than
+    // one that depends on which link you followed first.
+    queryKey: ["canvas-app-at", params.appId, version],
+    queryFn: () =>
+      version === "saved"
+        ? canvasApi.getSaved(workspace!.id, params.appId)
+        : canvasApi.getPublished(workspace!.id, params.appId),
     enabled: !!workspace,
   });
 
@@ -83,8 +105,9 @@ export default function PublishedAppPage() {
     return (
       <main className="page">
         <div className="state error">
-          This app isn&apos;t published to you. It may have been unpublished, or shared
-          only with groups you&apos;re not in.
+          {version === "saved"
+            ? "There's no saved version here for you. Either this app doesn't exist, or you don't have permission to see work that hasn't been published — which is the same answer on purpose."
+            : "This app isn't published to you. It may have been unpublished, or shared only with groups you're not in."}
         </div>
       </main>
     );
@@ -106,7 +129,7 @@ export default function PublishedAppPage() {
       </nav>
       <div className="page-head">
         <div>
-          <p className="eyebrow">published app</p>
+          <p className="eyebrow">{version === "saved" ? "saved version" : "published app"}</p>
           <h1>{app.data.name}</h1>
           <p className="sub">
             v{app.data.current_version}
@@ -114,6 +137,32 @@ export default function PublishedAppPage() {
           </p>
         </div>
       </div>
+      {/* p.166 calls this "for testing purposes", so somebody who arrived on a
+          hand-edited link has to be told that what they are looking at is not
+          what their colleagues see. */}
+      {versionNote(version) && (
+        <p className="state" data-testid="version-note">
+          {versionNote(version)}
+          {aheadNote(
+            aheadOfPublished(
+              version,
+              app.data.current_version,
+              app.data.published_version ?? null,
+            ),
+          ) && (
+            <>
+              {" "}
+              {aheadNote(
+                aheadOfPublished(
+                  version,
+                  app.data.current_version,
+                  app.data.published_version ?? null,
+                ),
+              )}
+            </>
+          )}
+        </p>
+      )}
       {Object.keys(definition).length === 0 ? (
         <div className="empty">
           <h2>This app is empty</h2>

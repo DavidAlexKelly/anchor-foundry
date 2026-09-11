@@ -39,6 +39,12 @@ import { ApiError, objects as objApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import {
+  emptyReason as favouritesEmptyReason,
+  rowLabel,
+  rowSubtitle,
+} from "@/lib/favourites";
+import { emptyReason as savedSearchesEmptyReason } from "@/lib/saved-searches";
+import {
   OBJECT_PARAM,
   decodeObject,
   encodeObject,
@@ -369,12 +375,21 @@ export function ObjectExplorer({
 
   return (
     <div className="ox">
-      <SavedSearches
-        workspaceId={workspaceId}
-        canEdit={canEdit}
-        criteria={applied}
-        onOpen={open}
-      />
+      <div className="ox-aside">
+        <SavedSearches
+          workspaceId={workspaceId}
+          canEdit={canEdit}
+          criteria={applied}
+          onOpen={open}
+        />
+        {/* **p.34's sidebar, here** (§312), because the two belong together:
+            one is a shortcut back to a question and the other a shortcut back
+            to an answer. Foundry's sidebar is platform-wide and ours is not,
+            so the alternative was inventing a surface to hold four items. */}
+        <Favourites workspaceId={workspaceId} onOpen={(ref) => url.set({
+          [OBJECT_PARAM]: encodeObject(ref),
+        })} />
+      </div>
 
       <div className="ox-main">
         <form
@@ -650,6 +665,56 @@ export function ObjectExplorer({
 }
 
 // ---- the saved-search rail ---------------------------------------------------
+/** p.34's favourites, as the Explorer's other aside (§312).
+ *
+ * **Opening one writes the URL and nothing else**, which is the whole reason
+ * §309 came first: a favourite is a shortcut, the object view is drawn from
+ * the address bar, and so a shortcut *is* a link. Had this list held the
+ * object itself it would be a second way to open one, disagreeing with the
+ * first the moment either changed.
+ */
+function Favourites({
+  workspaceId,
+  onOpen,
+}: {
+  workspaceId: string;
+  onOpen: (ref: { typeId: string; instanceId: string }) => void;
+}) {
+  const kept = useQuery({
+    queryKey: ["object-favourites", workspaceId],
+    queryFn: () => objApi.favourites(workspaceId),
+  });
+
+  return (
+    <aside className="ox-saved" aria-label="Favourites">
+      <h2>Favourites</h2>
+      {kept.isPending && <p className="slug">Loading…</p>}
+      {kept.isError && <p className="slug">Couldn&apos;t load favourites.</p>}
+      {kept.data?.length === 0 && (
+        <p className="ox-note" data-testid="favourites-empty">{favouritesEmptyReason()}</p>
+      )}
+      <ul className="ox-saved-list">
+        {kept.data?.map((f) => (
+          <li key={f.id}>
+            <button
+              type="button"
+              className="ox-saved-open"
+              data-testid={`favourite-open-${f.instance_id}`}
+              onClick={() =>
+                onOpen({ typeId: f.object_type_id, instanceId: f.instance_id })
+              }
+            >
+              <strong>{rowLabel(f)}</strong>
+              {rowSubtitle(f) && <span className="slug">{rowSubtitle(f)}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  );
+}
+
+
 function SavedSearches({
   workspaceId,
   canEdit,
@@ -683,11 +748,7 @@ function SavedSearches({
       {searches.isPending && <p className="slug">Loading…</p>}
       {searches.isError && <p className="slug">Couldn&apos;t load saved searches.</p>}
       {searches.data?.length === 0 && (
-        <p className="ox-note">
-          {canEdit
-            ? "None yet. Search for something, then Save this search — everyone in the workspace sees it."
-            : "None yet. An editor can save one, and it appears here for everybody."}
-        </p>
+        <p className="ox-note">{savedSearchesEmptyReason(canEdit)}</p>
       )}
       <ul className="ox-saved-list">
         {searches.data?.map((s) => (

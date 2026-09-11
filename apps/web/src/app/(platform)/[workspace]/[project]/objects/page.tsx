@@ -15,6 +15,12 @@ import { ActionDefinitionEditor } from "@/components/action-definition-editor";
 import { ObjectViewEditor } from "@/components/object-view-editor";
 import { InterfacesPanel } from "@/components/interfaces-panel";
 import { OntologySearch } from "@/components/ontology-search";
+import {
+  ISSUE_FILTER_OPTIONS,
+  issueDetail,
+  issueIsAnError,
+  issueLabel,
+} from "@/lib/object-type-issues";
 import { SharedPropertiesPanel } from "@/components/shared-properties-panel";
 import {
   GroupChips, GroupFilter, ObjectTypeGroupsPanel,
@@ -44,6 +50,7 @@ import {
   type ObjectTypeSummary,
   type OntologyStatus,
   type PropertyVisibility,
+  type TypeIssueFilter,
   type ObjectTypeSuggestion,
 } from "@/lib/types";
 
@@ -918,6 +925,10 @@ export default function ObjectsPage() {
   // opens it again rather than being swallowed as "no change".
   const [editingShared, setEditingShared] = useState<string | null>(null);
   const [openingGroup, setOpeningGroup] = useState<string | null>(null);
+  // The third ownerless kind (§316). §252 made interfaces searchable and left
+  // the hit with nowhere to go, so it fell through to the shared property
+  // editor and opened an id from another table — silently.
+  const [openingInterface, setOpeningInterface] = useState<string | null>(null);
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   // `ontology-manager` p.29's other two home-page filters. Separate pieces of
   // state rather than one object, because each is one control and combining
@@ -926,6 +937,7 @@ export default function ObjectsPage() {
   const [statusFilter, setStatusFilter] = useState<OntologyStatus | null>(null);
   const [visibilityFilter, setVisibilityFilter] =
     useState<PropertyVisibility | null>(null);
+  const [issueFilter, setIssueFilter] = useState<TypeIssueFilter | null>(null);
   /** Whether the table is showing a narrowed ontology rather than the whole one.
    *
    * **Read by the empty state, and that is why it is a value rather than three
@@ -941,7 +953,7 @@ export default function ObjectsPage() {
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const filtered = Boolean(
-    groupFilter || statusFilter || visibilityFilter || search.trim(),
+    groupFilter || statusFilter || visibilityFilter || issueFilter || search.trim(),
   );
   const clearFilters = () => {
     setGroupFilter(null);
@@ -972,12 +984,13 @@ export default function ObjectsPage() {
   const types = useQuery({
     queryKey: [
       "object-types", workspace?.id, groupFilter, statusFilter,
-      visibilityFilter, search, offset,
+      visibilityFilter, issueFilter, search, offset,
     ],
     queryFn: () =>
       objApi.listTypes(workspace!.id, groupFilter, {
         status: statusFilter,
         visibility: visibilityFilter,
+        issue: issueFilter,
         q: search.trim() || null,
         offset,
       }),
@@ -1086,6 +1099,7 @@ export default function ObjectsPage() {
           onOpenType={(typeId) => setEditingType(typeId)}
           onOpenSharedProperty={(sharedId) => setEditingShared(sharedId)}
           onOpenGroup={(groupId) => setOpeningGroup(groupId)}
+          onOpenInterface={(interfaceId) => setOpeningInterface(interfaceId)}
         />
       )}
 
@@ -1243,6 +1257,28 @@ export default function ObjectsPage() {
               <option key={v} value={v}>{v}</option>
             ))}
           </select>
+          {/* p.29's third home-page filter (§315). The row for it said it
+              wanted "indexing state the sync path does not record", and §313
+              showed that was wrong — `object_type_sources` has recorded it
+              since db 0003, so the blocker was never real.
+
+              Two values rather than one, matching the column beside it: p.29
+              names two things that can be wrong and they have different
+              remedies. `any` is there because "show me everything that needs
+              attention" is what somebody opening this filter is asking. */}
+          <select
+            data-testid="issue-filter"
+            aria-label="Filter object types by issue"
+            value={issueFilter ?? ""}
+            onChange={(e) => {
+              setIssueFilter((e.target.value || null) as TypeIssueFilter | null);
+              setOffset(0);
+            }}
+          >
+            {ISSUE_FILTER_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
         </div>
       )}
 
@@ -1252,7 +1288,7 @@ export default function ObjectsPage() {
             <thead>
               <tr>
                 <th aria-label="Select" />
-                <th>Object type</th><th>Sources</th><th aria-label="Actions" />
+                <th>Object type</th><th>Sources</th><th>Issue</th><th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
@@ -1303,6 +1339,25 @@ export default function ObjectsPage() {
                     )}
                   </td>
                   <td className="count">{t.source_count}</td>
+                  {/* **p.29's issue column** (§313): "Object types whose
+                      backing datasources are unregistered or have failed to
+                      reindex … will have red error messages in the issue
+                      column of the object type page."
+
+                      The cell counts and the hover explains, because the
+                      failure's own words are the part that says what to fix
+                      and are far too long for a table cell. */}
+                  <td>
+                    {issueLabel(t) && (
+                      <span
+                        className={issueIsAnError(t) ? "chip brass" : "slug"}
+                        title={issueDetail(t) ?? undefined}
+                        data-testid={`type-issue-${t.api_name}`}
+                      >
+                        {issueLabel(t)}
+                      </span>
+                    )}
+                  </td>
                   <td>
                     <div className="row-actions">
                       <Link
@@ -1439,6 +1494,8 @@ export default function ObjectsPage() {
           <InterfacesPanel
             workspaceId={workspace!.id}
             canEdit={canEditOntology}
+            openId={openingInterface}
+            onOpened={() => setOpeningInterface(null)}
           />
 
           {/* Groups last of the four, because it is the only one that says

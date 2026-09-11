@@ -1653,6 +1653,14 @@ export interface ObjectTypeSummary {
   colour: string;
   title_property_id: string | null;
   source_count: number;
+  /** p.29's issue column (§313): how many of this type's sources last failed
+   * to sync. **Two numbers rather than one flag**, because a type with no
+   * source at all was never pointed at data, and a type whose source failed
+   * was and then broke — different problems, different remedies. */
+  failing_source_count: number;
+  /** The most recent failure's own words, so the column can say what went
+   * wrong rather than only that something did. Null when nothing is failing. */
+  source_error: string | null;
   /** api_names an application should not draw (Foundry `object-link-types`
    * p.111). Only the hidden ones — a list endpoint should not carry every
    * property of every type to answer "which columns do I skip". */
@@ -1936,31 +1944,64 @@ export interface ModuleStateDetail extends ModuleState {
 }
 
 export interface OntologySearchHit {
+  /** **Seven, and `interface` was missing from this list for sixty-four
+   * units** (§252 made them searchable, §316 noticed). The server has returned
+   * `interface` hits the whole time; this union declared six, and nothing
+   * could complain — the response model types `kind` as `str`, and a
+   * `Record<Kind, …>` over a union with a member missing is a *complete*
+   * record, so `tsc` was satisfied by a map with a hole in it. The hit
+   * rendered with a blank label and, clicked, fell through to the shared
+   * property handler and opened nothing at all. */
   kind:
     | "object_type"
     | "property"
     | "link_type"
     | "action_type"
     | "shared_property"
-    | "group";
+    | "group"
+    | "interface";
   id: string;
   api_name: string;
   display_name: string;
   /** Where it lives. A property called "status" is not somewhere anybody can
    * navigate to; "status on Ticket" is.
    *
-   * **Null for a shared property and for a group**, neither of which belongs
-   * to an object type by definition (`object-link-types` p.178, p.261) — null
-   * rather than a stand-in, because a made-up owner would send whoever clicked
-   * it somewhere with nothing to do with what they searched for. */
+   * **Null for the three ownerless kinds** — a shared property, a group and an
+   * interface, none of which belongs to an object type by definition
+   * (`object-link-types` p.178, p.261, p.4; an interface is implemented *by*
+   * types rather than owned by one) — null rather than a stand-in, because a
+   * made-up owner would send whoever clicked it somewhere with nothing to do
+   * with what they searched for. */
   object_type_id: string | null;
   object_type_name: string;
-  /** How many things use it. Set for the two kinds with no owner to name:
-   * object types for a shared property, member object types for a group —
-   * which is the closest true answer to "where does this live". */
+  /** How many things use it. Set for the three kinds with no owner to name:
+   * object types for a shared property, member object types for a group,
+   * implementing types for an interface — which is the closest true answer to
+   * "where does this live". */
   usage_count: number | null;
   matched_field: string;
   matched_value: string;
+}
+
+/** One of p.30's quick links to what was edited last (§317).
+ *
+ * **Deliberately shaped like a search hit**, less the two fields about
+ * matching: the browser draws both lists with one renderer and one
+ * destination decision (`search-destination.ts`), because two renderers for
+ * the same kinds would be two places for a link to go wrong — which is
+ * exactly what §316 found when one of them knew a kind the other did not.
+ *
+ * `object_type_id` is never null here, unlike on a hit: p.30 names three
+ * kinds, and an object type is its own owner while a link type and an action
+ * type each belong to one. */
+export interface RecentlyEdited {
+  kind: "object_type" | "link_type" | "action_type";
+  id: string;
+  api_name: string;
+  display_name: string;
+  object_type_id: string;
+  object_type_name: string;
+  updated_at: string;
 }
 
 export interface ObjectView {
@@ -2204,6 +2245,15 @@ export interface ActionType {
    * "which properties does this action write", and that question has this
    * exact answer while `modify_object` is the only rule kind. */
   editable_properties: string[];
+  /** p.154's "Allow revert after action submission" toggle, in the Form tab.
+   * **New actions are revertible by default** (p.154). Sent so the toggle can
+   * be drawn in the state it is actually in — a switch that always renders on
+   * is §214's control that looks like it works.
+   *
+   * Turning it **off is not reversible for applications already made** (p.155:
+   * "even if action reverts have been toggled on again"), which is a property
+   * of this field nothing about its type can express. */
+  allow_revert: boolean;
   /** Developmental state (`object-link-types` p.253, which names actions among
    * the kinds that have one). `promoted` is excluded by p.255. **Not capped by
    * the object type** — p.257's cap is about link types and says nothing about
@@ -2262,6 +2312,31 @@ export interface ActionExecuteResult {
    * modify one a different parameter names, so which objects were written is
    * not something a browser can work out. Empty when the write failed. */
   touched: TouchedObject[];
+  /** This application's run (§319; `action-types` p.154). p.154 puts Undo "in
+   * the success message after any successful action application", so the thing
+   * to undo is named in the answer that reports the success — a screen should
+   * not have to find its own run in a list and pick one by timestamp. */
+  run_id: string | null;
+  /** Whether that Undo is worth drawing. **Decided by the server**, because
+   * every one of p.154-156's conditions is about state a browser does not
+   * have: who applied it, what the object looked like when the action
+   * finished, whether the toggle has been off at any point since. */
+  can_undo: boolean;
+  /** Why not, when it is not; `null` when it can be undone. p.155 calls the
+   * toast "your only opportunity", so a screen that silently omits the button
+   * says nothing at the one moment somebody could have acted. */
+  undo_refusal: string | null;
+}
+
+/** What an undo did (§319; `action-types` p.154-156). */
+export interface ActionUndoResult {
+  ok: boolean;
+  /** The undo's own run. A revert appends to the dataset and writes the index
+   * exactly as an apply does, so it has an author and a time rather than being
+   * an edit that appears from nowhere. */
+  run_id: string;
+  instance: ObjectInstance;
+  dataset_version: number | null;
 }
 
 /** What one inline-edit submission did (`workshop` p.242-243).
@@ -2687,3 +2762,24 @@ export interface ScratchpadResult {
    * an error from DuckDB should be able to see what DuckDB was given. */
   ran: string;
 }
+
+/** One favourited object (§312; db 0074; `getting-started` p.34).
+ *
+ * `label` is what the object was called when it was starred, and may be out of
+ * date: resolving it live would mean one read against the instance store per
+ * shortcut before a sidebar could draw. Opening the favourite shows the
+ * current object either way. */
+export interface ObjectFavourite {
+  id: string;
+  object_type_id: string;
+  object_type_name: string;
+  instance_id: string;
+  label: string;
+  created_at: string;
+}
+
+/** p.29's indexing-issue filter (§315). Two values rather than one, because
+ * p.29 names two things that can be wrong — "unregistered *or* have failed to
+ * reindex" — and they have different remedies. `any` is what somebody opening
+ * the filter is usually asking for. */
+export type TypeIssueFilter = "failing" | "unsourced" | "any";

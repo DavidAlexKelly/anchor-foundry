@@ -1202,3 +1202,154 @@ def test_without_auto_publish_a_save_leaves_viewers_where_they_were(client: Test
     saved = _put_definition(client, fx, app_id, _empty_doc("second")).json()
     assert saved["current_version"] == 2
     assert saved["published_version"] == 1, "saving did not move viewers"
+
+
+# ---- p.166's `/dev/`: the last *saved* version (§314) -----------------------
+#
+#     "For testing purposes, you can change the `/latest/` to `/dev/` in the
+#      URL, and the link will now redirect to the last saved version of the
+#      Workshop application instead of the last published version." (p.166)
+#
+# The counterpart to `test_saving_after_publishing_does_not_move_the_viewers`
+# above: that one is why `published_version` exists, and this is the one route
+# that deliberately looks past it.
+
+
+def _saved(client: TestClient, fx: Fixture, app_id: str, sub: str):
+    return client.get(f"{wbase(fx)}/saved-canvas-apps/{app_id}", headers=hdr(sub))
+
+
+def test_the_saved_version_is_the_one_the_author_last_saved(
+    client: TestClient, fx: Fixture
+) -> None:
+    """p.166's whole sentence, and it is only useful because the two differ.
+
+    Asserted against the published read in the same test, because "shows the
+    saved version" is satisfied by a route that shows *any* version until you
+    put the other one beside it.
+    """
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("as published"))
+    _publish(client, fx, app_id)
+    _save(client, fx, app_id, _text_module("still being worked on"))
+
+    dev = _saved(client, fx, app_id, fx.editor_sub)
+    assert dev.status_code == 200, dev.text
+    assert dev.json()["definition"]["layout"]["t1"]["props"]["text"] == (
+        "still being worked on"
+    )
+
+    live = client.get(f"{wbase(fx)}/published-canvas-apps/{app_id}",
+                      headers=hdr(fx.viewer_sub))
+    assert live.json()["definition"]["layout"]["t1"]["props"]["text"] == "as published"
+
+
+def test_an_unsaved_app_gives_the_same_answer_either_way(
+    client: TestClient, fx: Fixture
+) -> None:
+    """An author who has not saved since publishing sees no difference, which
+    is the honest result rather than a case to special-case."""
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("one and only"))
+    _publish(client, fx, app_id)
+
+    dev = _saved(client, fx, app_id, fx.editor_sub)
+    assert dev.json()["definition"]["layout"]["t1"]["props"]["text"] == "one and only"
+
+
+def test_a_viewer_cannot_read_the_saved_version(client: TestClient, fx: Fixture) -> None:
+    """**The refusal p.166 leaves implicit, and the reason this route exists at
+    all rather than a query parameter on the published one.**
+
+    "For testing purposes" means unpublished work, and unpublished work is
+    exactly what publishing-as-an-act keeps from viewers. A hand-edited link
+    must not be a way round that.
+    """
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("as published"))
+    _publish(client, fx, app_id)
+    _save(client, fx, app_id, _text_module("not for you"))
+
+    refused = _saved(client, fx, app_id, fx.viewer_sub)
+    assert refused.status_code == 404, refused.text
+    assert "not for you" not in refused.text
+
+
+def test_the_refusal_is_a_404_rather_than_a_403(client: TestClient, fx: Fixture) -> None:
+    """A 403 would confirm the app exists and has unpublished changes, which is
+    the very thing being withheld.
+
+    Asserted against a *nonexistent* app, so the two answers are the same
+    sentence — which is what makes the refusal say nothing.
+    """
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("private draft"))
+    _publish(client, fx, app_id)
+
+    refused = _saved(client, fx, app_id, fx.viewer_sub)
+    missing = _saved(client, fx, str(uuid.uuid4()), fx.viewer_sub)
+    assert refused.status_code == missing.status_code == 404
+    assert refused.json()["detail"] == missing.json()["detail"]
+
+
+def test_an_unpublished_app_is_still_readable_by_its_author(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**No `publish_scope` clause**, unlike the published read.
+
+    That clause is there because a private app has no viewers; this route is
+    not for viewers. An author previewing something they have never published
+    is the first thing anybody would do with p.166's URL.
+    """
+    app_id = _new_app(client, fx)
+    _save(client, fx, app_id, _text_module("never published"))
+
+    dev = _saved(client, fx, app_id, fx.editor_sub)
+    assert dev.status_code == 200, dev.text
+    assert dev.json()["definition"]["layout"]["t1"]["props"]["text"] == "never published"
+
+
+def test_the_saved_read_does_not_reach_across_workspaces(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The workspace clause, which §314's mutation run found unchecked.**
+
+    Removing `rls_project_workspace_id(a.project_id) = :wid` broke no test,
+    because every other test asks for an app through the workspace it is
+    actually in. Without it the route answers for an app in *another*
+    workspace the caller happens to belong to — not a leak, since the row
+    policy still applies, but a URL that says one workspace and returns
+    another's module, which is the kind of wrong that is discovered by
+    somebody sharing a link.
+
+    `get_published` carries the same clause, so this is the guard being
+    consistent rather than a special case.
+    """
+    elsewhere = client.post(
+        "/api/workspaces", headers=hdr(fx.admin_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:8]}"},
+    )
+    assert elsewhere.status_code == 201, elsewhere.text
+    other_ws = elsewhere.json()["id"]
+
+    project = client.post(
+        f"/api/workspaces/{other_ws}/projects", headers=hdr(fx.admin_sub),
+        json={"name": f"Elsewhere project {uuid.uuid4().hex[:6]}"},
+    )
+    assert project.status_code == 201, project.text
+    made = client.post(
+        f"/api/workspaces/{other_ws}/projects/{project.json()['id']}/canvas-apps",
+        headers=hdr(fx.admin_sub), json={"name": "Somewhere else"},
+    )
+    assert made.status_code == 201, made.text
+    app_id = made.json()["id"]
+
+    # Readable through its own workspace…
+    here = client.get(f"/api/workspaces/{other_ws}/saved-canvas-apps/{app_id}",
+                      headers=hdr(fx.admin_sub))
+    assert here.status_code == 200, here.text
+
+    # …and not through this one, which is a different URL for a different place.
+    there = client.get(f"{wbase(fx)}/saved-canvas-apps/{app_id}",
+                       headers=hdr(fx.admin_sub))
+    assert there.status_code == 404, there.text

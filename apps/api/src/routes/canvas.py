@@ -24,7 +24,13 @@ from pydantic import BaseModel, Field
 
 from ..lib.db import user_connection
 from ..lib.errors import ForbiddenError, NotFoundError
-from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
+from ..middleware.permissions import (
+    ProjectAccess,
+    WorkspaceAccess,
+    require_project_role,
+    require_workspace_role,
+    resolve_project_role,
+)
 from ..services import actions as actions_service
 from ..services import audit
 from ..services import ontology as ontology_service
@@ -778,6 +784,41 @@ async def list_published_apps(
     async with user_connection(access.auth.user_id) as conn:
         rows = await canvas_service.list_published(conn, access.workspace_id)
     return [_summary(r) for r in rows]
+
+
+@published_router.get("/saved-canvas-apps/{app_id}", response_model=CanvasAppDetail)
+async def get_saved_app(
+    app_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> CanvasAppDetail:
+    """p.166's `/dev/`: the app as its author last **saved** it (§314).
+
+        "For testing purposes, you can change the `/latest/` to `/dev/` in the
+         URL, and the link will now redirect to the last saved version of the
+         Workshop application instead of the last published version."
+
+    **The refusal p.166 leaves implicit is the point of this route.** "For
+    testing purposes" means unpublished work, and unpublished work is exactly
+    what publishing being an act rather than a checkbox exists to keep from
+    viewers — so a workspace viewer following a hand-edited link must get the
+    same answer as somebody who guessed the URL: nothing. The floor here is
+    workspace viewer only so the request reaches this function; who may
+    actually see a draft is settled below, against the *project*.
+
+    404 rather than 403, and that matters. A 403 would confirm the app exists
+    and has unpublished changes, which is the very thing being withheld.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        # Read first, so a nonexistent app and an app somebody may not preview
+        # give the same answer — `get_saved` raises `NotFoundError` for the
+        # first, and the check below produces the same for the second.
+        row = await canvas_service.get_saved(conn, access.workspace_id, app_id)
+        role = await resolve_project_role(
+            conn, access.auth.user_id, row["project_id"]
+        )
+        if role not in ("editor", "admin", "owner"):
+            raise NotFoundError("canvas app")
+    return _out(row)
 
 
 @published_router.get("/published-canvas-apps/{app_id}", response_model=CanvasAppDetail)

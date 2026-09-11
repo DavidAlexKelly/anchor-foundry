@@ -35,9 +35,10 @@
  */
 
 import { Editor, Frame, useEditor } from "@craftjs/core";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { canvas as canvasApi, objects as objApi } from "@/lib/api";
+import { canShowStar, starGlyph, starLabel } from "@/lib/favourites";
 import { CanvasEnvProvider, CanvasParameterProvider } from "@/components/canvas/context";
 import { VariableBridge } from "@/components/canvas/VariableBridge";
 import { CANVAS_RESOLVER } from "@/components/canvas/widgets";
@@ -142,6 +143,86 @@ function ConfiguredObjectView({
   );
 }
 
+/** p.34's star (§312).
+ *
+ * **Absent until the answer is known**, which is `canShowStar`'s whole job: an
+ * unfilled star means "not a favourite", so drawing one before the server has
+ * said would tell somebody their shortcut is gone — and the press that follows
+ * would remove a favourite they still had.
+ *
+ * The label sent is the one on screen. The server could resolve it from the
+ * type's title property, but the screen is already holding it, and db 0074
+ * stores it precisely so a sidebar of ten shortcuts is not ten instance reads.
+ */
+function FavouriteStar({
+  workspaceId,
+  typeId,
+  instance,
+}: {
+  workspaceId: string;
+  typeId: string;
+  instance: ObjectInstance;
+}) {
+  const client = useQueryClient();
+  const type = useQuery({
+    queryKey: ["object-type", typeId],
+    queryFn: () => objApi.getType(workspaceId, typeId),
+  });
+  const state = useQuery({
+    queryKey: ["object-favourite", workspaceId, typeId, instance.id],
+    queryFn: () => objApi.isFavourite(workspaceId, typeId, instance.id),
+  });
+
+  const titleProperty = (type.data?.properties ?? []).find(
+    (p) => p.id === type.data?.title_property_id,
+  );
+  const label = titleProperty
+    ? String(instance.properties[titleProperty.api_name] ?? instance.primary_key)
+    : instance.primary_key;
+
+  const isFavourite = state.data?.favourite ?? false;
+  const toggle = useMutation({
+    mutationFn: async () => {
+      if (isFavourite) {
+        await objApi.removeFavourite(workspaceId, typeId, instance.id);
+        return;
+      }
+      await objApi.addFavourite(workspaceId, {
+        object_type_id: typeId,
+        instance_id: instance.id,
+        label,
+      });
+    },
+    onSuccess: async () => {
+      await client.invalidateQueries({
+        queryKey: ["object-favourite", workspaceId, typeId, instance.id],
+      });
+      // The sidebar is a different query and has to hear about it, or starring
+      // something leaves it out of the list it was starred into.
+      await client.invalidateQueries({ queryKey: ["object-favourites", workspaceId] });
+    },
+  });
+
+  if (!canShowStar(state.data !== undefined)) return null;
+
+  return (
+    <div className="row-actions" style={{ justifyContent: "flex-end" }}>
+      <button
+        type="button"
+        className="btn quiet"
+        aria-label={starLabel(isFavourite)}
+        aria-pressed={isFavourite}
+        data-testid="favourite-star"
+        disabled={toggle.isPending}
+        onClick={() => toggle.mutate()}
+      >
+        {starGlyph(isFavourite)}
+      </button>
+    </div>
+  );
+}
+
+
 export function ObjectView({
   workspaceId,
   typeId,
@@ -207,6 +288,14 @@ export function ObjectView({
   const configured = view.data ?? null;
   return (
     <div className="object-view">
+      {/* **p.34's star, on the object view rather than literally beside the
+          title** (§312). The title lives inside `StandardObjectView`, and a
+          configured view has no title of ours at all — it is somebody's
+          Workshop module — so putting the star in either rendering would mean
+          it existed for one kind of object and not the other. Here it is
+          above both, which is where "next to its title" lands once the two
+          renderings are the same feature. */}
+      <FavouriteStar workspaceId={workspaceId} typeId={typeId} instance={shown} />
       {configured && allowToggle && (
         <div className="row-actions" style={{ justifyContent: "flex-end", marginBottom: 8 }}>
           {/* p.2's guarantee, as a control. Two buttons rather than a toggle so
