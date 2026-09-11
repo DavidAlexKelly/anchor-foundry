@@ -83,7 +83,9 @@ def test_opening_the_type_page_does_not_count_as_usage(page, api, counted) -> No
     # The rows are the proof the read happened, and the positive wait that
     # makes the assertion below about the product rather than about timing
     # (§318).
-    expect(page.get_by_role("table").first).to_contain_text("Ely", timeout=30000)
+    expect(page.get_by_test_id("instances-table")).to_contain_text(
+        "Ely", timeout=30000
+    )
     assert reads(api, counted) == before
 
 

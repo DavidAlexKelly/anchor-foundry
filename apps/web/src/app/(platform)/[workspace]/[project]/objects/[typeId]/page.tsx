@@ -200,7 +200,14 @@ export default function ObjectInstancesPage() {
             {total.toLocaleString()} instance{total === 1 ? "" : "s"}
           </p>
           <div style={{ overflowX: "auto" }}>
-            <table className="table">
+            {/* **Named, because this page has two tables now** (§321). §320's
+                usage panel added a second, and `get_by_role("table")` in a
+                sibling suite went from unambiguous to a strict-mode violation
+                — four tests, red in CI, for a change that touched none of
+                them. A role is a claim about what an element *is*; a test id
+                is a claim about *which one*, and a page that grows a second of
+                anything needs the second kind. */}
+            <table className="table" data-testid="instances-table">
               <thead>
                 <tr>
                   <th>Primary key</th>
