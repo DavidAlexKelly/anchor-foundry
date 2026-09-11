@@ -1841,6 +1841,26 @@ export const actions = {
     request<import("./types").ActionType>(
       `/workspaces/${wid}/action-types/${actionTypeId}`,
     ),
+  /** p.154's Undo, addressed as the pairing it is: a run of *this* action.
+   *
+   * A run reached through the wrong action type is not found rather than
+   * quietly undone — the caller has asked about a pairing that does not
+   * exist, and the id they guessed belongs to somebody else's action. */
+  undo: (wid: string, pid: string, actionTypeId: string, runId: string) =>
+    request<import("./types").ActionUndoResult>(
+      `/workspaces/${wid}/projects/${pid}/actions/${actionTypeId}/runs/${runId}/undo`,
+      { method: "POST" },
+    ),
+  /** p.154's "Allow revert after action submission" toggle, in the Form tab.
+   *
+   * **`false` here is not undoable for applications already made** (p.155:
+   * "even if action reverts have been toggled on again"), which is why the
+   * screen that offers this asks before switching it off. */
+  setRevert: (wid: string, actionTypeId: string, allow: boolean) =>
+    request<import("./types").ActionType>(
+      `/workspaces/${wid}/action-types/${actionTypeId}`,
+      { method: "PATCH", body: JSON.stringify({ allow_revert: allow }) },
+    ),
 };
 
 export const canvas = {

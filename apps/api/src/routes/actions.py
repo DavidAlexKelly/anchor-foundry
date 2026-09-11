@@ -29,11 +29,12 @@ from pydantic import BaseModel, Field
 
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
+from ..services import action_revert
 from ..services import actions as actions_service
 from ..services import audit
 from ..services import dataset_engine as engine
 from ..services import datasets as dataset_service
-from ..lib.errors import NotFoundError
+from ..lib.errors import ConflictError, NotFoundError
 from ..services import instance_store
 from ..services import notification_store
 from ..services import notifications as notifications_service
@@ -104,6 +105,10 @@ class ActionTypeOut(BaseModel):
     parameters: list[ActionParameterOut]
     rules: list[ActionRuleOut]
     criteria: list[ActionCriterionOut]
+    #: p.154's "Allow revert after action submission". Sent so the Form tab can
+    #: draw the toggle in the state it is actually in — a switch that always
+    #: renders on is §214's control that looks like it works.
+    allow_revert: bool = True
     # **Derived from the rules, not stored** - migration 0044 dropped the
     # column. Kept on the wire because the object-type screens and the
     # Workshop `run_action` editor both ask "which properties does this action
@@ -158,6 +163,14 @@ class ActionStatusUpdate(BaseModel):
 
     status: str | None = None
     deprecation: dict[str, Any] | None = None
+    #: p.154's "Allow revert after action submission" toggle, which sits beside
+    #: the status here for the same reason the status does: it is a statement
+    #: about the action rather than part of what it does.
+    #:
+    #: **Turning it off is not reversible for applications already made**
+    #: (p.155), so this is one of the few fields whose `false` does something a
+    #: later `true` cannot take back — see `block_outstanding_reverts`.
+    allow_revert: bool | None = None
 
 
 class ActionRunOut(BaseModel):
@@ -206,6 +219,21 @@ class ExecuteResult(BaseModel):
     # rule can create an object whose primary key comes from a parameter it
     # never sent.
     touched: list[TouchedObject] = Field(default_factory=list)
+    #: This application's run (§319). p.154 puts Undo "in the success message
+    #: after any successful action application", so the thing that has to be
+    #: undone is named in the answer that reports the success — otherwise a
+    #: screen wanting to offer it would have to go and find its own run in a
+    #: list, and pick the right one by timestamp.
+    run_id: UUID | None = None
+    #: Whether that Undo is worth drawing. **Decided here rather than in the
+    #: browser**, because every one of p.154-156's conditions is about state
+    #: the browser does not have — who applied it, what the object looked like
+    #: when the action finished, whether the toggle has been off since.
+    can_undo: bool = False
+    #: Why not, when it is not. Absent when it can be undone. p.155 calls the
+    #: toast "your only opportunity", so a screen that simply omits the button
+    #: is telling somebody nothing at the one moment they could have acted.
+    undo_refusal: str | None = None
 
 
 def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
@@ -313,6 +341,7 @@ async def set_action_status(
             action_type_id,
             status=body.status,
             deprecation=body.deprecation,
+            allow_revert=body.allow_revert,
         )
         await audit.record(
             conn,
@@ -438,6 +467,207 @@ async def action_runs(
         ActionRunOut(**{**r, "submitted_values": _parse_json(r["submitted_values"])})
         for r in rows
     ]
+
+
+# ---- undoing a run (§319; `action-types` p.154-156) ---------------------------
+class UndoResult(BaseModel):
+    """What the undo did, in the same shape the apply reports.
+
+    The instance comes back so the screen that offered Undo can show the object
+    as it now is without a second read — which matters here more than on an
+    apply, because the whole point of the button is that the reader is looking
+    at something they did not mean to do.
+    """
+
+    ok: bool
+    #: The undo's own run. A revert is an action run like any other — it
+    #: appends to the dataset and writes the index — so it has an author and a
+    #: time rather than being an edit that appears from nowhere.
+    run_id: UUID
+    instance: InstanceOut
+    dataset_version: int | None
+
+
+@project_router.post("/{action_type_id}/runs/{run_id}/undo", response_model=UndoResult)
+async def undo_action(
+    action_type_id: UUID,
+    run_id: UUID,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> UndoResult:
+    """p.154's Undo.
+
+        "Action reverts in Ontology Manager allow an action to be reverted
+         (that is, undone) immediately after the action has been applied."
+
+    **A write, through the same path the action used.** Here the dataset is the
+    record and the instance store is a projection of it (decision 0008), so
+    putting the old values back only in the index would last until the next
+    sync and then silently come undone. The undo therefore appends a row and
+    updates the projection, exactly as the apply did — which is also why it has
+    a run of its own.
+
+    **No side effects, in either direction** (p.156): "An action revert only
+    reverts the edits to the object instance, but it will not revert side
+    effects, such as notifications or webhooks, nor will it call them in the
+    same way that the applied action would have." So no webhook fires here and
+    no notification is sent — neither the original's, nor one about the undo.
+
+    `editor`, like execute: an undo is a write to project data, and the floor
+    that governs the write governs putting it back.
+    """
+    storage = _dataset_storage()
+    async with user_connection(access.auth.user_id) as conn:
+        run = await actions_service.get_run(conn, access.workspace_id, run_id)
+        if str(run["action_type_id"]) != str(action_type_id):
+            # The run exists but is not this action's. Not found rather than a
+            # mismatch error: the caller has asked about a pairing that does
+            # not exist, and naming which half was wrong tells them about a run
+            # in an action type they addressed by guess.
+            raise NotFoundError("action run")
+        object_type_id = UUID(str(run["object_type_id"]))
+        prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
+        instance = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=object_type_id,
+            instance_id=str(run["instance_id"]),
+        )
+        refused = action_revert.refusal(
+            run,
+            action_type=run,
+            actor_id=str(access.auth.user_id),
+            current_properties=(
+                _parse_json(instance["properties"]) if instance else None
+            ),
+        )
+        if refused:
+            # **409 rather than 403 or 422.** Every one of p.154-156's
+            # conditions is about the state the run is in now, not about the
+            # request being malformed or the caller being unauthorised — and
+            # most of them were false a minute earlier.
+            raise ConflictError(refused)
+        assert instance is not None
+        source = await ontology_service.get_source(
+            conn, access.project_id, UUID(str(instance["source_id"]))
+        )
+        properties = await ontology_service.list_properties(conn, object_type_id)
+        property_types = {p["api_name"]: p["data_type"] for p in properties}
+        edit_only = {
+            p["api_name"] for p in properties if p.get("edit_only")
+        }
+        previous = _parse_json(run["previous_properties"])
+        undo_run_id = await actions_service.open_run(
+            conn,
+            action_type_id=action_type_id,
+            instance_id=UUID(str(run["instance_id"])),
+            dataset_id=UUID(str(source["dataset_id"])),
+            requested_by=access.auth.user_id,
+            submitted_values=previous,
+        )
+        await actions_service.mark_as_revert(conn, undo_run_id, of_run_id=run_id)
+        # **Claimed before the write, not after.** Two presses of Undo arriving
+        # together would both pass the refusal above; only one can win this
+        # UPDATE, and the loser stops here rather than writing the old values
+        # over what the winner just restored.
+        if not await actions_service.mark_reverted(
+            conn, run_id, by=access.auth.user_id, revert_run_id=undo_run_id
+        ):
+            raise ConflictError("This action has already been undone.")
+
+    ok, error = True, None
+    dataset_version: int | None = None
+    try:
+        column_mappings: dict[str, str] = _parse_json(source["column_mappings"])
+        reverse_map = {prop: col for col, prop in column_mappings.items()}
+        # The dataset copy gets the flat form, and **edit-only properties are
+        # not in it** — they have no column (p.113), so there is nothing to
+        # write. They are still restored in the index below, which is the whole
+        # of what "edit-only" means in this path, on the way back as on the way
+        # out.
+        column_updates = {
+            reverse_map[prop]: ontology_service.column_value(
+                property_types.get(prop, "string"), value
+            )
+            for prop, value in previous.items()
+            if prop not in edit_only and prop in reverse_map
+        }
+        work_path = await anyio.to_thread.run_sync(
+            storage.local_path, str(source["s3_location"])
+        )
+        async with user_connection(access.auth.user_id) as conn:
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = os.path.join(tmp, "out.parquet")
+                work_schema, work_rows = await anyio.to_thread.run_sync(
+                    engine.write_rows,
+                    work_path,
+                    str(source["primary_key_column"]),
+                    [(str(instance["primary_key"]), column_updates)],
+                    [],
+                    dest,
+                    [],
+                )
+                with open(dest, "rb") as handle:
+                    work_bytes = handle.read()
+            staged = await dataset_service.stage_version(
+                conn, storage,
+                dataset_id=UUID(str(source["dataset_id"])),
+                workspace_id=access.workspace_id,
+                parquet_bytes=work_bytes,
+                schema=work_schema,
+                row_count=work_rows,
+                produced_by_kind="action",
+                produced_by_id=undo_run_id,
+                created_by=access.auth.user_id,
+            )
+            committed = await dataset_service.commit_versions(conn, [staged])
+            dataset_version = int(
+                committed.get(str(source["dataset_id"]), {"current_version": 0})[
+                    "current_version"
+                ]
+            ) or None
+            # The index after the record, the order decision 0008 gives: a
+            # failure here leaves an object whose stored properties are stale
+            # until the next sync, rather than a dataset that disagrees with
+            # itself.
+            await instance_store.store_for(conn).update_properties(
+                search_prefix=prefix,
+                object_type_id=object_type_id,
+                instance_id=str(run["instance_id"]),
+                properties=previous,
+            )
+    except DatasetEngineError as exc:
+        ok, error = False, str(exc)
+
+    async with user_connection(access.auth.user_id) as conn:
+        await actions_service.close_run(
+            conn, undo_run_id, ok=ok, dataset_version=dataset_version, error=error
+        )
+        restored = await instance_store.store_for(conn).get_instance(
+            search_prefix=prefix, object_type_id=object_type_id,
+            instance_id=str(run["instance_id"]),
+        ) or instance
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="action.undo",
+            resource_type="action_type",
+            resource_id=action_type_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"run_id": str(run_id), "undo_run_id": str(undo_run_id), "ok": ok},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    if not ok:
+        raise ConflictError(error or "the undo could not be written")
+    return UndoResult(
+        ok=ok,
+        run_id=undo_run_id,
+        instance=InstanceOut(
+            **{**restored, "properties": _parse_json(restored["properties"])}
+        ),
+        dataset_version=dataset_version,
+    )
 
 
 # ---- execute (project-scoped) -------------------------------------------------
@@ -1309,6 +1539,27 @@ async def execute_action(
             search_prefix=prefix, object_type_id=object_type_id,
             instance_id=str(body.instance_id),
         ) or instance
+        # **p.154's Undo needs what the object was, recorded here or nowhere**
+        # (§319). Once the dataset version is committed the appended rows look
+        # like every other row, so nothing later can reconstruct the before —
+        # and `unsupported_reason` is the same argument for the objects this
+        # run created, deleted or touched besides its subject, which no reader
+        # of `action_runs` could count afterwards.
+        #
+        # Recorded only for a successful run: a failed one changed nothing, and
+        # a "before" beside a failure would invite an undo of an edit that did
+        # not happen.
+        if ok:
+            await actions_service.record_revert_state(
+                conn, run_id,
+                previous_properties=_parse_json(instance["properties"]),
+                applied_properties=_parse_json(updated_instance["properties"]),
+                unsupported=action_revert.unsupported_reason(
+                    creations=len(creations),
+                    removals=len(removals),
+                    other_modifications=len(modifications),
+                ),
+            )
         await audit.record(
             conn,
             organisation_id=access.auth.organisation_id,
@@ -1325,10 +1576,34 @@ async def execute_action(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+        # **Asked rather than assumed** (§319). The apply path has just written
+        # everything an undo would need, so it is tempting to answer "yes" here
+        # and save a read — but `refusal` is the one place p.154-156's
+        # conditions live, and a second opinion beside it is a second place for
+        # them to drift. Two of them are already true at this instant for some
+        # runs: an action whose type has revert switched off, and one that
+        # created objects alongside its edit.
+        undo_refusal: str | None
+        if ok:
+            # `get_run` joins the action type's own toggle, so the run and
+            # p.155's setting are read in one statement rather than two with a
+            # window between them.
+            run_row = await actions_service.get_run(conn, access.workspace_id, run_id)
+            undo_refusal = action_revert.refusal(
+                run_row,
+                action_type=run_row,
+                actor_id=str(access.auth.user_id),
+                current_properties=_parse_json(updated_instance["properties"]),
+            )
+        else:
+            undo_refusal = "This action did not succeed, so there is nothing to undo."
     return ExecuteResult(
         ok=ok,
         error=error,
         dataset_version=dataset_version,
+        run_id=run_id,
+        can_undo=undo_refusal is None,
+        undo_refusal=undo_refusal,
         instance=InstanceOut(
             **{**updated_instance, "properties": _parse_json(updated_instance["properties"])}
         ),

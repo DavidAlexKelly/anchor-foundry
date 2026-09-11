@@ -10,7 +10,13 @@ import { LinkExplorerDialog, type LinkStop } from "@/components/instance-links";
 import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
-import type { ActionType, ObjectInstance, PropertyDataType } from "@/lib/types";
+import { UndoToast } from "@/components/undo-toast";
+import type {
+  ActionExecuteResult,
+  ActionType,
+  ObjectInstance,
+  PropertyDataType,
+} from "@/lib/types";
 
 const PAGE_SIZE = 50;
 
@@ -21,6 +27,7 @@ function EditInstanceDialog({
   actionTypes,
   propertyTypes,
   onClose,
+  onApplied,
 }: {
   workspaceId: string;
   projectId: string;
@@ -28,6 +35,12 @@ function EditInstanceDialog({
   actionTypes: ActionType[];
   propertyTypes: Record<string, PropertyDataType>;
   onClose: () => void;
+  /** What was applied, for p.154's success message. The dialog is gone by the
+   * time it is drawn, so the action's name travels with the result — there is
+   * nothing left to look it up on. */
+  onApplied: (
+    result: ActionExecuteResult, actionTypeId: string, actionName: string,
+  ) => void;
 }) {
   const [actionTypeId, setActionTypeId] = useState(actionTypes[0]?.id ?? "");
   const activeAction = actionTypes.find((a) => a.id === actionTypeId) ?? actionTypes[0];
@@ -42,8 +55,13 @@ function EditInstanceDialog({
 
   const execute = useMutation({
     mutationFn: () => actionApi.execute(workspaceId, projectId, activeAction!.id, instance.id, values),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["object-instances"] });
+      // **p.154's Undo lives outside this dialog**, because the dialog is
+      // about to close and the success message is the thing that carries it.
+      // Handed up rather than drawn here: the page owns the toast, so it
+      // survives the form that produced it.
+      onApplied(result, activeAction!.id, activeAction!.display_name);
       onClose();
     },
   });
@@ -107,6 +125,16 @@ export default function ObjectInstancesPage() {
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<ObjectInstance | null>(null);
   const [exploring, setExploring] = useState<LinkStop | null>(null);
+  // The last application, for p.154's success message. **One at a time**: a
+  // stack of toasts would be a stack of undos, and p.156's rule that only the
+  // most recent edit to an object can be undone would make all but the top one
+  // a button that refuses.
+  const [applied, setApplied] = useState<{
+    result: ActionExecuteResult;
+    actionTypeId: string;
+    actionName: string;
+  } | null>(null);
+  const queryClient = useQueryClient();
 
   const type = useQuery({
     queryKey: ["object-type", params.typeId],
@@ -266,6 +294,27 @@ export default function ObjectInstancesPage() {
             properties.map((p) => [p.api_name, p.data_type]),
           )}
           onClose={() => setEditing(null)}
+          onApplied={(result, id, name) =>
+            setApplied({ result, actionTypeId: id, actionName: name })
+          }
+        />
+      )}
+
+      {/* **p.154's success message, and the only place the Undo can live.**
+          The dialog above closes on success — the edit is made — so a button
+          inside it would go with it. p.155 calls this toast "your only
+          opportunity to revert the action". */}
+      {applied && workspace && project && (
+        <UndoToast
+          workspaceId={workspace.id}
+          projectId={project.id}
+          actionTypeId={applied.actionTypeId}
+          actionName={applied.actionName}
+          result={applied.result}
+          onUndone={() =>
+            queryClient.invalidateQueries({ queryKey: ["object-instances"] })
+          }
+          onDismiss={() => setApplied(null)}
         />
       )}
     </main>

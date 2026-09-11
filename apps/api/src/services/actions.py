@@ -1218,7 +1218,7 @@ async def list_action_types(
         f"""
         SELECT at.id, at.object_type_id, ot.display_name AS object_type_name,
                at.api_name, at.display_name, at.description,
-               at.status, at.deprecation,
+               at.status, at.deprecation, at.allow_revert,
                at.created_at, at.updated_at
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id
@@ -1238,7 +1238,7 @@ async def get_action_type(
         """
         SELECT at.id, at.object_type_id, ot.display_name AS object_type_name,
                at.api_name, at.display_name, at.description,
-               at.status, at.deprecation,
+               at.status, at.deprecation, at.allow_revert,
                at.created_at, at.updated_at
           FROM action_types at
           JOIN object_types ot ON ot.id = at.object_type_id
@@ -1377,6 +1377,7 @@ async def set_action_status(
     *,
     status: str | None = None,
     deprecation: Any = None,
+    allow_revert: bool | None = None,
 ) -> dict[str, Any]:
     """p.256's "select the dropdown next to the current status", for an action.
 
@@ -1402,22 +1403,36 @@ async def set_action_status(
         else current.get("deprecation"),
         next_status,
     )
+    # p.154's "Allow revert after action submission" toggle. Omitted means
+    # unchanged, like the two beside it.
+    next_revert = bool(
+        current.get("allow_revert", True) if allow_revert is None else allow_revert
+    )
     await conn.execute(
         text(
             """
             UPDATE action_types
                SET status = CAST(:status AS ontology_status),
-                   deprecation = CAST(:depr AS jsonb)
+                   deprecation = CAST(:depr AS jsonb),
+                   allow_revert = :revert
              WHERE id = :aid AND workspace_id = :wid
             """
         ),
         {
             "status": next_status,
             "depr": json.dumps(note) if note is not None else None,
+            "revert": next_revert,
             "aid": str(action_type_id),
             "wid": str(workspace_id),
         },
     )
+    # **Only on the way down, and never undone** (p.155): "An action cannot be
+    # reverted if action reverts has been toggled off after action submission,
+    # even if action reverts have been toggled on again." Switching it back on
+    # writes `allow_revert` and nothing else, so the runs that lost their undo
+    # stay without one.
+    if bool(current.get("allow_revert", True)) and not next_revert:
+        await block_outstanding_reverts(conn, action_type_id)
     return await get_action_type(conn, workspace_id, action_type_id)
 
 
@@ -1540,6 +1555,135 @@ async def list_runs(conn: AsyncConnection, action_type_id: UUID) -> list[dict[st
          LIMIT 50
         """,
         {"atid": str(action_type_id)},
+    )
+
+
+# ---- undoing a run (§319; db 0076; `action-types` p.154-156) ------------------
+
+
+async def record_revert_state(
+    conn: AsyncConnection,
+    run_id: UUID,
+    *,
+    previous_properties: dict[str, Any] | None,
+    applied_properties: dict[str, Any] | None,
+    unsupported: str | None,
+) -> None:
+    """What this run would have to put back, written as it finishes.
+
+    **Only the apply path can know this**, which is why it is recorded rather
+    than derived. Once the dataset version is committed the appended rows are
+    indistinguishable from every other row, so nothing later can work out what
+    the object looked like beforehand or that three others were created
+    alongside it.
+
+    Stored whole rather than as a diff, for p.156's reason: "an action on an
+    object cannot be reverted once any subsequent edit has been made to the
+    object, **even if the edit is on a different property**". A record of the
+    keys this run wrote cannot see a change to a key it did not.
+    """
+    await conn.execute(
+        text(
+            """
+            UPDATE action_runs
+               SET previous_properties = CAST(:before AS jsonb),
+                   applied_properties  = CAST(:after AS jsonb),
+                   revert_unsupported  = :why
+             WHERE id = :id
+            """
+        ),
+        {
+            "before": json.dumps(previous_properties) if previous_properties is not None else None,
+            "after": json.dumps(applied_properties) if applied_properties is not None else None,
+            "why": unsupported,
+            "id": str(run_id),
+        },
+    )
+
+
+async def get_run(
+    conn: AsyncConnection, workspace_id: UUID, run_id: UUID
+) -> dict[str, Any]:
+    """One run, with the action type's own revert setting beside it.
+
+    Joined rather than fetched twice: every caller that has a run in hand wants
+    p.155's toggle in the same breath, and the two reads would otherwise be a
+    window in which the toggle could change between them.
+    """
+    row = await fetch_one(
+        conn,
+        """
+        SELECT r.*, at.object_type_id, at.allow_revert, at.display_name AS action_name
+          FROM action_runs r
+          JOIN action_types at ON at.id = r.action_type_id
+         WHERE r.id = :id AND at.workspace_id = :wid
+        """,
+        {"id": str(run_id), "wid": str(workspace_id)},
+    )
+    if row is None:
+        raise NotFoundError("action run")
+    return dict(row)
+
+
+async def block_outstanding_reverts(
+    conn: AsyncConnection, action_type_id: UUID
+) -> None:
+    """Take the undo away from every run of this type that still has one.
+
+    **p.155's second sentence, and it is the whole reason this exists**: "An
+    action cannot be reverted if action reverts has been toggled off after
+    action submission, **even if action reverts have been toggled on again**."
+
+    A check against `action_types.allow_revert` alone would give every undo
+    back the moment somebody flipped the switch on, so the toggle going off
+    stamps the runs, and the stamp is never cleared.
+    """
+    await conn.execute(
+        text(
+            """
+            UPDATE action_runs
+               SET revert_blocked = TRUE
+             WHERE action_type_id = :atid AND reverted_at IS NULL
+            """
+        ),
+        {"atid": str(action_type_id)},
+    )
+
+
+async def mark_reverted(
+    conn: AsyncConnection, run_id: UUID, *, by: UUID, revert_run_id: UUID
+) -> bool:
+    """Stamp the original run as undone, and say whether this call was the one
+    that did it.
+
+    **The `reverted_at IS NULL` clause is the lock.** p.155 calls the toast
+    "your only opportunity", and two presses arriving together would otherwise
+    both pass the refusal check and both write the old values — the second over
+    whatever the first left. Only one `UPDATE` can match, so only one caller is
+    told to go ahead.
+    """
+    row = await fetch_one(
+        conn,
+        """
+        UPDATE action_runs
+           SET reverted_at = now(), reverted_by = :by,
+               reverted_by_run_id = :rrid
+         WHERE id = :id AND reverted_at IS NULL
+        RETURNING id
+        """,
+        {"id": str(run_id), "by": str(by), "rrid": str(revert_run_id)},
+    )
+    return row is not None
+
+
+async def mark_as_revert(
+    conn: AsyncConnection, revert_run_id: UUID, *, of_run_id: UUID
+) -> None:
+    """Say on the undo's own run what it undid, so a history can read either
+    way round."""
+    await conn.execute(
+        text("UPDATE action_runs SET reverts_run_id = :of WHERE id = :id"),
+        {"of": str(of_run_id), "id": str(revert_run_id)},
     )
 
 

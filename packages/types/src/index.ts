@@ -2245,6 +2245,15 @@ export interface ActionType {
    * "which properties does this action write", and that question has this
    * exact answer while `modify_object` is the only rule kind. */
   editable_properties: string[];
+  /** p.154's "Allow revert after action submission" toggle, in the Form tab.
+   * **New actions are revertible by default** (p.154). Sent so the toggle can
+   * be drawn in the state it is actually in — a switch that always renders on
+   * is §214's control that looks like it works.
+   *
+   * Turning it **off is not reversible for applications already made** (p.155:
+   * "even if action reverts have been toggled on again"), which is a property
+   * of this field nothing about its type can express. */
+  allow_revert: boolean;
   /** Developmental state (`object-link-types` p.253, which names actions among
    * the kinds that have one). `promoted` is excluded by p.255. **Not capped by
    * the object type** — p.257's cap is about link types and says nothing about
@@ -2303,6 +2312,31 @@ export interface ActionExecuteResult {
    * modify one a different parameter names, so which objects were written is
    * not something a browser can work out. Empty when the write failed. */
   touched: TouchedObject[];
+  /** This application's run (§319; `action-types` p.154). p.154 puts Undo "in
+   * the success message after any successful action application", so the thing
+   * to undo is named in the answer that reports the success — a screen should
+   * not have to find its own run in a list and pick one by timestamp. */
+  run_id: string | null;
+  /** Whether that Undo is worth drawing. **Decided by the server**, because
+   * every one of p.154-156's conditions is about state a browser does not
+   * have: who applied it, what the object looked like when the action
+   * finished, whether the toggle has been off at any point since. */
+  can_undo: boolean;
+  /** Why not, when it is not; `null` when it can be undone. p.155 calls the
+   * toast "your only opportunity", so a screen that silently omits the button
+   * says nothing at the one moment somebody could have acted. */
+  undo_refusal: string | null;
+}
+
+/** What an undo did (§319; `action-types` p.154-156). */
+export interface ActionUndoResult {
+  ok: boolean;
+  /** The undo's own run. A revert appends to the dataset and writes the index
+   * exactly as an apply does, so it has an author and a time rather than being
+   * an edit that appears from nowhere. */
+  run_id: string;
+  instance: ObjectInstance;
+  dataset_version: number | null;
 }
 
 /** What one inline-edit submission did (`workshop` p.242-243).

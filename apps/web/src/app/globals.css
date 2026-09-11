@@ -2899,3 +2899,35 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    the notification, and dimming a read one would make yesterday's harder to
    read than today's for no reason. */
 .bell-item.unread { border-left: 3px solid var(--accent); padding-left: 8px; }
+
+/* ---- p.154's success message, with its Undo (§319) ----------------------- */
+/* Fixed to the bottom rather than pushed into the page's flow: it outlives the
+   dialog that produced it, and a message that shifted the table underneath it
+   would move the row somebody is looking at to tell them it changed.
+
+   **No animation out.** `TOAST_DISMISSES_ITSELF` is false and says why — p.155
+   calls this "your only opportunity", and p.156's remediations for a missed
+   one do not exist here. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  /* `--line` and `--panel`, **not** `--rule` and `--paper`. The first pair
+     does not exist and the second is `transparent` in the dark block, so
+     either mistake draws a see-through toast over a table — the same shape as
+     §303's `var(--mono, monospace)`, where a fallback hid a token that was
+     never defined. */
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+  font-size: 13px;
+}
+.toast .slug { flex: 1 1 auto; min-width: 0; }
