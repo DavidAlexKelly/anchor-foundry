@@ -2687,3 +2687,18 @@ export interface ScratchpadResult {
    * an error from DuckDB should be able to see what DuckDB was given. */
   ran: string;
 }
+
+/** One favourited object (§312; db 0074; `getting-started` p.34).
+ *
+ * `label` is what the object was called when it was starred, and may be out of
+ * date: resolving it live would mean one read against the instance store per
+ * shortcut before a sidebar could draw. Opening the favourite shows the
+ * current object either way. */
+export interface ObjectFavourite {
+  id: string;
+  object_type_id: string;
+  object_type_name: string;
+  instance_id: string;
+  label: string;
+  created_at: string;
+}

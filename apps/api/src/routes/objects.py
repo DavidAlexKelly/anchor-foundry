@@ -39,6 +39,7 @@ from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
+from ..services import object_favourites as favourites_service
 from ..services import datasets as dataset_service
 from ..services import dataset_engine as engine
 from ..services import time_series as time_series_service
@@ -1012,6 +1013,111 @@ def _parsed(body: SearchDefinitionIn) -> dict[str, Any]:
         )
     except searches_service.SearchError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# ---- Favourite objects (§312; db 0074; `getting-started` p.34) ---------------
+class FavouriteOut(BaseModel):
+    id: UUID
+    object_type_id: UUID
+    object_type_name: str | None = None
+    instance_id: UUID
+    label: str
+    created_at: datetime
+
+
+class FavouriteIn(BaseModel):
+    object_type_id: UUID
+    instance_id: UUID
+    #: What the object was called when it was starred. Sent by the caller
+    #: because the caller is the one holding the resolved title — the server
+    #: would have to read the instance and the type's title property to work
+    #: out something the screen already has on it.
+    label: str = ""
+
+
+@router.get("/object-favourites", response_model=list[FavouriteOut])
+async def list_object_favourites(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[FavouriteOut]:
+    """p.34's sidebar: this person's shortcuts in this workspace.
+
+    **Whose they are never travels in the request.** db 0074's policy pins it
+    to the caller, so there is no parameter here that could be pointed at
+    somebody else's — the same division §306 arrived at the expensive way.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await favourites_service.listing(conn, workspace_id=access.workspace_id)
+    return [FavouriteOut(**row) for row in rows]
+
+
+@router.get("/object-favourites/{type_id}/{instance_id}", response_model=dict)
+async def is_object_favourited(
+    type_id: UUID,
+    instance_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> dict:
+    """Whether the star on this object view is filled in.
+
+    Its own read rather than a scan of the list, because an object view has no
+    reason to have fetched a hundred favourites to decide the state of one
+    button.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        yes = await favourites_service.starred(
+            conn, object_type_id=type_id, instance_id=instance_id
+        )
+    return {"favourite": yes}
+
+
+@router.put("/object-favourites", response_model=FavouriteOut)
+async def add_object_favourite(
+    body: FavouriteIn,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> FavouriteOut:
+    """p.34's star.
+
+    **PUT, because starring twice is the same star** (db 0074's UNIQUE). A
+    POST that refused the second press would make a toggle whose state arrived
+    a moment ago into a thing that can fail for having worked.
+
+    Viewer, because a favourite is a note to yourself about what you are
+    reading. Requiring an editor would mean somebody who may read an object may
+    not keep a shortcut to it.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        # The type has to be in this workspace, which the policy on
+        # `object_types` enforces for the read and the foreign key would not:
+        # a type id from another workspace is invisible here rather than
+        # refused, and this turns that into the message a caller can act on.
+        await ontology_service.get_type(conn, access.workspace_id, body.object_type_id)
+        try:
+            row = await favourites_service.add(
+                conn,
+                user_id=access.auth.user_id,
+                workspace_id=access.workspace_id,
+                object_type_id=body.object_type_id,
+                instance_id=body.instance_id,
+                label=body.label,
+            )
+        except favourites_service.TooManyFavourites as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FavouriteOut(**row)
+
+
+@router.delete("/object-favourites/{type_id}/{instance_id}",
+               status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def remove_object_favourite(
+    type_id: UUID,
+    instance_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> None:
+    """Addressed by what it points at rather than by the favourite's own id,
+    because that is what the star has: it sits on an object view, which knows
+    the object and has never been told the row's id."""
+    async with user_connection(access.auth.user_id) as conn:
+        await favourites_service.remove(
+            conn, object_type_id=type_id, instance_id=instance_id
+        )
 
 
 @router.get("/object-searches", response_model=list[SearchOut])

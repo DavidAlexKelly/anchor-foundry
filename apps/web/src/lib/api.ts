@@ -1232,6 +1232,34 @@ export const objects = {
       `/workspaces/${wid}/object-instances${qs ? `?${qs}` : ""}`,
     );
   },
+  /** p.34's favourite objects (§312).
+   *
+   * Whose they are never travels in the request: db 0074's policy pins every
+   * read and write to the caller. */
+  favourites: (wid: string) =>
+    request<import("./types").ObjectFavourite[]>(
+      `/workspaces/${wid}/object-favourites`,
+    ),
+  isFavourite: (wid: string, typeId: string, instanceId: string) =>
+    request<{ favourite: boolean }>(
+      `/workspaces/${wid}/object-favourites/${typeId}/${instanceId}`,
+    ),
+  /** **PUT, because starring twice is the same star.** The button's state
+   * arrived a moment ago, so a second press is ordinary rather than a mistake,
+   * and a route that refused it would be a toggle that fails for having
+   * worked. */
+  addFavourite: (
+    wid: string,
+    input: { object_type_id: string; instance_id: string; label: string },
+  ) =>
+    request<import("./types").ObjectFavourite>(
+      `/workspaces/${wid}/object-favourites`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ),
+  removeFavourite: (wid: string, typeId: string, instanceId: string) =>
+    request<void>(`/workspaces/${wid}/object-favourites/${typeId}/${instanceId}`, {
+      method: "DELETE",
+    }),
   /** Saved searches (item 4.1). The definition is validated server-side by the
    *  same function `explore` goes through, so a search that cannot run is
    *  refused here rather than the next time somebody opens it. */

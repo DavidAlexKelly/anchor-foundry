@@ -2454,6 +2454,10 @@ li.error .review-check-status { background: var(--paper); color: var(--ink-soft)
    of sharing one is that somebody who did not write it finds it. */
 .ox { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; }
 @media (max-width: 900px) { .ox { grid-template-columns: minmax(0, 1fr); } }
+/* The two asides stack in the one column the grid already gives them (§312):
+   Saved searches is a shortcut back to a question, Favourites a shortcut back
+   to an answer, and they are the same kind of thing. */
+.ox-aside { display: grid; gap: 18px; align-content: start; }
 .ox-main { min-width: 0; display: grid; gap: 12px; align-content: start; }
 .ox-query { display: grid; gap: 10px; }
 .ox-types, .ox-exact {
