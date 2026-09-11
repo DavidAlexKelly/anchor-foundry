@@ -1307,3 +1307,49 @@ def test_an_unpublished_app_is_still_readable_by_its_author(
     dev = _saved(client, fx, app_id, fx.editor_sub)
     assert dev.status_code == 200, dev.text
     assert dev.json()["definition"]["layout"]["t1"]["props"]["text"] == "never published"
+
+
+def test_the_saved_read_does_not_reach_across_workspaces(
+    client: TestClient, fx: Fixture
+) -> None:
+    """**The workspace clause, which §314's mutation run found unchecked.**
+
+    Removing `rls_project_workspace_id(a.project_id) = :wid` broke no test,
+    because every other test asks for an app through the workspace it is
+    actually in. Without it the route answers for an app in *another*
+    workspace the caller happens to belong to — not a leak, since the row
+    policy still applies, but a URL that says one workspace and returns
+    another's module, which is the kind of wrong that is discovered by
+    somebody sharing a link.
+
+    `get_published` carries the same clause, so this is the guard being
+    consistent rather than a special case.
+    """
+    elsewhere = client.post(
+        "/api/workspaces", headers=hdr(fx.admin_sub),
+        json={"name": f"Elsewhere {uuid.uuid4().hex[:8]}"},
+    )
+    assert elsewhere.status_code == 201, elsewhere.text
+    other_ws = elsewhere.json()["id"]
+
+    project = client.post(
+        f"/api/workspaces/{other_ws}/projects", headers=hdr(fx.admin_sub),
+        json={"name": f"Elsewhere project {uuid.uuid4().hex[:6]}"},
+    )
+    assert project.status_code == 201, project.text
+    made = client.post(
+        f"/api/workspaces/{other_ws}/projects/{project.json()['id']}/canvas-apps",
+        headers=hdr(fx.admin_sub), json={"name": "Somewhere else"},
+    )
+    assert made.status_code == 201, made.text
+    app_id = made.json()["id"]
+
+    # Readable through its own workspace…
+    here = client.get(f"/api/workspaces/{other_ws}/saved-canvas-apps/{app_id}",
+                      headers=hdr(fx.admin_sub))
+    assert here.status_code == 200, here.text
+
+    # …and not through this one, which is a different URL for a different place.
+    there = client.get(f"{wbase(fx)}/saved-canvas-apps/{app_id}",
+                       headers=hdr(fx.admin_sub))
+    assert there.status_code == 404, there.text
