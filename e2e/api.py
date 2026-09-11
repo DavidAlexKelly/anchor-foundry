@@ -291,6 +291,23 @@ class Module:
         """
         self.api = api
         self.tag = uuid.uuid4().hex[:6]
+        # **`[0]` of a list ordered by name** (`workspaces.list_for_user`), and
+        # that is a sharper edge than it looks: a test that *creates* a
+        # workspace whose name sorts early becomes `[0]` for every test that
+        # runs after it, in this process and — because the dev database is not
+        # reset — in every later run too.
+        #
+        # §308 did exactly that. Its empty-state test made a workspace called
+        # "Empty searches …", which sorts before the seeded one; CI starts from
+        # a clean database, so there it sorted first and five later tests built
+        # themselves in the wrong workspace. §310 removed the test rather than
+        # renaming it: the thing being asserted was a sentence, and a sentence
+        # is checkable without a browser.
+        #
+        # Left as `[0]` rather than pinned to a seeded name, because the
+        # alternative hides the coupling instead of removing it — what this
+        # suite actually relies on is that no test creates a workspace, and the
+        # comment is where that is written down.
         workspace = api.call("GET", "/workspaces")[0]
         self.workspace_id = workspace["id"]
         self.workspace_slug = workspace["slug"]

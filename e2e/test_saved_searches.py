@@ -14,9 +14,18 @@ again and getting the search back*, which is what separates saving one from
 bookmarking it.
 
 **What is here and what is not.** These drive the screen: the round trip from
-typing a search to opening it again and getting the search back, that the list
-is read from the server rather than from this browser, and what an empty list
-says. Sharing *between people* is not here — the `page` and `api` fixtures
+typing a search to opening it again and getting the search back, and that the
+list is read from the server rather than from this browser.
+
+**The empty state is deliberately not here** (§310). Asserting it needs a
+workspace nobody has saved a search in, so this file created one — and
+`workspaces.list_for_user` orders by name while the suite's `Module` takes
+`workspaces[0]`, so the new workspace sorted before the seeded one and every
+test built after it landed in the wrong place. It is a sentence, which is the
+cheapest thing there is to check without a browser:
+`apps/web/src/lib/saved-searches.test.ts`.
+
+Sharing *between people* is not here either — the `page` and `api` fixtures
 carry the same token, so a browser test cannot establish it without a second
 session this suite has no fixture for. It is checked where it can be:
 `apps/api/tests/test_saved_searches.py` saves as the editor and reads back as
@@ -127,20 +136,3 @@ def test_a_search_saved_elsewhere_appears_in_the_list(page, api, explorer) -> No
     )
     open_explorer(page, explorer)
     expect(page.get_by_label("Saved searches")).to_contain_text(name, timeout=30000)
-
-
-def test_the_empty_list_says_how_to_fill_it(page, api) -> None:
-    """A workspace nobody has saved a search in.
-
-    Its own workspace, because the shared one has other tests' searches in it —
-    an empty state asserted in a workspace that is not empty is an assertion
-    about what else ran today.
-    """
-    made = api.call("POST", "/workspaces",
-                    {"name": f"Empty searches {uuid.uuid4().hex[:6]}"})
-    page.goto(f"{WEB_BASE}/{made['slug']}/explore")
-    saved = page.get_by_label("Saved searches")
-    expect(saved).to_be_visible(timeout=30000)
-    expect(saved).to_contain_text("None yet", timeout=30000)
-    # And it says what to do, rather than only that there is nothing.
-    expect(saved).to_contain_text("Save this search")

@@ -155,7 +155,6 @@ export function ObjectExplorer({
   // exist, so the surface they were built for has to be linkable too, and one
   // source of truth is how it stays that way through a paste or a reload.
   const url = useUrlState();
-  const explorerClient = useQueryClient();
   const criteria: Criteria = {
     q: url.get("q") ?? "",
     typeIds: url.all("type"),
@@ -182,16 +181,18 @@ export function ObjectExplorer({
 
   // **The URL is the only state, and the instance comes from one place.**
   //
-  // Clicking Explore should not cost a round trip — the row on screen already
-  // carries the whole instance — so the first version of this kept it in a
-  // `useState` beside the URL and preferred it when the two agreed. §309's
-  // mutation run killed that: the agreement check was correct and *unreachable*,
-  // because the only writer of the parameter is `show`, which sets both at
-  // once. A guard nothing can make fail is a guard the next person deletes.
+  // This went through two shapes before arriving here, and both were killed by
+  // the same mutation run. First the open object was a `useState` beside the
+  // URL, preferred when the two agreed — and the agreement check could not be
+  // made to fail, because the only writer of the parameter sets both at once.
+  // Then the row's instance was seeded into this query's cache to save the
+  // round trip, and *that* survived too: filing it under the wrong key changes
+  // nothing a test can see, because a cache miss is simply a fetch.
   //
-  // Seeding this query's cache instead removes the question rather than
-  // answering it. The key **is** the object's identity, so a stale instance is
-  // not a bug to be checked for, it is unrepresentable.
+  // So there is one path. Clicking Explore costs one small read the dialog was
+  // about to make several more alongside, and in exchange a stale instance is
+  // unrepresentable rather than guarded against — the key **is** the object's
+  // identity.
   const linked = useQuery({
     queryKey: ["explorer-object", workspaceId, openRef?.typeId, openRef?.instanceId],
     queryFn: () => objApi.getInstance(workspaceId, openRef!.typeId, openRef!.instanceId),
@@ -202,14 +203,6 @@ export function ObjectExplorer({
   });
 
   function show(stop: LinkStop | null) {
-    if (stop) {
-      // The row's instance, filed under the key the query will ask for, so the
-      // fetch below is a cache hit rather than a request.
-      explorerClient.setQueryData(
-        ["explorer-object", workspaceId, stop.typeId, stop.instance.id],
-        stop.instance,
-      );
-    }
     url.set({
       [OBJECT_PARAM]: stop
         ? encodeObject({ typeId: stop.typeId, instanceId: stop.instance.id })
