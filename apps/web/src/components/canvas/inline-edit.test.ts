@@ -4,6 +4,7 @@ import {
   DEFAULT_BUTTON_TEXT,
   UNKNOWN_ROW_LIMIT,
   automaticMapping,
+  editableParameters,
   buttonTextOf,
   canStage,
   canSubmit,
@@ -93,9 +94,63 @@ describe("p.241's automatic mapping", () => {
     expect(automaticMapping(action({ parameters: [{ api_name: "new_status" }] }),
       ["status"])).toEqual({});
   });
+
+  it("does not map a hidden parameter onto a column of the same name", () => {
+    // **The case §324 created.** Until then an action with a hidden parameter
+    // was refused outright, so nothing downstream had to think about one;
+    // `action-types` p.137 makes visibility allowed, which turns it into a
+    // column not offered — and a name match would otherwise walk it straight
+    // onto an editor, which is the one thing `workshop` p.241 is against.
+    const withHidden = action({ inline_edit_hidden_parameters: ["priority"] });
+    expect(automaticMapping(withHidden, ["status", "priority"])).toEqual({
+      status: "status",
+    });
+  });
+});
+
+describe("which parameters a surface may offer (§324, p.137)", () => {
+  it("offers every parameter when none is hidden", () => {
+    expect(editableParameters(action()).map((p) => p.api_name)).toEqual([
+      "status", "priority",
+    ]);
+  });
+
+  it("drops the hidden ones", () => {
+    expect(editableParameters(action({ inline_edit_hidden_parameters: ["status"] }))
+      .map((p) => p.api_name)).toEqual(["priority"]);
+  });
+
+  it("treats a payload with no verdict as nothing hidden", () => {
+    // **The opposite default from `eligibleActions`, and on purpose.** An
+    // absent refusals list means "unknown, so do not offer" because offering
+    // would mean a save that fails. An absent hidden list cannot mean that:
+    // before §324 an action with a hidden parameter was refused outright, so a
+    // payload old enough to lack the field is a payload whose parameters are
+    // all visible. Defaulting to "everything is hidden" would take the columns
+    // away from every action that predates the field.
+    const old = action();
+    delete (old as { inline_edit_hidden_parameters?: unknown })
+      .inline_edit_hidden_parameters;
+    expect(editableParameters(old).map((p) => p.api_name)).toEqual([
+      "status", "priority",
+    ]);
+  });
+
+  it("has nothing to offer for no action at all", () => {
+    expect(editableParameters(null)).toEqual([]);
+    expect(editableParameters(undefined)).toEqual([]);
+  });
 });
 
 describe("reading a stored mapping", () => {
+  it("drops a mapping onto a parameter that is now hidden", () => {
+    // Both sides of a mapping can be edited long after it was made, and a
+    // parameter going hidden is one of the ways — the stored mapping is read
+    // against what may be offered now, not against what could be then.
+    expect(mappingOf({ status: "status" },
+      action({ inline_edit_hidden_parameters: ["status"] }), ["status"])).toEqual({});
+  });
+
   it("keeps a mapping both sides still have", () => {
     expect(mappingOf({ status: "status" }, action(), ["status"])).toEqual({
       status: "status",

@@ -1021,6 +1021,13 @@ def inline_edit_refusals(action_type: dict[str, Any]) -> list[str]:
     * `action-types` p.137's "side effect webhooks or side effect notifications
       cannot be enabled" - this platform has neither.
 
+    And one has been **moved out rather than kept**: parameter visibility.
+    p.137 lists it among the requirements only to say it is allowed — "can be
+    set; however, they will be ignored if the inline edit is used in Object
+    Explorer and Object Views" — so refusing an action for it was stricter than
+    the page. It is `hidden_inline_parameters` now, which names columns not to
+    offer instead of actions not to use (§324).
+
     Every reason returned is a sentence a builder can act on, in the same voice
     as the executor's refusals: it names what is wrong and what would fix it.
     """
@@ -1064,14 +1071,47 @@ def inline_edit_refusals(action_type: dict[str, Any]) -> list[str]:
                 f"{name!r} is a {data_type} parameter, and a table cell can only hold a "
                 "single primitive value"
             )
-        # p.241: "Parameters' visibility options should not be set to 'hidden'
-        # (as each parameter will be tied to a visible column with the table)."
-        if parameter.get("hidden"):
-            reasons.append(
-                f"{name!r} is hidden, and every inline-edit parameter is tied to a "
-                "column the reader can see"
-            )
     return reasons
+
+
+def hidden_inline_parameters(action_type: dict[str, Any]) -> list[str]:
+    """Which parameters a surface should not offer as an editable column
+    (§324; `action-types` p.137, `workshop` p.241).
+
+    **Not a refusal, and that is a correction to §238.** This check used to sit
+    inside `inline_edit_refusals`, disqualifying the whole action type — and
+    neither page asks for that. `action-types` p.137 is in the list of
+    requirements an action must meet, and what it says about visibility is that
+    it is *allowed*:
+
+        "Visibility status and overrides can be set; however, they will be
+         ignored if the inline edit is used in Object Explorer and Object
+         Views." (p.137)
+
+    `workshop` p.241's "Parameters' visibility options should not be set to
+    'hidden' (as each parameter will be tied to a visible column with the
+    table)" is advice about a table's columns, and §238 read it as a hard rule.
+    The result was stricter than either page: one hidden parameter took an
+    otherwise perfectly eligible action out of inline editing entirely.
+
+    **It is safe to ignore one, and p.135 says why**: "every parameter is
+    optional and defaults to the existing value of the object". A parameter no
+    column offers is seeded from the object and submitted unchanged, which is
+    the same thing that happens to every column a reader did not type in.
+
+    So a hidden parameter is a column that is not offered, on every surface.
+    p.137 distinguishes the surfaces — Workshop honours visibility, the
+    Explorer and Object Views ignore it — but the outcome here is identical
+    either way, because a parameter the Explorer would have offered and a
+    reader never touched is also submitted unchanged. Said once rather than
+    branched on, because a branch whose two sides agree is a branch somebody
+    will later have to prove is pointless.
+    """
+    return [
+        str(parameter.get("api_name"))
+        for parameter in action_type.get("parameters") or []
+        if parameter.get("hidden")
+    ]
 
 
 def seed_from_instance(

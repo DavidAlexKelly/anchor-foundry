@@ -128,6 +128,13 @@ class ActionTypeOut(BaseModel):
     # own copy of the rules is the seventh copy of a constraint this session has
     # spent four units collapsing.
     inline_edit_refusals: list[str]
+    # Which parameters a surface should not offer as a column (§324;
+    # `action-types` p.137, `workshop` p.241). **Not a refusal**: p.137 lists
+    # visibility among the requirements only to say it is allowed, so a hidden
+    # parameter is a column that is not offered rather than an action that
+    # cannot be used. It is seeded from the object and submitted unchanged,
+    # exactly like a column the reader did not type in (p.135).
+    inline_edit_hidden_parameters: list[str]
     # p.242: "Users can stage edits for up to … 200 rows at a time for actions
     # that are not function-backed." **Sent rather than known by the browser**,
     # for the same reason as the refusals above: the table has to stop a reader
@@ -262,6 +269,8 @@ def _action_type_out(row: dict[str, Any]) -> ActionTypeOut:
             # second parse of the same value - which is what a mutant said when
             # it swapped the parsed rules for the raw ones and nothing failed.
             "inline_edit_refusals": actions_service.inline_edit_refusals(row),
+            "inline_edit_hidden_parameters":
+                actions_service.hidden_inline_parameters(row),
             "inline_edit_row_limit": actions_service.INLINE_EDIT_ROW_LIMIT,
             # jsonb, so it may arrive as text depending on the driver path -
             # the same treatment `config` gets two lines up.

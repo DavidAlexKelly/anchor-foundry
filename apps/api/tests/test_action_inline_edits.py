@@ -221,14 +221,27 @@ def test_a_struct_parameter_is_refused_by_name(
     assert "'status'" not in refusals[0]
 
 
-def test_a_hidden_parameter_is_refused(
+def test_a_hidden_parameter_is_a_column_not_offered_rather_than_a_refusal(
     client: TestClient, fx: Fixture, ticket_type_id: str
 ) -> None:
-    """p.241: "Parameters' visibility options should not be set to 'hidden' (as
-    each parameter will be tied to a visible column with the table)."
+    """**This test used to assert the opposite, and the page is why it changed**
+    (§324).
 
-    A hidden parameter is one the form fills without showing; a table column is
-    the opposite arrangement, and a hidden one has no cell to be typed into.
+    It read `workshop` p.241 — "Parameters' visibility options should not be set
+    to 'hidden' (as each parameter will be tied to a visible column with the
+    table)" — as a hard rule, and refused the whole action type for it.
+    `action-types` p.137 lists visibility among the requirements an action must
+    meet only to say it is *allowed*:
+
+        "Visibility status and overrides can be set; however, they will be
+         ignored if the inline edit is used in Object Explorer and Object
+         Views."
+
+    So refusing was stricter than either page: one hidden parameter took an
+    otherwise eligible action out of inline editing entirely. It is safe to
+    ignore one, and p.135 says why — "every parameter is optional and defaults
+    to the existing value of the object" — so a parameter no column offers is
+    submitted unchanged, exactly like a column nobody typed into.
     """
     action = make_action(client, fx, ticket_type_id, ["status"])
     updated = define(client, fx, action["id"], {
@@ -241,9 +254,36 @@ def test_a_hidden_parameter_is_refused(
              "config": {"property": "status", "parameter": "status"}},
         ],
     })
-    assert any("hidden" in r for r in updated["inline_edit_refusals"]), updated[
-        "inline_edit_refusals"
-    ]
+    assert updated["inline_edit_refusals"] == [], (
+        "visibility is allowed by p.137; it is not an eligibility rule"
+    )
+    assert updated["inline_edit_hidden_parameters"] == ["status"], (
+        "but no surface should offer it as a column"
+    )
+
+
+def test_a_visible_parameter_is_not_named_as_hidden(
+    client: TestClient, fx: Fixture, ticket_type_id: str
+) -> None:
+    """The other direction, and what stops the list above meaning nothing.
+
+    Without it, "hidden parameters are named" is satisfied by a server that
+    names every parameter — which would leave a table with no columns at all
+    and an action that looks eligible.
+    """
+    action = make_action(client, fx, ticket_type_id, ["status"])
+    updated = define(client, fx, action["id"], {
+        "parameters": [
+            {"api_name": "status", "display_name": "Status", "data_type": "string"},
+            {"api_name": "note", "display_name": "Note", "data_type": "string",
+             "hidden": True},
+        ],
+        "rules": [
+            {"kind": "modify_object",
+             "config": {"property": "status", "parameter": "status"}},
+        ],
+    })
+    assert updated["inline_edit_hidden_parameters"] == ["note"]
 
 
 def test_an_action_that_creates_an_object_is_refused(

@@ -2340,6 +2340,12 @@ export interface ActionType {
    * in another language would be free to disagree with the endpoint that runs
    * them. */
   inline_edit_refusals: string[];
+  /** Parameters no surface should offer as an editable column (§324;
+   * `action-types` p.137, `workshop` p.241). **Not a refusal**: p.137 lists
+   * visibility among the requirements only to say it is allowed. One of these
+   * is seeded from the object and submitted unchanged, exactly like a column
+   * the reader did not type into (p.135). */
+  inline_edit_hidden_parameters: string[];
   /** p.242: "up to 200 rows at a time for actions that are not
    * function-backed". Sent so the table can stop a reader staging the two
    * hundred and first row before Submit, without a second copy of the number. */
