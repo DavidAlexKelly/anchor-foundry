@@ -128,3 +128,31 @@ def test_the_headline_leads_with_people(page, api, counted) -> None:
     expect(headline).to_contain_text("last 30 days")
     expect(headline).to_contain_text("person")
     expect(page.get_by_test_id("usage-active-users")).to_have_text("1")
+
+
+def test_a_failure_says_so_rather_than_reading_as_no_usage(page, api, counted) -> None:
+    """**The two states a surviving mutant showed were interchangeable.**
+
+    Replacing the error branch with `return null` — draw nothing when the
+    request fails — passed every other test in this file. And "nothing" is
+    exactly what p.33's "No usage for the last 30 days" looks like from across
+    the room, so a reader would take a broken panel for a definite answer and
+    rename the property.
+
+    The failure is manufactured by refusing the request, which is the only way
+    to reach a branch the server has no way to produce on demand.
+    """
+    page.route("**/usage", lambda route: route.abort())
+    try:
+        page.goto(
+            f"{WEB_BASE}/{counted.workspace_slug}/{counted.project_slug}"
+            f"/objects/{counted.object_type_id}"
+        )
+        problem = page.get_by_text("Couldn't load usage for this type")
+        expect(problem).to_be_visible(timeout=30000)
+        # And it is **not** mistakable for the empty state: that sentence is
+        # the one a reader would act on.
+        expect(page.get_by_test_id("usage-empty")).to_have_count(0)
+        expect(page.get_by_test_id("usage-figures")).to_have_count(0)
+    finally:
+        page.unroute("**/usage")
