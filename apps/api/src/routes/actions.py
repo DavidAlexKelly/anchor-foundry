@@ -19,8 +19,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
 
 import anyio
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
+from ..services import action_metrics
 from ..services import action_revert
 from ..services import actions as actions_service
 from ..services import audit
@@ -473,6 +475,85 @@ async def action_runs(
         ActionRunOut(**{**r, "submitted_values": _parse_json(r["submitted_values"])})
         for r in rows
     ]
+
+
+# ---- action metrics (§323; `action-types` p.164-166) -------------------------
+class FailureCount(BaseModel):
+    """One of p.165-166's categories, and how often it happened."""
+
+    category: str
+    failures: int
+
+
+class MetricsOut(BaseModel):
+    """p.164's "near real-time usage of an action type over the last 30 days"."""
+
+    succeeded: int
+    failed: int
+    #: Neither, and reported as itself — a run still going is not evidence
+    #: either way, and folding it into one of the two would make them disagree
+    #: with `total`.
+    running: int
+    total: int
+    #: p.164's "95th percentile (P95) execution duration". `None` when nothing
+    #: has finished in the window, which is not the same as nought seconds.
+    p95_seconds: float | None
+    #: The window the three counts are over, sent rather than assumed: a screen
+    #: that hard-codes "30 days" is one that lies the day this constant moves.
+    window_days: int
+    failures: list[FailureCount]
+
+
+class RunHistoryOut(BaseModel):
+    """One row of p.164's "complete view of a given action's executions over
+    the past seven days"."""
+
+    id: UUID
+    status: str
+    error: str | None
+    failure_category: str | None
+    instance_id: UUID | None
+    started_at: datetime
+    finished_at: datetime | None
+    seconds: float | None
+    requested_by_name: str | None
+
+
+@router.get(
+    "/action-types/{action_type_id}/metrics", response_model=MetricsOut
+)
+async def action_metrics_summary(
+    action_type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> MetricsOut:
+    """**`viewer`, like the runs listing above.** p.164 puts metrics on the
+    action type's own page, which is a page a viewer can already open; a
+    success count is not more sensitive than the list of runs it counts."""
+    async with user_connection(access.auth.user_id) as conn:
+        await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
+        summary = await action_metrics.summary(conn, action_type_id)
+        failures = await action_metrics.failures_by_category(conn, action_type_id)
+    return MetricsOut(**summary, failures=[FailureCount(**f) for f in failures])
+
+
+@router.get(
+    "/action-types/{action_type_id}/history",
+    response_model=list[RunHistoryOut],
+)
+async def action_run_history(
+    action_type_id: UUID,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[RunHistoryOut]:
+    """p.164's seven-day run history.
+
+    Its own route rather than a field on the metrics, because the two windows
+    differ: a reader who wanted the counts should not pay for two hundred rows
+    they did not open.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        await actions_service.get_action_type(conn, access.workspace_id, action_type_id)
+        rows = await action_metrics.history(conn, action_type_id)
+    return [RunHistoryOut(**r) for r in rows]
 
 
 # ---- undoing a run (§319; `action-types` p.154-156) ---------------------------
@@ -969,6 +1050,46 @@ async def _user_card(conn, user_id) -> dict:
     return dict(row) if row else {}
 
 
+@asynccontextmanager
+async def _counted_as(
+    category: str,
+    *,
+    action_type_id: UUID,
+    instance_id: UUID | None,
+    dataset_id: UUID | None,
+    requested_by: UUID,
+    submitted_values: dict[str, Any],
+) -> AsyncIterator[None]:
+    """Count a refusal raised inside this block as one of p.166's failures
+    (§323; `action-types` p.165-166).
+
+    **The three refusals below are the ones p.165's sentence is about.** "Unlike
+    action logs, action metrics track failures" — but every refusal here is
+    raised *before* `open_run`, so until this existed the only failure the
+    metric could see was a dataset engine error, which is to say a failure
+    nobody submitted. A parameter that isn't valid, a submission criterion that
+    isn't met and a writeback webhook that didn't answer are the three things a
+    person actually causes, and p.166 has a name for each.
+
+    The refusal is re-raised untouched: the caller still gets its 422 with its
+    own message, and the record is a side effect of failing rather than a
+    change to what failing means.
+    """
+    try:
+        yield
+    except ValueError as exc:
+        await action_metrics.record_refusal(
+            action_type_id=action_type_id,
+            instance_id=instance_id,
+            dataset_id=dataset_id,
+            requested_by=requested_by,
+            submitted_values=submitted_values,
+            category=category,
+            message=str(exc),
+        )
+        raise
+
+
 @project_router.post("/{action_type_id}/execute", response_model=ExecuteResult)
 async def execute_action(
     action_type_id: UUID,
@@ -1003,19 +1124,38 @@ async def execute_action(
         # Two steps, because they answer different questions: what did the
         # caller supply (against the declared parameters), and what do the
         # rules write with it (against the object type and its mapping).
-        bound = actions_service.bind_parameters(
-            body.values, parameters=action_type["parameters"]
-        )
+        # Everything a refused submission needs to be counted, resolved once.
+        # `source` is already read above, so a refusal names the dataset it
+        # would have written — which is what makes the row look like the run it
+        # nearly was.
+        refusal_of: dict[str, Any] = {
+            "action_type_id": action_type_id,
+            "instance_id": body.instance_id,
+            "dataset_id": UUID(str(source["dataset_id"])),
+            "requested_by": access.auth.user_id,
+            "submitted_values": dict(body.values),
+        }
+        # p.165: "submitted with a parameter or parameters that are not valid
+        # within the context of the action".
+        async with _counted_as("invalid_parameter", **refusal_of):
+            bound = actions_service.bind_parameters(
+                body.values, parameters=action_type["parameters"]
+            )
         # **Before the first rule runs, and before the run is even opened**
         # (p.49-50). "Refused" and "refused after writing half of it" look the
         # same to the caller and are very different in the dataset, and our
         # write-back appends a version per write - so the check has to come
         # before anything that could leave one behind.
-        actions_service.check_criteria(
-            bound,
-            criteria=action_type["criteria"],
-            user=await actions_service.criteria_user(conn, access.auth.user_id),
-        )
+        #
+        # p.166 calls a submission that "did not pass the security submission
+        # criteria" an authentication failure, which is p.49-50's criteria by
+        # another name.
+        async with _counted_as("authentication", **refusal_of):
+            actions_service.check_criteria(
+                bound,
+                criteria=action_type["criteria"],
+                user=await actions_service.criteria_user(conn, access.auth.user_id),
+            )
         # **p.106's writeback, before anything is written and before the
         # notifications are even rendered.**
         #
@@ -1044,7 +1184,13 @@ async def execute_action(
             # No run is opened and nothing is written. The message names the
             # webhook, because "the action failed" about an external system is
             # not something the person who clicked can act on.
-            raise ValueError(writeback_failure)
+            #
+            # p.166: "failed due to a webhook or an incorrectly configured side
+            # effect" — its own category, because a webhook that is down is not
+            # something the submitter did wrong, and counting it as an invalid
+            # parameter would send them back to a form that was fine.
+            async with _counted_as("side_effect", **refusal_of):
+                raise ValueError(writeback_failure)
         # p.111's "Writeback response", spelled as a reserved name in the one
         # namespace every rule kind already reads from. It cannot collide with
         # a parameter (no dots in an api_name) and cannot be forged by a caller

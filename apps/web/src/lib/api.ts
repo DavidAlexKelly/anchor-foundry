@@ -1832,6 +1832,18 @@ export const actions = {
     }),
   removeType: (wid: string, actionTypeId: string) =>
     request<void>(`/workspaces/${wid}/action-types/${actionTypeId}`, { method: "DELETE" }),
+  /** p.164's action metrics, over the server's own thirty-day window (§323). */
+  metrics: (wid: string, actionTypeId: string) =>
+    request<import("./types").ActionMetrics>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/metrics`,
+    ),
+  /** p.164's seven-day run history. **Its own call rather than a field on the
+   * metrics**, because the two windows differ and a reader who wanted the
+   * counts should not pay for two hundred rows they did not open. */
+  history: (wid: string, actionTypeId: string) =>
+    request<import("./types").ActionRunHistory[]>(
+      `/workspaces/${wid}/action-types/${actionTypeId}/history`,
+    ),
   /** p.256's status dropdown. Its own call rather than a field on
    * `setDefinition`, because that body is what the action *does* and a status
    * is how much anyone should rely on it — folding them together would make

@@ -11,6 +11,7 @@ import { PropertyInput, PropertyValue } from "@/components/property-value";
 import { conditionalStyle } from "@/lib/conditional-format";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { UndoToast } from "@/components/undo-toast";
+import { ActionMetricsSection } from "@/components/action-metrics-panel";
 import { UsagePanel } from "@/components/usage-panel";
 import type {
   ActionExecuteResult,
@@ -337,6 +338,16 @@ export default function ObjectInstancesPage() {
           because it is what somebody consults *before* changing something
           above it rather than something they came here to do. */}
       {workspace && <UsagePanel workspaceId={workspace.id} typeId={params.typeId} />}
+      {/* p.164's action metrics, below the usage they belong beside: the usage
+          panel says who relies on this type, and this says whether the thing
+          they do to it is working. Both are consulted before changing
+          something above them rather than being why somebody came here. */}
+      {workspace && actionTypes.data && (
+        <ActionMetricsSection
+          workspaceId={workspace.id}
+          actionTypes={actionTypes.data}
+        />
+      )}
     </main>
   );
 }

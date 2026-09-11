@@ -1525,12 +1525,27 @@ async def close_run(
     dataset_version: int | None,
     error: str | None,
 ) -> None:
+    """Finish a run, and say which of p.166's categories it failed under.
+
+    **Classified here rather than at each call site** (§323; db 0079). Three
+    handlers close runs, and a category chosen by the caller is one a fourth
+    handler can forget to pass — leaving a failure that reads as
+    `unclassified` because nobody looked, which is indistinguishable on the
+    screen from one that was looked at and could not be named.
+
+    A run that succeeded gets `NULL`, overwriting any category a previous
+    attempt left: `status` and `failure_category` disagreeing is the one state
+    a reader could not make sense of.
+    """
+    from . import action_metrics
+
     await conn.execute(
         text(
             """
             UPDATE action_runs
                SET status = :status, dataset_version = :version,
-                   error = :error, finished_at = now()
+                   error = :error, failure_category = :category,
+                   finished_at = now()
              WHERE id = :id
             """
         ),
@@ -1538,6 +1553,9 @@ async def close_run(
             "status": "succeeded" if ok else "failed",
             "version": dataset_version,
             "error": error,
+            "category": (
+                None if ok else action_metrics.classify_engine_error(error or "")
+            ),
             "id": str(run_id),
         },
     )

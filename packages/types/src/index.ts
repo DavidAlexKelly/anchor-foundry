@@ -2853,3 +2853,45 @@ export interface ObjectFavourite {
  * reindex" — and they have different remedies. `any` is what somebody opening
  * the filter is usually asking for. */
 export type TypeIssueFilter = "failing" | "unsourced" | "any";
+
+/** p.164's action metrics (§323; db 0079; `action-types` p.164-166).
+ *
+ *     "Action metrics display the near real-time usage of an action type over
+ *      the last 30 days… Success/failure metrics… P95 duration metric." (p.164)
+ */
+export interface ActionFailureCount {
+  category: string;
+  failures: number;
+}
+
+export interface ActionMetrics {
+  succeeded: number;
+  failed: number;
+  /** Neither, and reported as itself: a run still going is not evidence either
+   * way, and folding it into one side would make the two disagree with
+   * `total`. */
+  running: number;
+  total: number;
+  /** p.164's "95th percentile (P95) execution duration", in seconds. `null`
+   * when nothing has finished in the window — which is **not** nought: a P95
+   * of 0 says every run was instant. */
+  p95_seconds: number | null;
+  /** Sent rather than assumed, so a screen that hard-codes "30 days" is not
+   * one that lies the day the constant moves. */
+  window_days: number;
+  failures: ActionFailureCount[];
+}
+
+/** One row of p.164's seven-day run history. */
+export interface ActionRunHistory {
+  id: string;
+  status: string;
+  error: string | null;
+  /** One of p.165-166's categories, or `null` when the run did not fail. */
+  failure_category: string | null;
+  instance_id: string | null;
+  started_at: string;
+  finished_at: string | null;
+  seconds: number | null;
+  requested_by_name: string | null;
+}
