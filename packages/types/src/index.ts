@@ -1983,6 +1983,27 @@ export interface OntologySearchHit {
   matched_value: string;
 }
 
+/** One of p.30's quick links to what was edited last (§317).
+ *
+ * **Deliberately shaped like a search hit**, less the two fields about
+ * matching: the browser draws both lists with one renderer and one
+ * destination decision (`search-destination.ts`), because two renderers for
+ * the same kinds would be two places for a link to go wrong — which is
+ * exactly what §316 found when one of them knew a kind the other did not.
+ *
+ * `object_type_id` is never null here, unlike on a hit: p.30 names three
+ * kinds, and an object type is its own owner while a link type and an action
+ * type each belong to one. */
+export interface RecentlyEdited {
+  kind: "object_type" | "link_type" | "action_type";
+  id: string;
+  api_name: string;
+  display_name: string;
+  object_type_id: string;
+  object_type_name: string;
+  updated_at: string;
+}
+
 export interface ObjectView {
   id: string;
   object_type_id: string;

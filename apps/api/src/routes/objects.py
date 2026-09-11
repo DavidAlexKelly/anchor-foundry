@@ -51,6 +51,7 @@ from ..services import instances as instances_service
 from ..services import object_searches as searches_service
 from ..services import ontology as ontology_service
 from ..services import object_type_groups as groups_service
+from ..services import ontology_recent
 from ..services import ontology_search
 from ..services import interfaces as interfaces_service
 from ..services import interface_sets
@@ -462,6 +463,54 @@ async def search_ontology(
     async with user_connection(access.auth.user_id) as conn:
         rows = await ontology_search.search(conn, access.workspace_id, q, limit=limit)
     return [OntologySearchHit(**r) for r in rows]
+
+
+# ---- what was edited last (`ontology-manager` p.30) --------------------------
+class RecentlyEdited(BaseModel):
+    """One of p.30's quick links.
+
+    Deliberately the same field names a search hit uses, less the two about
+    matching: the browser draws both lists with one renderer, and two renderers
+    for the same seven kinds would be two places for a destination to go wrong
+    — which is exactly what §316 found when one of them had a kind the other
+    did not.
+    """
+
+    # object_type | link_type | action_type — p.30's three, no more.
+    kind: str
+    id: UUID
+    api_name: str
+    display_name: str
+    #: Where it lives. An action type and a link type both belong to one; an
+    #: object type is its own, so the field is always answerable here and
+    #: never null, unlike on a search hit.
+    object_type_id: UUID
+    object_type_name: str
+    updated_at: datetime
+
+
+@router.get("/ontology-recent", response_model=list[RecentlyEdited])
+async def recently_edited(
+    limit: int = Query(default=ontology_recent.DEFAULT_LIMIT, ge=1,
+                       le=ontology_recent.MAX_LIMIT),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[RecentlyEdited]:
+    """p.30's quick links to "recently edited object types, link types, and
+    action types".
+
+    Viewer, like the search beside it: this reads the ontology's shape and
+    nothing about anybody's data. The row-level policy still decides which
+    workspace's rows exist at all, so "recently edited" can only ever mean
+    within a workspace the caller can already list.
+
+    **`ge`/`le` here as well as in the service.** The service refuses out of
+    range because it is the thing that knows what the number means; the route
+    bounds it because a 422 from FastAPI names the parameter and a `ValueError`
+    reaching the handler would be a 500.
+    """
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await ontology_recent.recent(conn, access.workspace_id, limit=limit)
+    return [RecentlyEdited(**r) for r in rows]
 
 
 # ---- object types (workspace-scoped) ----------------------------------------

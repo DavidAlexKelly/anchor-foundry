@@ -138,11 +138,22 @@ def _refuse_a_stale_api() -> None:
     identical bytes and a new mtime, so this refuses a tree that is in fact
     exactly what the server loaded. That is the right way round - this cannot
     know what the process read, and the alternative guess is the failure shape
-    the docstring above is about - but it has a consequence worth knowing
-    before it costs an afternoon: a harness whose *later* sweeps depend on this
-    suite must put the mtime back (`os.utime`) after each restore, or every one
-    of those mutants dies on this guard and is scored as caught while proving
-    nothing at all.
+    the docstring above is about.
+
+    **It has a consequence, and the obvious fix for it is a second bug.** A
+    harness whose later sweeps depend on this suite must put the mtime back
+    (`os.utime`) after each restore *of a file under `apps/api/`*, or every one
+    of those mutants dies on this guard and is scored as **caught** while
+    proving nothing. Doing the same to a *web* file is the identical mistake in
+    the other direction: Next decides what to recompile from the mtime, so a
+    mutant written with the old one is never built, the browser tests the
+    original page, and every mutant is scored as **survived** - equally having
+    proved nothing. §313's three browser mutants came back 3/3 and then 0/3
+    over identical code, one bug each way.
+
+    The rule that holds: freeze the mtime only under `apps/api/`, where nothing
+    hot-reloads and mutants are checked in-process by pytest. Let a web file's
+    mtime move, because moving it is how the change is seen at all.
     """
     import subprocess
 

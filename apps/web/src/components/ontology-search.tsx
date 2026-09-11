@@ -26,6 +26,7 @@ import { useEffect, useRef, useState } from "react";
 import { objects as objApi } from "@/lib/api";
 import { highlight } from "@/components/ontology-highlight";
 import { memberSummary } from "@/lib/object-type-groups";
+import { editedAgo } from "@/lib/recently-edited";
 import {
   KIND_LABELS,
   destinationFor,
@@ -63,6 +64,12 @@ export function OntologySearch({
   onOpenInterface: (interfaceId: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  // **Focus, not hover** (§317). p.30 puts the quick links behind a hover, and
+  // a hover is a gesture a keyboard and a touchscreen do not have — so the
+  // panel opens when the box is focused, which `Cmd+K` does from anywhere and
+  // a tap does on a phone. The same links, reachable by everybody who can
+  // reach the search they sit inside.
+  const [focused, setFocused] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -90,6 +97,29 @@ export function OntologySearch({
   });
   const hits = results.data ?? [];
 
+  // **p.30's quick links, in the shape this product has for them** (§317).
+  //
+  //     "Hovering over the Back home button will also bring up quick links to
+  //      recently edited object types, link types, and action types." (p.30)
+  //
+  // There is no Back home button here to hover: this ontology has one page
+  // with sections rather than Foundry's separate home (the `ontology.md` row
+  // for p.29 says why), so the hover has no host. The box you open when you
+  // want to get somewhere does, and it is already the thing people reach for —
+  // `Cmd+K` lands here from anywhere on the page.
+  //
+  // **This does not contradict the comment above it.** "Blank means blank" is
+  // about *search results*, and it still holds: an empty query still searches
+  // for nothing, because a search box whose empty state is the whole ontology
+  // is a list. Eight things somebody edited is not the ontology; it is the
+  // shortest possible answer to "take me back to what I was doing".
+  const recent = useQuery({
+    queryKey: ["ontology-recent", workspaceId],
+    queryFn: () => objApi.recentlyEdited(workspaceId),
+    enabled: focused && query.trim().length === 0,
+  });
+  const quickLinks = recent.data ?? [];
+
   return (
     <div className="ontology-search" data-testid="ontology-search">
       <input
@@ -99,7 +129,67 @@ export function OntologySearch({
         aria-label="Search the ontology"
         placeholder="Search object types, properties, links, actions… (⌘K)"
         onChange={(e) => setQuery(e.target.value)}
+        onFocus={() => setFocused(true)}
+        // **On a timer, and the timer is the point.** A `blur` that closed the
+        // panel immediately would fire before the click that caused it landed
+        // on a button inside the panel — the link would be removed from the
+        // document mid-click and nothing would happen, which is the same
+        // silent nothing §316 spent sixty-four units being.
+        onBlur={() => window.setTimeout(() => setFocused(false), 150)}
       />
+      {focused && query.trim().length === 0 && quickLinks.length > 0 && (
+        <div className="ontology-search-results" data-testid="ontology-recent">
+          <p className="slug" style={{ margin: "0 0 6px" }}>Recently edited</p>
+          <ul className="link-list">
+            {quickLinks.map((row) => (
+              <li key={`${row.kind}:${row.id}`}>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  style={{ padding: "4px 10px", fontSize: 12.5, textAlign: "left" }}
+                  data-kind={row.kind}
+                  data-testid={`recent-${row.api_name}`}
+                  /* The same decision the search hits use. All three of p.30's
+                     kinds have an owning object type, so all three resolve to
+                     one — but routed through `destinationFor` rather than
+                     assumed, because "they all go to the same place" is a fact
+                     about today's three kinds and not about the function. */
+                  onMouseDown={(e) => {
+                    // **`mousedown`, not `click`.** The blur that closes this
+                    // panel fires first, and a click handler on a button that
+                    // is about to be unmounted is a button that does nothing.
+                    e.preventDefault();
+                    const to = destinationFor(row);
+                    if (to?.open === "object_type") onOpenType(to.id);
+                  }}
+                >
+                  <span className="slug" style={{ marginRight: 8 }}>
+                    {KIND_LABELS[row.kind]}
+                  </span>
+                  <strong>{row.display_name || row.api_name}</strong>
+                  {/* Where it lives, for the two kinds that live somewhere
+                      else. An object type is its own owner, and "Site on Site"
+                      is noise. */}
+                  {row.kind !== "object_type" && (
+                    <span className="slug" style={{ marginLeft: 8 }}>
+                      on {row.object_type_name}
+                    </span>
+                  )}
+                  {/* **When**, because the order alone says which is most
+                      recent and nothing about whether the top row is four
+                      minutes old or four months — and those are different
+                      lists. It also keeps the field honest: a response field
+                      nothing draws is a field nothing checks. */}
+                  <span className="slug" style={{ marginLeft: 8 }}>
+                    {editedAgo(row.updated_at, Date.now())}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {query.trim().length > 0 && (
         <div className="ontology-search-results" data-testid="ontology-search-results">
           {results.isPending && <p className="state">Searching…</p>}

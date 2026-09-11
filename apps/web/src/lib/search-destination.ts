@@ -30,6 +30,19 @@
  */
 import type { OntologySearchHit } from "./types";
 
+/**
+ * The parts of a row that decide where it goes.
+ *
+ * Narrower than `OntologySearchHit` on purpose: p.30's recently-edited quick
+ * links (§317) carry the same `kind`/`id`/owner and nothing about matching,
+ * and they have to reach the same screens. Two lists of links to the same
+ * things, differing only in how they were found, would be two places for a
+ * destination to go wrong — which is what this file exists because of.
+ */
+export type Locatable = Pick<OntologySearchHit, "kind" | "id"> & {
+  object_type_id: string | null;
+};
+
 /** Which screen opens, and the id to open it with. */
 export type Destination =
   | { open: "object_type"; id: string }
@@ -48,7 +61,7 @@ export type Destination =
  * nothing to do with what they searched for is worse than a hit that does not
  * move, because it looks like it worked.
  */
-export function destinationFor(hit: OntologySearchHit): Destination | null {
+export function destinationFor(hit: Locatable): Destination | null {
   switch (hit.kind) {
     case "object_type":
     case "property":

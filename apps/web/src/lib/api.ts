@@ -1439,6 +1439,14 @@ export const objects = {
     request<import("./types").OntologySearchHit[]>(
       `/workspaces/${wid}/ontology-search?q=${encodeURIComponent(q)}`,
     ),
+  /** p.30's quick links to "recently edited object types, link types, and
+   * action types". No `limit` here: the server's default is what a hover is
+   * worth, and a caller passing its own number would be deciding how long a
+   * list somebody else has to read. */
+  recentlyEdited: (wid: string) =>
+    request<import("./types").RecentlyEdited[]>(
+      `/workspaces/${wid}/ontology-recent`,
+    ),
   /** Interfaces (`object-link-types` p.4, p.53; `ontology` p.60–62). */
   listInterfaces: (wid: string) =>
     request<import("./types").InterfaceSummary[]>(`/workspaces/${wid}/interfaces`),
